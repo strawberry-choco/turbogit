@@ -36,7 +36,8 @@
 7. [UI / UX Structure](#7-ui--ux-structure)
 8. [Data Model](#8-data-model)
 9. [Build Roadmap](#9-build-roadmap)
-10. [Open Questions](#10-open-questions)
+10. [Technology Stack (Rust + egui)](#10-technology-stack-rust--egui)
+11. [Open Questions](#11-open-questions)
 
 ---
 
@@ -860,14 +861,109 @@ Phased so each milestone is independently usable.
 
 ---
 
-## 10. Open Questions
+## 10. Technology Stack (Rust + egui)
 
-1. **Engine choice:** git CLI wrapper (maximum fidelity, external process) vs libgit2 binding (in-process, faster log) — or hybrid (CLI for mutating ops, libgit2 for reads)? Recommend hybrid.
-2. **UI framework:** confirms with user before code-gen. (The project is named `turbogit`; stack TBD.)
-3. **Ignore-file strategy:** pure `.gitignore` mirroring vs. additional IDE-level ignore — confirm.
-4. **WSL/SSH credential handling:** how deep in v1?
-5. **Synchronous mode default:** IntelliJ proposes-on-first-use; we should mirror — confirm.
-6. **Protected-branch source:** local patterns only, or also read GitHub branch-protection (like IntelliJ does on checkout)?
+Stack chosen for code generation. Resolves Open Questions #1 and #2.
+
+- **Language:** Rust (latest stable). Cargo binary crate named `turbogit`.
+- **App runtime:** [`eframe`](https://docs.rs/eframe) (egui's framework) → native desktop window on Windows/WSL/Linux/macOS (renders via `wgpu`/`glow`).
+- **UI toolkit:** [egui](https://docs.rs/egui) — **immediate-mode**. App state is held in a struct implementing `eframe::App`; `update(&mut self, ctx, _frame)` rebuilds the whole UI every frame from current state. No retained widget tree to fight — keep domain state in fields and re-derive view from it.
+- **Layout / "tool windows":** egui has no native IDE tool-window concept. Emulate it with [`egui_dock`](https://docs.rs/egui_dock) for docking panels (Commit window, Git Log, Shelves/Stash) plus collapsible tabs; use `SidePanel` / `TopBottomPanel` for the status-bar **VCS branch widget**; use `Popup` / `Window` for the **Branches popup**, Push/Merge/Rebase/Conflicts dialogs, and Interactive Rebase.
+- **Lists / tables:** [`egui_extras::Table`](https://docs.rs/egui_extras) (virtualized) for the Log Commit pane, Changed-Files pane, Commit Details, Push dialog, and per-root status groups. Essential for large histories.
+- **Async model (critical):** egui renders on the main thread; **git must never block it.** Wrap each unit of work (status scan, fetch, push, rebase, conflict resolution) so it runs on worker threads (`std::thread` or `tokio`) and returns results/status over a channel (`crossbeam-channel` or `std::sync::mpsc`). In `update()` the app drains the receiver and calls `ctx.request_repaint()` to refresh. Long ops stream progress so the UI stays responsive.
+- **Git engine — hybrid** (matches the recommended approach):
+  - **Reads / status / diff / log graph:** [`git2`](https://docs.rs/git2) (libgit2 bindings) — in-process, fast, no subprocess. Provides `Repository`, `Statuses`, `Branch`, `Remote`, `Commit`, `Diff`, `Revwalk`, refs, tags.
+  - **Porcelain / mutating ops libgit2 under-implements or makes risky** (interactive rebase, conflict-heavy merge, push with `--force-with-lease`, worktree creation, stash apply/pop, submodules): shell out to the system `git` via `std::process::Command`, wrapped in a typed `GitCli` module. Maximizes fidelity for workflows libgit2 doesn't fully cover.
+  - **Config:** `git2::Config` for `core.autocrlf`, commit template, `user.name`/`user.email`; detect git executable + WSL git path (Windows) for the CLI module.
+- **Multi-root is the default unit.** Every domain type carries its owning `Root` (path-based id, see §8). `MultiRootManager` owns `Vec<RootHandle>` and fans out single-root ops; the `synchronous_branches` flag governs batch branch operations.
+- **Persistence:** a `.turbogit/` dir (the analog of IntelliJ's `.idea/` + `vcs.xml`) stores directory mappings + per-project settings; git's own `.git/` is the source of truth for repo data. Settings serialized with `serde` (`RON` or `toml`).
+- **Errors:** typed `TgError` enum wrapping `git2::Error` + `std::io::Error` + parse errors; surfaced via `egui::Window` / toast.
+- **Testing:** domain layer (`engine`/`core`) unit-tested against temp git repos (`tempfile`); UI exercised headless where feasible.
+
+### Rust-typed data model sketch (concrete for code-gen)
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RootId(pub PathBuf);
+
+#[derive(Clone, Debug)]
+pub struct Root {
+    pub id: RootId,
+    pub path: PathBuf,
+    pub remotes: Vec<Remote>,
+    pub branches: Vec<Branch>,
+    pub current_branch: Option<BranchRef>,
+    pub head: Option<CommitId>,
+    pub status: RootStatus,
+}
+
+pub struct MultiRootManager {
+    pub roots: Vec<Root>,
+    pub synchronous_branches: bool, // "Execute branch operations on all roots"
+}
+
+#[derive(Clone, Debug)]
+pub struct Branch {
+    pub name: String,
+    pub kind: BranchKind,
+    pub tracking: Option<String>,
+    pub favorite: bool,
+    pub protected: bool,
+}
+pub enum BranchKind { Local, Remote }
+
+#[derive(Clone, Debug)]
+pub struct Commit {
+    pub id: CommitId,
+    pub parents: Vec<CommitId>,
+    pub author: Signature,
+    pub committer: Signature,
+    pub message: String,
+    pub time: i64,
+    pub root: RootId,
+}
+pub type CommitId = String; // sha-1 hex
+
+#[derive(Clone, Debug)]
+pub struct Changelist {
+    pub name: String,
+    pub active: bool,
+    pub changes: Vec<Change>,
+    pub root: RootId,
+}
+#[derive(Clone, Debug)]
+pub struct Change {
+    pub path: PathBuf,
+    pub status: ChangeStatus,
+    pub chunks: Vec<Chunk>,
+    pub staged: bool,
+}
+pub enum ChangeStatus {
+    Modified, Added, Deleted, Renamed,
+    Unversioned, Ignored, Conflicted,
+}
+
+pub struct Conflict {
+    pub path: PathBuf,
+    pub base: PathBuf,
+    pub local: PathBuf,
+    pub incoming: PathBuf,
+    pub resolved: bool,
+    pub root: RootId,
+}
+pub struct Shelf { pub name: String, pub changes: Vec<Change>, pub created_at: chrono::DateTime<chrono::Utc> }
+pub struct Stash { pub message: String, pub root: RootId, pub index: usize }
+pub struct Worktree { pub path: PathBuf, pub branch: String, pub root: RootId }
+```
+
+## 11. Open Questions
+
+1. ~~**Engine choice**~~ → resolved (§10): hybrid `git2` (reads) + `git` CLI subprocess (porcelain/mutating).
+2. ~~**UI framework**~~ → resolved (§10): Rust + egui (`eframe`), `egui_dock` for tool windows.
+3. **Ignore-file strategy:** pure `.gitignore` mirroring (recommended) vs. additional IDE-level ignore patterns. → recommend pure mirroring.
+4. **WSL / SSH credential handling:** depth in v1. Recommend: detect WSL git path on Windows (Phase 0); defer SSH-agent UI/passthrough to Phase 3.
+5. **Synchronous mode default:** mirror IntelliJ — propose-on-first-use when all roots share branch names. → confirmed default behavior.
+6. **Protected-branch source:** local patterns only (recommended v1) vs. also import GitHub branch protection on checkout (like IntelliJ). → recommend local patterns for v1.
 
 ---
 

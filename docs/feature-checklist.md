@@ -1,6 +1,8 @@
 # TurboGit — Feature Implementation Checklist
 
 > Working backlog derived from [`product-spec.md`](./product-spec.md). Check items off as they are implemented. Each ID maps to a section in the spec. Phases (0–4) follow the roadmap in §9.
+>
+> **Stack (resolved):** Rust + egui (`eframe`) for UI, `egui_dock` for tool windows, `git2` (reads) + `git` CLI subprocess (porcelain). See spec §10.
 
 Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
