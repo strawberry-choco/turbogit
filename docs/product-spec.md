@@ -657,7 +657,7 @@ flowchart LR
 - **What:** Mark/unmark files; reflects in status.
 
 #### P3. Configure ignored files
-- **What:** Settings-level ignore patterns in addition to `.gitignore`.
+- **What:** Only the standard `.gitignore` file(s) are consulted and edited — turbogit writes ignore entries directly into the repo's `.gitignore` (creating one at the repo root if missing). **No separate IDE-layer ignore list** (decided 2026-07-31: pure `.gitignore` mirroring). Settings here only govern *which* `.gitignore` (repo-root vs. the nearest enclosing) and template comments.
 
 ---
 
@@ -675,7 +675,7 @@ flowchart LR
 | Explicitly check incoming on remotes | VCS → Git | Auto/Always/Never |
 | Update method | VCS → Git | Merge / Rebase |
 | Clean working tree using | VCS → Git | Stash / Shelve |
-| Protected branches | VCS → Git | force-push deny patterns |
+| Protected branches | VCS → Git | force-push deny patterns (local) + auto-import from GitHub/GitLab protection API |
 | Commit checks | VCS → Commit | reformat, imports, TODO, run config, etc. |
 | Commit message rules/template | VCS → Commit | formatting + `.txt` template |
 | Restore workspace on branch switch | VCS → Confirmation | per-branch context |
@@ -960,10 +960,10 @@ pub struct Worktree { pub path: PathBuf, pub branch: String, pub root: RootId }
 
 1. ~~**Engine choice**~~ → resolved (§10): hybrid `git2` (reads) + `git` CLI subprocess (porcelain/mutating).
 2. ~~**UI framework**~~ → resolved (§10): Rust + egui (`eframe`), `egui_dock` for tool windows.
-3. **Ignore-file strategy:** pure `.gitignore` mirroring (recommended) vs. additional IDE-level ignore patterns. → recommend pure mirroring.
-4. **WSL / SSH credential handling:** depth in v1. Recommend: detect WSL git path on Windows (Phase 0); defer SSH-agent UI/passthrough to Phase 3.
-5. **Synchronous mode default:** mirror IntelliJ — propose-on-first-use when all roots share branch names. → confirmed default behavior.
-6. **Protected-branch source:** local patterns only (recommended v1) vs. also import GitHub branch protection on checkout (like IntelliJ). → recommend local patterns for v1.
+3. ~~**Ignore-file strategy**~~ → resolved: **pure `.gitignore` mirroring.** turbogit only reads/writes standard `.gitignore` files; no separate IDE-layer ignore list. (Decision: 2026-07-31.)
+4. **WSL / SSH credential handling:** → resolved: **Basic.** Support SSH/HTTPS remote URLs and rely on the system `git` credential helpers as-is. No automatic WSL detection in v1; defer SSH-agent UI/passthrough to Phase 3. (Decision: 2026-07-31.)
+5. ~~**Synchronous mode default**~~ → resolved: mirror IntelliJ — propose-on-first-use when all roots share branch names. Confirmed default behavior.
+6. **Protected-branch source:** → resolved: **also read remote protection.** In addition to local user-defined patterns (e.g. `main`, `release/*`), turbogit queries the GitHub/GitLab branch-protection API on checkout to auto-protect remote-protected branches (like IntelliJ). Requires a lightweight remote API + auth module — schedule for Phase 3. (Decision: 2026-07-31.)
 
 ---
 
