@@ -1,0 +1,10 @@
+pub mod branch_service;
+pub mod changes;
+pub mod conflict;
+pub mod history_editor;
+pub mod history_service;
+pub mod integrate_service;
+pub mod multi_root;
+pub mod shelve_stash;
+pub mod sync_service;
+pub mod vcs_manager;

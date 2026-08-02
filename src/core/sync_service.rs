@@ -1,0 +1,131 @@
+//! Remote synchronization service: fetch / pull / push for single roots and
+//! aggregated across all roots in a [`MultiRootManager`].
+//!
+//! Provides protected-branch gating for force-pushes and batch operations that
+//! iterate every registered root, recording one result per root.
+
+#![allow(dead_code)]
+
+use crate::core::vcs_manager::VcsManager;
+use crate::error::{TgError, TgResult};
+use crate::model::*;
+use std::path::Path;
+
+/// Returns `true` if `branch` matches any protected-branch pattern.
+///
+/// Pattern semantics:
+/// - `*` matches every branch.
+/// - a pattern ending with `*` matches by prefix (e.g. `release/*`).
+/// - a pattern starting with `*` matches by suffix (e.g. `*/main`).
+/// - otherwise the pattern must match the branch name exactly.
+pub fn is_protected(settings: &VcsSettings, branch: &str) -> bool {
+    settings
+        .protected_branch_patterns
+        .iter()
+        .any(|pat| {
+            if pat == "*" {
+                true
+            } else if let Some(prefix) = pat.strip_suffix('*') {
+                branch.starts_with(prefix)
+            } else if let Some(suffix) = pat.strip_prefix('*') {
+                branch.ends_with(suffix)
+            } else {
+                pat == branch
+            }
+        })
+}
+
+/// Fetch from the given remote (or all remotes when `remote` is `None`).
+pub fn fetch(vcs: &VcsManager, root: &Path, remote: Option<&str>) -> TgResult<()> {
+    vcs.fetch(root, remote)
+}
+
+/// Pull into `root`, merging or rebasing per `rebase`.
+pub fn pull(vcs: &VcsManager, root: &Path, rebase: bool) -> TgResult<()> {
+    vcs.pull(root, rebase)
+}
+
+/// Fetch everything, then pull using the configured update method.
+pub fn update_project(vcs: &VcsManager, root: &Path, method: UpdateMethod) -> TgResult<()> {
+    fetch(vcs, root, None)?;
+    pull(vcs, root, method == UpdateMethod::Rebase)
+}
+
+/// Push `branch` to `remote`, refusing a force-push to a protected branch.
+pub fn push(
+    vcs: &VcsManager,
+    root: &Path,
+    remote: &str,
+    branch: &str,
+    force: bool,
+    settings: &VcsSettings,
+) -> TgResult<()> {
+    if force && is_protected(settings, branch) {
+        return Err(TgError::Other(format!(
+            "Refusing force-push to protected branch '{}'",
+            branch
+        )));
+    }
+    vcs.push(root, remote, branch, force)
+}
+
+/// Push all tags to `remote` (or a single named tag when `name` is `Some`).
+pub fn push_tags(vcs: &VcsManager, root: &Path, remote: &str, all: bool) -> TgResult<()> {
+    vcs.tag_push(root, remote, None, all)
+}
+
+/// Push the current branch of every root. Returns one `(RootId, result)` per
+/// root. A root with no current branch records `Ok(())` (nothing to push).
+pub fn push_all(
+    vcs: &VcsManager,
+    mgr: &MultiRootManager,
+    settings: &VcsSettings,
+) -> Vec<(RootId, TgResult<()>)> {
+    mgr.roots
+        .iter()
+        .map(|root| {
+            let result = match &root.current_branch {
+                Some(branch) => {
+                    // Resolve the upstream remote from the branch's tracking ref
+                    // when present; otherwise fall back to the first remote, or
+                    // "origin" if the root has no remotes configured.
+                    let tracking = root
+                        .branches
+                        .iter()
+                        .find(|b| &b.name == branch)
+                        .and_then(|b| b.tracking.clone());
+                    let remote = match tracking {
+                        Some(t) if t.contains('/') => t
+                            .split('/')
+                            .next()
+                            .unwrap_or("origin")
+                            .to_string(),
+                        _ => root
+                            .remotes
+                            .first()
+                            .map(|r| r.name.clone())
+                            .unwrap_or_else(|| "origin".to_string()),
+                    };
+                    push(vcs, &root.path, &remote, branch, false, settings)
+                }
+                None => Ok(()),
+            };
+            (root.id.clone(), result)
+        })
+        .collect()
+}
+
+/// Update (fetch + pull) every root using each root's configured update method.
+pub fn update_all(
+    vcs: &VcsManager,
+    mgr: &MultiRootManager,
+) -> Vec<(RootId, TgResult<()>)> {
+    let method = vcs.settings.update_method;
+    mgr.roots
+        .iter()
+        .map(|root| {
+            let result = update_project(vcs, &root.path, method);
+            (root.id.clone(), result)
+        })
+        .collect()
+}
