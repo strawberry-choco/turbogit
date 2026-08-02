@@ -1,0 +1,151 @@
+//! IntelliJ-style changelists, staging-area splitting, and partial-commit
+//! orchestration for TurboGit.
+//!
+//! This module groups working-tree [`Change`]s into named changelists, splits
+//! them by their `staged` flag, and orchestrates stage/commit/discard flows on
+//! top of [`VcsManager`].
+
+#![allow(dead_code)]
+
+use crate::core::vcs_manager::VcsManager;
+use crate::error::TgResult;
+use crate::model::*;
+use std::path::{Path, PathBuf};
+
+/// Default changelist holding tracked local changes.
+pub const DEFAULT_CHANGELIST: &str = "Local Changes";
+
+/// Changelist holding newly-unversioned files.
+pub const UNVERSIONED_CHANGELIST: &str = "Unversioned Files";
+
+/// Whether a change is tracked (i.e. not unversioned/ignored).
+fn is_tracked(status: ChangeStatus) -> bool {
+    !matches!(status, ChangeStatus::Unversioned | ChangeStatus::Ignored)
+}
+
+/// Build the two canonical changelists from a [`RootStatus`].
+///
+/// "Local Changes" (active) contains every tracked change; "Unversioned Files"
+/// (inactive) contains the unversioned ones. Each change keeps its own `staged`
+/// flag untouched.
+pub fn build_changelists(status: &RootStatus, root: &RootId) -> Vec<Changelist> {
+    let tracked: Vec<Change> = status
+        .changes
+        .iter()
+        .filter(|c| is_tracked(c.status))
+        .cloned()
+        .collect();
+    let unversioned: Vec<Change> = status
+        .changes
+        .iter()
+        .filter(|c| c.status == ChangeStatus::Unversioned)
+        .cloned()
+        .collect();
+
+    vec![
+        Changelist {
+            name: DEFAULT_CHANGELIST.to_string(),
+            active: true,
+            changes: tracked,
+            root: root.clone(),
+        },
+        Changelist {
+            name: UNVERSIONED_CHANGELIST.to_string(),
+            active: false,
+            changes: unversioned,
+            root: root.clone(),
+        },
+    ]
+}
+
+/// Split changes into (staged, unstaged) according to `change.staged`.
+pub fn split_by_staging(status: &RootStatus, _root: &RootId) -> (Vec<Change>, Vec<Change>) {
+    let staged: Vec<Change> = status
+        .changes
+        .iter()
+        .filter(|c| c.staged)
+        .cloned()
+        .collect();
+    let unstaged: Vec<Change> = status
+        .changes
+        .iter()
+        .filter(|c| !c.staged)
+        .cloned()
+        .collect();
+    (staged, unstaged)
+}
+
+/// Move changes whose path is in `paths` from changelist `from` to `to`.
+pub fn move_changes(changelists: &mut Vec<Changelist>, from: &str, to: &str, paths: &[PathBuf]) {
+    // Find the destination index up-front so we can keep borrowing disjoint.
+    let dest_idx = match changelists.iter().position(|cl| cl.name == to) {
+        Some(i) => i,
+        None => return,
+    };
+
+    let mut moved: Vec<Change> = Vec::new();
+    if let Some(src) = changelists.iter_mut().find(|cl| cl.name == from) {
+        let mut i = 0;
+        while i < src.changes.len() {
+            if paths.contains(&src.changes[i].path) {
+                moved.push(src.changes.remove(i));
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    changelists[dest_idx].changes.extend(moved);
+}
+
+/// Collect the paths of the supplied changes.
+fn paths_of(changes: &[Change]) -> Vec<PathBuf> {
+    changes.iter().map(|c| c.path.clone()).collect()
+}
+
+/// Stage the selected changes' paths.
+pub fn stage_selected(vcs: &VcsManager, root: &Path, changes: &[Change]) -> TgResult<()> {
+    let paths = paths_of(changes);
+    if paths.is_empty() {
+        return Ok(());
+    }
+    vcs.add(root, &paths)
+}
+
+/// Unstage the selected changes' paths.
+pub fn unstage_selected(vcs: &VcsManager, root: &Path, changes: &[Change]) -> TgResult<()> {
+    let paths = paths_of(changes);
+    if paths.is_empty() {
+        return Ok(());
+    }
+    vcs.unstage(root, &paths)
+}
+
+/// Commit changes.
+///
+/// With no selected changes, commits everything tracked (`vcs.commit`). With a
+/// selection, stages the chosen paths then commits the index
+/// (`vcs.commit_index`); a partial commit never amends.
+pub fn commit_selected(
+    vcs: &VcsManager,
+    root: &Path,
+    message: &str,
+    changes: &[Change],
+    amend: bool,
+) -> TgResult<CommitId> {
+    if changes.is_empty() {
+        vcs.commit(root, message, amend)
+    } else {
+        stage_selected(vcs, root, changes)?;
+        vcs.commit_index(root, message, false)
+    }
+}
+
+/// Discard working-tree edits for the selected changes via `vcs.restore`.
+pub fn discard_changes(vcs: &VcsManager, root: &Path, changes: &[Change]) -> TgResult<()> {
+    let paths = paths_of(changes);
+    if paths.is_empty() {
+        return Ok(());
+    }
+    vcs.restore(root, &paths)
+}

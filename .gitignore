@@ -49,3 +49,8 @@ logs/
 
 # WorkBuddy
 .workbuddy/
+
+
+# Added by cargo
+
+/target
