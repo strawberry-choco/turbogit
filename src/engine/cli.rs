@@ -246,12 +246,15 @@ impl GitExecutor for CliExecutor {
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>> {
         match self.run(root, &["symbolic-ref", "--short", "HEAD"]) {
             Ok((out, _, _)) => Ok(Some(out.trim().to_string())),
-            Err(TgError::Cli { code, stderr }) => {
+            Err(TgError::Cli { stderr, .. }) => {
                 // Detached HEAD: "fatal: ref HEAD is not a symbolic ref".
-                if stderr.contains("not a symbolic") || code == 128 {
+                // Only that case maps to `None`; every other failure (e.g.
+                // "not a git repository") must propagate so repo discovery
+                // does not mistake arbitrary directories for repositories.
+                if stderr.contains("not a symbolic") {
                     Ok(None)
                 } else {
-                    Err(TgError::Cli { code, stderr })
+                    Err(TgError::Cli { code: 128, stderr })
                 }
             }
             Err(e) => Err(e),

@@ -137,6 +137,11 @@ pub struct UiState {
     pub confirm: Option<crate::state::PendingConfirm>,
     // recently opened repositories (Epic J4)
     pub recent_repos: Vec<PathBuf>,
+    // Branches popup (issue #14): recently checked-out branches (≤5, newest first).
+    pub recent_branches: Vec<String>,
+    /// Keyboard cursor into the branches popup's flattened selectable rows
+    /// (issue #14: ↑/↓ move it, Enter checks the highlighted row out).
+    pub branches_cursor: usize,
     // IDE shell visibility model (issue #9, spec §9.2): true → the central
     // body routes to the Welcome page instead of the active tool window.
     // Derived true whenever no root is open (`AppState::show_welcome`).
