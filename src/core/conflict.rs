@@ -99,3 +99,24 @@ pub fn resolve_all_simple(
 pub fn unresolved(status: &RootStatus) -> usize {
     status.conflicted.len()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::fake::FakeExecutor;
+
+    #[test]
+    fn write_resolution_writes_file_then_stages_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().to_path_buf();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let engine = FakeExecutor::new();
+
+        write_resolution(&engine, &repo, Path::new("src/main.rs"), "resolved!").unwrap();
+
+        let written = std::fs::read_to_string(repo.join("src").join("main.rs")).unwrap();
+        assert_eq!(written, "resolved!");
+        let calls = engine.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "one stage call recorded");
+    }
+}
