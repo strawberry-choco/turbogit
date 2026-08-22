@@ -34,13 +34,7 @@ impl App for TurbogitApp {
         while let Ok(ev) = self.state.rx.try_recv() {
             match ev {
                 AppEvent::StatusScanned { root, status } => {
-                    if let Some(r) = self
-                        .state
-                        .multi
-                        .roots
-                        .iter_mut()
-                        .find(|r| r.id == root)
-                    {
+                    if let Some(r) = self.state.multi.roots.iter_mut().find(|r| r.id == root) {
                         match status {
                             Ok(s) => r.status = s,
                             Err(e) => self.state.last_error = Some(e.to_string()),
@@ -66,8 +60,7 @@ impl App for TurbogitApp {
                             }
                         }
                         Err(e) => {
-                            self.state.ui.toast =
-                                Some(format!("✗ {label}: {e}"));
+                            self.state.ui.toast = Some(format!("✗ {label}: {e}"));
                             self.state.last_error = Some(e.to_string());
                         }
                     }
@@ -85,13 +78,24 @@ impl App for TurbogitApp {
                         }
                         Err(e) => {
                             self.state.ui.diff_error = Some(e.to_string());
-                            if self.state.ui.diff_cache.as_ref().map(|(k, _)| k != &key).unwrap_or(false) {
+                            if self
+                                .state
+                                .ui
+                                .diff_cache
+                                .as_ref()
+                                .map(|(k, _)| k != &key)
+                                .unwrap_or(false)
+                            {
                                 self.state.ui.diff_cache = None;
                             }
                         }
                     }
                 }
-                AppEvent::AheadBehind { root, ahead, behind } => {
+                AppEvent::AheadBehind {
+                    root,
+                    ahead,
+                    behind,
+                } => {
                     self.state.ahead_behind.insert(root, (ahead, behind));
                 }
                 _ => {}
