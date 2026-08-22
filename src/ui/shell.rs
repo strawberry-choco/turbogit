@@ -66,7 +66,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     egui::CentralPanel::default().show(ui, |ui| {
         render_tab_strip(ui, state);
         if state.show_welcome() {
-            super::welcome::placeholder(ui, state);
+            super::welcome::show(ui, state);
         } else {
             show_tool_window(ui, state);
         }
@@ -201,10 +201,11 @@ fn render_topbar(ui: &mut Ui, state: &mut AppState) {
                 ui.menu_button(menu_text("File"), |ui| {
                     if ui.button("Open Project…").clicked() {
                         ui.close();
-                        // Re-open the launch project dir; enters the shell
-                        // when roots are discovered (ADR-0004).
-                        state.rescan();
-                        state.ui.welcome_visible = false;
+                        // Same end-to-end flow as the Welcome Open card
+                        // (issue #10): pick a folder, open it as a project.
+                        if let Some(dir) = super::welcome::pick_dir_public(state, "Open Project") {
+                            state.open_project(&dir);
+                        }
                     }
                     if ui.button("Clone…").clicked() {
                         ui.close();
@@ -217,7 +218,9 @@ fn render_topbar(ui: &mut Ui, state: &mut AppState) {
                     ui.separator();
                     if ui.button("Welcome Screen").clicked() {
                         ui.close();
-                        state.ui.welcome_visible = true;
+                        // Return to the Welcome screen, closing every open
+                        // project (issue #10, ADR-0004).
+                        state.close_all_projects();
                     }
                 });
                 for name in INERT_MENUS {
