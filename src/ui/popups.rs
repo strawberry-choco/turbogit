@@ -8,9 +8,9 @@ use crate::state::{AppState, Dialog};
 use egui::Ui;
 
 /// Every globally-invokable action, reused by both the VCS popup and the
-/// command palette.
+/// command palette — and by the shell's Git menu (issue #9).
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Action {
+pub enum Action {
     Refresh,
     Fetch,
     Pull,
@@ -28,7 +28,7 @@ enum Action {
 }
 
 impl Action {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Action::Refresh => "Refresh",
             Action::Fetch => "Fetch",
@@ -47,7 +47,7 @@ impl Action {
         }
     }
 
-    fn all() -> &'static [Action] {
+    pub fn all() -> &'static [Action] {
         &[
             Action::Refresh,
             Action::Fetch,
@@ -67,7 +67,7 @@ impl Action {
     }
 }
 
-fn run_action(state: &mut AppState, action: Action) {
+pub fn run_action(state: &mut AppState, action: Action) {
     let root = state.selected_path();
     match action {
         Action::Refresh => {
@@ -109,8 +109,8 @@ fn run_action(state: &mut AppState, action: Action) {
         Action::CommitTab => state.ui.tab = crate::state::Tab::Commit,
         Action::Settings => state.ui.settings_open = true,
         Action::Clone => {
-            // Focus the clone field in the left panel (best-effort).
-            state.ui.toast = Some("Use the Clone field in the left panel.".into());
+            // The clone flow lives on the Welcome screen (ticket #10).
+            state.ui.toast = Some("Clone opens from the Welcome screen.".into());
         }
     }
 }

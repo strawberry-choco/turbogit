@@ -347,19 +347,10 @@ impl Default for VcsSettings {
 }
 
 /// On-disk project state persisted under `.turbogit/`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProjectState {
     pub mappings: Vec<DirMapping>,
     pub settings: VcsSettings,
-}
-
-impl Default for ProjectState {
-    fn default() -> Self {
-        Self {
-            mappings: Vec::new(),
-            settings: VcsSettings::default(),
-        }
-    }
 }
 
 /// Options for a log query.

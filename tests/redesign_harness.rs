@@ -1,114 +1,309 @@
-//! Issue #4 — Seam 2: headless egui harness driving `ui::render()`.
+//! Issue #9 — IDE shell frame: topbar, toolbar, rail, tab strip, status bar.
 //!
-//! The harness runs the top-level [`turbogit::ui::render`] end-to-end over
-//! synthetic raw input (egui_kittest, no GPU / window / display server) and
-//! asserts only on public surfaces:
+//! Headless egui_kittest harness driving [`turbogit::ui::render`] end-to-end
+//! over synthetic raw input (no GPU / window / display server). Asserts only
+//! on public surfaces:
 //!
-//! - **Painted output** — the frame's shapes from `FullOutput`, i.e. exactly
-//!   what a software painter would fill (text galleys carry their strings).
+//! - **Painted output** — the frame's shapes from `FullOutput`: text galleys
+//!   carry their strings; filled rects carry geometry + token color.
 //! - **State transitions** — public `AppState` fields after the frames.
 //!
-//! Later redesign tickets assert navigation, inert controls, dialog cycles,
-//! placeholder panes, and shortcut dispatch against this harness.
+//! Covered here (spec §4.2/§6, ADR-0009):
+//! - shell regions render at spec dimensions ±4px
+//! - rail clicks switch the active tool window; tab strip reflects + controls it
+//! - inert Run/Debug/Search chrome changes nothing on click
+//! - the five frozen shortcuts dispatch unchanged
+//! - no project open → Welcome placeholder page
 
-use egui::{Key, Modifiers, Shape};
+mod common;
+
+use common::{
+    assert_not_painted, assert_painted, filled_rects, galley_origin, settle, shell_harness,
+};
+use egui::{Color32, Key, Modifiers, Rect};
 use egui_kittest::{kittest::Queryable, Harness};
 use turbogit::state::{AppState, Dialog, Tab};
-use turbogit::theme::{configure_style, install_fonts};
+use turbogit::theme::Palette;
 
-/// A harness rendering the full shell over a fresh [`AppState`].
-///
-/// The project dir is an empty temp directory: zero roots are discovered, so
-/// the render is deterministic and no background git workers are spawned.
-/// Setup mirrors production (`app.rs`): dark-only tokens every frame plus
-/// embedded JetBrains Mono installed once.
-fn shell_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
-    let project = tempfile::tempdir().expect("temp project dir");
-    let state = AppState::new(project.path().to_path_buf());
-    assert!(
-        state.multi.roots.is_empty(),
-        "test project must discover no roots"
-    );
+// --- Region finders (geometry over painted filled rects) --------------------
+//
+// All regions are located RELATIVE to each other (the harness wraps content
+// in an 8px outer margin, and production windows may too), so the assertions
+// measure spec dimensions, not absolute screen coordinates.
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    (harness, project)
-}
-
-/// All text painted by the last completed frame.
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Assert `needle` appears in some painted text galley.
 #[track_caller]
-fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
+fn expect_region(
+    harness: &Harness<'_, AppState>,
+    what: &str,
+    pred: impl Fn(Rect, Color32) -> bool,
+) -> Rect {
+    filled_rects(harness)
+        .into_iter()
+        .find(|(r, c)| pred(*r, *c))
+        .map(|(r, _)| r)
+        .unwrap_or_else(|| panic!("{what} region was not painted"))
 }
 
-/// Step frames until the painted output stabilizes.
-///
-/// The first frames after startup relayout (embedded fonts take effect at
-/// pass 2), so queries and clicks must only happen on a settled frame —
-/// mirroring a user clicking an already-rendered shell.
-fn settle(harness: &mut Harness<'_, AppState>) {
-    let mut prev = String::new();
-    for _ in 0..10 {
-        harness.step();
-        let fingerprint = format!("{:?}", painted_text(harness));
-        if fingerprint == prev {
-            return;
-        }
-        prev = fingerprint;
+/// Topbar: topmost full-width SURFACE band.
+fn topbar_rect(harness: &Harness<'_, AppState>) -> Rect {
+    expect_region(harness, "topbar", |r, c| {
+        c == Palette::SURFACE && r.width() >= 900.0
+    })
+}
+
+/// Toolbar: full-width BG band directly below the topbar.
+fn toolbar_rect(harness: &Harness<'_, AppState>) -> Rect {
+    let topbar = topbar_rect(harness);
+    expect_region(harness, "toolbar", |r, c| {
+        c == Palette::BG && r.width() >= 900.0 && (r.top() - topbar.bottom()).abs() <= 2.0
+    })
+}
+
+/// The active tab paints a SURFACE rect: ~31px tall, narrow, just below the
+/// toolbar (spec §6.2: top-rounded INK-on-SURFACE entry).
+fn active_tab_rect(harness: &Harness<'_, AppState>) -> Rect {
+    let toolbar_top = toolbar_rect(harness).bottom();
+    expect_region(harness, "active tab", |r, c| {
+        c == Palette::SURFACE
+            && r.height() >= 27.0
+            && r.height() <= 35.0
+            && r.width() < 400.0
+            && r.top() >= toolbar_top - 2.0
+            && r.top() <= toolbar_top + 8.0
+    })
+}
+
+#[derive(Debug, PartialEq)]
+struct ModalState {
+    tab: Tab,
+    dialog: Option<Dialog>,
+    vcs_popup: bool,
+    command_palette: bool,
+    branches_popup: bool,
+    settings_open: bool,
+}
+
+fn modal_state(harness: &Harness<'_, AppState>) -> ModalState {
+    let s = harness.state();
+    ModalState {
+        tab: s.ui.tab,
+        dialog: s.ui.dialog,
+        vcs_popup: s.ui.vcs_popup,
+        command_palette: s.ui.command_palette,
+        branches_popup: s.ui.branches_popup,
+        settings_open: s.ui.settings_open,
     }
-    panic!("shell layout did not settle within 10 frames");
 }
 
-// --- Cycle 1: initial render paints the shell over an empty project ---
+// --- Cycle 1: initial render paints the full shell frame ---------------------
 
 #[test]
 fn initial_render_paints_the_shell_over_an_empty_project() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
+    // Topbar: eight menu labels.
     for label in [
-        "Repositories",           // left pane heading
-        "No repository selected", // status bar with zero roots
-        "Commit",                 // central tabs
-        "Log",
-        "History",
-        "⏏ Push", // status bar actions
-        "⤓ Pull",
-        "⚙ Settings",
+        "File", "Edit", "View", "Navigate", "Code", "Git", "Window", "Help",
     ] {
         assert_painted(&harness, label);
     }
+    // Toolbar: inert chrome + functional VCS actions.
+    for label in [
+        "Run", "Debug", "Search", "Commit", "Pull", "Fetch", "Push", "Branches",
+    ] {
+        assert_painted(&harness, label);
+    }
+    // Tab strip keeps every existing Tab variant for now (#19/#16 delete later).
+    for label in ["Commit", "Log", "History", "Settings"] {
+        assert_painted(&harness, label);
+    }
+    // No project open → central body routes to the Welcome placeholder.
+    assert_painted(&harness, "Welcome to TurboGit");
 }
 
-// --- Cycle 2: synthetic keyboard input drives a navigation transition ---
+#[test]
+fn no_project_renders_welcome_placeholder_instead_of_old_panels() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+
+    assert_painted(&harness, "Welcome to TurboGit");
+    // The old panel layout is replaced outright — its left-pane copy is gone.
+    assert_not_painted(&harness, "No Git repositories detected.");
+    assert_not_painted(&harness, "Clone:");
+}
+
+// --- Cycle 2: shell regions at spec dimensions ±4px --------------------------
+
+#[test]
+fn shell_regions_render_at_spec_dimensions() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+
+    // Topbar: SURFACE band across the very top (spec §4.2: 38px).
+    let topbar = topbar_rect(&harness);
+    assert!(
+        (topbar.height() - 38.0).abs() <= 4.0,
+        "topbar height {} deviates from 38px ±4",
+        topbar.height()
+    );
+
+    // Toolbar: BG band directly below the topbar (spec §4.2: 34px).
+    let toolbar = toolbar_rect(&harness);
+    assert!(
+        (toolbar.height() - 34.0).abs() <= 4.0,
+        "toolbar height {} deviates from 34px ±4",
+        toolbar.height()
+    );
+
+    // Sidebar rail: SURFACE column on the left edge (spec §4.2: 48px wide),
+    // starting where the toolbar ends.
+    let rail = expect_region(&harness, "rail", |r, c| {
+        c == Palette::SURFACE
+            && r.width() >= 40.0
+            && r.width() <= 60.0
+            && (r.top() - toolbar.bottom()).abs() <= 2.0
+    });
+    assert!(
+        (rail.width() - 48.0).abs() <= 4.0,
+        "rail width {} deviates from 48px ±4",
+        rail.width()
+    );
+
+    // Tab strip: measured via the active tab item (31px in a 32px strip).
+    let tab = active_tab_rect(&harness);
+    assert!(
+        (tab.height() - 31.0).abs() <= 4.0,
+        "tab item height {} deviates from 31px ±4",
+        tab.height()
+    );
+
+    // Status bar: SURFACE band across the very bottom (spec §4.2: ~24px).
+    let status = expect_region(&harness, "status bar", |r, c| {
+        c == Palette::SURFACE && r.width() >= 900.0 && r.top() >= rail.bottom() - 2.0
+    });
+    assert!(
+        (status.height() - 24.0).abs() <= 4.0,
+        "status bar height {} deviates from 24px ±4",
+        status.height()
+    );
+}
+
+#[test]
+fn commit_is_the_only_primary_toolbar_button() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+
+    let toolbar = toolbar_rect(&harness);
+    let brand_in_toolbar: Vec<Rect> = filled_rects(&harness)
+        .into_iter()
+        .filter(|(r, c)| *c == Palette::BRAND && toolbar.intersects(*r))
+        .map(|(r, _)| r)
+        .collect();
+    assert_eq!(
+        brand_in_toolbar.len(),
+        1,
+        "exactly one primary-styled button may exist in the toolbar"
+    );
+    // …and it is the Commit button (its label sits inside the brand fill).
+    let commit_pos = galley_origin(&harness, "Commit").expect("Commit label painted");
+    assert!(
+        brand_in_toolbar[0].contains(commit_pos),
+        "the single primary button must be Commit"
+    );
+}
+
+// --- Cycle 3: rail switches tool windows; tab strip reflects + controls ------
+
+#[test]
+fn rail_click_switches_tool_window_and_tab_strip_reflects_it() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+    assert_eq!(harness.state().ui.tab, Tab::Commit);
+
+    harness.get_by_label("Git Log").click(); // sidebar rail button
+    settle(&mut harness);
+
+    assert_eq!(
+        harness.state().ui.tab,
+        Tab::Log,
+        "clicking the Git Log rail button must switch tool windows"
+    );
+    // Reflection: the active-tab surface rect wraps the Log label…
+    let active = active_tab_rect(&harness);
+    let log_pos = galley_origin(&harness, "Log").expect("Log tab painted");
+    assert!(active.contains(log_pos), "Log tab must render as active");
+    // …and not the inactive History label.
+    let history_pos = galley_origin(&harness, "History").expect("History tab painted");
+    assert!(
+        !active.contains(history_pos),
+        "History tab must render as inactive"
+    );
+}
+
+#[test]
+fn tab_strip_controls_the_active_tool_window() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+
+    harness.get_by_label("History").click();
+    settle(&mut harness);
+    assert_eq!(harness.state().ui.tab, Tab::History);
+
+    harness.get_by_label("Log").click();
+    settle(&mut harness);
+    assert_eq!(harness.state().ui.tab, Tab::Log);
+}
+
+// --- Cycle 4: inert chrome ----------------------------------------------------
+
+#[test]
+fn inert_run_debug_search_clicks_change_nothing() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+    let before = modal_state(&harness);
+
+    harness.get_by_label("Run").click();
+    settle(&mut harness);
+    harness.get_by_label("Debug").click();
+    settle(&mut harness);
+    // "Search" exists twice (toolbar + rail); both are inert chrome.
+    {
+        let mut searches = harness.get_all_by_label("Search");
+        searches
+            .next()
+            .expect("Search chrome must be queryable")
+            .click();
+    }
+    settle(&mut harness);
+
+    assert_eq!(
+        modal_state(&harness),
+        before,
+        "Run/Debug/Search are inert in v1 and must not change any state"
+    );
+}
+
+// --- Cycle 5: the five frozen shortcuts (ADR-0009) ----------------------------
+
+#[test]
+fn ctrl_k_returns_to_the_commit_tool_window() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+
+    harness.get_by_label("History").click();
+    settle(&mut harness);
+    assert_eq!(harness.state().ui.tab, Tab::History);
+
+    harness.key_press_modifiers(Modifiers::CTRL, Key::K);
+    settle(&mut harness);
+
+    assert_eq!(
+        harness.state().ui.tab,
+        Tab::Commit,
+        "Ctrl+K must switch to the Commit tool window"
+    );
+}
 
 #[test]
 fn ctrl_shift_k_opens_the_push_dialog() {
@@ -131,19 +326,46 @@ fn ctrl_shift_k_opens_the_push_dialog() {
     assert_painted(&harness, "Force push (--force-with-lease)");
 }
 
-// --- Cycle 3: synthetic mouse input through the accessibility tree ---
-
 #[test]
-fn clicking_the_log_tab_switches_tool_window() {
+fn ctrl_t_rescans_without_disturbing_shell_state() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("Log").click();
+    harness.key_press_modifiers(Modifiers::CTRL, Key::T);
     settle(&mut harness);
 
-    assert_eq!(
-        harness.state().ui.tab,
-        Tab::Log,
-        "clicking the Log tab must switch tool windows"
+    let after = modal_state(&harness);
+    assert_eq!(after.tab, Tab::Commit);
+    assert_eq!(after.dialog, None, "Ctrl+T must not open dialogs");
+    assert!(!after.command_palette && !after.vcs_popup && !after.branches_popup);
+}
+
+#[test]
+fn ctrl_shift_a_opens_the_command_palette() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+
+    harness.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::A);
+    settle(&mut harness);
+
+    assert!(
+        harness.state().ui.command_palette,
+        "Ctrl+Shift+A must open the command palette"
     );
+    assert_painted(&harness, "Find Action");
+}
+
+#[test]
+fn alt_backtick_opens_the_vcs_operations_popup() {
+    let (mut harness, _project) = shell_harness();
+    settle(&mut harness);
+
+    harness.key_press_modifiers(Modifiers::ALT, Key::Backtick);
+    settle(&mut harness);
+
+    assert!(
+        harness.state().ui.vcs_popup,
+        "Alt+` must open the VCS operations popup"
+    );
+    assert_painted(&harness, "VCS Operations");
 }

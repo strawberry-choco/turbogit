@@ -76,7 +76,7 @@ pub fn split_by_staging(status: &RootStatus, _root: &RootId) -> (Vec<Change>, Ve
 }
 
 /// Move changes whose path is in `paths` from changelist `from` to `to`.
-pub fn move_changes(changelists: &mut Vec<Changelist>, from: &str, to: &str, paths: &[PathBuf]) {
+pub fn move_changes(changelists: &mut [Changelist], from: &str, to: &str, paths: &[PathBuf]) {
     // Find the destination index up-front so we can keep borrowing disjoint.
     let dest_idx = match changelists.iter().position(|cl| cl.name == to) {
         Some(i) => i,

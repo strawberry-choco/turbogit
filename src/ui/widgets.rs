@@ -37,6 +37,8 @@ const BUTTON_HEIGHT: f32 = 32.0; // .tg-btn
 const COMPACT_BUTTON_HEIGHT: f32 = 28.0; // h-7 compact variants
 const ICON_BUTTON_SIZE: f32 = 28.0; // square ghost (dialog close X)
 const BUTTON_ICON_SIZE: f32 = 16.0; // §5.3: 16×16 in buttons
+pub const TOOLBAR_BUTTON_HEIGHT: f32 = 26.0; // §4.2: toolbar buttons
+const TOOLBAR_ICON_SIZE: f32 = 14.0; // §5.3/§6.2: 14×14 in the toolbar
 const CHIP_PAD_X: f32 = 6.0;
 const DIALOG_HEADER_HEIGHT: f32 = 40.0;
 const TOOLWINDOW_HEADER_HEIGHT: f32 = 28.0;
@@ -234,11 +236,43 @@ pub fn icon_button(ui: &mut Ui, icon: Icon) -> Response {
     button_response(ui, ButtonVariant::Icon, Some(icon), None)
 }
 
+/// Toolbar button (spec §4.2/§6.2): 26px tall, 0×8 padding, 14×14 icon +
+/// label. `primary = true` renders the solid-brand variant — the toolbar's
+/// single primary action (Commit).
+pub fn toolbar_button(ui: &mut Ui, icon: Icon, label: &str, primary: bool) -> Response {
+    let variant = if primary {
+        ButtonVariant::Primary
+    } else {
+        ButtonVariant::Ghost
+    };
+    button_response_sized(
+        ui,
+        variant,
+        Some(icon),
+        Some(label),
+        Some(TOOLBAR_BUTTON_HEIGHT),
+        Some(8.0),
+        Some(TOOLBAR_ICON_SIZE),
+    )
+}
+
 fn button_response(
     ui: &mut Ui,
     variant: ButtonVariant,
     icon: Option<Icon>,
     label: Option<&str>,
+) -> Response {
+    button_response_sized(ui, variant, icon, label, None, None, None)
+}
+
+fn button_response_sized(
+    ui: &mut Ui,
+    variant: ButtonVariant,
+    icon: Option<Icon>,
+    label: Option<&str>,
+    height_override: Option<f32>,
+    pad_x_override: Option<f32>,
+    icon_size_override: Option<f32>,
 ) -> Response {
     let enabled = ui.is_enabled();
     let compact = matches!(variant, ButtonVariant::Compact);
@@ -258,16 +292,17 @@ fn button_response(
             FontId::new(if compact { 12.0 } else { 14.0 }, FontFamily::Proportional)
         });
 
-    let pad_x = match variant {
+    let pad_x = pad_x_override.unwrap_or(match variant {
         ButtonVariant::Compact => 12.0, // px-3
         ButtonVariant::Icon => 6.0,
         _ => ui.style().spacing.button_padding.x,
-    };
-    let height = match variant {
+    });
+    let height = height_override.unwrap_or(match variant {
         ButtonVariant::Icon => ICON_BUTTON_SIZE,
         ButtonVariant::Compact => COMPACT_BUTTON_HEIGHT,
         _ => BUTTON_HEIGHT,
-    };
+    });
+    let icon_size = icon_size_override.unwrap_or(BUTTON_ICON_SIZE);
 
     // Measure once (color is overridden at paint time), allocate, decide.
     let galley = label.map(|l| {
@@ -276,7 +311,7 @@ fn button_response(
     });
     let label_w = galley.as_ref().map_or(0.0, |g| g.size().x);
     let icon_w = if icon.is_some() && !icon_only {
-        BUTTON_ICON_SIZE + 6.0
+        icon_size + 6.0
     } else {
         0.0
     };
@@ -327,15 +362,9 @@ fn button_response(
     let cy = rect.center().y;
     let mut x = rect.left() + (rect.width() - content_w) / 2.0;
     if let Some(ic) = icon {
-        paint_icon_at(
-            ui,
-            ic,
-            Pos2::new(x, cy - BUTTON_ICON_SIZE / 2.0),
-            BUTTON_ICON_SIZE,
-            ink,
-        );
+        paint_icon_at(ui, ic, Pos2::new(x, cy - icon_size / 2.0), icon_size, ink);
         if !icon_only {
-            x += BUTTON_ICON_SIZE + 6.0;
+            x += icon_size + 6.0;
         }
     }
     if let Some(g) = galley {
