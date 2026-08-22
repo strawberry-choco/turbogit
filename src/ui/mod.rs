@@ -17,6 +17,7 @@ pub mod commit_window;
 pub mod conflicts;
 pub mod dialogs;
 pub mod diff;
+pub mod icons;
 pub mod log_window;
 pub mod popups;
 
