@@ -17,9 +17,16 @@ pub struct TurbogitApp {
 
 impl TurbogitApp {
     pub fn new(project_dir: std::path::PathBuf) -> Self {
-        Self {
-            state: AppState::new(project_dir),
-        }
+        Self::launch(Some(project_dir))
+    }
+
+    /// Launch flow (ADR-0004): `Some(dir)` enters the shell directly;
+    /// `None` lands on the Welcome screen. Wires the native folder-picker
+    /// seam used by the Welcome Open/Initialize/Clone flows.
+    pub fn launch(project_dir: Option<std::path::PathBuf>) -> Self {
+        let mut state = AppState::launch(project_dir);
+        state.dir_picker = Some(Box::new(|| rfd::FileDialog::new().pick_folder()));
+        Self { state }
     }
 }
 
@@ -34,13 +41,7 @@ impl App for TurbogitApp {
         while let Ok(ev) = self.state.rx.try_recv() {
             match ev {
                 AppEvent::StatusScanned { root, status } => {
-                    if let Some(r) = self
-                        .state
-                        .multi
-                        .roots
-                        .iter_mut()
-                        .find(|r| r.id == root)
-                    {
+                    if let Some(r) = self.state.multi.roots.iter_mut().find(|r| r.id == root) {
                         match status {
                             Ok(s) => r.status = s,
                             Err(e) => self.state.last_error = Some(e.to_string()),
@@ -66,8 +67,7 @@ impl App for TurbogitApp {
                             }
                         }
                         Err(e) => {
-                            self.state.ui.toast =
-                                Some(format!("✗ {label}: {e}"));
+                            self.state.ui.toast = Some(format!("✗ {label}: {e}"));
                             self.state.last_error = Some(e.to_string());
                         }
                     }
@@ -85,13 +85,24 @@ impl App for TurbogitApp {
                         }
                         Err(e) => {
                             self.state.ui.diff_error = Some(e.to_string());
-                            if self.state.ui.diff_cache.as_ref().map(|(k, _)| k != &key).unwrap_or(false) {
+                            if self
+                                .state
+                                .ui
+                                .diff_cache
+                                .as_ref()
+                                .map(|(k, _)| k != &key)
+                                .unwrap_or(false)
+                            {
                                 self.state.ui.diff_cache = None;
                             }
                         }
                     }
                 }
-                AppEvent::AheadBehind { root, ahead, behind } => {
+                AppEvent::AheadBehind {
+                    root,
+                    ahead,
+                    behind,
+                } => {
                     self.state.ahead_behind.insert(root, (ahead, behind));
                 }
                 _ => {}

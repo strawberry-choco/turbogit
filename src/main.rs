@@ -5,12 +5,10 @@ use std::path::PathBuf;
 use turbogit::app::TurbogitApp;
 
 fn main() {
-    // Project directory: optional first CLI arg, else the current working dir.
-    let project_dir: PathBuf = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
+    // Project directory: optional first CLI arg (ADR-0004). With a path the
+    // shell opens straight away; without one the Welcome screen is shown —
+    // no implicit CWD scan.
+    let project_dir: Option<PathBuf> = std::env::args().nth(1).map(PathBuf::from);
 
     let options = NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -27,7 +25,7 @@ fn main() {
         Box::new(|cc| {
             // Embedded JetBrains Mono (ADR-0002), once before the first frame.
             turbogit::theme::install_fonts(&cc.egui_ctx);
-            Ok(Box::new(TurbogitApp::new(project_dir)) as Box<dyn eframe::App>)
+            Ok(Box::new(TurbogitApp::launch(project_dir)) as Box<dyn eframe::App>)
         }),
     );
     if let Err(e) = result {
