@@ -1,8 +1,8 @@
 //! TurboGit binary entry point. The real logic lives in the `turbogit` lib.
 
-use turbogit::app::TurbogitApp;
 use eframe::NativeOptions;
 use std::path::PathBuf;
+use turbogit::app::TurbogitApp;
 
 fn main() {
     // Project directory: optional first CLI arg, else the current working dir.
@@ -24,7 +24,11 @@ fn main() {
     let result = eframe::run_native(
         "TurboGit",
         options,
-        Box::new(|_cc| Ok(Box::new(TurbogitApp::new(project_dir)) as Box<dyn eframe::App>)),
+        Box::new(|cc| {
+            // Embedded JetBrains Mono (ADR-0002), once before the first frame.
+            turbogit::theme::install_fonts(&cc.egui_ctx);
+            Ok(Box::new(TurbogitApp::new(project_dir)) as Box<dyn eframe::App>)
+        }),
     );
     if let Err(e) = result {
         eprintln!("TurboGit failed to start: {e}");

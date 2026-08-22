@@ -19,20 +19,17 @@ use std::path::Path;
 /// - a pattern starting with `*` matches by suffix (e.g. `*/main`).
 /// - otherwise the pattern must match the branch name exactly.
 pub fn is_protected(settings: &VcsSettings, branch: &str) -> bool {
-    settings
-        .protected_branch_patterns
-        .iter()
-        .any(|pat| {
-            if pat == "*" {
-                true
-            } else if let Some(prefix) = pat.strip_suffix('*') {
-                branch.starts_with(prefix)
-            } else if let Some(suffix) = pat.strip_prefix('*') {
-                branch.ends_with(suffix)
-            } else {
-                pat == branch
-            }
-        })
+    settings.protected_branch_patterns.iter().any(|pat| {
+        if pat == "*" {
+            true
+        } else if let Some(prefix) = pat.strip_suffix('*') {
+            branch.starts_with(prefix)
+        } else if let Some(suffix) = pat.strip_prefix('*') {
+            branch.ends_with(suffix)
+        } else {
+            pat == branch
+        }
+    })
 }
 
 /// Fetch from the given remote (or all remotes when `remote` is `None`).
@@ -95,11 +92,9 @@ pub fn push_all(
                         .find(|b| &b.name == branch)
                         .and_then(|b| b.tracking.clone());
                     let remote = match tracking {
-                        Some(t) if t.contains('/') => t
-                            .split('/')
-                            .next()
-                            .unwrap_or("origin")
-                            .to_string(),
+                        Some(t) if t.contains('/') => {
+                            t.split('/').next().unwrap_or("origin").to_string()
+                        }
                         _ => root
                             .remotes
                             .first()
@@ -109,6 +104,36 @@ pub fn push_all(
                     push(vcs, &root.path, &remote, branch, false, settings)
                 }
                 None => Ok(()),
+            };
+            (root.id.clone(), result)
+        })
+        .collect()
+}
+
+/// List each root's outgoing commits (local-ahead SHAs, newest-first).
+/// Returns one `(RootId, result)` per root. A root with no current branch, or
+/// whose branch has no tracking upstream, records `Ok(vec![])`.
+pub fn outgoing_per_root(
+    vcs: &dyn GitExecutor,
+    mgr: &MultiRootManager,
+) -> Vec<(RootId, TgResult<Vec<CommitId>>)> {
+    mgr.roots
+        .iter()
+        .map(|root| {
+            let result = match &root.current_branch {
+                Some(branch) => {
+                    match root
+                        .branches
+                        .iter()
+                        .find(|b| &b.name == branch)
+                        .and_then(|b| b.tracking.clone())
+                    {
+                        Some(upstream) => vcs.outgoing_commits(&root.path, branch, &upstream),
+                        // No tracking ref = nothing known to be ahead.
+                        None => Ok(Vec::new()),
+                    }
+                }
+                None => Ok(Vec::new()),
             };
             (root.id.clone(), result)
         })
