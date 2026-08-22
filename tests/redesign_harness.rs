@@ -118,8 +118,8 @@ fn initial_render_paints_the_shell_over_an_empty_project() {
     for label in ["Commit", "Log", "History", "Settings"] {
         assert_painted(&harness, label);
     }
-    // No project open → central body routes to the Welcome placeholder.
-    assert_painted(&harness, "Welcome to TurboGit");
+    // No project open → central body routes to the Welcome page (issue #10).
+    assert_painted(&harness, "TurboGit");
 }
 
 #[test]
@@ -127,7 +127,7 @@ fn no_project_renders_welcome_placeholder_instead_of_old_panels() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    assert_painted(&harness, "Welcome to TurboGit");
+    assert_painted(&harness, "A fast, keyboard-friendly Git client");
     // The old panel layout is replaced outright — its left-pane copy is gone.
     assert_not_painted(&harness, "No Git repositories detected.");
     assert_not_painted(&harness, "Clone:");
