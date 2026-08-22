@@ -3,14 +3,14 @@
 
 #![allow(dead_code)]
 
-use crate::core::vcs_manager::VcsManager;
+use crate::engine::GitExecutor;
 use crate::error::TgResult;
 use crate::model::*;
 use std::path::Path;
 
 /// Merge `target` into the current branch at `root`.
 pub fn merge(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     target: &str,
     opts: &MergeOpts,
@@ -20,7 +20,7 @@ pub fn merge(
 
 /// Rebase the current branch onto `onto`.
 pub fn rebase(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     onto: &str,
     opts: &RebaseOpts,
@@ -29,17 +29,17 @@ pub fn rebase(
 }
 
 /// Apply `commit` on top of the current branch.
-pub fn cherry_pick(vcs: &VcsManager, root: &Path, commit: &str) -> TgResult<()> {
+pub fn cherry_pick(vcs: &dyn GitExecutor, root: &Path, commit: &str) -> TgResult<()> {
     vcs.cherry_pick(root, commit)
 }
 
 /// Abort an in-progress `op` (merge / rebase / cherry-pick).
-pub fn abort(vcs: &VcsManager, root: &Path, op: &str) -> TgResult<()> {
+pub fn abort(vcs: &dyn GitExecutor, root: &Path, op: &str) -> TgResult<()> {
     vcs.abort(root, op)
 }
 
 /// Continue an in-progress `op` after resolving conflicts.
-pub fn cont(vcs: &VcsManager, root: &Path, op: &str) -> TgResult<()> {
+pub fn cont(vcs: &dyn GitExecutor, root: &Path, op: &str) -> TgResult<()> {
     vcs.continue_op(root, op)
 }
 
@@ -50,7 +50,7 @@ pub fn cont(vcs: &VcsManager, root: &Path, op: &str) -> TgResult<()> {
 /// is ignored so the stash is left in place. A merge failure still triggers a
 /// best-effort pop before returning the merge error.
 pub fn smart_merge(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     target: &str,
     opts: &MergeOpts,

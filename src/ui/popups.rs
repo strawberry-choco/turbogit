@@ -89,7 +89,7 @@ fn run_action(state: &mut AppState, action: Action) {
         }
         Action::Pull => {
             let r = root.clone();
-            let rebase = state.vcs.settings.update_method == crate::model::UpdateMethod::Rebase;
+            let rebase = state.settings.update_method == crate::model::UpdateMethod::Rebase;
             state.run_git("Pull".into(), move |v| {
                 if let Some(r) = &r {
                     v.pull(r, rebase)
