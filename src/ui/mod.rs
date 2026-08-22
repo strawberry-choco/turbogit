@@ -20,6 +20,7 @@ pub mod diff;
 pub mod icons;
 pub mod log_window;
 pub mod popups;
+pub mod widgets;
 
 use crate::state::{AppState, Dialog, PendingConfirm, Tab};
 use egui::{Align, Color32, Context, Key, Layout, Panel, ScrollArea, Ui};
