@@ -8,6 +8,8 @@
 //! See `product-spec.md` §10 and `execution-plan.md` §3.
 
 pub mod cli;
+#[cfg(test)]
+pub mod fake;
 #[cfg(feature = "gix-reader")]
 pub mod gix_reader;
 

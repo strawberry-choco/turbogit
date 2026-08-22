@@ -1,11 +1,12 @@
-//! Application state: owns the VCS manager, the multi-root model, the project
-//! directory, the event channel, and all UI-only ephemeral state. The UI reads
-//! from here and never calls git directly; long ops are dispatched to worker
-//! threads via [`AppState::run_git`].
+//! Application state: owns the Git engine (the [`GitExecutor`] seam), the
+//! multi-root model, canonical settings, the project directory, the event
+//! channel, and all UI-only ephemeral state. The UI reads from here and never
+//! calls git directly; long ops are dispatched to worker threads via
+//! [`AppState::run_git`].
 
 use crate::core::changes;
-use crate::core::vcs_manager::VcsManager;
-use crate::engine::AppEvent;
+use crate::engine::{AppEvent, GitExecutor};
+use std::sync::Arc;
 use crate::error::TgResult;
 use crate::model::*;
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -142,7 +143,10 @@ pub struct UiState {
 
 pub struct AppState {
     pub project_dir: PathBuf,
-    pub vcs: VcsManager,
+    /// The Git engine. This interface is the seam (ADR-0001).
+    pub executor: Arc<dyn GitExecutor>,
+    /// Canonical engine settings (git binary path, update method, …).
+    pub settings: VcsSettings,
     pub multi: MultiRootManager,
     pub tx: Sender<AppEvent>,
     pub rx: Receiver<AppEvent>,
@@ -160,10 +164,13 @@ impl AppState {
     pub fn new(project_dir: PathBuf) -> Self {
         let (tx, rx) = unbounded();
         let settings = VcsSettings::default();
-        let vcs = VcsManager::new(settings);
+        let executor: Arc<dyn GitExecutor> = Arc::new(crate::engine::cli::CliExecutor {
+            settings: settings.clone(),
+        });
         let mut state = Self {
             project_dir,
-            vcs,
+            executor,
+            settings,
             multi: MultiRootManager::default(),
             tx,
             rx,
@@ -206,8 +213,8 @@ impl AppState {
     /// Re-discover roots under `project_dir`, register any new ones, and
     /// dispatch a fresh asynchronous status scan for every registered root.
     pub fn rescan(&mut self) {
-        let paths = crate::core::multi_root::discover_roots(&self.vcs, &self.project_dir);
-        let results = crate::core::multi_root::register_all(&self.vcs, &mut self.multi, &paths);
+        let paths = crate::core::multi_root::discover_roots(self.executor.as_ref(), &self.project_dir);
+        let results = crate::core::multi_root::register_all(self.executor.as_ref(), &mut self.multi, &paths);
         for r in &results {
             if let Err(e) = r {
                 self.last_error = Some(e.to_string());
@@ -217,7 +224,7 @@ impl AppState {
             self.selected_root = self.multi.roots.first().map(|r| r.id.clone());
         }
 
-        let executor = self.vcs.executor.clone();
+        let executor = self.executor.clone();
         let tx = self.tx.clone();
         for root in &self.multi.roots {
             let root_path = root.id.0.clone();
@@ -261,7 +268,7 @@ impl AppState {
 
     /// Fetch (and cache) the commit log for a root on a worker thread.
     pub fn fetch_log(&mut self, root: RootId) {
-        let executor = self.vcs.executor.clone();
+        let executor = self.executor.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             let res = executor.log(&root.0, &LogOpts::default());
@@ -269,18 +276,18 @@ impl AppState {
         });
     }
 
-    /// Dispatch a git operation on a worker thread. `work` receives a
-    /// `VcsManager` and returns a `TgResult<()>`; the result is posted as an
+    /// Dispatch a git operation on a worker thread. `work` receives the
+    /// engine (`GitExecutor`) and returns a `TgResult<()>`; the result is posted as an
     /// `OpCompleted` event and the UI re-scans on completion.
     pub fn run_git<W>(&mut self, label: String, work: W)
     where
-        W: FnOnce(&VcsManager) -> TgResult<()> + Send + 'static,
+        W: FnOnce(&dyn GitExecutor) -> TgResult<()> + Send + 'static,
     {
-        let vcs = VcsManager::with_executor(self.vcs.executor.clone(), self.vcs.settings.clone());
+        let executor = self.executor.clone();
         let tx = self.tx.clone();
         self.ui.busy = true;
         std::thread::spawn(move || {
-            let res = work(&vcs);
+            let res = work(executor.as_ref());
             let _ = tx.send(AppEvent::OpCompleted { label, result: res });
         });
     }
@@ -326,7 +333,7 @@ impl AppState {
 
     /// `git init` at the project dir, persist the mapping, then rescan.
     pub fn init_repo(&mut self) {
-        if let Err(e) = self.vcs.init(&self.project_dir) {
+        if let Err(e) = self.executor.init(&self.project_dir) {
             self.last_error = Some(e.to_string());
             return;
         }
@@ -347,7 +354,7 @@ impl AppState {
             .trim_end_matches(".git")
             .to_string();
         let dest = self.project_dir.join(&name);
-        if let Err(e) = self.vcs.clone(&url, &dest, None) {
+        if let Err(e) = GitExecutor::clone(&*self.executor, &url, &dest, None) {
             self.last_error = Some(e.to_string());
             return;
         }

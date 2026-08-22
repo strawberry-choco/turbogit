@@ -3,11 +3,11 @@
 //!
 //! This module groups working-tree [`Change`]s into named changelists, splits
 //! them by their `staged` flag, and orchestrates stage/commit/discard flows on
-//! top of [`VcsManager`].
+//! top of [`GitExecutor`].
 
 #![allow(dead_code)]
 
-use crate::core::vcs_manager::VcsManager;
+use crate::engine::GitExecutor;
 use crate::error::TgResult;
 use crate::model::*;
 use std::path::{Path, PathBuf};
@@ -104,7 +104,7 @@ fn paths_of(changes: &[Change]) -> Vec<PathBuf> {
 }
 
 /// Stage the selected changes' paths.
-pub fn stage_selected(vcs: &VcsManager, root: &Path, changes: &[Change]) -> TgResult<()> {
+pub fn stage_selected(vcs: &dyn GitExecutor, root: &Path, changes: &[Change]) -> TgResult<()> {
     let paths = paths_of(changes);
     if paths.is_empty() {
         return Ok(());
@@ -113,7 +113,7 @@ pub fn stage_selected(vcs: &VcsManager, root: &Path, changes: &[Change]) -> TgRe
 }
 
 /// Unstage the selected changes' paths.
-pub fn unstage_selected(vcs: &VcsManager, root: &Path, changes: &[Change]) -> TgResult<()> {
+pub fn unstage_selected(vcs: &dyn GitExecutor, root: &Path, changes: &[Change]) -> TgResult<()> {
     let paths = paths_of(changes);
     if paths.is_empty() {
         return Ok(());
@@ -127,7 +127,7 @@ pub fn unstage_selected(vcs: &VcsManager, root: &Path, changes: &[Change]) -> Tg
 /// selection, stages the chosen paths then commits the index
 /// (`vcs.commit_index`); a partial commit never amends.
 pub fn commit_selected(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     message: &str,
     changes: &[Change],
@@ -142,10 +142,57 @@ pub fn commit_selected(
 }
 
 /// Discard working-tree edits for the selected changes via `vcs.restore`.
-pub fn discard_changes(vcs: &VcsManager, root: &Path, changes: &[Change]) -> TgResult<()> {
+pub fn discard_changes(vcs: &dyn GitExecutor, root: &Path, changes: &[Change]) -> TgResult<()> {
     let paths = paths_of(changes);
     if paths.is_empty() {
         return Ok(());
     }
     vcs.restore(root, &paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::fake::{Call, FakeExecutor};
+
+    fn change(path: &str, staged: bool) -> Change {
+        Change {
+            path: PathBuf::from(path),
+            status: ChangeStatus::Modified,
+            chunks: vec![],
+            staged,
+        }
+    }
+
+    #[test]
+    fn commit_selected_stages_then_commits_index_for_partial_selection() {
+        let engine = FakeExecutor::new();
+        let root = PathBuf::from("/repo");
+        let selected = [change("a.txt", false), change("b.txt", false)];
+
+        let id = commit_selected(&engine, &root, "msg", &selected, false).unwrap();
+        assert_eq!(id, "bbbb", "partial commits go through commit_index");
+        assert_eq!(
+            engine.calls.lock().unwrap().as_slice(),
+            [
+                Call::Add(vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]),
+                Call::CommitIndex,
+            ],
+            "stage first, then commit the index"
+        );
+    }
+
+    #[test]
+    fn commit_without_selection_commits_everything_tracked() {
+        let engine = FakeExecutor::new();
+        let root = PathBuf::from("/repo");
+
+        let id = commit_selected(&engine, &root, "msg", &[], true).unwrap();
+        assert_eq!(id, "aaaa");
+        assert_eq!(
+            engine.calls.lock().unwrap().as_slice(),
+            [Call::CommitAll],
+            "empty selection uses -a commit; amend flag passes through"
+        );
+    }
 }

@@ -125,7 +125,7 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
     ui.label(format!("{} commits", matched.len()));
 
     let colors = assign_colors(&commits);
-    let date_mode = state.vcs.settings.date_format;
+    let date_mode = state.settings.date_format;
     let id = state.selected_root.clone();
 
     ScrollArea::vertical().show(ui, |ui| {
@@ -218,7 +218,7 @@ pub fn show_history(ui: &mut Ui, state: &mut AppState) {
             if let Some(id) = &state.selected_root {
                 let id = id.clone();
                 let path = std::path::PathBuf::from(state.ui.history_path.trim());
-                let executor = state.vcs.executor.clone();
+                let executor = state.executor.clone();
                 let tx = state.tx.clone();
                 std::thread::spawn(move || {
                     let res = executor.log(
@@ -236,7 +236,7 @@ pub fn show_history(ui: &mut Ui, state: &mut AppState) {
             let root = state.selected_path();
             let path = std::path::PathBuf::from(state.ui.history_path.trim());
             if let Some(r) = root {
-                match state.vcs.blame(&r, &path, None) {
+                match state.executor.blame(&r, &path, None) {
                     Ok(lines) => {
                         for l in lines.iter().take(200) {
                             ui.colored_label(
