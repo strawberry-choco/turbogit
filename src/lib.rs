@@ -9,6 +9,7 @@ pub mod engine;
 pub mod error;
 pub mod model;
 pub mod persistence;
+pub mod recents;
 pub mod state;
 pub mod theme;
 pub mod ui;

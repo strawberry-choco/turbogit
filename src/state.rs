@@ -10,7 +10,7 @@ use crate::error::TgResult;
 use crate::model::*;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Persistent input fields for the modal dialogs (kept across redraws).
@@ -141,6 +141,17 @@ pub struct UiState {
     // body routes to the Welcome page instead of the active tool window.
     // Derived true whenever no root is open (`AppState::show_welcome`).
     pub welcome_visible: bool,
+    // Welcome page (issue #10): in-memory copy of the global recents store
+    // (ADR-0005), loaded at launch and refreshed on every recorded open.
+    pub recent_projects: Vec<crate::recents::RecentProject>,
+    /// In-memory branch-indicator cache for visible recents: path →
+    /// `(branch, computed_at)`. Computed live at render, never persisted.
+    pub welcome_branch_cache: HashMap<PathBuf, (Option<String>, std::time::Instant)>,
+    // Inline clone form on the Welcome page (issue #10).
+    pub welcome_clone_url: String,
+    pub welcome_shallow: bool,
+    /// Set by the Clone action card; focuses the URL input on the next render.
+    pub welcome_focus_clone: bool,
     /// User-toggleable shell regions (View menu); not persisted in v1.
     pub show_toolbar: bool,
     pub show_status_bar: bool,
@@ -163,17 +174,39 @@ pub struct AppState {
     pub log_cache: HashMap<RootId, Vec<Commit>>,
     /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
     pub ahead_behind: HashMap<RootId, (usize, usize)>,
+    /// Override for the OS config dir hosting the global recents file
+    /// (ADR-0005). `None` → `recents::default_config_dir()`. Tests inject a
+    /// temp dir so the real user configuration is never touched.
+    pub recents_config_dir: Option<PathBuf>,
+    /// Native folder-picker seam for the Welcome Open/Initialize flows.
+    /// Production wires `rfd`; tests inject closures returning fixed paths.
+    pub dir_picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
 }
 
 impl AppState {
     pub fn new(project_dir: PathBuf) -> Self {
+        Self::launch(Some(project_dir))
+    }
+
+    /// Launch with an explicit project directory: roots are discovered and
+    /// the shell is entered directly — `turbogit <path>` (ADR-0004). `None`
+    /// lands on the Welcome screen without scanning any directory.
+    pub fn launch(project_dir: Option<PathBuf>) -> Self {
+        Self::launch_in(project_dir, None)
+    }
+
+    /// Launch flow (ADR-0004): with a project directory the shell opens
+    /// straight away; without one the Welcome screen is the landing surface
+    /// and no CWD scan happens. `recents_config_dir` overrides the OS config
+    /// dir hosting the global recents file (tests inject a temp dir).
+    pub fn launch_in(project_dir: Option<PathBuf>, recents_config_dir: Option<PathBuf>) -> Self {
         let (tx, rx) = unbounded();
         let settings = VcsSettings::default();
         let executor: Arc<dyn GitExecutor> = Arc::new(crate::engine::cli::CliExecutor {
             settings: settings.clone(),
         });
         let mut state = Self {
-            project_dir,
+            project_dir: project_dir.clone().unwrap_or_default(),
             executor,
             settings,
             multi: MultiRootManager::default(),
@@ -190,19 +223,44 @@ impl AppState {
             },
             log_cache: HashMap::new(),
             ahead_behind: HashMap::new(),
+            recents_config_dir,
+            dir_picker: None,
         };
-        state.rescan();
 
-        // Restore persisted UI state (Epic J4): active tab, draft message, recent repos.
-        let ui = crate::persistence::load_ui_state(&state.project_dir);
-        state.ui.tab = match ui.tab.as_str() {
-            "Log" => Tab::Log,
-            "History" => Tab::History,
-            _ => Tab::Commit,
-        };
-        state.ui.commit_message = ui.draft_message;
-        state.ui.recent_repos = ui.recent_repos;
+        // Global recents (ADR-0005) load before anything is open so the
+        // Welcome screen can list them.
+        if let Some(cfg) = state.recents_config() {
+            state.ui.recent_projects = crate::recents::load(&cfg).projects;
+        }
+
+        match project_dir {
+            Some(dir) => {
+                state.project_dir = dir;
+                state.rescan();
+
+                // Restore persisted UI state (Epic J4): active tab, draft message, recent repos.
+                let ui = crate::persistence::load_ui_state(&state.project_dir);
+                state.ui.tab = match ui.tab.as_str() {
+                    "Log" => Tab::Log,
+                    "History" => Tab::History,
+                    _ => Tab::Commit,
+                };
+                state.ui.commit_message = ui.draft_message;
+                state.ui.recent_repos = ui.recent_repos;
+            }
+            None => {
+                // No project directory supplied: land on Welcome (ADR-0004).
+                state.ui.welcome_visible = true;
+            }
+        }
         state
+    }
+
+    /// The effective config dir for the global recents file (ADR-0005).
+    fn recents_config(&self) -> Option<PathBuf> {
+        self.recents_config_dir
+            .clone()
+            .or_else(crate::recents::default_config_dir)
     }
 
     /// Persist lightweight UI state (active tab, draft message, recent repos).
@@ -351,6 +409,56 @@ impl AppState {
         }
         let _ = crate::persistence::add_mapping(&self.project_dir, &self.project_dir, Vcs::Git);
         self.rescan();
+    }
+
+    /// Open `dir` as the active project (issue #10): retarget the project
+    /// directory, rediscover roots from scratch, enter the shell, and record
+    /// the project in the global recents store (ADR-0005).
+    pub fn open_project(&mut self, dir: &Path) {
+        self.project_dir = dir.to_path_buf();
+        self.multi = MultiRootManager::default();
+        self.selected_root = None;
+        self.log_cache.clear();
+        self.ahead_behind.clear();
+        self.rescan();
+        self.ui.welcome_visible = false;
+        self.record_recent(dir);
+    }
+
+    /// Create a real repository at `dir` through the engine seam and enter
+    /// it (Welcome "Initialize Repository" card, issue #10).
+    pub fn initialize_and_enter(&mut self, dir: &Path) {
+        if let Err(e) = self.executor.init(dir) {
+            self.last_error = Some(e.to_string());
+            return;
+        }
+        let _ = crate::persistence::add_mapping(dir, dir, Vcs::Git);
+        self.open_project(dir);
+    }
+
+    /// Close every open project and return to the Welcome screen
+    /// (File → Welcome, ADR-0004).
+    pub fn close_all_projects(&mut self) {
+        self.multi = MultiRootManager::default();
+        self.selected_root = None;
+        self.log_cache.clear();
+        self.ahead_behind.clear();
+        self.ui.welcome_visible = true;
+    }
+
+    /// Upsert `dir` into the global recents store and refresh the in-memory
+    /// copy used by the Welcome page.
+    pub fn record_recent(&mut self, dir: &Path) {
+        if let Some(cfg) = self.recents_config() {
+            let recents = crate::recents::record(&cfg, dir);
+            self.ui.recent_projects = recents.projects;
+        }
+    }
+
+    /// Drop the cached branch indicators so the next render recomputes them
+    /// live (ADR-0005: never stored, always fresh at render time).
+    pub fn invalidate_welcome_branches(&mut self) {
+        self.ui.welcome_branch_cache.clear();
     }
 
     /// Clone `clone_url` into a sibling directory, then rescan.
