@@ -2,12 +2,12 @@
 //!
 //! A merge conflict in Git leaves up to three versions of a file in the index:
 //! the common ancestor (`:1`), "ours" (`:2`), and "theirs" (`:3`). This module
-//! reads those versions through the [`VcsManager`] and offers helpers to stage
+//! reads those versions through the [`GitExecutor`] and offers helpers to stage
 //! a resolved file or to apply the simplest automatic strategy.
 
 #![allow(dead_code)]
 
-use crate::core::vcs_manager::VcsManager;
+use crate::engine::GitExecutor;
 use crate::error::TgResult;
 use crate::model::*;
 use std::path::{Path, PathBuf};
@@ -32,10 +32,10 @@ pub fn detect(status: &RootStatus) -> Vec<PathBuf> {
 
 /// Read the three sides of a conflicted file from the index.
 ///
-/// Delegates to `git show` via [`VcsManager::show_file`], which builds the
+/// Delegates to `git show` via [`GitExecutor::show_file`], which builds the
 /// `<rev>:<path>` refspec: `:1` = base, `:2` = ours, `:3` = theirs.
 pub fn read_versions(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     path: &Path,
 ) -> TgResult<ConflictVersions> {
@@ -47,7 +47,7 @@ pub fn read_versions(
 
 /// Write `content` to the working tree copy and stage it as resolved.
 pub fn write_resolution(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     path: &Path,
     content: &str,
@@ -57,13 +57,13 @@ pub fn write_resolution(
 }
 
 /// Resolve a conflict by taking our side verbatim.
-pub fn accept_ours(vcs: &VcsManager, root: &Path, path: &Path) -> TgResult<()> {
+pub fn accept_ours(vcs: &dyn GitExecutor, root: &Path, path: &Path) -> TgResult<()> {
     let versions = read_versions(vcs, root, path)?;
     write_resolution(vcs, root, path, &versions.ours)
 }
 
 /// Resolve a conflict by taking their side verbatim.
-pub fn accept_theirs(vcs: &VcsManager, root: &Path, path: &Path) -> TgResult<()> {
+pub fn accept_theirs(vcs: &dyn GitExecutor, root: &Path, path: &Path) -> TgResult<()> {
     let versions = read_versions(vcs, root, path)?;
     write_resolution(vcs, root, path, &versions.theirs)
 }
@@ -75,7 +75,7 @@ pub fn accept_theirs(vcs: &VcsManager, root: &Path, path: &Path) -> TgResult<()>
 /// stage it. Paths that genuinely differ are left untouched (still reported as
 /// `Ok` so the caller can iterate; the unresolved count is unchanged).
 pub fn resolve_all_simple(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     status: &RootStatus,
 ) -> Vec<(PathBuf, TgResult<()>)> {
@@ -98,4 +98,25 @@ pub fn resolve_all_simple(
 /// Number of conflicts still awaiting resolution.
 pub fn unresolved(status: &RootStatus) -> usize {
     status.conflicted.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::fake::FakeExecutor;
+
+    #[test]
+    fn write_resolution_writes_file_then_stages_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().to_path_buf();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let engine = FakeExecutor::new();
+
+        write_resolution(&engine, &repo, Path::new("src/main.rs"), "resolved!").unwrap();
+
+        let written = std::fs::read_to_string(repo.join("src").join("main.rs")).unwrap();
+        assert_eq!(written, "resolved!");
+        let calls = engine.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "one stage call recorded");
+    }
 }
