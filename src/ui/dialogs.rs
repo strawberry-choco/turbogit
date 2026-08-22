@@ -52,9 +52,17 @@ fn push(ui: &mut Ui, state: &mut AppState) {
                     if let Some(t) = &b.tracking {
                         let parts: Vec<&str> = t.splitn(2, '/').collect();
                         state.ui.dlg.push_remote = parts[0].to_string();
-                        state.ui.dlg.push_branch = parts.get(1).copied().unwrap_or_else(|| b.name.as_str()).to_string();
+                        state.ui.dlg.push_branch = parts
+                            .get(1)
+                            .copied()
+                            .unwrap_or_else(|| b.name.as_str())
+                            .to_string();
                     } else {
-                        state.ui.dlg.push_remote = root.remotes.first().map(|r| r.name.clone()).unwrap_or_else(|| "origin".into());
+                        state.ui.dlg.push_remote = root
+                            .remotes
+                            .first()
+                            .map(|r| r.name.clone())
+                            .unwrap_or_else(|| "origin".into());
                         state.ui.dlg.push_branch = root.current_branch.clone().unwrap_or_default();
                     }
                 }
@@ -65,12 +73,18 @@ fn push(ui: &mut Ui, state: &mut AppState) {
     ui.text_edit_singleline(&mut state.ui.dlg.push_remote);
     ui.label("Branch:");
     ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
-    ui.checkbox(&mut state.ui.dlg.force_push, "Force push (--force-with-lease)");
+    ui.checkbox(
+        &mut state.ui.dlg.force_push,
+        "Force push (--force-with-lease)",
+    );
 
     let protected = state.settings.protected_branch_patterns.clone();
     let branch = state.ui.dlg.push_branch.clone();
     if state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch) {
-        ui.colored_label(egui::Color32::RED, format!("⚠ '{branch}' is protected — force-push blocked."));
+        ui.colored_label(
+            egui::Color32::RED,
+            format!("⚠ '{branch}' is protected — force-push blocked."),
+        );
     }
 
     // Review what will be pushed (Epic F6).
@@ -120,7 +134,10 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
     ui.text_edit_singleline(&mut state.ui.dlg.new_branch_name);
     ui.label("Start point (blank = current HEAD):");
     ui.text_edit_singleline(&mut state.ui.dlg.new_branch_start);
-    ui.checkbox(&mut state.ui.dlg.new_branch_checkout, "Checkout after create");
+    ui.checkbox(
+        &mut state.ui.dlg.new_branch_checkout,
+        "Checkout after create",
+    );
     ui.horizontal(|ui| {
         if ui.button("Create").clicked() {
             let root = state.selected_path();
@@ -152,7 +169,10 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
     ui.checkbox(&mut state.ui.dlg.merge_no_ff, "No fast-forward (--no-ff)");
     ui.checkbox(&mut state.ui.dlg.merge_squash, "Squash");
     ui.checkbox(&mut state.ui.dlg.merge_no_commit, "No commit");
-    ui.checkbox(&mut state.ui.dlg.merge_no_verify, "Skip hooks (--no-verify)");
+    ui.checkbox(
+        &mut state.ui.dlg.merge_no_verify,
+        "Skip hooks (--no-verify)",
+    );
     ui.horizontal(|ui| {
         if ui.button("Merge").clicked() {
             let root = state.selected_path();
@@ -193,7 +213,11 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
             let onto = state.ui.dlg.rebase_onto.clone();
             let onto_arg = onto.clone();
             let opts = RebaseOpts {
-                onto: if onto.trim().is_empty() { None } else { Some(onto) },
+                onto: if onto.trim().is_empty() {
+                    None
+                } else {
+                    Some(onto)
+                },
                 rebase_merges: state.ui.dlg.rebase_merges,
                 keep_empty: state.ui.dlg.rebase_keep_empty,
                 update_refs: state.ui.dlg.rebase_update_refs,
@@ -270,10 +294,7 @@ fn interactive_rebase(ui: &mut Ui, state: &mut AppState) {
                         ("drop", RebaseAction::Drop),
                     ];
                     for (lbl, act) in actions {
-                        if ui
-                            .selectable_label(plan[i].action == act, lbl)
-                            .clicked()
-                        {
+                        if ui.selectable_label(plan[i].action == act, lbl).clicked() {
                             plan[i].action = act;
                         }
                     }
@@ -330,7 +351,11 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
                 if let Some(r) = &root {
                     v.tag_create(r, &name, if msg.is_empty() { None } else { Some(&msg) })?;
                     if push {
-                        let remote = v.remotes(r)?.first().map(|x| x.name.clone()).unwrap_or_else(|| "origin".into());
+                        let remote = v
+                            .remotes(r)?
+                            .first()
+                            .map(|x| x.name.clone())
+                            .unwrap_or_else(|| "origin".into());
                         v.tag_push(r, &remote, Some(&name), false)?;
                     }
                     Ok(())

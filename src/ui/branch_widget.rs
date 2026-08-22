@@ -52,10 +52,16 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 ui.horizontal(|ui| {
                     ui.label("Current:");
                     if *ahead > 0 {
-                        ui.colored_label(egui::Color32::from_rgb(120, 200, 120), format!("↑{ahead}"));
+                        ui.colored_label(
+                            egui::Color32::from_rgb(120, 200, 120),
+                            format!("↑{ahead}"),
+                        );
                     }
                     if *behind > 0 {
-                        ui.colored_label(egui::Color32::from_rgb(230, 160, 90), format!("↓{behind}"));
+                        ui.colored_label(
+                            egui::Color32::from_rgb(230, 160, 90),
+                            format!("↓{behind}"),
+                        );
                     }
                 });
             }

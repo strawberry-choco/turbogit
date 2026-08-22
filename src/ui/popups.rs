@@ -157,17 +157,19 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
                 .copied()
                 .filter(|a| q.is_empty() || a.label().to_lowercase().contains(&q))
                 .collect();
-            egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                for &a in &matches {
-                    if ui.selectable_label(false, a.label()).clicked() {
-                        run_action(state, a);
-                        state.ui.command_palette = false;
+            egui::ScrollArea::vertical()
+                .max_height(320.0)
+                .show(ui, |ui| {
+                    for &a in &matches {
+                        if ui.selectable_label(false, a.label()).clicked() {
+                            run_action(state, a);
+                            state.ui.command_palette = false;
+                        }
                     }
-                }
-                if matches.is_empty() {
-                    ui.label("No matching actions.");
-                }
-            });
+                    if matches.is_empty() {
+                        ui.label("No matching actions.");
+                    }
+                });
         });
     if !open {
         state.ui.command_palette = false;

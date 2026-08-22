@@ -101,7 +101,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     }
 
     ui.horizontal(|ui| {
-        if ui.button("Stage selected").on_hover_text("Move selected files into the staging area").clicked() {
+        if ui
+            .button("Stage selected")
+            .on_hover_text("Move selected files into the staging area")
+            .clicked()
+        {
             let ch = selected_changes(state);
             let root = state.selected_path();
             state.run_git("Stage".into(), move |v| {
@@ -112,7 +116,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 }
             });
         }
-        if ui.button("Unstage selected").on_hover_text("Remove selected files from the staging area").clicked() {
+        if ui
+            .button("Unstage selected")
+            .on_hover_text("Remove selected files from the staging area")
+            .clicked()
+        {
             let ch = selected_changes(state);
             let root = state.selected_path();
             state.run_git("Unstage".into(), move |v| {
@@ -123,7 +131,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 }
             });
         }
-        if ui.button("Discard").on_hover_text("Discard working-tree changes (irreversible)").clicked() {
+        if ui
+            .button("Discard")
+            .on_hover_text("Discard working-tree changes (irreversible)")
+            .clicked()
+        {
             let ch = selected_changes(state);
             if ch.is_empty() {
                 state.ui.toast = Some("Select files to discard.".into());
@@ -151,10 +163,18 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         {
             do_commit(state, true);
         }
-        if ui.button("Shelve…").on_hover_text("Shelve selected changes").clicked() {
+        if ui
+            .button("Shelve…")
+            .on_hover_text("Shelve selected changes")
+            .clicked()
+        {
             state.ui.dialog = Some(Dialog::Shelve);
         }
-        if ui.button("Stash…").on_hover_text("Stash all changes").clicked() {
+        if ui
+            .button("Stash…")
+            .on_hover_text("Stash all changes")
+            .clicked()
+        {
             state.ui.dialog = Some(Dialog::Stash);
         }
     });

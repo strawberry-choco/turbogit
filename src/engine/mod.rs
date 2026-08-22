@@ -84,6 +84,10 @@ pub trait GitExecutor: Send + Sync {
     /// Returns `(ahead, behind)`.
     fn ahead_behind(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<(usize, usize)>;
 
+    /// Commits on local `branch` that are missing from `upstream`
+    /// (e.g. `"origin/main"`), newest-first (`git rev-list upstream..branch`).
+    fn outgoing_commits(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<Vec<CommitId>>;
+
     /// Configured remotes.
     fn remotes(&self, root: &Path) -> TgResult<Vec<Remote>>;
 
@@ -117,6 +121,13 @@ pub trait GitExecutor: Send + Sync {
 
     /// `git push` (optionally `--force-with-lease`).
     fn push(&self, root: &Path, remote: &str, branch: &str, force: bool) -> TgResult<()>;
+
+    /// `git push --dry-run`: report what a push would do without mutating the
+    /// remote. Returns the verbatim git report (captured from stderr) on
+    /// success; a rejected push (e.g. non-fast-forward) surfaces as
+    /// [`TgError::Cli`] carrying the verbatim stderr.
+    fn push_dry_run(&self, root: &Path, remote: &str, branch: &str, force: bool)
+    -> TgResult<String>;
 
     /// `git commit` (optionally `--amend`).
     fn commit(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId>;
