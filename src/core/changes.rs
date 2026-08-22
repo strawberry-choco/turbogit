@@ -149,3 +149,50 @@ pub fn discard_changes(vcs: &dyn GitExecutor, root: &Path, changes: &[Change]) -
     }
     vcs.restore(root, &paths)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::fake::{Call, FakeExecutor};
+
+    fn change(path: &str, staged: bool) -> Change {
+        Change {
+            path: PathBuf::from(path),
+            status: ChangeStatus::Modified,
+            chunks: vec![],
+            staged,
+        }
+    }
+
+    #[test]
+    fn commit_selected_stages_then_commits_index_for_partial_selection() {
+        let engine = FakeExecutor::new();
+        let root = PathBuf::from("/repo");
+        let selected = [change("a.txt", false), change("b.txt", false)];
+
+        let id = commit_selected(&engine, &root, "msg", &selected, false).unwrap();
+        assert_eq!(id, "bbbb", "partial commits go through commit_index");
+        assert_eq!(
+            engine.calls.lock().unwrap().as_slice(),
+            [
+                Call::Add(vec![PathBuf::from("a.txt"), PathBuf::from("b.txt")]),
+                Call::CommitIndex,
+            ],
+            "stage first, then commit the index"
+        );
+    }
+
+    #[test]
+    fn commit_without_selection_commits_everything_tracked() {
+        let engine = FakeExecutor::new();
+        let root = PathBuf::from("/repo");
+
+        let id = commit_selected(&engine, &root, "msg", &[], true).unwrap();
+        assert_eq!(id, "aaaa");
+        assert_eq!(
+            engine.calls.lock().unwrap().as_slice(),
+            [Call::CommitAll],
+            "empty selection uses -a commit; amend flag passes through"
+        );
+    }
+}

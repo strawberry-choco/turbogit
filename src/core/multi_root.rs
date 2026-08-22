@@ -32,7 +32,7 @@ pub fn scan_for_roots(engine: &dyn GitExecutor, dir: &Path) -> Vec<PathBuf> {
     found
 }
 
-fn scan_dir(engine: &dyn GitExecutor, dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+fn scan_dir(_engine: &dyn GitExecutor, dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
     if depth >= SCAN_MAX_DEPTH {
         return;
     }
@@ -53,7 +53,7 @@ fn scan_dir(engine: &dyn GitExecutor, dir: &Path, depth: usize, found: &mut Vec<
         if path.join(".git").exists() {
             found.push(path.clone());
         }
-        scan_dir(engine, &path, depth + 1, found);
+        scan_dir(_engine, &path, depth + 1, found);
     }
 }
 
@@ -117,4 +117,73 @@ pub fn roots_status(mgr: &MultiRootManager) -> Vec<(RootId, usize, usize)> {
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::fake::FakeExecutor;
+
+    fn repo_at(dir: &Path) {
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+    }
+
+    #[test]
+    fn scanner_finds_repos_within_depth_and_skips_deeper_ones() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // depth 1 and depth 2 repos exist; a depth-3 nested repo must be skipped
+        let d1 = base.join("one");
+        let d2 = base.join("a").join("two");
+        let d3 = base.join("a").join("b").join("c").join("three");
+        repo_at(&d1);
+        repo_at(&d2);
+        repo_at(&d3);
+
+        let engine = FakeExecutor::new();
+        let mut found = scan_for_roots(&engine, base);
+        found.retain(|p| p != base); // drop the tempdir root itself
+
+        assert!(found.contains(&d1), "depth-1 repo should be found");
+        assert!(found.contains(&d2), "depth-2 repo should be found");
+        assert!(!found.contains(&d3), "beyond SCAN_MAX_DEPTH must not be walked");
+    }
+
+    #[test]
+    fn snapshot_populates_fields_through_the_seam() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("r");
+        repo_at(&repo);
+        let mut engine = FakeExecutor::new();
+        let root_id = RootId(repo.clone());
+        engine.branches.insert(repo.clone(), vec![Branch {
+            name: "main".into(),
+            kind: BranchKind::Local,
+            tracking: Some("origin/main".into()),
+            favorite: false,
+            protected: false,
+            exists: true,
+        }]);
+        engine.current_branch.insert(repo.clone(), Some("main".into()));
+
+        let snap = root_snapshot(&engine, &repo).unwrap();
+        assert_eq!(snap.id, root_id);
+        assert_eq!(snap.current_branch.as_deref(), Some("main"));
+        assert_eq!(snap.branches.len(), 1);
+        assert!(snap.head.is_none());
+    }
+
+    #[test]
+    fn register_all_is_idempotent_per_root_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("r");
+        repo_at(&repo);
+        let engine = FakeExecutor::new();
+        let mut mgr = MultiRootManager::default();
+
+        let paths = vec![repo.clone(), repo.clone()];
+        let results = register_all(&engine, &mut mgr, &paths);
+        assert!(results.iter().all(|r| r.is_ok()));
+        assert_eq!(mgr.roots.len(), 1, "same id registered once");
+    }
 }

@@ -130,3 +130,56 @@ pub fn update_all(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::fake::{Call, FakeExecutor};
+    use std::path::PathBuf;
+
+    fn settings_with(patterns: &[&str]) -> VcsSettings {
+        VcsSettings {
+            protected_branch_patterns: patterns.iter().map(|s| s.to_string()).collect(),
+            ..VcsSettings::default()
+        }
+    }
+
+    #[test]
+    fn is_protected_matches_exact_prefix_suffix_and_wildcard() {
+        let s = settings_with(&["main", "release/*", "*/hotfix"]);
+        assert!(is_protected(&s, "main"));
+        assert!(is_protected(&s, "release/1.0"));
+        // Raw-prefix semantics (documented): "release/*" matches by prefix, so it also covers "releaseX/…".
+        assert!(is_protected(&s, "eu/hotfix"));
+        assert!(!is_protected(&s, "hotfix"), "suffix must start at */");
+        let wild = settings_with(&["*"]);
+        assert!(is_protected(&wild, "anything/at/all"));
+    }
+
+    #[test]
+    fn push_refuses_force_to_protected_but_delegates_otherwise() {
+        let engine = FakeExecutor::new();
+        let s = settings_with(&["main"]);
+        let root = PathBuf::from("/repo");
+
+        let blocked = push(&engine, &root, "origin", "main", true, &s);
+        assert!(blocked.is_err(), "force-push to protected branch must fail");
+        assert!(
+            engine.calls.lock().unwrap().is_empty(),
+            "blocked push must not reach the engine"
+        );
+
+        let normal = push(&engine, &root, "origin", "feature", false, &s);
+        assert!(normal.is_ok());
+        let calls = engine.calls.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            [Call::Push {
+                root: root.clone(),
+                remote: "origin".into(),
+                branch: "feature".into(),
+                force: false,
+            }]
+        );
+    }
+}
