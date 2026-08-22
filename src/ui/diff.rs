@@ -164,18 +164,16 @@ pub fn render_diff(
         ui.colored_label(Color32::RED, err);
         return;
     }
-    let cached = state.ui.diff_cache.clone();
-    let text = match cached {
-        Some((k, t)) if k == key => t,
-        _ => {
-            if state.ui.diff_loading {
-                ui.spinner();
-                ui.label(" Computing diff…");
-            } else {
-                ui.label("(no diff)");
-            }
-            return;
+    let Some((active_key, text)) =
+        state.ui.diff_cache.clone().filter(|(k, _)| *k == key)
+    else {
+        if state.ui.diff_loading {
+            ui.spinner();
+            ui.label(" Computing diff…");
+        } else {
+            ui.label("(no diff)");
         }
+        return;
     };
 
     if text.trim().is_empty() {
@@ -199,14 +197,25 @@ pub fn render_diff(
 
     ScrollArea::vertical().show(ui, |ui| {
         if state.ui.diff_side_by_side {
-            render_side_by_side(ui, state, &rows);
+            render_side_by_side(ui, state, &rows, &active_key);
         } else {
-            render_unified(ui, state, &rows);
+            render_unified(ui, state, &rows, &active_key);
         }
     });
 }
 
-fn render_unified(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
+/// Issue the hunk scroll request at most once per (diff, hunk): re-issuing
+/// `scroll_to_me` every frame would keep the ScrollArea repainting forever.
+fn hunk_needs_scroll(ui: &Ui, diff_key: &str, idx: usize) -> bool {
+    let id = egui::Id::new(("diff_hunk_scrolled", diff_key, idx));
+    let done = ui.ctx().memory(|m| m.data.get_temp::<bool>(id)) == Some(true);
+    if !done {
+        ui.ctx().memory_mut(|m| m.data.insert_temp(id, true));
+    }
+    !done
+}
+
+fn render_unified(ui: &mut Ui, state: &mut AppState, rows: &[Row], diff_key: &str) {
     let base = ui.style().visuals.text_color();
     for row in rows {
         let mut resp: Option<Response> = None;
@@ -217,7 +226,7 @@ fn render_unified(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
             Row::Hunk(idx, s) => {
                 ui.colored_label(Color32::from_rgb(200, 170, 90), s);
                 resp = Some(ui.response());
-                if *idx == state.ui.diff_current_hunk {
+                if *idx == state.ui.diff_current_hunk && hunk_needs_scroll(ui, diff_key, *idx) {
                     if let Some(r) = resp.take() {
                         r.scroll_to_me(Some(Align::Center));
                     }
@@ -237,7 +246,7 @@ fn render_unified(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
     }
 }
 
-fn render_side_by_side(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
+fn render_side_by_side(ui: &mut Ui, state: &mut AppState, rows: &[Row], diff_key: &str) {
     // Pair consecutive Del/Add lines; render context/hunk/meta as full-width.
     let mut i = 0;
     while i < rows.len() {
@@ -248,7 +257,7 @@ fn render_side_by_side(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
             }
             Row::Hunk(idx, s) => {
                 ui.colored_label(Color32::from_rgb(200, 170, 90), s);
-                if *idx == state.ui.diff_current_hunk {
+                if *idx == state.ui.diff_current_hunk && hunk_needs_scroll(ui, diff_key, *idx) {
                     ui.response().scroll_to_me(Some(Align::Center));
                 }
                 i += 1;

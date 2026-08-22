@@ -20,7 +20,8 @@ thiserror = "2.0.19"
 toml = "1.1.4"
 
 [dev-dependencies]
-egui_kittest = "0.35"
+crossbeam-channel = "0.5.16"
+egui_kittest = "0.35.0"
 tempfile = "3.27.0"
 
 # Optional fast read-path; all mutating ops always go through the git CLI.
