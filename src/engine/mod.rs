@@ -40,10 +40,7 @@ pub enum AppEvent {
         commits: TgResult<Vec<Commit>>,
     },
     /// Generic asynchronous completion (e.g. push/pull finished).
-    OpCompleted {
-        label: String,
-        result: TgResult<()>,
-    },
+    OpCompleted { label: String, result: TgResult<()> },
     /// Fatal / unexpected error to surface in the UI.
     Error(String),
     /// App is ready (roots initialized, first scan dispatched).
@@ -73,6 +70,22 @@ pub trait GitExecutor: Send + Sync {
     /// `git log` for a root.
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>>;
 
+    /// Ref decorations per commit: every local branch, remote-tracking branch
+    /// and tag with the full SHA it points at (issue #12 ref chips). The
+    /// default returns an empty list for engines that cannot answer.
+    fn ref_decorations(&self, root: &Path) -> TgResult<Vec<(CommitId, Vec<CommitRef>)>> {
+        let _ = root;
+        Ok(Vec::new())
+    }
+
+    /// Files touched by one commit as `(status, path)` pairs
+    /// (`git diff-tree --name-status`; issue #12 changed-files pane).
+    /// The default returns an empty list for engines that cannot answer.
+    fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
+        let _ = (root, commit);
+        Ok(Vec::new())
+    }
+
     /// `git branch -vv` (+ remotes) for a root.
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>>;
 
@@ -86,7 +99,12 @@ pub trait GitExecutor: Send + Sync {
 
     /// Commits on local `branch` that are missing from `upstream`
     /// (e.g. `"origin/main"`), newest-first (`git rev-list upstream..branch`).
-    fn outgoing_commits(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<Vec<CommitId>>;
+    fn outgoing_commits(
+        &self,
+        root: &Path,
+        branch: &str,
+        upstream: &str,
+    ) -> TgResult<Vec<CommitId>>;
 
     /// Configured remotes.
     fn remotes(&self, root: &Path) -> TgResult<Vec<Remote>>;
@@ -126,8 +144,13 @@ pub trait GitExecutor: Send + Sync {
     /// remote. Returns the verbatim git report (captured from stderr) on
     /// success; a rejected push (e.g. non-fast-forward) surfaces as
     /// [`TgError::Cli`] carrying the verbatim stderr.
-    fn push_dry_run(&self, root: &Path, remote: &str, branch: &str, force: bool)
-    -> TgResult<String>;
+    fn push_dry_run(
+        &self,
+        root: &Path,
+        remote: &str,
+        branch: &str,
+        force: bool,
+    ) -> TgResult<String>;
 
     /// `git commit` (optionally `--amend`).
     fn commit(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId>;
