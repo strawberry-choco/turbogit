@@ -82,9 +82,13 @@ pub fn build_root(engine: &dyn GitExecutor, path: &Path) -> TgResult<Root> {
     root_snapshot(engine, path)
 }
 
-/// Register `root` into `mgr` unless a root with the same id already exists.
+/// Register `root` into `mgr`, replacing any existing snapshot with the same
+/// id so re-registration after an operation refreshes branches / HEAD /
+/// status instead of leaving stale data behind.
 pub fn register(mgr: &mut MultiRootManager, root: Root) {
-    if !mgr.roots.iter().any(|r| r.id == root.id) {
+    if let Some(existing) = mgr.roots.iter_mut().find(|r| r.id == root.id) {
+        *existing = root;
+    } else {
         mgr.roots.push(root);
     }
 }
@@ -109,13 +113,7 @@ pub fn register_all(
 pub fn roots_status(mgr: &MultiRootManager) -> Vec<(RootId, usize, usize)> {
     mgr.roots
         .iter()
-        .map(|r| {
-            (
-                r.id.clone(),
-                r.status.modified(),
-                r.status.unversioned(),
-            )
-        })
+        .map(|r| (r.id.clone(), r.status.modified(), r.status.unversioned()))
         .collect()
 }
 
@@ -146,7 +144,10 @@ mod tests {
 
         assert!(found.contains(&d1), "depth-1 repo should be found");
         assert!(found.contains(&d2), "depth-2 repo should be found");
-        assert!(!found.contains(&d3), "beyond SCAN_MAX_DEPTH must not be walked");
+        assert!(
+            !found.contains(&d3),
+            "beyond SCAN_MAX_DEPTH must not be walked"
+        );
     }
 
     #[test]
@@ -156,15 +157,20 @@ mod tests {
         repo_at(&repo);
         let mut engine = FakeExecutor::new();
         let root_id = RootId(repo.clone());
-        engine.branches.insert(repo.clone(), vec![Branch {
-            name: "main".into(),
-            kind: BranchKind::Local,
-            tracking: Some("origin/main".into()),
-            favorite: false,
-            protected: false,
-            exists: true,
-        }]);
-        engine.current_branch.insert(repo.clone(), Some("main".into()));
+        engine.branches.insert(
+            repo.clone(),
+            vec![Branch {
+                name: "main".into(),
+                kind: BranchKind::Local,
+                tracking: Some("origin/main".into()),
+                favorite: false,
+                protected: false,
+                exists: true,
+            }],
+        );
+        engine
+            .current_branch
+            .insert(repo.clone(), Some("main".into()));
 
         let snap = root_snapshot(&engine, &repo).unwrap();
         assert_eq!(snap.id, root_id);
