@@ -65,11 +65,7 @@ pub fn save_settings(project_dir: &Path, settings: &VcsSettings) -> TgResult<()>
 /// Register a directory → VCS mapping, skipping duplicates for the same dir.
 pub fn add_mapping(project_dir: &Path, dir: &Path, vcs: Vcs) -> TgResult<()> {
     let mut state = load_or_default(project_dir)?;
-    if !state
-        .mappings
-        .iter()
-        .any(|m| m.directory == dir)
-    {
+    if !state.mappings.iter().any(|m| m.directory == dir) {
         state.mappings.push(DirMapping {
             directory: dir.to_path_buf(),
             vcs,

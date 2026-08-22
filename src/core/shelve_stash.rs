@@ -15,12 +15,7 @@ use std::path::{Path, PathBuf};
 // ---------- Stash pass-throughs ----------
 
 /// Create a stash entry for `root`.
-pub fn stash(
-    vcs: &dyn GitExecutor,
-    root: &Path,
-    message: &str,
-    keep_index: bool,
-) -> TgResult<()> {
+pub fn stash(vcs: &dyn GitExecutor, root: &Path, message: &str, keep_index: bool) -> TgResult<()> {
     vcs.stash_push(root, message, keep_index)
 }
 
@@ -40,7 +35,12 @@ pub fn stash_drop_index(vcs: &dyn GitExecutor, root: &Path, index: usize) -> TgR
 }
 
 /// Create a branch from a stash entry (`git stash branch`).
-pub fn stash_branch(vcs: &dyn GitExecutor, root: &Path, index: usize, branch: &str) -> TgResult<()> {
+pub fn stash_branch(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    index: usize,
+    branch: &str,
+) -> TgResult<()> {
     vcs.branch_create(root, branch, true, Some(&format!("stash@{{{}}}", index)))
 }
 
