@@ -131,6 +131,8 @@ fn app_state(roots: &[PathBuf]) -> AppState {
         ui: Default::default(),
         log_cache: Default::default(),
         ahead_behind: Default::default(),
+        recents_config_dir: None,
+        dir_picker: None,
     };
     for r in roots {
         let id = RootId(r.clone());
