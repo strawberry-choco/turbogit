@@ -215,10 +215,12 @@ pub fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
 
 /// Step frames until the painted output stabilizes AND no async diff load is
 /// pending (the fingerprint includes the loading flag so a late `DiffReady`
-/// can never be mistaken for a settled frame).
+/// can never be mistaken for a settled frame). Budgeted by wall-clock time —
+/// not frame count — so a contended `git` subprocess cannot starve it.
 pub fn settle(harness: &mut Harness<'_, AppState>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut prev = String::new();
-    for _ in 0..60 {
+    while std::time::Instant::now() < deadline {
         harness.step();
         let fingerprint = format!(
             "{:?}|loading={}",
@@ -230,7 +232,7 @@ pub fn settle(harness: &mut Harness<'_, AppState>) {
         }
         prev = fingerprint;
     }
-    panic!("diff viewer did not settle within 60 frames");
+    panic!("diff viewer did not settle within 15s");
 }
 
 /// Open the Commit tab's inline preview for one file (public state
