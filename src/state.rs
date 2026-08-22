@@ -1,7 +1,8 @@
-//! Application state: owns the VCS manager, the multi-root model, the project
-//! directory, the event channel, and all UI-only ephemeral state. The UI reads
-//! from here and never calls git directly; long ops are dispatched to worker
-//! threads via [`AppState::run_git`].
+//! Application state: owns the Git engine (the [`GitExecutor`] seam), the
+//! multi-root model, canonical settings, the project directory, the event
+//! channel, and all UI-only ephemeral state. The UI reads from here and never
+//! calls git directly; long ops are dispatched to worker threads via
+//! [`AppState::run_git`].
 
 use crate::core::changes;
 use crate::engine::{AppEvent, GitExecutor};
