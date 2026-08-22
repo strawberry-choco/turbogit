@@ -106,6 +106,13 @@ pub struct UiState {
     pub branches_popup: bool,
     pub branch_filter: String,
     pub log_filter: String,
+    // Git Log four-pane workspace (issue #12)
+    /// Live search text for the branches pane.
+    pub log_branch_filter: String,
+    /// Roots filter: `None` shows every root's commits, `Some(id)` narrows.
+    pub log_root_filter: Option<RootId>,
+    /// File selected in the changed-files pane.
+    pub log_selected_file: Option<PathBuf>,
     pub history_path: String,
     pub selected_commit: Option<CommitId>,
     pub diff: Option<DiffTarget>,
@@ -161,6 +168,10 @@ pub struct AppState {
     pub ui: UiState,
     /// Cached commit logs keyed by root (refreshed on demand / after ops).
     pub log_cache: HashMap<RootId, Vec<Commit>>,
+    /// Cached ref decorations keyed by root, then commit id (issue #12).
+    pub ref_cache: HashMap<RootId, HashMap<CommitId, Vec<CommitRef>>>,
+    /// Cached changed-file lists keyed by (root, commit id) (issue #12).
+    pub files_cache: HashMap<(RootId, CommitId), Vec<Change>>,
     /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
     pub ahead_behind: HashMap<RootId, (usize, usize)>,
 }
@@ -189,6 +200,8 @@ impl AppState {
                 ..UiState::default()
             },
             log_cache: HashMap::new(),
+            ref_cache: HashMap::new(),
+            files_cache: HashMap::new(),
             ahead_behind: HashMap::new(),
         };
         state.rescan();
