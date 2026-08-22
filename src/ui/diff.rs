@@ -108,7 +108,7 @@ fn ensure_diff(
     if stale && !state.ui.diff_loading {
         state.ui.diff_loading = true;
         state.ui.diff_error = None;
-        let executor: Arc<dyn crate::engine::GitExecutor> = state.vcs.executor.clone();
+        let executor: Arc<dyn crate::engine::GitExecutor> = state.executor.clone();
         let tx = state.tx.clone();
         let root = root.to_path_buf();
         let mut opts = DiffOpts::default();

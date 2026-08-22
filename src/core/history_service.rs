@@ -1,20 +1,20 @@
 //! History service: log graph, file/selection/dir history, blame, compare, and
-//! "open on web". Thin orchestration over [`VcsManager`]; no git plumbing here.
+//! "open on web". Thin orchestration over [`GitExecutor`]; no git plumbing here.
 
 #![allow(dead_code)]
 
-use crate::core::vcs_manager::VcsManager;
+use crate::engine::GitExecutor;
 use crate::error::TgResult;
 use crate::model::*;
 use std::path::Path;
 
 /// Commit log for a root (log graph backing store).
-pub fn log(vcs: &VcsManager, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
+pub fn log(vcs: &dyn GitExecutor, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
     vcs.log(root, opts)
 }
 
 /// History of a single file (follow renames handled by the engine).
-pub fn file_history(vcs: &VcsManager, root: &Path, path: &Path) -> TgResult<Vec<Commit>> {
+pub fn file_history(vcs: &dyn GitExecutor, root: &Path, path: &Path) -> TgResult<Vec<Commit>> {
     vcs.log(
         root,
         &LogOpts {
@@ -26,7 +26,7 @@ pub fn file_history(vcs: &VcsManager, root: &Path, path: &Path) -> TgResult<Vec<
 
 /// Per-line blame for a file at an optional revision.
 pub fn blame(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     path: &Path,
     rev: Option<&str>,
@@ -36,7 +36,7 @@ pub fn blame(
 
 /// Unified diff between two commits (compare view).
 pub fn compare_commits(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     left: &str,
     right: &str,
@@ -52,7 +52,7 @@ pub fn compare_commits(
 }
 
 /// Contents of a file at a given revision (selection/dir history viewer).
-pub fn show_at(vcs: &VcsManager, root: &Path, rev: &str, path: &Path) -> TgResult<String> {
+pub fn show_at(vcs: &dyn GitExecutor, root: &Path, rev: &str, path: &Path) -> TgResult<String> {
     vcs.show_file(root, rev, path)
 }
 
@@ -92,7 +92,7 @@ pub fn open_on_web(root: &Root, rev: &str) -> Option<String> {
 }
 
 /// Search-Everywhere history: full log filtered by id/message substring.
-pub fn log_index(vcs: &VcsManager, root: &Path, query: &str) -> TgResult<Vec<Commit>> {
+pub fn log_index(vcs: &dyn GitExecutor, root: &Path, query: &str) -> TgResult<Vec<Commit>> {
     let all = vcs.log(root, &LogOpts::default())?;
     let q = query.to_lowercase();
     Ok(all

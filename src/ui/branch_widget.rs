@@ -138,7 +138,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
 
             ui.separator();
             ui.heading("Tags");
-            if let Ok(tags) = state.vcs.tag_list(&id.0) {
+            if let Ok(tags) = state.executor.tag_list(&id.0) {
                 for t in tags
                     .iter()
                     .filter(|t| filter.is_empty() || t.to_lowercase().contains(&filter))

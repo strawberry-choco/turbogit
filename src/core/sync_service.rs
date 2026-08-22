@@ -6,7 +6,7 @@
 
 #![allow(dead_code)]
 
-use crate::core::vcs_manager::VcsManager;
+use crate::engine::GitExecutor;
 use crate::error::{TgError, TgResult};
 use crate::model::*;
 use std::path::Path;
@@ -36,24 +36,24 @@ pub fn is_protected(settings: &VcsSettings, branch: &str) -> bool {
 }
 
 /// Fetch from the given remote (or all remotes when `remote` is `None`).
-pub fn fetch(vcs: &VcsManager, root: &Path, remote: Option<&str>) -> TgResult<()> {
+pub fn fetch(vcs: &dyn GitExecutor, root: &Path, remote: Option<&str>) -> TgResult<()> {
     vcs.fetch(root, remote)
 }
 
 /// Pull into `root`, merging or rebasing per `rebase`.
-pub fn pull(vcs: &VcsManager, root: &Path, rebase: bool) -> TgResult<()> {
+pub fn pull(vcs: &dyn GitExecutor, root: &Path, rebase: bool) -> TgResult<()> {
     vcs.pull(root, rebase)
 }
 
 /// Fetch everything, then pull using the configured update method.
-pub fn update_project(vcs: &VcsManager, root: &Path, method: UpdateMethod) -> TgResult<()> {
+pub fn update_project(vcs: &dyn GitExecutor, root: &Path, method: UpdateMethod) -> TgResult<()> {
     fetch(vcs, root, None)?;
     pull(vcs, root, method == UpdateMethod::Rebase)
 }
 
 /// Push `branch` to `remote`, refusing a force-push to a protected branch.
 pub fn push(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     remote: &str,
     branch: &str,
@@ -70,14 +70,14 @@ pub fn push(
 }
 
 /// Push all tags to `remote` (or a single named tag when `name` is `Some`).
-pub fn push_tags(vcs: &VcsManager, root: &Path, remote: &str, all: bool) -> TgResult<()> {
+pub fn push_tags(vcs: &dyn GitExecutor, root: &Path, remote: &str, all: bool) -> TgResult<()> {
     vcs.tag_push(root, remote, None, all)
 }
 
 /// Push the current branch of every root. Returns one `(RootId, result)` per
 /// root. A root with no current branch records `Ok(())` (nothing to push).
 pub fn push_all(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     mgr: &MultiRootManager,
     settings: &VcsSettings,
 ) -> Vec<(RootId, TgResult<()>)> {
@@ -117,10 +117,11 @@ pub fn push_all(
 
 /// Update (fetch + pull) every root using each root's configured update method.
 pub fn update_all(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     mgr: &MultiRootManager,
+    settings: &VcsSettings,
 ) -> Vec<(RootId, TgResult<()>)> {
-    let method = vcs.settings.update_method;
+    let method = settings.update_method;
     mgr.roots
         .iter()
         .map(|root| {
