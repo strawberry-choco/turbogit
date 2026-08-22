@@ -104,7 +104,12 @@ fn ensure_diff(
     path: &Option<std::path::PathBuf>,
 ) {
     let key = diff_key(root, left, right, path);
-    let stale = state.ui.diff_cache.as_ref().map(|(k, _)| k != &key).unwrap_or(true);
+    let stale = state
+        .ui
+        .diff_cache
+        .as_ref()
+        .map(|(k, _)| k != &key)
+        .unwrap_or(true);
     if stale && !state.ui.diff_loading {
         state.ui.diff_loading = true;
         state.ui.diff_error = None;
@@ -181,7 +186,11 @@ pub fn render_diff(
     if total_hunks > 0 {
         ui.label(format!(
             "Hunk {}/{}",
-            state.ui.diff_current_hunk.min(total_hunks.saturating_sub(0)) + 1,
+            state
+                .ui
+                .diff_current_hunk
+                .min(total_hunks.saturating_sub(0))
+                + 1,
             total_hunks
         ));
     }

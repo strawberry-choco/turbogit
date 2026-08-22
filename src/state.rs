@@ -6,12 +6,12 @@
 
 use crate::core::changes;
 use crate::engine::{AppEvent, GitExecutor};
-use std::sync::Arc;
 use crate::error::TgResult;
 use crate::model::*;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Persistent input fields for the modal dialogs (kept across redraws).
 #[derive(Default)]
@@ -50,7 +50,7 @@ pub struct DialogState {
 }
 
 /// Which central tab is active.
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     #[default]
     Commit,
@@ -60,7 +60,7 @@ pub enum Tab {
 }
 
 /// A modal dialog currently open.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dialog {
     Push,
     Merge,
@@ -115,8 +115,8 @@ pub struct UiState {
     // 3-way merge editor (Epic E6)
     pub conflict_open: Option<PathBuf>,
     pub conflict_segs: Vec<(String, String, bool)>, // (text, other_text, is_conflict)
-    pub conflict_res: Vec<u8>, // 0=ours, 1=theirs, 2=both per conflict
-    pub conflict_text: String, // editable composed result
+    pub conflict_res: Vec<u8>,                      // 0=ours, 1=theirs, 2=both per conflict
+    pub conflict_text: String,                      // editable composed result
     pub shelves: Vec<Shelf>,
     // commit-tab inline diff preview (Epic C3)
     pub preview_change: Option<PathBuf>,
@@ -129,8 +129,6 @@ pub struct UiState {
     // command palette (Epic F5)
     pub command_palette: bool,
     pub command_query: String,
-    // theme applied cache (Epic A)
-    pub last_applied_theme: Option<crate::model::ThemeMode>,
     // transient
     pub toast: Option<String>,
     pub toast_shown_at: Option<f64>,
@@ -213,8 +211,10 @@ impl AppState {
     /// Re-discover roots under `project_dir`, register any new ones, and
     /// dispatch a fresh asynchronous status scan for every registered root.
     pub fn rescan(&mut self) {
-        let paths = crate::core::multi_root::discover_roots(self.executor.as_ref(), &self.project_dir);
-        let results = crate::core::multi_root::register_all(self.executor.as_ref(), &mut self.multi, &paths);
+        let paths =
+            crate::core::multi_root::discover_roots(self.executor.as_ref(), &self.project_dir);
+        let results =
+            crate::core::multi_root::register_all(self.executor.as_ref(), &mut self.multi, &paths);
         for r in &results {
             if let Err(e) = r {
                 self.last_error = Some(e.to_string());

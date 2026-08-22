@@ -60,14 +60,17 @@ fn assign_colors(commits: &[crate::model::Commit]) -> std::collections::HashMap<
     let mut lanes: Vec<Option<String>> = Vec::new();
     let mut next_color = 0usize;
     for c in commits {
-        let idx = lanes.iter().position(|l| l.as_deref() == Some(&c.id)).unwrap_or_else(|| {
-            if let Some(e) = lanes.iter().position(|l| l.is_none()) {
-                e
-            } else {
-                lanes.push(None);
-                lanes.len() - 1
-            }
-        });
+        let idx = lanes
+            .iter()
+            .position(|l| l.as_deref() == Some(&c.id))
+            .unwrap_or_else(|| {
+                if let Some(e) = lanes.iter().position(|l| l.is_none()) {
+                    e
+                } else {
+                    lanes.push(None);
+                    lanes.len() - 1
+                }
+            });
         color_of.entry(c.id.clone()).or_insert_with(|| {
             // pick the lane's color, allocating a new one if needed
             let color = if idx < lanes.len() && lanes[idx].is_none() {
@@ -131,7 +134,10 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
     ScrollArea::vertical().show(ui, |ui| {
         for c in &matched {
             let sel = state.ui.selected_commit.as_ref() == Some(&c.id);
-            let color = colors.get(&c.id).map(|i| GRAPH_COLORS[i % GRAPH_COLORS.len()]).unwrap_or(Color32::GRAY);
+            let color = colors
+                .get(&c.id)
+                .map(|i| GRAPH_COLORS[i % GRAPH_COLORS.len()])
+                .unwrap_or(Color32::GRAY);
             let first = c.message.lines().next().unwrap_or("").to_string();
             let short_hash = &c.id[..7.min(c.id.len())];
             ui.horizontal(|ui| {
@@ -141,7 +147,11 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
                     "{short_hash}  {author:<16}  {date}  {msg}",
                     author = c.author.name,
                     date = fmt_date(c.time, date_mode),
-                    msg = if first.len() > 50 { &first[..50] } else { &first }
+                    msg = if first.len() > 50 {
+                        &first[..50]
+                    } else {
+                        &first
+                    }
                 );
                 if ui.selectable_label(sel, label).clicked() {
                     state.ui.selected_commit = Some(c.id.clone());
@@ -228,7 +238,10 @@ pub fn show_history(ui: &mut Ui, state: &mut AppState) {
                             ..Default::default()
                         },
                     );
-                    let _ = tx.send(crate::engine::AppEvent::LogLoaded { root: id, commits: res });
+                    let _ = tx.send(crate::engine::AppEvent::LogLoaded {
+                        root: id,
+                        commits: res,
+                    });
                 });
             }
         }
@@ -241,7 +254,12 @@ pub fn show_history(ui: &mut Ui, state: &mut AppState) {
                         for l in lines.iter().take(200) {
                             ui.colored_label(
                                 Color32::from_gray(150),
-                                format!("{} {} {}", &l.commit[..7.min(l.commit.len())], l.author, l.content),
+                                format!(
+                                    "{} {} {}",
+                                    &l.commit[..7.min(l.commit.len())],
+                                    l.author,
+                                    l.content
+                                ),
                             );
                         }
                     }

@@ -20,7 +20,6 @@ pub mod diff;
 pub mod log_window;
 pub mod popups;
 
-use crate::model::ThemeMode;
 use crate::state::{AppState, Dialog, PendingConfirm, Tab};
 use egui::{Align, Color32, Context, Key, Layout, Panel, ScrollArea, Ui};
 
@@ -109,13 +108,25 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.button("⚙ Settings").on_hover_text("Open settings").clicked() {
+                if ui
+                    .button("⚙ Settings")
+                    .on_hover_text("Open settings")
+                    .clicked()
+                {
                     state.ui.settings_open = true;
                 }
-                if ui.button("⏏ Push").on_hover_text("Push commits to remote (Ctrl+Shift+K)").clicked() {
+                if ui
+                    .button("⏏ Push")
+                    .on_hover_text("Push commits to remote (Ctrl+Shift+K)")
+                    .clicked()
+                {
                     state.ui.dialog = Some(Dialog::Push);
                 }
-                if ui.button("⤓ Pull").on_hover_text("Pull updates from remote").clicked() {
+                if ui
+                    .button("⤓ Pull")
+                    .on_hover_text("Pull updates from remote")
+                    .clicked()
+                {
                     let root = state.selected_path();
                     let rebase = state.settings.update_method == crate::model::UpdateMethod::Rebase;
                     state.run_git("Pull".into(), move |v| {
@@ -126,7 +137,11 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
                         }
                     });
                 }
-                if ui.button("⤒ Fetch").on_hover_text("Fetch from remote").clicked() {
+                if ui
+                    .button("⤒ Fetch")
+                    .on_hover_text("Fetch from remote")
+                    .clicked()
+                {
                     let root = state.selected_path();
                     state.run_git("Fetch".into(), move |v| {
                         if let Some(r) = &root {
@@ -136,10 +151,18 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
                         }
                     });
                 }
-                if ui.button("⎇ Branches").on_hover_text("Manage branches").clicked() {
+                if ui
+                    .button("⎇ Branches")
+                    .on_hover_text("Manage branches")
+                    .clicked()
+                {
                     state.ui.branches_popup = true;
                 }
-                if ui.button("VCS ⌃`").on_hover_text("VCS operations (Alt+`)").clicked() {
+                if ui
+                    .button("VCS ⌃`")
+                    .on_hover_text("VCS operations (Alt+`)")
+                    .clicked()
+                {
                     state.ui.vcs_popup = true;
                 }
                 if state.ui.busy {
@@ -192,10 +215,18 @@ fn render_left(ui: &mut Ui, state: &mut AppState) {
         });
         ui.separator();
         ui.horizontal(|ui| {
-            if ui.button("＋ Branch").on_hover_text("Create a new branch").clicked() {
+            if ui
+                .button("＋ Branch")
+                .on_hover_text("Create a new branch")
+                .clicked()
+            {
                 state.ui.dialog = Some(Dialog::NewBranch);
             }
-            if ui.button("⟳ Refresh").on_hover_text("Rescan repositories (Ctrl+T)").clicked() {
+            if ui
+                .button("⟳ Refresh")
+                .on_hover_text("Rescan repositories (Ctrl+T)")
+                .clicked()
+            {
                 state.rescan();
                 if let Some(id) = &state.selected_root {
                     let id = id.clone();
@@ -204,13 +235,20 @@ fn render_left(ui: &mut Ui, state: &mut AppState) {
             }
         });
         ui.horizontal(|ui| {
-            if ui.button("Init here").on_hover_text("Initialize a git repository here").clicked() {
+            if ui
+                .button("Init here")
+                .on_hover_text("Initialize a git repository here")
+                .clicked()
+            {
                 state.init_repo();
             }
         });
         ui.horizontal(|ui| {
             ui.label("Clone:");
-            ui.text_edit_singleline(&mut state.clone_url);
+            // Bounded width: an unconstrained TextEdit here fills to the panel
+            // edge and pushes the Go button past it, so the panel's persisted
+            // size grows every frame (layout never settles).
+            ui.add(egui::TextEdit::singleline(&mut state.clone_url).desired_width(140.0));
             if ui.button("Go").on_hover_text("Clone repository").clicked() {
                 state.clone_repo();
             }
@@ -267,20 +305,20 @@ fn render_central(ui: &mut Ui, state: &mut AppState) {
 
 fn settings_inline(ui: &mut Ui, state: &mut AppState) {
     let s = &mut state.settings;
-    ui.label("Theme:");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut s.theme, ThemeMode::Dark, "Dark");
-        ui.radio_value(&mut s.theme, ThemeMode::Light, "Light");
-        ui.radio_value(&mut s.theme, ThemeMode::HighContrast, "High contrast");
-    });
     ui.separator();
     ui.checkbox(&mut s.staging_area, "Staging-area mode (Unstaged/Staged)");
     ui.checkbox(&mut s.synchronous_branches, "Synchronous branch control");
-    ui.checkbox(&mut s.restore_workspace, "Restore workspace context per branch");
+    ui.checkbox(
+        &mut s.restore_workspace,
+        "Restore workspace context per branch",
+    );
     ui.checkbox(&mut s.gutter_markers, "Show gutter change markers");
     ui.checkbox(&mut s.warn_crlf, "Warn before committing CRLF");
     ui.checkbox(&mut s.warn_detached, "Warn in detached HEAD");
-    ui.checkbox(&mut s.no_commit_hooks, "Disable git commit hooks (IDE-wide)");
+    ui.checkbox(
+        &mut s.no_commit_hooks,
+        "Disable git commit hooks (IDE-wide)",
+    );
     ui.separator();
     ui.label("Commit message:");
     ui.horizontal(|ui| {
@@ -289,26 +327,62 @@ fn settings_inline(ui: &mut Ui, state: &mut AppState) {
     });
     ui.label("Date format in log:");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut s.date_format, crate::model::DateFormat::Relative, "Relative");
-        ui.radio_value(&mut s.date_format, crate::model::DateFormat::Absolute, "Absolute");
+        ui.radio_value(
+            &mut s.date_format,
+            crate::model::DateFormat::Relative,
+            "Relative",
+        );
+        ui.radio_value(
+            &mut s.date_format,
+            crate::model::DateFormat::Absolute,
+            "Absolute",
+        );
         ui.radio_value(&mut s.date_format, crate::model::DateFormat::Iso, "ISO");
     });
     ui.separator();
     ui.label("Update method:");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut s.update_method, crate::model::UpdateMethod::Merge, "Merge");
-        ui.radio_value(&mut s.update_method, crate::model::UpdateMethod::Rebase, "Rebase");
+        ui.radio_value(
+            &mut s.update_method,
+            crate::model::UpdateMethod::Merge,
+            "Merge",
+        );
+        ui.radio_value(
+            &mut s.update_method,
+            crate::model::UpdateMethod::Rebase,
+            "Rebase",
+        );
     });
     ui.label("Clean working tree on update:");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut s.clean_tree_method, crate::model::CleanTreeMethod::Stash, "Stash");
-        ui.radio_value(&mut s.clean_tree_method, crate::model::CleanTreeMethod::Shelve, "Shelve");
+        ui.radio_value(
+            &mut s.clean_tree_method,
+            crate::model::CleanTreeMethod::Stash,
+            "Stash",
+        );
+        ui.radio_value(
+            &mut s.clean_tree_method,
+            crate::model::CleanTreeMethod::Shelve,
+            "Shelve",
+        );
     });
     ui.label("Incoming-check mode:");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut s.incoming_check, crate::model::IncomingCheckMode::Auto, "Auto");
-        ui.radio_value(&mut s.incoming_check, crate::model::IncomingCheckMode::Always, "Always");
-        ui.radio_value(&mut s.incoming_check, crate::model::IncomingCheckMode::Never, "Never");
+        ui.radio_value(
+            &mut s.incoming_check,
+            crate::model::IncomingCheckMode::Auto,
+            "Auto",
+        );
+        ui.radio_value(
+            &mut s.incoming_check,
+            crate::model::IncomingCheckMode::Always,
+            "Always",
+        );
+        ui.radio_value(
+            &mut s.incoming_check,
+            crate::model::IncomingCheckMode::Never,
+            "Never",
+        );
     });
     ui.label("Protected branch patterns (comma separated):");
     let mut pats = s.protected_branch_patterns.join(", ");
@@ -328,7 +402,6 @@ fn settings_inline(ui: &mut Ui, state: &mut AppState) {
         state.executor = std::sync::Arc::new(crate::engine::cli::CliExecutor {
             settings: state.settings.clone(),
         });
-        state.ui.last_applied_theme = None; // force theme re-apply
         state.persist_ui();
         state.ui.toast = Some("✓ Settings saved".into());
     }
@@ -392,7 +465,10 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
     };
     let msg = match &confirm {
         PendingConfirm::Discard { changes } => {
-            format!("Discard changes to {} file(s)? This cannot be undone.", changes.len())
+            format!(
+                "Discard changes to {} file(s)? This cannot be undone.",
+                changes.len()
+            )
         }
         PendingConfirm::DeleteLocalBranch { name } => {
             format!("Delete local branch '{name}'? This cannot be undone.")

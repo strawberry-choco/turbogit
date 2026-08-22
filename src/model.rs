@@ -292,17 +292,8 @@ pub enum DateFormat {
     Iso,
 }
 
-/// UI color theme.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ThemeMode {
-    #[default]
-    Dark,
-    Light,
-    HighContrast,
-}
-
 /// Project + per-root settings, serialized under `.turbogit/`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VcsSettings {
     /// Path to the git executable (empty = resolve from PATH).
     pub git_executable: String,
@@ -332,8 +323,6 @@ pub struct VcsSettings {
     pub date_format: DateFormat,
     /// IDE-wide "do not run git commit hooks".
     pub no_commit_hooks: bool,
-    /// UI color theme.
-    pub theme: ThemeMode,
 }
 
 impl Default for VcsSettings {
@@ -353,7 +342,6 @@ impl Default for VcsSettings {
             gutter_markers: true,
             date_format: DateFormat::default(),
             no_commit_hooks: false,
-            theme: ThemeMode::default(),
         }
     }
 }

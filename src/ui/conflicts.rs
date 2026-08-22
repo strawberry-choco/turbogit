@@ -124,11 +124,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     let full = r.join(path);
                     if let Ok(content) = std::fs::read_to_string(&full) {
                         let (segs, _n) = parse_conflicts(&content);
-                        let res: Vec<u8> = segs
-                            .iter()
-                            .filter(|(_, _, c)| *c)
-                            .map(|_| 0u8)
-                            .collect();
+                        let res: Vec<u8> =
+                            segs.iter().filter(|(_, _, c)| *c).map(|_| 0u8).collect();
                         state.ui.conflict_segs = segs;
                         state.ui.conflict_res = res.clone();
                         state.ui.conflict_text = compose(&state.ui.conflict_segs, &res);
@@ -166,7 +163,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     .filter(|(_, (_, _, c))| *c)
                     .map(|(i, _)| i)
                     .collect();
-                ui.label(format!("{} conflict(s). Pick a side per block.", conflicts.len()));
+                ui.label(format!(
+                    "{} conflict(s). Pick a side per block.",
+                    conflicts.len()
+                ));
                 ScrollArea::vertical().show(ui, |ui| {
                     for (ci, seg_idx) in conflicts.iter().enumerate() {
                         let (ours, theirs, _is) = &state.ui.conflict_segs[*seg_idx];
