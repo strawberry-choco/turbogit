@@ -91,7 +91,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     ui.separator();
-    ui.heading(format!("Merge conflicts ({})", conflicted.len()));
+    // The canonical "Merge conflicts" group in the changelist tree owns the
+    // listing; this section only hosts the resolution tools.
+    ui.heading("Conflict resolution");
     let root = state.selected_path();
     for path in &conflicted {
         ui.horizontal(|ui| {

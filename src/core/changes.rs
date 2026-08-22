@@ -125,7 +125,8 @@ pub fn unstage_selected(vcs: &dyn GitExecutor, root: &Path, changes: &[Change]) 
 ///
 /// With no selected changes, commits everything tracked (`vcs.commit`). With a
 /// selection, stages the chosen paths then commits the index
-/// (`vcs.commit_index`); a partial commit never amends.
+/// (`vcs.commit_index`); `amend` passes through in both paths so Amend works
+/// for full and partial commits alike.
 pub fn commit_selected(
     vcs: &dyn GitExecutor,
     root: &Path,
@@ -137,7 +138,7 @@ pub fn commit_selected(
         vcs.commit(root, message, amend)
     } else {
         stage_selected(vcs, root, changes)?;
-        vcs.commit_index(root, message, false)
+        vcs.commit_index(root, message, amend)
     }
 }
 
