@@ -50,10 +50,10 @@ fn parse(text: &str) -> Vec<Row> {
             || line.starts_with("Binary")
         {
             rows.push(Row::Meta(line.to_string()));
-        } else if line.starts_with('+') {
-            rows.push(Row::Add(line[1..].to_string()));
-        } else if line.starts_with('-') {
-            rows.push(Row::Del(line[1..].to_string()));
+        } else if let Some(body) = line.strip_prefix('+') {
+            rows.push(Row::Add(body.to_string()));
+        } else if let Some(body) = line.strip_prefix('-') {
+            rows.push(Row::Del(body.to_string()));
         } else {
             rows.push(Row::Context(line.to_string()));
         }
@@ -116,10 +116,12 @@ fn ensure_diff(
         let executor: Arc<dyn crate::engine::GitExecutor> = state.executor.clone();
         let tx = state.tx.clone();
         let root = root.to_path_buf();
-        let mut opts = DiffOpts::default();
-        opts.left = left.clone();
-        opts.right = right.clone();
-        opts.path = path.clone();
+        let opts = DiffOpts {
+            left: left.clone(),
+            right: right.clone(),
+            path: path.clone(),
+            ..DiffOpts::default()
+        };
         std::thread::spawn(move || {
             let res = executor.diff(&root, &opts);
             let _ = tx.send(AppEvent::DiffReady { key, result: res });
@@ -254,8 +256,8 @@ fn render_side_by_side(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
             Row::Context(s) => {
                 let fg = ui.style().visuals.text_color();
                 ui.columns(2, |cols| {
-                    cols[0].colored_label(fg, &format!(" {s}"));
-                    cols[1].colored_label(fg, &format!(" {s}"));
+                    cols[0].colored_label(fg, format!(" {s}"));
+                    cols[1].colored_label(fg, format!(" {s}"));
                 });
                 i += 1;
             }

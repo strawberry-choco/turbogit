@@ -67,7 +67,7 @@ impl GitExecutor for CliExecutor {
                 let status = map_xy(xy);
                 // Porcelain v2 `1 <XY>`: first char is the index (staged)
                 // status; a space means the index is unchanged → unstaged.
-                let staged = xy.chars().next() != Some(' ');
+                let staged = !xy.starts_with(' ');
                 changes.push(Change {
                     path: PathBuf::from(path),
                     status,
@@ -217,8 +217,7 @@ impl GitExecutor for CliExecutor {
                 None
             };
 
-            let (kind, disp_name) = if name.starts_with("remotes/") {
-                let without = &name["remotes/".len()..];
+            let (kind, disp_name) = if let Some(without) = name.strip_prefix("remotes/") {
                 let local = match without.find('/') {
                     Some(i) => &without[i + 1..],
                     None => without,
@@ -360,7 +359,7 @@ impl GitExecutor for CliExecutor {
         let flush =
             |path: Option<PathBuf>, branch: String, root: &Path, out: &mut Vec<Worktree>| {
                 if let Some(p) = path {
-                    if &p != root {
+                    if p != root {
                         let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
                             stripped.to_string()
                         } else {
@@ -402,7 +401,7 @@ impl GitExecutor for CliExecutor {
             }
             // Leading status char + space, then path (optionally " (commit)").
             let rest = &line[1..];
-            let path = rest.trim_start().split_whitespace().next().unwrap_or("");
+            let path = rest.split_whitespace().next().unwrap_or("");
             if !path.is_empty() {
                 result.push(PathBuf::from(path));
             }
@@ -640,7 +639,7 @@ impl GitExecutor for CliExecutor {
             })
             .collect();
         let base_rev = format!("{}~1", plan[0].commit);
-        let tmp = std::env::temp_dir().join(format!("turbogit-rebase-{}.txt", &plan[0].commit));
+        let tmp = std::env::temp_dir().join(format!("turbogit-rebase-{}.txt", plan[0].commit));
         std::fs::write(&tmp, todo)?;
         let bin = crate::model::git_binary(&self.settings);
         let todo_str = tmp.to_string_lossy().replace('\\', "/");

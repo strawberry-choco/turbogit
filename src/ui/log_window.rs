@@ -73,14 +73,13 @@ fn assign_colors(commits: &[crate::model::Commit]) -> std::collections::HashMap<
             });
         color_of.entry(c.id.clone()).or_insert_with(|| {
             // pick the lane's color, allocating a new one if needed
-            let color = if idx < lanes.len() && lanes[idx].is_none() {
+            if idx < lanes.len() && lanes[idx].is_none() {
                 let c = next_color;
                 next_color += 1;
                 c
             } else {
                 idx
-            };
-            color
+            }
         });
         lanes[idx] = c.parents.first().cloned();
         for p in c.parents.iter().skip(1) {

@@ -52,11 +52,8 @@ fn push(ui: &mut Ui, state: &mut AppState) {
                     if let Some(t) = &b.tracking {
                         let parts: Vec<&str> = t.splitn(2, '/').collect();
                         state.ui.dlg.push_remote = parts[0].to_string();
-                        state.ui.dlg.push_branch = parts
-                            .get(1)
-                            .copied()
-                            .unwrap_or_else(|| b.name.as_str())
-                            .to_string();
+                        state.ui.dlg.push_branch =
+                            parts.get(1).copied().unwrap_or(b.name.as_str()).to_string();
                     } else {
                         state.ui.dlg.push_remote = root
                             .remotes
