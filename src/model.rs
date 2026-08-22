@@ -70,6 +70,24 @@ pub struct Branch {
 /// SHA-1 hex string.
 pub type CommitId = String;
 
+/// Kind of a git ref decoration attached to a commit (issue #12 ref chips).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GitRefKind {
+    /// Local branch (`refs/heads/…`).
+    Branch,
+    /// Remote-tracking branch (`refs/remotes/<remote>/<name>`).
+    Remote,
+    /// Tag (`refs/tags/…`).
+    Tag,
+}
+
+/// One named ref pointing at a commit (branch / remote branch / tag).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitRef {
+    pub kind: GitRefKind,
+    pub name: String,
+}
+
 /// An author / committer signature.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signature {
