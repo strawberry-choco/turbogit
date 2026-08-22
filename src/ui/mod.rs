@@ -20,7 +20,6 @@ pub mod diff;
 pub mod log_window;
 pub mod popups;
 
-use crate::core::vcs_manager::VcsManager;
 use crate::model::ThemeMode;
 use crate::state::{AppState, Dialog, PendingConfirm, Tab};
 use egui::{Align, Color32, Context, Key, Layout, Panel, ScrollArea, Ui};
@@ -118,9 +117,10 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
                 }
                 if ui.button("⤓ Pull").on_hover_text("Pull updates from remote").clicked() {
                     let root = state.selected_path();
+                    let rebase = state.settings.update_method == crate::model::UpdateMethod::Rebase;
                     state.run_git("Pull".into(), move |v| {
                         if let Some(r) = &root {
-                            v.pull(r, v.settings.update_method == crate::model::UpdateMethod::Rebase)
+                            v.pull(r, rebase)
                         } else {
                             Ok(())
                         }
@@ -266,7 +266,7 @@ fn render_central(ui: &mut Ui, state: &mut AppState) {
 // -------------------------------------------------------------- settings ---
 
 fn settings_inline(ui: &mut Ui, state: &mut AppState) {
-    let s = &mut state.vcs.settings;
+    let s = &mut state.settings;
     ui.label("Theme:");
     ui.horizontal(|ui| {
         ui.radio_value(&mut s.theme, ThemeMode::Dark, "Dark");
@@ -322,9 +322,12 @@ fn settings_inline(ui: &mut Ui, state: &mut AppState) {
     ui.label("Git executable (blank = PATH):");
     ui.text_edit_singleline(&mut s.git_executable);
     if ui.button("Save settings").clicked() {
-        let _ = crate::persistence::save_settings(&state.project_dir, &state.vcs.settings);
-        // Reflect git executable change in the live executor.
-        state.vcs = VcsManager::new(state.vcs.settings.clone());
+        let _ = crate::persistence::save_settings(&state.project_dir, &state.settings);
+        // Reflect a changed git executable in the live engine (ADR-0001:
+        // rebuild behind the seam).
+        state.executor = std::sync::Arc::new(crate::engine::cli::CliExecutor {
+            settings: state.settings.clone(),
+        });
         state.ui.last_applied_theme = None; // force theme re-apply
         state.persist_ui();
         state.ui.toast = Some("✓ Settings saved".into());
