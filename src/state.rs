@@ -137,6 +137,13 @@ pub struct UiState {
     pub confirm: Option<crate::state::PendingConfirm>,
     // recently opened repositories (Epic J4)
     pub recent_repos: Vec<PathBuf>,
+    // IDE shell visibility model (issue #9, spec §9.2): true → the central
+    // body routes to the Welcome page instead of the active tool window.
+    // Derived true whenever no root is open (`AppState::show_welcome`).
+    pub welcome_visible: bool,
+    /// User-toggleable shell regions (View menu); not persisted in v1.
+    pub show_toolbar: bool,
+    pub show_status_bar: bool,
 }
 
 pub struct AppState {
@@ -175,7 +182,12 @@ impl AppState {
             selected_root: None,
             clone_url: String::new(),
             last_error: None,
-            ui: UiState::default(),
+            // Shell regions start visible; View-menu toggles flip these.
+            ui: UiState {
+                show_toolbar: true,
+                show_status_bar: true,
+                ..UiState::default()
+            },
             log_cache: HashMap::new(),
             ahead_behind: HashMap::new(),
         };
@@ -365,5 +377,13 @@ impl AppState {
     /// The currently selected root's path (or None).
     pub fn selected_path(&self) -> Option<PathBuf> {
         self.selected_root.as_ref().map(|r| r.0.clone())
+    }
+
+    /// Welcome-vs-shell routing (issue #9, spec §9.2): the central body shows
+    /// the Welcome page when no repository root is open, or when the user
+    /// explicitly returned to it (File → Welcome). A project opened at launch
+    /// (`turbogit <path>`) enters the shell directly.
+    pub fn show_welcome(&self) -> bool {
+        self.multi.roots.is_empty() || self.ui.welcome_visible
     }
 }
