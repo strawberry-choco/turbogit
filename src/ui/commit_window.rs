@@ -54,7 +54,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
         ui.checkbox(&mut state.ui.amend, "Amend");
         if ui.button("Template").clicked() {
-            let tpl = state.vcs.settings.commit_template.clone();
+            let tpl = state.settings.commit_template.clone();
             if tpl.is_empty() {
                 state.ui.toast = Some("No commit template configured.".into());
             } else if let Ok(content) = std::fs::read_to_string(&tpl) {

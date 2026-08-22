@@ -67,9 +67,9 @@ fn push(ui: &mut Ui, state: &mut AppState) {
     ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
     ui.checkbox(&mut state.ui.dlg.force_push, "Force push (--force-with-lease)");
 
-    let protected = state.vcs.settings.protected_branch_patterns.clone();
+    let protected = state.settings.protected_branch_patterns.clone();
     let branch = state.ui.dlg.push_branch.clone();
-    if state.ui.dlg.force_push && sync_service::is_protected(&state.vcs.settings, &branch) {
+    if state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch) {
         ui.colored_label(egui::Color32::RED, format!("⚠ '{branch}' is protected — force-push blocked."));
     }
 
@@ -98,7 +98,7 @@ fn push(ui: &mut Ui, state: &mut AppState) {
             let remote = state.ui.dlg.push_remote.clone();
             let branch = state.ui.dlg.push_branch.clone();
             let force = state.ui.dlg.force_push;
-            let settings = state.vcs.settings.clone();
+            let settings = state.settings.clone();
             state.run_git("Push".into(), move |v| {
                 if let Some(r) = &root {
                     sync_service::push(v, r, &remote, &branch, force, &settings)
@@ -164,7 +164,7 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
                 no_verify: state.ui.dlg.merge_no_verify,
                 ..Default::default()
             };
-            let clean = state.vcs.settings.clean_tree_method;
+            let clean = state.settings.clean_tree_method;
             state.run_git(format!("Merge {target}"), move |v| {
                 if let Some(r) = &root {
                     integrate_service::smart_merge(v, r, &target, &opts, clean)
@@ -234,7 +234,7 @@ fn interactive_rebase(ui: &mut Ui, state: &mut AppState) {
                         if let Some(base) = base {
                             state.ui.dlg.rebase_base = Some(base.clone());
                             if let Ok(plan) =
-                                history_editor::build_plan(&state.vcs, &id.0, &base)
+                                history_editor::build_plan(state.executor.as_ref(), &id.0, &base)
                             {
                                 state.ui.dlg.rebase_plan = Some(plan);
                             }

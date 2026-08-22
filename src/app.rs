@@ -29,7 +29,7 @@ impl App for TurbogitApp {
 
         // Apply / refresh the active theme (Epic A). Guarded so it only
         // re-styles when the theme actually changes (preserves user zoom).
-        let theme = self.state.vcs.settings.theme;
+        let theme = self.state.settings.theme;
         if self.state.ui.last_applied_theme != Some(theme) {
             crate::theme::configure_style(ctx, theme);
             self.state.ui.last_applied_theme = Some(theme);

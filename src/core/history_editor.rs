@@ -2,11 +2,11 @@
 //!
 //! Operates purely on the [`model::RebasePlanEntry`] rows surfaced by the UI:
 //! building a plan from `base..HEAD`, mutating actions, reordering, and
-//! dispatching the final plan to [`VcsManager::rebase_interactive`].
+//! dispatching the final plan to [`GitExecutor::rebase_interactive`].
 
 #![allow(dead_code)]
 
-use crate::core::vcs_manager::VcsManager;
+use crate::engine::GitExecutor;
 use crate::error::TgResult;
 use crate::model::*;
 use std::path::Path;
@@ -17,7 +17,7 @@ use std::path::Path;
 /// plan is oldest-first: the first entry is the oldest commit, closest to
 /// `base`. Every entry defaults to [`RebaseAction::Pick`].
 pub fn build_plan(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     base: &str,
 ) -> TgResult<Vec<RebasePlanEntry>> {
@@ -66,7 +66,7 @@ pub fn reorder(plan: &mut Vec<RebasePlanEntry>, from: usize, to: usize) {
 }
 
 /// Execute a rebase plan.
-pub fn execute(vcs: &VcsManager, root: &Path, plan: &[RebasePlanEntry]) -> TgResult<()> {
+pub fn execute(vcs: &dyn GitExecutor, root: &Path, plan: &[RebasePlanEntry]) -> TgResult<()> {
     vcs.rebase_interactive(root, plan)
 }
 

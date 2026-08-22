@@ -1,19 +1,19 @@
 //! Branch operations, favorites, and synchronous branch control across roots.
 //!
-//! Thin orchestration layer over [`VcsManager`] plus helpers that mutate the
+//! Thin orchestration layer over [`GitExecutor`] plus helpers that mutate the
 //! in-memory [`MultiRootManager`] (favorites / protected flags) and compute
 //! multi-root aggregates (common branches, synchronous create/checkout).
 
 #![allow(dead_code)]
 
-use crate::core::vcs_manager::VcsManager;
+use crate::engine::GitExecutor;
 use crate::error::TgResult;
 use crate::model::*;
 use std::path::Path;
 
 /// Create a branch in one root.
 pub fn create(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     root: &Path,
     name: &str,
     start_point: Option<&str>,
@@ -23,22 +23,22 @@ pub fn create(
 }
 
 /// Check out a branch in one root.
-pub fn checkout(vcs: &VcsManager, root: &Path, name: &str) -> TgResult<()> {
+pub fn checkout(vcs: &dyn GitExecutor, root: &Path, name: &str) -> TgResult<()> {
     vcs.branch_checkout(root, name)
 }
 
 /// Rename a branch in one root.
-pub fn rename(vcs: &VcsManager, root: &Path, old: &str, new: &str) -> TgResult<()> {
+pub fn rename(vcs: &dyn GitExecutor, root: &Path, old: &str, new: &str) -> TgResult<()> {
     vcs.branch_rename(root, old, new)
 }
 
 /// Delete a local branch in one root.
-pub fn delete(vcs: &VcsManager, root: &Path, name: &str, force: bool) -> TgResult<()> {
+pub fn delete(vcs: &dyn GitExecutor, root: &Path, name: &str, force: bool) -> TgResult<()> {
     vcs.branch_delete(root, name, force)
 }
 
 /// Delete a remote-tracking branch in one root.
-pub fn delete_remote(vcs: &VcsManager, root: &Path, remote: &str, name: &str) -> TgResult<()> {
+pub fn delete_remote(vcs: &dyn GitExecutor, root: &Path, remote: &str, name: &str) -> TgResult<()> {
     vcs.branch_delete_remote(root, remote, name)
 }
 
@@ -61,7 +61,7 @@ pub fn set_protected(mgr: &mut MultiRootManager, root: &RootId, name: &str, prot
 }
 
 /// Diff the working tree against `name` (branch vs working tree).
-pub fn compare(vcs: &VcsManager, root: &Path, name: &str) -> TgResult<String> {
+pub fn compare(vcs: &dyn GitExecutor, root: &Path, name: &str) -> TgResult<String> {
     vcs.diff(root, &DiffOpts {
         left: Some(name.to_string()),
         ..Default::default()
@@ -69,7 +69,7 @@ pub fn compare(vcs: &VcsManager, root: &Path, name: &str) -> TgResult<String> {
 }
 
 /// Diff the working tree against `name` (alias of [`compare`]).
-pub fn compare_working(vcs: &VcsManager, root: &Path, name: &str) -> TgResult<String> {
+pub fn compare_working(vcs: &dyn GitExecutor, root: &Path, name: &str) -> TgResult<String> {
     vcs.diff(root, &DiffOpts {
         left: Some(name.to_string()),
         ..Default::default()
@@ -102,7 +102,7 @@ pub fn common_branches(mgr: &MultiRootManager) -> Vec<String> {
 
 /// Create `name` (with checkout) in every root and refresh each root's branches.
 pub fn create_all(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     mgr: &mut MultiRootManager,
     name: &str,
     start_point: Option<&str>,
@@ -129,7 +129,7 @@ pub fn create_all(
 
 /// Check out `name` in every root and refresh each root's branches.
 pub fn checkout_all(
-    vcs: &VcsManager,
+    vcs: &dyn GitExecutor,
     mgr: &mut MultiRootManager,
     name: &str,
 ) -> Vec<TgResult<()>> {
