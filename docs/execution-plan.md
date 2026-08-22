@@ -166,7 +166,10 @@ gix = { version = "0.63", optional = true }
 > Enable `gix` only when you start Phase 1/3 hot‑path optimization: `cargo build --features turbogit-git/gix`.
 
 ### Step 4.2 — `crates/core` (domain layer, engine‑agnostic)
-Holds the data model from spec §8: `Project`, `Root`, `Remote`, `Branch`, `Commit`, `Changelist`, `Change`, `Chunk`, `Shelf`, `Stash`, `Worktree`, `Conflict`. Plus service traits that the UI calls: `VcsManager`, `ChangeTracker`, `BranchService`, `HistoryService`, `IntegrateService`, `ConflictResolver`, `ShelveStashService`, `SyncService`, `MultiRootManager`. **No `std::process`, no `egui` imports allowed here** — this is what makes it unit‑testable.
+
+> **Amended by [ADR-0001](adr/0001-executor-is-the-seam.md):** the engine seam is the `GitExecutor` interface itself — there is no `VcsManager` façade. Core services take `&dyn GitExecutor`; root discovery and `Root` snapshots live in the multi-root module (the Root scanner).
+
+Holds the data model from spec §8: `Project`, `Root`, `Remote`, `Branch`, `Commit`, `Changelist`, `Change`, `Chunk`, `Shelf`, `Stash`, `Worktree`, `Conflict`. Plus service modules that the UI calls: `changes`, `branch_service`, `history_service`, `integrate_service`, `conflict`, `shelve_stash`, `sync_service`, and the multi-root module (`MultiRootManager` model + Root scanner). All take `&dyn GitExecutor` (ADR-0001). **No `std::process`, no `egui` imports allowed here** — this is what makes it unit‑testable.
 
 ### Step 4.3 — `crates/git` (engine layer)
 - `GitExecutor` trait: `status(root)`, `log(root, range)`, `commit(...)`, `fetch/pull/push`, `branch_*`, `merge/rebase/cherry_pick`, `stash/shelve`, `diff(...)`, `blame(...)`.
