@@ -9,22 +9,12 @@ use crate::model::*;
 use std::path::Path;
 
 /// Merge `target` into the current branch at `root`.
-pub fn merge(
-    vcs: &dyn GitExecutor,
-    root: &Path,
-    target: &str,
-    opts: &MergeOpts,
-) -> TgResult<()> {
+pub fn merge(vcs: &dyn GitExecutor, root: &Path, target: &str, opts: &MergeOpts) -> TgResult<()> {
     vcs.merge(root, target, opts)
 }
 
 /// Rebase the current branch onto `onto`.
-pub fn rebase(
-    vcs: &dyn GitExecutor,
-    root: &Path,
-    onto: &str,
-    opts: &RebaseOpts,
-) -> TgResult<()> {
+pub fn rebase(vcs: &dyn GitExecutor, root: &Path, onto: &str, opts: &RebaseOpts) -> TgResult<()> {
     vcs.rebase(root, onto, opts)
 }
 
@@ -59,7 +49,11 @@ pub fn smart_merge(
     let dirty = !vcs.status(root)?.changes.is_empty();
     if dirty {
         // Use stash for both methods; ignore a failing stash push.
-        let _ = vcs.stash_push(root, "TurboGit smart merge", clean == CleanTreeMethod::Shelve);
+        let _ = vcs.stash_push(
+            root,
+            "TurboGit smart merge",
+            clean == CleanTreeMethod::Shelve,
+        );
     }
 
     match vcs.merge(root, target, opts) {
