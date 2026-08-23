@@ -179,11 +179,15 @@ pub struct UiState {
     pub dialog: Option<Dialog>,
     pub vcs_popup: bool,
     pub settings_open: bool,
-    // 3-way merge editor (Epic E6)
+    // 3-way merge editor (Epic E6; redesigned in issue #15)
     pub conflict_open: Option<PathBuf>,
     pub conflict_segs: Vec<(String, String, bool)>, // (text, other_text, is_conflict)
-    pub conflict_res: Vec<u8>,                      // 0=ours, 1=theirs, 2=both per conflict
-    pub conflict_text: String,                      // editable composed result
+    /// Per-conflict resolution: `None` = unresolved, `Some(0)` = ours,
+    /// `Some(1)` = theirs, `Some(2)` = both ("Ignore").
+    pub conflict_res: Vec<Option<u8>>,
+    /// Read-only composed result shown in the editor's Result pane
+    /// (free-text editing is explicitly deferred).
+    pub conflict_text: String,
     pub shelves: Vec<Shelf>,
     // commit-tab inline diff preview (Epic C3)
     pub preview_change: Option<PathBuf>,
