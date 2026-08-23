@@ -16,7 +16,7 @@
 
 use crate::core::changes;
 use crate::model::{Change, ChangeStatus, RootId};
-use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm};
+use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use egui::{Color32, RichText, Ui};
@@ -404,7 +404,7 @@ fn staging_toolbar_row(ui: &mut Ui, state: &mut AppState) {
         {
             let ch = selected_changes(state);
             if ch.is_empty() {
-                state.ui.toast = Some("Select files to discard.".into());
+                state.ui.toast = Some(Toast::warning("Select files to discard."));
             } else {
                 // Gate behind confirmation — destructive, irreversible.
                 state.ui.confirm = Some(PendingConfirm::Discard { changes: ch });
@@ -462,11 +462,11 @@ fn message_editor(ui: &mut Ui, state: &mut AppState) {
         if ui.button("Template").clicked() {
             let tpl = state.settings.commit_template.clone();
             if tpl.is_empty() {
-                state.ui.toast = Some("No commit template configured.".into());
+                state.ui.toast = Some(Toast::warning("No commit template configured."));
             } else if let Ok(content) = std::fs::read_to_string(&tpl) {
                 state.ui.commit_message = content;
             } else {
-                state.ui.toast = Some(format!("Could not read template: {tpl}"));
+                state.ui.toast = Some(Toast::error(format!("Could not read template: {tpl}")));
             }
         }
         if ui.button("Clear").clicked() {
