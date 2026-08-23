@@ -22,11 +22,12 @@ pub mod diff;
 pub mod icons;
 pub mod log_window;
 pub mod popups;
+pub mod push_dialog;
 pub mod shell;
 pub mod welcome;
 pub mod widgets;
 
-use crate::state::{AppState, PendingConfirm};
+use crate::state::{AppState, Dialog, PendingConfirm};
 use egui::{Color32, Context, Ui};
 
 /// Render one full frame: the IDE shell plus its floating surfaces.
@@ -40,7 +41,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     popups::vcs_operations(ui, state);
     popups::command_palette(ui, state);
     if let Some(d) = state.ui.dialog {
-        dialogs::show(ui, state, d);
+        if d == Dialog::Push {
+            // Issue #20: the redesigned push dialog lives in its own module.
+            push_dialog::show(ui, state);
+        } else {
+            dialogs::show(ui, state, d);
+        }
     }
     render_confirm(ui, state);
     settings_window(ui, state);
