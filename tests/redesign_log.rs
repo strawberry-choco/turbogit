@@ -696,21 +696,21 @@ fn history_tab_is_gone_and_navigation_lands_only_on_valid_windows() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
 
-    // Contract step: the legacy History tab is deleted from the strip.
+    // Contract step: the legacy History tab is deleted from the strip —
+    // and Settings left it too (issue #16, gear-only modal now).
     assert_not_painted(&harness, "History");
+    assert_not_painted(&harness, "Settings");
 
     // Every remaining tab is reachable and lands on its tool window.
     // ("Commit" is intentionally reached by keyboard only — its label also
     // exists on the toolbar button, and kittest rejects ambiguous queries.)
-    for (label, expected) in [("Settings", Tab::Settings), ("Log", Tab::Log)] {
-        harness.get_by_label(label).click();
-        settle(&mut harness);
-        assert_eq!(
-            harness.state().ui.tab,
-            expected,
-            "{label} tab must land on its tool window"
-        );
-    }
+    harness.get_by_label("Log").click();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().ui.tab,
+        Tab::Log,
+        "Log tab must land on its tool window"
+    );
 
     // Keyboard navigation stays valid: Ctrl+K always lands on Commit.
     harness.key_press_modifiers(Modifiers::CTRL, Key::K);
