@@ -7,7 +7,7 @@
 //! explicitly deferred).
 
 use crate::core::conflict;
-use crate::state::AppState;
+use crate::state::{AppState, Toast};
 use crate::theme::Palette;
 use egui::{Color32, CornerRadius, Margin, Rect, RichText, ScrollArea, Stroke, Ui, Vec2};
 
@@ -278,7 +278,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         state.ui.conflict_text = compose_display(&state.ui.conflict_segs, &res);
                         state.ui.conflict_open = Some(path.clone());
                     } else {
-                        state.ui.toast = Some("Could not read conflicted file.".into());
+                        state.ui.toast = Some(Toast::error("Could not read conflicted file."));
                     }
                 }
             }
