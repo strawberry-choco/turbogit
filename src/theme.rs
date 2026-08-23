@@ -11,7 +11,6 @@ use egui::{Color32, Context, CornerRadius, FontFamily, FontId, Stroke, TextStyle
 /// The single central token set (spec §2, Darcula-derived dark).
 pub struct Palette;
 
-#[allow(dead_code)]
 impl Palette {
     // Core surfaces & lines.
     /// App background, panel fill (`--tg-bg`).

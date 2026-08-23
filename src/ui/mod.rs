@@ -12,8 +12,6 @@
 //! modal dialogs, confirm prompts, the Settings modal (issue #16), and the
 //! toast.
 
-#![allow(dead_code)]
-
 pub mod branch_widget;
 pub mod commit_window;
 pub mod conflicts;
