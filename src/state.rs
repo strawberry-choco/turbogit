@@ -91,6 +91,28 @@ pub struct DiffTarget {
     pub path: Option<PathBuf>,
 }
 
+/// Which working-tree comparison the diff viewer shows (issue #13, spec §8.4
+/// revision chips). Each variant maps to one documented git pair:
+///
+/// | Chip    | Pair               | Engine call            |
+/// |---------|--------------------|------------------------|
+/// | `Repo`  | HEAD ↔ worktree    | `git diff HEAD`        |
+/// | `Staged`| HEAD ↔ index       | `git diff --cached`    |
+/// | `Local` | index ↔ worktree   | `git diff`             |
+///
+/// Only used when the viewer renders a working-tree comparison; explicit
+/// commit-to-commit targets (Git Log) keep their fixed revision pair.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum DiffComparison {
+    /// HEAD ↔ worktree.
+    Repo,
+    /// HEAD ↔ index.
+    Staged,
+    /// index ↔ worktree.
+    #[default]
+    Local,
+}
+
 /// UI-only ephemeral state (never persisted).
 #[derive(Default)]
 pub struct UiState {
@@ -126,6 +148,9 @@ pub struct UiState {
     pub diff_error: Option<String>,
     pub diff_side_by_side: bool,
     pub diff_current_hunk: usize,
+    // diff viewer working-tree comparison chips + whitespace toggle (issue #13)
+    pub diff_comparison: DiffComparison,
+    pub diff_ignore_whitespace: bool,
     // command palette (Epic F5)
     pub command_palette: bool,
     pub command_query: String,
@@ -480,6 +505,84 @@ impl AppState {
         }
         let _ = crate::persistence::add_mapping(&self.project_dir, &dest, Vcs::Git);
         self.rescan();
+    }
+
+    /// Drain worker-thread events and apply them to state. Production calls
+    /// this every frame from `app.rs`; headless harnesses call it for
+    /// production parity (issue #13: async diff tests).
+    pub fn drain_events(&mut self) -> usize {
+        let mut drained = 0usize;
+        while let Ok(ev) = self.rx.try_recv() {
+            match ev {
+                AppEvent::StatusScanned { root, status } => {
+                    if let Some(r) = self.multi.roots.iter_mut().find(|r| r.id == root) {
+                        match status {
+                            Ok(s) => r.status = s,
+                            Err(e) => self.last_error = Some(e.to_string()),
+                        }
+                    }
+                }
+                AppEvent::LogLoaded { root, commits } => match commits {
+                    Ok(c) => {
+                        self.log_cache.insert(root, c);
+                    }
+                    Err(e) => self.last_error = Some(e.to_string()),
+                },
+                AppEvent::OpCompleted { label, result } => {
+                    self.ui.busy = false;
+                    match result {
+                        Ok(()) => {
+                            self.ui.toast = Some(format!("✓ {label}"));
+                            // Refresh roots (status/branches/remotes) + log.
+                            self.rescan();
+                            if let Some(id) = &self.selected_root {
+                                let id = id.clone();
+                                self.fetch_log(id);
+                            }
+                        }
+                        Err(e) => {
+                            self.ui.toast = Some(format!("✗ {label}: {e}"));
+                            self.last_error = Some(e.to_string());
+                        }
+                    }
+                }
+                AppEvent::Error(msg) => {
+                    self.ui.busy = false;
+                    self.last_error = Some(msg);
+                }
+                AppEvent::DiffReady { key, result } => {
+                    self.ui.diff_loading = false;
+                    match result {
+                        Ok(text) => {
+                            self.ui.diff_error = None;
+                            self.ui.diff_cache = Some((key, text));
+                        }
+                        Err(e) => {
+                            self.ui.diff_error = Some(e.to_string());
+                            if self
+                                .ui
+                                .diff_cache
+                                .as_ref()
+                                .map(|(k, _)| k != &key)
+                                .unwrap_or(false)
+                            {
+                                self.ui.diff_cache = None;
+                            }
+                        }
+                    }
+                }
+                AppEvent::AheadBehind {
+                    root,
+                    ahead,
+                    behind,
+                } => {
+                    self.ahead_behind.insert(root, (ahead, behind));
+                }
+                _ => {}
+            }
+            drained += 1;
+        }
+        drained
     }
 
     /// The currently selected root's path (or None).
