@@ -71,12 +71,14 @@ pub struct DialogState {
 }
 
 /// Which central tab is active.
+///
+/// Settings left the strip in issue #16 (spec §9.1 correction): it is a
+/// gear-only modal now and can never be the active tool window.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tab {
     #[default]
     Commit,
     Log,
-    Settings,
 }
 
 /// Which Commit-window sub-tab is active (issue #18).
@@ -235,6 +237,11 @@ pub struct UiState {
     pub dialog: Option<Dialog>,
     pub vcs_popup: bool,
     pub settings_open: bool,
+    /// Draft copy of the loaded [`VcsSettings`] while the Settings modal is
+    /// open (issue #16). Edited in place, compared against
+    /// [`AppState::settings`] for dirty-gating; Reset restores it from the
+    /// loaded values and Cancel/close drops it without persisting.
+    pub settings_draft: Option<VcsSettings>,
     // 3-way merge editor (Epic E6; redesigned in issue #15)
     pub conflict_open: Option<PathBuf>,
     pub conflict_segs: Vec<(String, String, bool)>, // (text, other_text, is_conflict)
