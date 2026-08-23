@@ -10,6 +10,10 @@
 //!   filled rects carry their geometry + token color).
 //! - **State transitions** — public `AppState` fields after the frames.
 
+// Each integration-test crate compiles its own copy of this module and uses
+// only the helpers it needs; the rest are intentionally unused there.
+#![allow(dead_code)]
+
 use egui::{Color32, Pos2, Rect, Shape};
 use egui_kittest::Harness;
 use turbogit::state::AppState;
