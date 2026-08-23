@@ -114,10 +114,12 @@ fn initial_render_paints_the_shell_over_an_empty_project() {
     ] {
         assert_painted(&harness, label);
     }
-    // Tab strip keeps every existing Tab variant for now (#19/#16 delete later).
-    for label in ["Commit", "Log", "History", "Settings"] {
+    // Tab strip: the legacy History tab was deleted in issue #19; file
+    // history lives in Git Log's path-scoped view.
+    for label in ["Commit", "Log", "Settings"] {
         assert_painted(&harness, label);
     }
+    assert_not_painted(&harness, "History");
     // No project open → central body routes to the Welcome page (issue #10).
     assert_painted(&harness, "TurboGit");
 }
@@ -233,12 +235,8 @@ fn rail_click_switches_tool_window_and_tab_strip_reflects_it() {
     let active = active_tab_rect(&harness);
     let log_pos = galley_origin(&harness, "Log").expect("Log tab painted");
     assert!(active.contains(log_pos), "Log tab must render as active");
-    // …and not the inactive History label.
-    let history_pos = galley_origin(&harness, "History").expect("History tab painted");
-    assert!(
-        !active.contains(history_pos),
-        "History tab must render as inactive"
-    );
+    // …and the deleted History tab is nowhere in the strip (issue #19).
+    assert_not_painted(&harness, "History");
 }
 
 #[test]
@@ -246,9 +244,9 @@ fn tab_strip_controls_the_active_tool_window() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("History").click();
+    harness.get_by_label("Settings").click();
     settle(&mut harness);
-    assert_eq!(harness.state().ui.tab, Tab::History);
+    assert_eq!(harness.state().ui.tab, Tab::Settings);
 
     harness.get_by_label("Log").click();
     settle(&mut harness);
@@ -291,9 +289,9 @@ fn ctrl_k_returns_to_the_commit_tool_window() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("History").click();
+    harness.get_by_label("Settings").click();
     settle(&mut harness);
-    assert_eq!(harness.state().ui.tab, Tab::History);
+    assert_eq!(harness.state().ui.tab, Tab::Settings);
 
     harness.key_press_modifiers(Modifiers::CTRL, Key::K);
     settle(&mut harness);
