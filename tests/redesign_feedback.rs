@@ -24,7 +24,6 @@ use egui::epaint::ColorMode;
 use egui::{Color32, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{kittest::Queryable as _, Harness};
 use tempfile::TempDir;
-use turbogit::engine::AppEvent;
 use turbogit::state::{AppState, PendingConfirm, Tab, Toast, ToastKind};
 use turbogit::theme::Palette;
 use turbogit::ui::popups::Action;
@@ -74,69 +73,6 @@ fn repo_project() -> (TempDir, PathBuf) {
 
 // --- harness ---------------------------------------------------------------------
 
-/// Drain worker-thread events exactly like production `app.rs` does, so async
-/// ops actually complete inside the harness loop. Mirrors `state.rs`
-/// `drain_events`, including the typed toast results (issue #22).
-fn drain_events(state: &mut AppState) {
-    while let Ok(ev) = state.rx.try_recv() {
-        match ev {
-            AppEvent::StatusScanned { root, status } => {
-                if let Some(r) = state.multi.roots.iter_mut().find(|r| r.id == root) {
-                    match status {
-                        Ok(s) => r.status = s,
-                        Err(e) => state.last_error = Some(e.to_string()),
-                    }
-                }
-            }
-            AppEvent::LogLoaded { root, commits } => match commits {
-                Ok(c) => {
-                    state.log_cache.insert(root, c);
-                }
-                Err(e) => state.last_error = Some(e.to_string()),
-            },
-            AppEvent::OpCompleted { label, result } => {
-                state.ui.busy = false;
-                match result {
-                    Ok(()) => {
-                        state.ui.toast = Some(Toast::success(label));
-                        state.rescan();
-                        if let Some(id) = &state.selected_root {
-                            let id = id.clone();
-                            state.fetch_log(id);
-                        }
-                    }
-                    Err(e) => {
-                        state.ui.toast = Some(Toast::error(format!("{label}: {e}")));
-                        state.last_error = Some(e.to_string());
-                    }
-                }
-            }
-            AppEvent::Error(msg) => {
-                state.ui.busy = false;
-                state.last_error = Some(msg);
-            }
-            AppEvent::DiffReady { key, result } => {
-                state.ui.diff_loading = false;
-                match result {
-                    Ok(text) => {
-                        state.ui.diff_error = None;
-                        state.ui.diff_cache = Some((key, text));
-                    }
-                    Err(e) => state.ui.diff_error = Some(e.to_string()),
-                }
-            }
-            AppEvent::AheadBehind {
-                root,
-                ahead,
-                behind,
-            } => {
-                state.ahead_behind.insert(root, (ahead, behind));
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Harness over a real repo-backed project. Setup mirrors production app.rs:
 /// event pump first, then dark-only tokens + embedded fonts once, then render.
 fn feedback_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
@@ -144,7 +80,7 @@ fn feedback_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
-            drain_events(state);
+            state.drain_events();
             turbogit::theme::configure_style(ui.ctx());
             if !fonts_installed {
                 turbogit::theme::install_fonts(ui.ctx());

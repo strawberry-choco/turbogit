@@ -7,10 +7,6 @@
 
 use egui_kittest::Harness;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use turbogit::engine::cli::CliExecutor;
-use turbogit::engine::GitExecutor;
-use turbogit::model::{Root, RootId, VcsSettings};
 use turbogit::state::{AppState, Dialog};
 use turbogit::theme::{configure_style, install_fonts};
 
@@ -30,50 +26,6 @@ fn git(repo: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).to_string()
-}
-
-/// Build an `AppState` over the given roots with synchronous status scans.
-fn app_state(project_dir: &Path, roots: &[PathBuf]) -> AppState {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let settings = VcsSettings::default();
-    let executor: Arc<dyn GitExecutor> = Arc::new(CliExecutor {
-        settings: settings.clone(),
-    });
-    let mut st = AppState {
-        project_dir: project_dir.to_path_buf(),
-        executor,
-        settings,
-        multi: Default::default(),
-        tx,
-        rx,
-        selected_root: None,
-        clone_url: String::new(),
-        last_error: None,
-        ui: Default::default(),
-        log_cache: Default::default(),
-        ahead_behind: Default::default(),
-        recents_config_dir: None,
-        dir_picker: None,
-        ref_cache: Default::default(),
-        files_cache: Default::default(),
-        log_path_cache: Default::default(),
-    };
-    for r in roots {
-        let id = RootId(r.clone());
-        let status = st.executor.status(r).expect("status scan");
-        let current_branch = st.executor.current_branch(r).ok().flatten();
-        st.multi.register_root(Root {
-            id: id.clone(),
-            path: r.clone(),
-            remotes: vec![],
-            branches: vec![],
-            current_branch,
-            head: None,
-            status,
-        });
-    }
-    st.selected_root = st.multi.roots.first().map(|r| r.id.clone());
-    st
 }
 
 fn harness(state: AppState) -> Harness<'static, AppState> {
@@ -197,7 +149,7 @@ fn acceptance_matrix_screenshots() {
 
     // --- Repo-backed pages ---------------------------------------------
     let (_tmp, repo) = seeded_repo();
-    let state = app_state(repo.parent().unwrap(), std::slice::from_ref(&repo));
+    let state = AppState::for_roots(repo.parent().unwrap(), std::slice::from_ref(&repo));
     let mut h = harness(state);
 
     // Commit tool window (default tab) with changelist + preview.
@@ -236,7 +188,7 @@ fn acceptance_matrix_screenshots() {
 
     // --- Merge editor ----------------------------------------------------
     let (_ctmp, crepo) = conflicted_repo();
-    let mut state = app_state(crepo.parent().unwrap(), std::slice::from_ref(&crepo));
+    let mut state = AppState::for_roots(crepo.parent().unwrap(), std::slice::from_ref(&crepo));
     // Open the merge editor for the conflicted file directly.
     state.ui.conflict_open = Some(crepo.join("conf.txt"));
     let mut h = harness(state);
