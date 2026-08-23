@@ -70,6 +70,22 @@ pub trait GitExecutor: Send + Sync {
     /// `git log` for a root.
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>>;
 
+    /// Ref decorations per commit: every local branch, remote-tracking branch
+    /// and tag with the full SHA it points at (issue #12 ref chips). The
+    /// default returns an empty list for engines that cannot answer.
+    fn ref_decorations(&self, root: &Path) -> TgResult<Vec<(CommitId, Vec<CommitRef>)>> {
+        let _ = root;
+        Ok(Vec::new())
+    }
+
+    /// Files touched by one commit as `(status, path)` pairs
+    /// (`git diff-tree --name-status`; issue #12 changed-files pane).
+    /// The default returns an empty list for engines that cannot answer.
+    fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
+        let _ = (root, commit);
+        Ok(Vec::new())
+    }
+
     /// `git branch -vv` (+ remotes) for a root.
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>>;
 
