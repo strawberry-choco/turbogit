@@ -3,7 +3,7 @@
 //! (Local | Result | Theirs) with per-conflict resolution (Epic E6).
 
 use crate::core::conflict;
-use crate::state::AppState;
+use crate::state::{AppState, Toast};
 use egui::{Color32, ScrollArea, Ui};
 
 /// Parse a file's conflict markers into alternating normal / conflict blocks.
@@ -133,7 +133,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                         state.ui.conflict_text = compose(&state.ui.conflict_segs, &res);
                         state.ui.conflict_open = Some(path.clone());
                     } else {
-                        state.ui.toast = Some("Could not read conflicted file.".into());
+                        state.ui.toast = Some(Toast::error("Could not read conflicted file."));
                     }
                 }
             }

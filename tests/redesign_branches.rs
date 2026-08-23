@@ -26,7 +26,7 @@ use egui::Key;
 use egui_kittest::{kittest::Queryable as _, Harness};
 use tempfile::TempDir;
 use turbogit::engine::AppEvent;
-use turbogit::state::{AppState, Dialog};
+use turbogit::state::{AppState, Dialog, Toast};
 use turbogit::theme::Palette;
 use turbogit::ui::branch_widget;
 
@@ -116,7 +116,7 @@ fn drain_events(state: &mut AppState) {
                 state.ui.busy = false;
                 match result {
                     Ok(()) => {
-                        state.ui.toast = Some(format!("✓ {label}"));
+                        state.ui.toast = Some(Toast::success(label));
                         state.rescan();
                         if let Some(id) = &state.selected_root {
                             let id = id.clone();
@@ -124,7 +124,7 @@ fn drain_events(state: &mut AppState) {
                         }
                     }
                     Err(e) => {
-                        state.ui.toast = Some(format!("✗ {label}: {e}"));
+                        state.ui.toast = Some(Toast::error(format!("{label}: {e}")));
                         state.last_error = Some(e.to_string());
                     }
                 }
