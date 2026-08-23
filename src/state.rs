@@ -13,6 +13,15 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// One root's outgoing commits for the push dialog tree (issue #20).
+#[derive(Clone)]
+pub struct OutgoingRoot {
+    pub id: RootId,
+    pub name: String,
+    /// Enriched commits newest-first, or the engine error string.
+    pub commits: Result<Vec<Commit>, String>,
+}
+
 /// Persistent input fields for the modal dialogs (kept across redraws).
 #[derive(Default)]
 pub struct DialogState {
@@ -20,6 +29,14 @@ pub struct DialogState {
     pub push_remote: String,
     pub push_branch: String,
     pub force_push: bool,
+    /// Narrow scope to the selected root's explicit Remote/Branch target
+    /// (issue #20); the default batch push covers every root (ADR-0006).
+    pub push_current_branch_only: bool,
+    /// Outgoing-commit tree snapshot built once when the dialog opens.
+    pub push_outgoing: Option<Vec<OutgoingRoot>>,
+    /// Which root node the user clicked — filters the changed-files PREVIEW
+    /// only, never the batch push scope (ADR-0006).
+    pub push_preview_root: Option<RootId>,
     // Merge
     pub merge_target: String,
     pub merge_no_ff: bool,
