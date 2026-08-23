@@ -5,7 +5,7 @@
 //! 32px tab strip and ~24px status bar — all composed in [`shell`]. The
 //! central body routes between the Welcome placeholder ([`welcome`], shown
 //! when no project is open) and the active tool window (Commit / Log /
-//! History / Settings).
+//! Settings).
 //!
 //! This module owns what wraps the shell: global shortcut dispatch lives in
 //! `shell::render`, and the floating surfaces below are rendered on top of
