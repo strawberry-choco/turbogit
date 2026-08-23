@@ -79,13 +79,9 @@ pub fn open_on_web(root: &Root, rev: &str) -> Option<String> {
         }
 
         if host.contains("github.com") {
-            return Some(format!(
-                "https://github.com/{owner}/{repo}/commit/{rev}"
-            ));
+            return Some(format!("https://github.com/{owner}/{repo}/commit/{rev}"));
         } else if host.contains("gitlab") {
-            return Some(format!(
-                "https://gitlab.com/{owner}/{repo}/-/commit/{rev}"
-            ));
+            return Some(format!("https://gitlab.com/{owner}/{repo}/-/commit/{rev}"));
         }
     }
     None
@@ -97,8 +93,6 @@ pub fn log_index(vcs: &dyn GitExecutor, root: &Path, query: &str) -> TgResult<Ve
     let q = query.to_lowercase();
     Ok(all
         .into_iter()
-        .filter(|c| {
-            c.id.to_lowercase().contains(&q) || c.message.to_lowercase().contains(&q)
-        })
+        .filter(|c| c.id.to_lowercase().contains(&q) || c.message.to_lowercase().contains(&q))
         .collect())
 }
