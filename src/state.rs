@@ -55,7 +55,6 @@ pub enum Tab {
     #[default]
     Commit,
     Log,
-    History,
     Settings,
 }
 
@@ -135,7 +134,10 @@ pub struct UiState {
     pub log_root_filter: Option<RootId>,
     /// File selected in the changed-files pane.
     pub log_selected_file: Option<PathBuf>,
-    pub history_path: String,
+    /// Active path scope in Git Log (issue #19): `Some(path)` narrows the
+    /// graph to only the commits touching that path (set from the
+    /// changed-files pane's "Show history for file..." context menu).
+    pub log_path_scope: Option<PathBuf>,
     pub selected_commit: Option<CommitId>,
     pub diff: Option<DiffTarget>,
     pub dialog: Option<Dialog>,
@@ -213,6 +215,8 @@ pub struct AppState {
     pub ref_cache: HashMap<RootId, HashMap<CommitId, Vec<CommitRef>>>,
     /// Cached changed-file lists keyed by (root, commit id) (issue #12).
     pub files_cache: HashMap<(RootId, CommitId), Vec<Change>>,
+    /// Cached path-scoped logs keyed by (root, scoped path) (issue #19).
+    pub log_path_cache: HashMap<(RootId, PathBuf), Vec<Commit>>,
     /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
     pub ahead_behind: HashMap<RootId, (usize, usize)>,
     /// Override for the OS config dir hosting the global recents file
@@ -265,6 +269,7 @@ impl AppState {
             log_cache: HashMap::new(),
             ref_cache: HashMap::new(),
             files_cache: HashMap::new(),
+            log_path_cache: HashMap::new(),
             ahead_behind: HashMap::new(),
             recents_config_dir,
             dir_picker: None,
@@ -285,7 +290,8 @@ impl AppState {
                 let ui = crate::persistence::load_ui_state(&state.project_dir);
                 state.ui.tab = match ui.tab.as_str() {
                     "Log" => Tab::Log,
-                    "History" => Tab::History,
+                    // Legacy persisted "History" (removed in issue #19)
+                    // gracefully falls back to the Commit tab.
                     _ => Tab::Commit,
                 };
                 state.ui.commit_message = ui.draft_message;
@@ -311,7 +317,6 @@ impl AppState {
         let ui = crate::persistence::UiPersist {
             tab: match self.ui.tab {
                 Tab::Log => "Log",
-                Tab::History => "History",
                 _ => "Commit",
             }
             .to_string(),

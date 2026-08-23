@@ -374,12 +374,11 @@ fn rail_button(ui: &mut Ui, state: &mut AppState, icon: Icon, label: &str, targe
 
 // --- Tab strip ---------------------------------------------------------------------
 
-/// Shell tabs in strip order. History/Settings remain valid states kept in
-/// the strip for now; later tickets delete them (#19/#16).
-const SHELL_TABS: [(Tab, Icon, &str); 4] = [
+/// Shell tabs in strip order. The legacy History tab was deleted in
+/// issue #19: file history lives in Git Log's path-scoped view instead.
+const SHELL_TABS: [(Tab, Icon, &str); 3] = [
     (Tab::Commit, Icon::GIT_COMMIT, "Commit"),
     (Tab::Log, Icon::GIT_BRANCH, "Log"),
-    (Tab::History, Icon::CLOCK, "History"),
     (Tab::Settings, Icon::SETTINGS, "Settings"),
 ];
 
@@ -538,7 +537,6 @@ fn show_tool_window(ui: &mut Ui, state: &mut AppState) {
     match state.ui.tab {
         Tab::Commit => super::commit_window::show(ui, state),
         Tab::Log => super::log_window::show_log(ui, state),
-        Tab::History => super::log_window::show_history(ui, state),
         Tab::Settings => super::settings_inline(ui, state),
     }
 }

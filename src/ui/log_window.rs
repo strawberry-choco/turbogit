@@ -1,6 +1,7 @@
 //! Git Log four-pane workspace (issue #12, spec §8.3): branches pane,
-//! graph pane, changed-files pane and commit-details pane — plus the legacy
-//! History tab (H5–H8) it shares this module with.
+//! graph pane, changed-files pane and commit-details pane. Since issue #19
+//! the legacy History tab is gone: file history lives here as a path-scoped
+//! view ("Show history for file..." on a changed-file entry).
 //!
 //! Layout (spec §8.3):
 //! 1. **Branches** (left, 210px): live search; LOCAL / REMOTE / TAGS groups
@@ -169,8 +170,9 @@ fn visible_root_ids(state: &AppState) -> Vec<RootId> {
 }
 
 /// Lazily load (through the engine seam, cached) everything the four panes
-/// need beyond the log itself: ref decorations per visible root and the
-/// changed-file list of the selected commit.
+/// need beyond the log itself: ref decorations per visible root, the
+/// changed-file list of the selected commit, and — when a path scope is
+/// active (issue #19) — the path-scoped commit listing.
 fn ensure_log_data(state: &mut AppState) {
     for id in visible_root_ids(state) {
         if !state.ref_cache.contains_key(&id) {
@@ -191,17 +193,58 @@ fn ensure_log_data(state: &mut AppState) {
             state.files_cache.insert(key, files);
         }
     }
+    // Path-scoped history (issue #19): fill the scoped cache through the
+    // engine seam's `LogOpts::path` support (`git log -- <path>`).
+    if let (Some(root), Some(path)) = (state.selected_root.clone(), state.ui.log_path_scope.clone())
+    {
+        let key = (root.clone(), path);
+        if !state.log_path_cache.contains_key(&key) {
+            let commits = state
+                .executor
+                .log(
+                    &root.0,
+                    &crate::model::LogOpts {
+                        path: Some(key.1.clone()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_default();
+            state.log_path_cache.insert(key, commits);
+        }
+    }
+}
+
+/// Commits for `root` honoring the active path scope (issue #19): when a
+/// path scope is active and its scoped query is cached, that listing
+/// replaces the root's full log everywhere in this window (graph rows,
+/// details pane, changed-files parent lookup).
+fn commits_for(state: &AppState, root: &RootId) -> Vec<Commit> {
+    if let Some(path) = &state.ui.log_path_scope {
+        if let Some(commits) = state.log_path_cache.get(&(root.clone(), path.clone())) {
+            return commits.clone();
+        }
+    }
+    state.log_cache.get(root).cloned().unwrap_or_default()
 }
 
 /// The commits currently displayed: union across visible roots (newest first,
-/// live-filtered by the graph search box).
+/// live-filtered by the graph search box). With an active path scope (issue
+/// #19) only the selected root's scoped listing is shown — never another
+/// root's unscoped log.
 fn visible_commits(state: &AppState) -> Vec<Commit> {
-    let mut commits: Vec<Commit> = visible_root_ids(state)
-        .iter()
-        .filter_map(|id| state.log_cache.get(id))
-        .flatten()
-        .cloned()
-        .collect();
+    let mut commits: Vec<Commit> = if state.ui.log_path_scope.is_some() {
+        match &state.selected_root {
+            Some(root) => commits_for(state, root),
+            None => Vec::new(),
+        }
+    } else {
+        visible_root_ids(state)
+            .iter()
+            .filter_map(|id| state.log_cache.get(id))
+            .flatten()
+            .cloned()
+            .collect()
+    };
     commits.sort_by(|a, b| b.time.cmp(&a.time).then(a.id.cmp(&b.id)));
     let filter = state.ui.log_filter.to_lowercase();
     if filter.is_empty() {
@@ -445,10 +488,28 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
         widgets::search_input(ui, "Search commits", &mut state.ui.log_filter);
     });
 
+    // Path-scope banner (issue #19): what is filtered + one-click way out.
+    if let Some(path) = state.ui.log_path_scope.clone() {
+        ui.horizontal(|ui| {
+            icons::icon(ui, Icon::CLOCK, 13.0, Palette::BRAND);
+            ui.label(
+                RichText::new(format!("History for {}", path.display()))
+                    .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                    .color(Palette::INK_2),
+            );
+            if ui.small_button("Clear path history").clicked() {
+                state.ui.log_path_scope = None;
+            }
+        });
+    }
+
     let commits = visible_commits(state);
     let colors = assign_colors(&commits);
     let date_mode = state.settings.date_format;
-    let multi_root = state.multi.roots.len() > 1 && state.ui.log_root_filter.is_none();
+    // Scoped views are single-root by definition — no root stripes/legend.
+    let multi_root = state.multi.roots.len() > 1
+        && state.ui.log_root_filter.is_none()
+        && state.ui.log_path_scope.is_none();
 
     // Root-stripe legend chip row (11px INK_3) for multi-root setups.
     if multi_root {
@@ -698,10 +759,9 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    let parent = state
-        .log_cache
-        .get(&root_id)
-        .and_then(|cs| cs.iter().find(|c| c.id == cid))
+    let parent = commits_for(state, &root_id)
+        .iter()
+        .find(|c| c.id == cid)
         .and_then(|c| c.parents.first().cloned());
 
     ScrollArea::vertical().show(ui, |ui| {
@@ -788,6 +848,16 @@ fn file_row(
             path: Some(change.path.clone()),
         });
     }
+    // Path-scoped file history (issue #19): right-click a changed file to
+    // narrow the whole Git Log workspace to the commits touching it.
+    response.context_menu(|ui| {
+        if ui.button("Show history for file...").clicked() {
+            state.ui.log_path_scope = Some(change.path.clone());
+            state.ui.selected_commit = None;
+            state.ui.log_selected_file = None;
+            ui.close();
+        }
+    });
 }
 
 // --- Pane 4: commit details -----------------------------------------------------------
@@ -810,11 +880,9 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    let Some(commit) = state
-        .log_cache
-        .get(&root_id)
-        .and_then(|cs| cs.iter().find(|c| c.id == cid))
-        .cloned()
+    let Some(commit) = commits_for(state, &root_id)
+        .into_iter()
+        .find(|c| c.id == cid)
     else {
         return;
     };
@@ -908,87 +976,4 @@ fn kv_value(ui: &mut Ui, key: &str, value: impl Into<String>) {
                 .color(Palette::INK),
         );
     });
-}
-
-// --- Legacy History tab (unchanged behavior, H5–H8) -----------------------------------
-
-pub fn show_history(ui: &mut Ui, state: &mut AppState) {
-    ui.heading("File / Selection History");
-    ui.horizontal(|ui| {
-        ui.text_edit_singleline(&mut state.ui.history_path);
-        if ui.button("Show history").clicked() {
-            if let Some(id) = &state.selected_root {
-                let id = id.clone();
-                let path = std::path::PathBuf::from(state.ui.history_path.trim());
-                let executor = state.executor.clone();
-                let tx = state.tx.clone();
-                std::thread::spawn(move || {
-                    let res = executor.log(
-                        &id.0,
-                        &crate::model::LogOpts {
-                            path: Some(path),
-                            ..Default::default()
-                        },
-                    );
-                    let _ = tx.send(crate::engine::AppEvent::LogLoaded {
-                        root: id,
-                        commits: res,
-                    });
-                });
-            }
-        }
-        if ui.button("Blame").clicked() {
-            let root = state.selected_path();
-            let path = std::path::PathBuf::from(state.ui.history_path.trim());
-            if let Some(r) = root {
-                match state.executor.blame(&r, &path, None) {
-                    Ok(lines) => {
-                        for l in lines.iter().take(200) {
-                            ui.colored_label(
-                                Color32::from_gray(150),
-                                format!(
-                                    "{} {} {}",
-                                    &l.commit[..7.min(l.commit.len())],
-                                    l.author,
-                                    l.content
-                                ),
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        ui.colored_label(Color32::RED, e.to_string());
-                    }
-                }
-            }
-        }
-    });
-    // File history reuses the log cache for the selected root (path-scoped).
-    let commits = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.log_cache.get(id).cloned())
-        .unwrap_or_default();
-    ui.separator();
-    ui.label(format!("{} commits touching this path", commits.len()));
-    ScrollArea::vertical().show(ui, |ui| {
-        for c in &commits {
-            let first = c.message.lines().next().unwrap_or("").to_string();
-            if ui
-                .selectable_label(false, format!("{}  {}", short(&c.id), first))
-                .clicked()
-            {
-                state.ui.diff = Some(DiffTarget {
-                    root: state.selected_root.clone().unwrap(),
-                    left: c.parents.first().cloned(),
-                    right: Some(c.id.clone()),
-                    path: Some(std::path::PathBuf::from(state.ui.history_path.trim())),
-                });
-            }
-        }
-    });
-    if let Some(d) = state.ui.diff.clone() {
-        if d.path.is_some() {
-            crate::ui::diff::render_diff(ui, state, &d.left, &d.right, &d.path);
-        }
-    }
 }
