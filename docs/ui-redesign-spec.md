@@ -141,7 +141,7 @@ Load fonts once at startup via `ctx.set_fonts(FontDefinitions)`:
 2. Set `Proportional` family = JetBrains Mono, then Segoe UI as fallback entry (matches the mockups' mono-everything look).
 3. Set `Monospace` family = JetBrains Mono, Consolas fallback.
 
-If bundling is rejected (§12.2), fall back to `Segoe UI` for Proportional and `Consolas` for Monospace — spacing shifts slightly but all layouts in §4 must still fit.
+Bundling is accepted (ADR-0002): JetBrains Mono ships embedded as binary includes, so text metrics are identical on every machine and no system-font fallback path is exercised except on font-load failure.
 
 ### 3.2 Font sizes
 
@@ -454,7 +454,7 @@ Resolving updates Result immediately and decrements remaining count; Apply (G4) 
 
 ### 8.8 Settings Dialog
 
-**Mockup:** `pages/settings.html` · **Module:** `src/ui/mod.rs::settings_window` · **Features:** Q1+
+**Mockup:** `pages/settings.html` · **Module:** `src/ui/settings_modal.rs` · **Features:** Q1+
 
 Large modal (~768px), centered, BACKDROP behind.
 
@@ -473,7 +473,7 @@ Structure:
    - CRLF handling radio group: Convert to LF on commit | Convert to CRLF on checkout | No conversion
    - Date format dropdown: System default | ISO 8601 | RFC 2822
    - Manage Remotes button (opens remotes manager A6)
-5. Footer: Reset (ghost) | Cancel (ghost) | Apply (ghost, disabled until dirty) | OK (primary)
+5. Footer: Reset (ghost) | Cancel (ghost) | Apply (primary-styled, disabled until dirty). No OK button — Apply is the sole committing action (mockup correction landed with the implementing work).
 
 Controls bind to existing `VcsSettings`; Apply persists via `persistence.rs`.
 
@@ -489,12 +489,10 @@ pub enum Tab {
     #[default]
     Commit,
     Log,
-    History,   // kept for compatibility; hidden from tab strip in v1
-    Settings,  // moves out of tab strip; becomes modal-only (§8.8)
 }
 ```
 
-Tab strip renders: Local Changes (Commit) · Git Log (Log). History/Settings remain valid internal states but are not shown as tabs — History is reachable via log context menus, Settings via the toolbar gear.
+Tab strip renders: Local Changes (Commit) · Git Log (Log) — nothing else (correction landed with the implementing work: the `History` and `Settings` variants were removed outright, not hidden). File history is reachable via the log context menu's "Show history for file…" action rendering a path-scoped Git Log; Settings opens exclusively as a modal dialog from the toolbar gear.
 
 ### 9.2 New UI state
 
