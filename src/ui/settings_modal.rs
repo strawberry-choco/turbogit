@@ -22,7 +22,7 @@ use egui::{
 
 use super::widgets;
 use crate::model::{CleanTreeMethod, DateFormat, UpdateMethod, VcsSettings};
-use crate::state::AppState;
+use crate::state::{AppState, Toast};
 use crate::theme::Palette;
 
 /// Spec §8.8: large modal, ~768px wide.
@@ -360,7 +360,7 @@ fn apply_settings(state: &mut AppState) {
         settings: state.settings.clone(),
     });
     state.persist_ui();
-    state.ui.toast = Some("✓ Settings saved".into());
+    state.ui.toast = Some(Toast::success("Settings saved"));
 }
 
 /// Restore the draft from the loaded values (footer Reset).
