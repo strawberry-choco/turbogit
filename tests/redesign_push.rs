@@ -34,11 +34,10 @@ use std::time::{Duration, Instant};
 use common::{assert_not_painted, assert_painted, painted_text, RecordingExecutor};
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
-use turbogit::core::multi_root::build_root;
-use turbogit::engine::{AppEvent, GitExecutor};
+use turbogit::engine::GitExecutor;
 use turbogit::error::TgError;
 use turbogit::model::{RootId, VcsSettings};
-use turbogit::state::{AppState, Dialog, Toast};
+use turbogit::state::{AppState, Dialog};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -164,112 +163,32 @@ fn repo_diverged_from_origin(parent: &Path, name: &str) -> (Repo, String) {
 }
 
 /// Build an `AppState` over fully-built roots (branches/remotes/tracking
-/// included via `build_root`) with synchronous scans — no background threads.
+/// included via the production registration path) with synchronous scans —
+/// no background threads.
 fn app_state(project_dir: &Path, roots: &[PathBuf]) -> AppState {
-    let settings = VcsSettings::default();
-    let executor: Arc<dyn GitExecutor> = Arc::new(turbogit::engine::cli::CliExecutor {
-        settings: settings.clone(),
-    });
-    app_state_with(project_dir, roots, executor, settings)
+    AppState::for_roots(project_dir, roots)
 }
 
 /// [`app_state`] with an injected engine and settings — lets tests assert at
 /// the executor boundary through [`RecordingExecutor`] and configure
-/// protected-branch patterns.
+/// protected-branch patterns. The executor/settings swap happens AFTER
+/// synchronous registration, so setup reads never reach the recorder.
 fn app_state_with(
     project_dir: &Path,
     roots: &[PathBuf],
     executor: Arc<dyn GitExecutor>,
     settings: VcsSettings,
 ) -> AppState {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let mut st = AppState {
-        project_dir: project_dir.to_path_buf(),
-        executor,
-        settings,
-        multi: Default::default(),
-        tx,
-        rx,
-        selected_root: None,
-        clone_url: String::new(),
-        last_error: None,
-        ui: Default::default(),
-        log_cache: Default::default(),
-        ahead_behind: Default::default(),
-        recents_config_dir: None,
-        dir_picker: None,
-        ref_cache: Default::default(),
-        files_cache: Default::default(),
-        log_path_cache: Default::default(),
-    };
-    for r in roots {
-        let root = build_root(st.executor.as_ref(), r).expect("build root");
-        st.multi.register_root(root);
-    }
-    st.selected_root = st.multi.roots.first().map(|r| r.id.clone());
-    st
-}
-
-/// Drain worker-thread events exactly like `app.rs`, but re-status
-/// synchronously after completed ops so tests stay deterministic.
-fn drain_events(state: &mut AppState) {
-    while let Ok(ev) = state.rx.try_recv() {
-        match ev {
-            AppEvent::StatusScanned {
-                root,
-                status: Ok(s),
-            } => {
-                if let Some(r) = state.multi.roots.iter_mut().find(|r| r.id == root) {
-                    r.status = s;
-                }
-            }
-            AppEvent::StatusScanned { .. } => {}
-            AppEvent::OpCompleted { label, result } => {
-                state.ui.busy = false;
-                match result {
-                    Ok(()) => {
-                        state.ui.toast = Some(Toast::success(label));
-                        for root in &mut state.multi.roots {
-                            if let Ok(s) = state.executor.status(&root.path) {
-                                root.status = s;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        state.ui.toast = Some(Toast::error(format!("{label}: {e}")));
-                        state.last_error = Some(e.to_string());
-                    }
-                }
-            }
-            AppEvent::DiffReady { key, result } => {
-                state.ui.diff_loading = false;
-                match result {
-                    Ok(text) => {
-                        state.ui.diff_error = None;
-                        state.ui.diff_cache = Some((key, text));
-                    }
-                    Err(e) => {
-                        state.ui.diff_error = Some(e.to_string());
-                    }
-                }
-            }
-            AppEvent::AheadBehind {
-                root,
-                ahead,
-                behind,
-            } => {
-                state.ahead_behind.insert(root, (ahead, behind));
-            }
-            _ => {}
-        }
-    }
+    AppState::for_roots(project_dir, roots)
+        .with_executor(executor)
+        .with_settings(settings)
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
-            drain_events(state);
+            state.drain_events();
             turbogit::ui::render(ui, state);
         },
         state,
