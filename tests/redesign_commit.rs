@@ -18,14 +18,11 @@ mod common;
 
 use common::{assert_not_painted, assert_painted};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
-use turbogit::engine::{AppEvent, GitExecutor};
-use turbogit::model::{Root, RootId, VcsSettings};
-use turbogit::state::{AppState, CommitSubTab, Dialog, Toast};
+use turbogit::state::{AppState, CommitSubTab, Dialog};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -115,108 +112,14 @@ fn seed_conflict(repo: &Path, branch: &str) {
     git_unchecked(repo, &["merge", "--no-edit", "side"]); // expected to conflict
 }
 
-/// Build an `AppState` over the given roots with synchronous status scans
-/// (no background threads), so tests are deterministic.
+/// Headless harness over the given repository roots (see CONTEXT.md).
 fn app_state(roots: &[PathBuf]) -> AppState {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let settings = VcsSettings::default();
-    let executor: Arc<dyn GitExecutor> = Arc::new(turbogit::engine::cli::CliExecutor {
-        settings: settings.clone(),
-    });
-    let mut st = AppState {
-        project_dir: roots
-            .first()
-            .and_then(|r| r.parent())
-            .map(Path::to_path_buf)
-            .unwrap_or_default(),
-        executor,
-        settings,
-        multi: Default::default(),
-        tx,
-        rx,
-        selected_root: None,
-        clone_url: String::new(),
-        last_error: None,
-        ui: Default::default(),
-        log_cache: Default::default(),
-        ahead_behind: Default::default(),
-        recents_config_dir: None,
-        dir_picker: None,
-        ref_cache: Default::default(),
-        files_cache: Default::default(),
-        log_path_cache: Default::default(),
-    };
-    for r in roots {
-        let id = RootId(r.clone());
-        let status = st.executor.status(r).expect("status scan");
-        let current_branch = st.executor.current_branch(r).ok().flatten();
-        st.multi.register_root(Root {
-            id: id.clone(),
-            path: r.clone(),
-            remotes: vec![],
-            branches: vec![],
-            current_branch,
-            head: None,
-            status,
-        });
-        if st.selected_root.is_none() {
-            st.selected_root = Some(id);
-        }
-    }
-    st
-}
-
-/// Drain worker-thread events exactly like `app.rs`, but re-status
-/// synchronously after completed ops so tests stay deterministic.
-fn drain_events(state: &mut AppState) {
-    while let Ok(ev) = state.rx.try_recv() {
-        match ev {
-            AppEvent::StatusScanned {
-                root,
-                status: Ok(s),
-            } => {
-                if let Some(r) = state.multi.roots.iter_mut().find(|r| r.id == root) {
-                    r.status = s;
-                }
-            }
-            AppEvent::StatusScanned { .. } => {}
-            AppEvent::OpCompleted { label, result } => {
-                state.ui.busy = false;
-                match result {
-                    Ok(()) => {
-                        state.ui.toast = Some(Toast::success(label));
-                        for root in &mut state.multi.roots {
-                            if let Ok(s) = state.executor.status(&root.path) {
-                                root.status = s;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        state.ui.toast = Some(Toast::error(format!("{label}: {e}")));
-                        state.last_error = Some(e.to_string());
-                    }
-                }
-            }
-            AppEvent::DiffReady { key, result } => {
-                state.ui.diff_loading = false;
-                match result {
-                    Ok(text) => {
-                        state.ui.diff_error = None;
-                        state.ui.diff_cache = Some((key, text));
-                    }
-                    Err(e) => state.ui.diff_error = Some(e.to_string()),
-                }
-            }
-            AppEvent::AheadBehind {
-                root,
-                ahead,
-                behind,
-            } => {
-                state.ahead_behind.insert(root, (ahead, behind));
-            }
-            _ => {}
-        }
-    }
+    let dir = roots
+        .first()
+        .and_then(|r| r.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    AppState::for_roots(&dir, roots)
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
@@ -226,7 +129,7 @@ fn drain_events(state: &mut AppState) {
 fn harness(state: AppState) -> Harness<'static, AppState> {
     Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
-            drain_events(state);
+            state.drain_events();
             turbogit::ui::render(ui, state);
         },
         state,
