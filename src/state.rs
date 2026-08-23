@@ -37,6 +37,10 @@ pub struct DialogState {
     /// Which root node the user clicked — filters the changed-files PREVIEW
     /// only, never the batch push scope (ADR-0006).
     pub push_preview_root: Option<RootId>,
+    /// Verbatim `git push --dry-run` output captured by the Preview button
+    /// (issue #21): `Ok(report)` when git accepted the push, `Err(git
+    /// stderr)` when it rejected it. Rendered as-is, never paraphrased.
+    pub push_preview_output: Option<Result<String, String>>,
     // Merge
     pub merge_target: String,
     pub merge_no_ff: bool,
