@@ -82,9 +82,13 @@ pub fn build_root(engine: &dyn GitExecutor, path: &Path) -> TgResult<Root> {
     root_snapshot(engine, path)
 }
 
-/// Register `root` into `mgr` unless a root with the same id already exists.
+/// Register `root` into `mgr`, replacing any existing snapshot with the same
+/// id so re-registration after an operation refreshes branches / HEAD /
+/// status instead of leaving stale data behind.
 pub fn register(mgr: &mut MultiRootManager, root: Root) {
-    if !mgr.roots.iter().any(|r| r.id == root.id) {
+    if let Some(existing) = mgr.roots.iter_mut().find(|r| r.id == root.id) {
+        *existing = root;
+    } else {
         mgr.roots.push(root);
     }
 }
