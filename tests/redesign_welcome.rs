@@ -21,6 +21,14 @@
 //! - branch indicators are cached in memory, then recompute when invalidated
 //! - File → Welcome closes every project and returns to the screen
 //! - `turbogit <path>` bypasses Welcome; launching without one lands on it
+//!
+//! Issue #17 adds the Clone card end-to-end and pins the folder-picker seam:
+//! - Clone from a URL (plain local path) into a picked destination with full
+//!   history; the clone enters the shell and is offered in recents
+//! - The shallow checkbox limits cloned history to `--depth 1` (via a
+//!   `file://` remote — the only local transport that honors depth)
+//! - Missing picker / cancelled pick surface toasts instead of failing
+//! - The picker seam is invoked only behind user-initiated flows
 
 use egui::Shape;
 use egui_kittest::{kittest::Queryable, Harness};
@@ -98,6 +106,55 @@ fn seed_repo(base: &Path, name: &str) -> PathBuf {
     dir
 }
 
+/// Run `git <args>` in `cwd`, returning trimmed stdout (tests read history).
+#[track_caller]
+fn git_out(args: &[&str], cwd: &Path) -> String {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("git must be on PATH");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A real bare "remote" with three commits on `main` (issue #17).
+fn seed_bare_remote(base: &Path, name: &str) -> PathBuf {
+    let work = seed_repo(base, &format!("{name}-work"));
+    git(&["config", "user.email", "test@example.com"], &work);
+    git(&["config", "user.name", "Test"], &work);
+    for i in 1..=3 {
+        std::fs::write(work.join(format!("f{i}.txt")), format!("commit {i}"))
+            .expect("write tracked file");
+        git(&["add", "."], &work);
+        git(&["commit", "-q", "-m", &format!("c{i}")], &work);
+    }
+    let bare = base.join(format!("{name}.git"));
+    let work_s = work.to_string_lossy().to_string();
+    let bare_s = bare.to_string_lossy().to_string();
+    git(&["clone", "--bare", "-q", &work_s, &bare_s], base);
+    bare
+}
+
+/// `file:///…` URL for a local path: the only local transport that honors
+/// `--depth` (plain paths make git ignore it with a warning).
+fn file_url(path: &Path) -> String {
+    format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
+}
+
+/// Focus the input labelled `label` and type into it (kittest only delivers
+/// text events to the focused widget, so click-to-focus must come first).
+#[track_caller]
+fn type_into(harness: &mut Harness<'_, AppState>, label: &str, text: &str) {
+    let field = harness.get_by_label(label);
+    field.click();
+    field.type_text(text);
+}
+
 /// Seed the global recents file under a TEMP config dir (never the real one).
 fn seed_recents(config_dir: &Path, projects: &[RecentProject]) {
     let file = recents_file(config_dir);
@@ -116,16 +173,26 @@ struct Fixture {
     /// The launch project dir (empty → Welcome).
     _project: tempfile::TempDir,
     /// Injected OS-config-dir stand-in holding the global recents file.
-    _config: tempfile::TempDir,
+    config: tempfile::TempDir,
 }
 
 /// A harness over an empty project dir (Welcome visible) with an injected,
 /// empty recents config dir. `pick` becomes the injected folder picker.
 fn fixture_with_picker(pick: impl Fn() -> Option<PathBuf> + Send + Sync + 'static) -> Fixture {
+    fixture_inner(Some(Box::new(pick)))
+}
+
+/// Same, but with NO folder picker wired at all (production always injects
+/// `rfd`; this exercises the seam's missing-picker path).
+fn fixture_without_picker() -> Fixture {
+    fixture_inner(None)
+}
+
+fn fixture_inner(picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>) -> Fixture {
     let project = tempfile::tempdir().expect("temp project dir");
     let config = tempfile::tempdir().expect("temp config dir");
     let mut state = AppState::launch_in(None, Some(config.path().to_path_buf()));
-    state.dir_picker = Some(Box::new(pick));
+    state.dir_picker = picker;
 
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
@@ -143,7 +210,7 @@ fn fixture_with_picker(pick: impl Fn() -> Option<PathBuf> + Send + Sync + 'stati
     Fixture {
         harness,
         _project: project,
-        _config: config,
+        config,
     }
 }
 
@@ -471,4 +538,185 @@ fn recents_store_roundtrips_upserts_sorts_and_caps() {
     let file = recents_file(config.path());
     std::fs::write(&file, "not ron at all {{{").unwrap();
     assert!(load(config.path()).projects.is_empty());
+}
+
+// --- Cycle 7: Clone card is end-to-end (issue #17) ------------------------------
+
+/// The clone must be offered by the global recents store: both the in-memory
+/// copy on `AppState` and the persisted file under the injected config dir.
+#[track_caller]
+fn assert_offered_in_recents(fx: &Fixture, dest: &Path) {
+    let s = fx.harness.state();
+    assert!(
+        s.ui.recent_projects.iter().any(|p| p.path == dest),
+        "cloned repo must appear in in-memory recents; got {:?}",
+        s.ui.recent_projects
+    );
+    let persisted = load(fx.config.path());
+    assert!(
+        persisted.projects.iter().any(|p| p.path == dest),
+        "cloned repo must be recorded in the persisted recents store"
+    );
+}
+
+#[test]
+fn clone_card_clones_full_history_from_a_local_path_into_the_picked_destination() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let remote = seed_bare_remote(project.path(), "origin");
+    let workspace = project.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create picked parent");
+    let dest = workspace.join("origin");
+
+    let picked = workspace.clone();
+    let mut fx = fixture_with_picker(move || Some(picked.clone()));
+    settle(&mut fx.harness);
+
+    type_into(&mut fx.harness, "Repository URL", remote.to_str().unwrap());
+    fx.harness.get_by_label("Clone").click();
+    settle(&mut fx.harness);
+
+    // Real files on disk: a full clone of the bare remote.
+    assert!(
+        dest.join(".git").exists(),
+        "clone must land at <picked parent>/origin"
+    );
+    assert_eq!(
+        git_out(&["rev-list", "--count", "HEAD"], &dest),
+        "3",
+        "a full clone carries the remote's entire history"
+    );
+
+    // It opens into the shell like any other project.
+    let s = fx.harness.state();
+    assert!(!s.show_welcome(), "a successful clone enters the shell");
+    assert_eq!(s.multi.roots.len(), 1);
+    assert_eq!(s.multi.roots[0].id.0, dest);
+    assert_eq!(
+        s.selected_root.as_ref().map(|r| r.0.clone()),
+        Some(dest.clone())
+    );
+    assert!(
+        s.ui.welcome_clone_url.is_empty(),
+        "URL input resets on success"
+    );
+
+    assert_painted(&fx.harness, "Repository cloned");
+    assert_offered_in_recents(&fx, &dest);
+}
+
+#[test]
+fn clone_card_shallow_checkbox_limits_cloned_history_to_depth_one() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let remote = seed_bare_remote(project.path(), "origin");
+    let workspace = project.path().join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create picked parent");
+    let dest = workspace.join("origin");
+
+    let picked = workspace.clone();
+    let mut fx = fixture_with_picker(move || Some(picked.clone()));
+    settle(&mut fx.harness);
+
+    type_into(&mut fx.harness, "Repository URL", &file_url(&remote));
+    fx.harness.get_by_label("Shallow clone (--depth 1)").click();
+    settle(&mut fx.harness);
+    assert!(
+        fx.harness.state().ui.welcome_shallow,
+        "clicking the checkbox must toggle shallow mode on"
+    );
+    fx.harness.get_by_label("Clone").click();
+    settle(&mut fx.harness);
+
+    assert!(
+        dest.join(".git").exists(),
+        "shallow clone still lands on disk"
+    );
+    assert_eq!(
+        git_out(&["rev-list", "--count", "HEAD"], &remote),
+        "3",
+        "the remote keeps its full history"
+    );
+    assert_eq!(
+        git_out(&["rev-list", "--count", "HEAD"], &dest),
+        "1",
+        "shallow clone must pass --depth 1 through the engine layer"
+    );
+
+    let s = fx.harness.state();
+    assert!(!s.show_welcome());
+    assert_eq!(s.multi.roots[0].id.0, dest);
+    assert_offered_in_recents(&fx, &dest);
+}
+
+// --- Cycle 8: the folder-picker seam (issue #17) ---------------------------------
+
+#[test]
+fn clone_without_a_folder_picker_surfaces_a_toast_and_stays_on_welcome() {
+    let mut fx = fixture_without_picker();
+    settle(&mut fx.harness);
+
+    type_into(
+        &mut fx.harness,
+        "Repository URL",
+        "https://example.com/some/repo.git",
+    );
+    fx.harness.get_by_label("Clone").click();
+    settle(&mut fx.harness);
+
+    assert_painted(&fx.harness, "no folder picker available");
+    let s = fx.harness.state();
+    assert!(s.show_welcome(), "a failed pick must not enter the shell");
+    assert_eq!(
+        s.ui.welcome_clone_url, "https://example.com/some/repo.git",
+        "the typed URL is kept so the user can retry"
+    );
+}
+
+#[test]
+fn cancelling_the_clone_folder_pick_surfaces_a_toast_and_keeps_welcome() {
+    let mut fx = fixture_with_picker(|| None);
+    settle(&mut fx.harness);
+
+    type_into(
+        &mut fx.harness,
+        "Repository URL",
+        "https://example.com/some/repo.git",
+    );
+    fx.harness.get_by_label("Clone").click();
+    settle(&mut fx.harness);
+
+    assert_painted(&fx.harness, "no folder selected");
+    let s = fx.harness.state();
+    assert!(s.show_welcome());
+    assert!(s.multi.roots.is_empty());
+}
+
+#[test]
+fn folder_picker_seam_is_only_invoked_behind_user_initiated_flows() {
+    static PICKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let mut fx = fixture_with_picker(|| {
+        PICKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        None
+    });
+
+    // Merely rendering Welcome — launch, settle, File → Welcome round-trip —
+    // must never open a native dialog.
+    settle(&mut fx.harness);
+    settle(&mut fx.harness);
+    assert_eq!(
+        PICKS.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "rendering the Welcome screen must not invoke the picker seam"
+    );
+
+    // An explicit user action is what triggers it.
+    fx.harness.get_by_label("Open Project").click();
+    settle(&mut fx.harness);
+    assert!(
+        PICKS.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "clicking Open Project must go through the picker seam exactly once per click"
+    );
+    assert!(
+        fx.harness.state().show_welcome(),
+        "a cancelled pick leaves the user on Welcome"
+    );
 }
