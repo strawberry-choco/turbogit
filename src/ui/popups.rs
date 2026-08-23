@@ -4,7 +4,7 @@
 //! opens the command palette: a fuzzy-searchable list of every action, the
 //! IntelliJ "Find Action" hallmark.
 
-use crate::state::{AppState, Dialog};
+use crate::state::{AppState, Dialog, Tab, Toast};
 use egui::Ui;
 
 /// Every globally-invokable action, reused by both the VCS popup and the
@@ -25,6 +25,11 @@ pub enum Action {
     CommitTab,
     Settings,
     Clone,
+    // Shell-navigation extras (issue #22 / ADR-0011): palette-only. The VCS
+    // operations popup keeps its exact pre-existing action set.
+    GoToLog,
+    OpenWelcome,
+    ToggleToolbar,
 }
 
 impl Action {
@@ -44,9 +49,14 @@ impl Action {
             Action::CommitTab => "Go to Commit",
             Action::Settings => "Settings…",
             Action::Clone => "Clone…",
+            Action::GoToLog => "Go to Log",
+            Action::OpenWelcome => "Open Welcome",
+            Action::ToggleToolbar => "Toggle Toolbar",
         }
     }
 
+    /// The VCS operations popup's action set: exactly the pre-existing list
+    /// (issue #22 keeps it unchanged while the palette grows).
     pub fn all() -> &'static [Action] {
         &[
             Action::Refresh,
@@ -63,6 +73,30 @@ impl Action {
             Action::CommitTab,
             Action::Settings,
             Action::Clone,
+        ]
+    }
+
+    /// The command palette's action set (ADR-0011): every existing entry plus
+    /// the shell-navigation actions the new shell makes meaningful.
+    pub fn palette_actions() -> &'static [Action] {
+        &[
+            Action::Refresh,
+            Action::Fetch,
+            Action::Pull,
+            Action::Push,
+            Action::Branches,
+            Action::NewBranch,
+            Action::Merge,
+            Action::Rebase,
+            Action::Stash,
+            Action::Shelve,
+            Action::Tag,
+            Action::CommitTab,
+            Action::Settings,
+            Action::Clone,
+            Action::GoToLog,
+            Action::OpenWelcome,
+            Action::ToggleToolbar,
         ]
     }
 }
@@ -106,12 +140,19 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::Stash => state.ui.dialog = Some(Dialog::Stash),
         Action::Shelve => state.ui.dialog = Some(Dialog::Shelve),
         Action::Tag => state.ui.dialog = Some(Dialog::Tag),
-        Action::CommitTab => state.ui.tab = crate::state::Tab::Commit,
+        Action::CommitTab => state.ui.tab = Tab::Commit,
         Action::Settings => state.ui.settings_open = true,
         Action::Clone => {
             // The clone flow lives on the Welcome screen (ticket #10).
-            state.ui.toast = Some("Clone opens from the Welcome screen.".into());
+            state.ui.toast = Some(Toast::info("Clone opens from the Welcome screen."));
         }
+        // Shell navigation (issue #22 / ADR-0011).
+        Action::GoToLog => {
+            state.ui.welcome_visible = false;
+            state.ui.tab = Tab::Log;
+        }
+        Action::OpenWelcome => state.ui.welcome_visible = true,
+        Action::ToggleToolbar => state.ui.show_toolbar = !state.ui.show_toolbar,
     }
 }
 
@@ -121,8 +162,12 @@ pub fn vcs_operations(ui: &mut Ui, state: &mut AppState) {
     }
     let ctx = ui.ctx().clone();
     let mut open = state.ui.vcs_popup;
+    // Popup chrome (issue #22, spec §10): SURFACE fill, LINE border, radius 8
+    // — mapped centrally via `theme::configure_style`; fixed-size like the
+    // palette. The action list itself is untouched.
     egui::Window::new("VCS Operations")
         .open(&mut open)
+        .resizable(false)
         .show(&ctx, |ui| {
             for a in Action::all() {
                 if ui.button(a.label()).clicked() {
@@ -141,35 +186,59 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
         return;
     }
     let ctx = ui.ctx().clone();
+
+    // Compact rows so the full action set fits unscrolled (issue #22: every
+    // entry must stay listed and reachable, ADR-0011).
+    let row_h = 24.0;
+    let q = state.ui.command_query.to_lowercase();
+    let match_count = Action::palette_actions()
+        .iter()
+        .filter(|a| q.is_empty() || a.label().to_lowercase().contains(&q))
+        .count();
+    let view_h = ctx.input(|i| i.viewport_rect().height());
+    let list_h = ((match_count as f32 + 1.0) * row_h).min((view_h - 220.0).max(120.0));
+
     let mut open = true;
     egui::Window::new("Find Action")
         .open(&mut open)
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 60.0))
         .default_width(420.0)
+        // Floor the outer window height so the Resize state's remembered
+        // size can never clamp the list below the full action set (the
+        // Branches-popup lesson, applied at the Window level).
+        .min_height(105.0 + list_h)
         .resizable(false)
         .show(&ctx, |ui| {
             ui.text_edit_singleline(&mut state.ui.command_query)
                 .request_focus();
             ui.separator();
-            let q = state.ui.command_query.to_lowercase();
-            let matches: Vec<Action> = Action::all()
+            let matches: Vec<Action> = Action::palette_actions()
                 .iter()
                 .copied()
                 .filter(|a| q.is_empty() || a.label().to_lowercase().contains(&q))
                 .collect();
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    for &a in &matches {
-                        if ui.selectable_label(false, a.label()).clicked() {
-                            run_action(state, a);
-                            state.ui.command_palette = false;
-                        }
-                    }
-                    if matches.is_empty() {
-                        ui.label("No matching actions.");
-                    }
-                });
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 2.0);
+            ui.spacing_mut().interact_size.y = 16.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), list_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(list_h)
+                        .show(ui, |ui| {
+                            for &a in &matches {
+                                if ui.selectable_label(false, a.label()).clicked() {
+                                    run_action(state, a);
+                                    state.ui.command_palette = false;
+                                }
+                            }
+                            if matches.is_empty() {
+                                ui.label("No matching actions.");
+                            }
+                        });
+                },
+            );
         });
     if !open {
         state.ui.command_palette = false;

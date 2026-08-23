@@ -25,7 +25,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use turbogit::engine::{AppEvent, GitExecutor};
 use turbogit::model::{Root, RootId, VcsSettings};
-use turbogit::state::{AppState, CommitSubTab, Dialog};
+use turbogit::state::{AppState, CommitSubTab, Dialog, Toast};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -184,7 +184,7 @@ fn drain_events(state: &mut AppState) {
                 state.ui.busy = false;
                 match result {
                     Ok(()) => {
-                        state.ui.toast = Some(format!("✓ {label}"));
+                        state.ui.toast = Some(Toast::success(label));
                         for root in &mut state.multi.roots {
                             if let Ok(s) = state.executor.status(&root.path) {
                                 root.status = s;
@@ -192,7 +192,7 @@ fn drain_events(state: &mut AppState) {
                         }
                     }
                     Err(e) => {
-                        state.ui.toast = Some(format!("✗ {label}: {e}"));
+                        state.ui.toast = Some(Toast::error(format!("{label}: {e}")));
                         state.last_error = Some(e.to_string());
                     }
                 }
@@ -608,7 +608,7 @@ fn advanced_options_control_is_visible_but_inert() {
         message: String,
         amend: bool,
         selected_len: usize,
-        toast: Option<String>,
+        toast: Option<turbogit::state::Toast>,
         busy: bool,
     }
     fn snap(h: &Harness<'_, AppState>) -> CommitUiSnap {
