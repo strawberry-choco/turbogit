@@ -10,7 +10,11 @@
 //! section (ADR-0007) because protected-branch force-push blocking keys off
 //! the branch name.
 //!
-//! Deferred to later tickets: Preview dry-run footer button, "Push tags".
+//! Issue #21 adds the safety layer: a Preview button running a REAL
+//! `git push --dry-run` through the engine seam with the report shown
+//! VERBATIM in-dialog, and protected-branch force-push blocking keyed off the
+//! exact Remote/Branch fields — a blocked push never reaches the engine
+//! instead of being silently downgraded. Deferred: "Push tags".
 
 use crate::core::sync_service;
 use crate::error::TgError;
@@ -52,19 +56,70 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 "Push current branch only",
             );
 
+            // Safety strips (issue #21): acknowledging force warns about
+            // history rewrite; naming a protected branch in the exact Branch
+            // field BLOCKS the push outright.
             let branch = state.ui.dlg.push_branch.clone();
-            if state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch) {
+            let force_blocked =
+                state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch);
+            if force_blocked {
                 ui.colored_label(
                     Color32::RED,
                     format!("⚠ '{branch}' is protected — force-push blocked."),
                 );
+                ui.colored_label(
+                    Color32::RED,
+                    "Uncheck force push or retarget the Branch field to continue.",
+                );
+            } else if state.ui.dlg.force_push {
+                ui.colored_label(
+                    Color32::YELLOW,
+                    "⚠ Force push rewrites the remote branch (--force-with-lease).",
+                );
+            }
+
+            // Verbatim dry-run report pane (issue #21).
+            if let Some(preview) = state.ui.dlg.push_preview_output.as_ref() {
+                ui.separator();
+                match preview {
+                    Ok(report) => {
+                        ui.label("Dry-run report (verbatim):");
+                        egui::ScrollArea::vertical()
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                ui.label(RichText::new(report).monospace().small());
+                            });
+                    }
+                    Err(stderr) => {
+                        ui.colored_label(Color32::RED, "Push rejected by git:");
+                        egui::ScrollArea::vertical()
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(stderr)
+                                        .monospace()
+                                        .small()
+                                        .color(Color32::RED),
+                                );
+                            });
+                    }
+                }
             }
 
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
                     close(state);
                 }
-                if ui.button("Push").clicked() {
+                if ui.button("Preview dry-run").clicked() {
+                    run_preview(state);
+                }
+                // A blocked force-push never dispatches: the disabled button
+                // keeps the block visible in-dialog instead of silently
+                // downgrading to a regular (or refused) push.
+                if ui
+                    .add_enabled(!force_blocked, egui::Button::new("Push"))
+                    .clicked()
+                {
                     execute_push(state);
                     close(state);
                 }
@@ -80,6 +135,37 @@ fn close(state: &mut AppState) {
     state.ui.dlg.push_outgoing = None;
     state.ui.dlg.push_preview_root = None;
     state.ui.dlg.push_current_branch_only = false;
+    state.ui.dlg.push_preview_output = None;
+}
+
+/// Run a REAL `git push --dry-run` for the explicit Remote/Branch target on
+/// the selected root (issue #21), honoring the force acknowledgment, and
+/// store the report VERBATIM. Synchronous like the outgoing snapshot builder
+/// (a local git subprocess); a rejected push surfaces through the same pane
+/// with git's verbatim stderr instead of a toast.
+fn run_preview(state: &mut AppState) {
+    let output = match state.selected_path() {
+        Some(root) => {
+            let remote = state.ui.dlg.push_remote.clone();
+            let branch = state.ui.dlg.push_branch.clone();
+            let force = state.ui.dlg.force_push;
+            match state.executor.push_dry_run(&root, &remote, &branch, force) {
+                Ok(report) => Ok(report),
+                Err(e) => Err(verbatim_stderr(&e)),
+            }
+        }
+        None => Err("No repository selected.".to_string()),
+    };
+    state.ui.dlg.push_preview_output = Some(output);
+}
+
+/// Extract git's verbatim stderr from an engine error; anything that is not
+/// a CLI error falls back to its Display text.
+fn verbatim_stderr(e: &TgError) -> String {
+    match e {
+        TgError::Cli { stderr, .. } => stderr.clone(),
+        other => other.to_string(),
+    }
 }
 
 /// Build the outgoing-commit snapshot once per dialog open (synchronous like
