@@ -1,7 +1,7 @@
 //! Optional read-only acceleration via `gix` (feature `gix-reader`).
 //!
-//! Placeholder module: the read path still runs through
-//! [`crate::engine::cli::CliExecutor`]. Implementations land behind this
-//! module when the fast-read ticket executes; the file exists so tooling
-//! (`cargo fmt`) can resolve the feature-gated `pub mod gix_reader;`
-//! declaration in [`crate::engine`].
+//! Placeholder module: the in-process read path has not landed yet, so with
+//! the feature enabled every read still falls through to the CLI executor.
+//! The module exists so `cargo fmt` / `cargo clippy --all-targets` can
+//! resolve `mod gix_reader` regardless of the active feature set (issue #13
+//! tooling unblock; see `engine/mod.rs`).
