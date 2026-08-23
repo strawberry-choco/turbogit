@@ -10,9 +10,9 @@
 use crate::engine::GitExecutor;
 use crate::error::TgResult;
 use crate::model::*;
-use std::sync::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// One recorded engine call (mutating operations only).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,7 +20,18 @@ pub enum Call {
     Add(Vec<PathBuf>),
     CommitAll,
     CommitIndex,
-    Push { root: PathBuf, remote: String, branch: String, force: bool },
+    Push {
+        root: PathBuf,
+        remote: String,
+        branch: String,
+        force: bool,
+    },
+    PushDryRun {
+        root: PathBuf,
+        remote: String,
+        branch: String,
+        force: bool,
+    },
 }
 
 /// In-memory fake. Configure per-test state through the public fields before
@@ -91,7 +102,10 @@ impl GitExecutor for FakeExecutor {
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
         let mut out = self.branches.get(root).cloned().unwrap_or_default();
         if let Some(cur) = self.local_branch(root) {
-            if !out.iter().any(|b| b.kind == BranchKind::Local && b.name == cur.name) {
+            if !out
+                .iter()
+                .any(|b| b.kind == BranchKind::Local && b.name == cur.name)
+            {
                 out.push(cur);
             }
         }
@@ -102,8 +116,22 @@ impl GitExecutor for FakeExecutor {
         Ok(self.current_branch.get(root).cloned().flatten())
     }
 
-    fn ahead_behind(&self, _root: &Path, _branch: &str, _upstream: &str) -> TgResult<(usize, usize)> {
+    fn ahead_behind(
+        &self,
+        _root: &Path,
+        _branch: &str,
+        _upstream: &str,
+    ) -> TgResult<(usize, usize)> {
         Ok((0, 0))
+    }
+
+    fn outgoing_commits(
+        &self,
+        _root: &Path,
+        _branch: &str,
+        _upstream: &str,
+    ) -> TgResult<Vec<CommitId>> {
+        Ok(Vec::new())
     }
 
     fn remotes(&self, root: &Path) -> TgResult<Vec<Remote>> {
@@ -165,6 +193,22 @@ impl GitExecutor for FakeExecutor {
             force,
         });
         Ok(())
+    }
+
+    fn push_dry_run(
+        &self,
+        root: &Path,
+        remote: &str,
+        branch: &str,
+        force: bool,
+    ) -> TgResult<String> {
+        self.calls.lock().unwrap().push(Call::PushDryRun {
+            root: root.to_path_buf(),
+            remote: remote.to_string(),
+            branch: branch.to_string(),
+            force,
+        });
+        Ok(String::new())
     }
 
     fn commit(&self, _root: &Path, _message: &str, _amend: bool) -> TgResult<CommitId> {
@@ -282,7 +326,13 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn tag_push(&self, _root: &Path, _remote: &str, _name: Option<&str>, _all: bool) -> TgResult<()> {
+    fn tag_push(
+        &self,
+        _root: &Path,
+        _remote: &str,
+        _name: Option<&str>,
+        _all: bool,
+    ) -> TgResult<()> {
         Ok(())
     }
 
@@ -300,7 +350,13 @@ impl GitExecutor for FakeExecutor {
         // Conflict reads use index revs ":1"/":2"/":3"; the fake serves one
         // content per path regardless of rev — enough for resolution tests.
         let _ = rev;
-        Ok(self.files.lock().unwrap().get(path).cloned().unwrap_or_default())
+        Ok(self
+            .files
+            .lock()
+            .unwrap()
+            .get(path)
+            .cloned()
+            .unwrap_or_default())
     }
 
     // ---- revert / undo ----

@@ -1,7 +1,8 @@
-//! Modal dialogs: Push (D4/D5), Merge (F1/F2), Rebase (F3/F4), Interactive
-//! rebase (F5), New Branch (E3), Tag (O1–O4), Shelve (J1–J4), Stash (J5–J8).
+//! Modal dialogs: Merge (F1/F2), Rebase (F3/F4), Interactive rebase (F5),
+//! New Branch (E3), Tag (O1–O4), Shelve (J1–J4), Stash (J5–J8). The Push
+//! dialog lives in [`super::push_dialog`] (issue #20).
 
-use crate::core::{branch_service, history_editor, integrate_service, shelve_stash, sync_service};
+use crate::core::{branch_service, history_editor, integrate_service, shelve_stash};
 use crate::model::{MergeOpts, RebaseAction, RebaseOpts};
 use crate::state::{AppState, Dialog};
 use egui::Ui;
@@ -10,7 +11,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
     let ctx = ui.ctx().clone();
     let mut open = true;
     let title = match dialog {
-        Dialog::Push => "Push",
         Dialog::NewBranch => "New Branch",
         Dialog::Merge => "Merge",
         Dialog::Rebase => "Rebase",
@@ -18,11 +18,13 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
         Dialog::Tag => "Tag",
         Dialog::Shelve => "Shelve",
         Dialog::Stash => "Stash",
+        // Push is rendered by `push_dialog` (issue #20); `ui::render` routes
+        // it there before this function is ever called.
+        _ => return,
     };
     egui::Window::new(title)
         .open(&mut open)
         .show(&ctx, |ui| match dialog {
-            Dialog::Push => push(ui, state),
             Dialog::NewBranch => new_branch(ui, state),
             Dialog::Merge => merge(ui, state),
             Dialog::Rebase => rebase(ui, state),
@@ -30,6 +32,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
             Dialog::Tag => tag(ui, state),
             Dialog::Shelve => shelve(ui, state),
             Dialog::Stash => stash(ui, state),
+            _ => {}
         });
     if !open {
         state.ui.dialog = None;
@@ -40,87 +43,15 @@ fn close(state: &mut AppState) {
     state.ui.dialog = None;
 }
 
-fn push(ui: &mut Ui, state: &mut AppState) {
-    let id = state.selected_root.clone();
-    if let Some(id) = &id {
-        if let Some(root) = state.multi.by_id(id) {
-            if state.ui.dlg.push_remote.is_empty() {
-                if let Some(b) = root.branches.iter().find(|b| {
-                    b.kind == crate::model::BranchKind::Local
-                        && root.current_branch.as_deref() == Some(&b.name)
-                }) {
-                    if let Some(t) = &b.tracking {
-                        let parts: Vec<&str> = t.splitn(2, '/').collect();
-                        state.ui.dlg.push_remote = parts[0].to_string();
-                        state.ui.dlg.push_branch = parts.get(1).copied().unwrap_or_else(|| b.name.as_str()).to_string();
-                    } else {
-                        state.ui.dlg.push_remote = root.remotes.first().map(|r| r.name.clone()).unwrap_or_else(|| "origin".into());
-                        state.ui.dlg.push_branch = root.current_branch.clone().unwrap_or_default();
-                    }
-                }
-            }
-        }
-    }
-    ui.label("Remote:");
-    ui.text_edit_singleline(&mut state.ui.dlg.push_remote);
-    ui.label("Branch:");
-    ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
-    ui.checkbox(&mut state.ui.dlg.force_push, "Force push (--force-with-lease)");
-
-    let protected = state.settings.protected_branch_patterns.clone();
-    let branch = state.ui.dlg.push_branch.clone();
-    if state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch) {
-        ui.colored_label(egui::Color32::RED, format!("⚠ '{branch}' is protected — force-push blocked."));
-    }
-
-    // Review what will be pushed (Epic F6).
-    ui.separator();
-    ui.label("Commits to push:");
-    if let Some(id) = &state.selected_root {
-        if let Some((ahead, _behind)) = state.ahead_behind.get(id) {
-            ui.label(format!("Ahead by {ahead} commit(s)."));
-            if let Some(commits) = state.log_cache.get(id) {
-                let n = (*ahead).min(10);
-                for c in commits.iter().take(n) {
-                    let first = c.message.lines().next().unwrap_or("");
-                    ui.colored_label(
-                        egui::Color32::from_gray(180),
-                        format!("  {}  {}", &c.id[..7.min(c.id.len())], first),
-                    );
-                }
-            }
-        }
-    }
-
-    ui.horizontal(|ui| {
-        if ui.button("Push").clicked() {
-            let root = state.selected_path();
-            let remote = state.ui.dlg.push_remote.clone();
-            let branch = state.ui.dlg.push_branch.clone();
-            let force = state.ui.dlg.force_push;
-            let settings = state.settings.clone();
-            state.run_git("Push".into(), move |v| {
-                if let Some(r) = &root {
-                    sync_service::push(v, r, &remote, &branch, force, &settings)
-                } else {
-                    Ok(())
-                }
-            });
-            close(state);
-        }
-        if ui.button("Cancel").clicked() {
-            close(state);
-        }
-    });
-    let _ = protected;
-}
-
 fn new_branch(ui: &mut Ui, state: &mut AppState) {
     ui.label("Name:");
     ui.text_edit_singleline(&mut state.ui.dlg.new_branch_name);
     ui.label("Start point (blank = current HEAD):");
     ui.text_edit_singleline(&mut state.ui.dlg.new_branch_start);
-    ui.checkbox(&mut state.ui.dlg.new_branch_checkout, "Checkout after create");
+    ui.checkbox(
+        &mut state.ui.dlg.new_branch_checkout,
+        "Checkout after create",
+    );
     ui.horizontal(|ui| {
         if ui.button("Create").clicked() {
             let root = state.selected_path();
@@ -152,7 +83,10 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
     ui.checkbox(&mut state.ui.dlg.merge_no_ff, "No fast-forward (--no-ff)");
     ui.checkbox(&mut state.ui.dlg.merge_squash, "Squash");
     ui.checkbox(&mut state.ui.dlg.merge_no_commit, "No commit");
-    ui.checkbox(&mut state.ui.dlg.merge_no_verify, "Skip hooks (--no-verify)");
+    ui.checkbox(
+        &mut state.ui.dlg.merge_no_verify,
+        "Skip hooks (--no-verify)",
+    );
     ui.horizontal(|ui| {
         if ui.button("Merge").clicked() {
             let root = state.selected_path();
@@ -193,7 +127,11 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
             let onto = state.ui.dlg.rebase_onto.clone();
             let onto_arg = onto.clone();
             let opts = RebaseOpts {
-                onto: if onto.trim().is_empty() { None } else { Some(onto) },
+                onto: if onto.trim().is_empty() {
+                    None
+                } else {
+                    Some(onto)
+                },
                 rebase_merges: state.ui.dlg.rebase_merges,
                 keep_empty: state.ui.dlg.rebase_keep_empty,
                 update_refs: state.ui.dlg.rebase_update_refs,
@@ -270,10 +208,7 @@ fn interactive_rebase(ui: &mut Ui, state: &mut AppState) {
                         ("drop", RebaseAction::Drop),
                     ];
                     for (lbl, act) in actions {
-                        if ui
-                            .selectable_label(plan[i].action == act, lbl)
-                            .clicked()
-                        {
+                        if ui.selectable_label(plan[i].action == act, lbl).clicked() {
                             plan[i].action = act;
                         }
                     }
@@ -330,7 +265,11 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
                 if let Some(r) = &root {
                     v.tag_create(r, &name, if msg.is_empty() { None } else { Some(&msg) })?;
                     if push {
-                        let remote = v.remotes(r)?.first().map(|x| x.name.clone()).unwrap_or_else(|| "origin".into());
+                        let remote = v
+                            .remotes(r)?
+                            .first()
+                            .map(|x| x.name.clone())
+                            .unwrap_or_else(|| "origin".into());
                         v.tag_push(r, &remote, Some(&name), false)?;
                     }
                     Ok(())

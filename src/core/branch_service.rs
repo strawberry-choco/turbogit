@@ -62,18 +62,24 @@ pub fn set_protected(mgr: &mut MultiRootManager, root: &RootId, name: &str, prot
 
 /// Diff the working tree against `name` (branch vs working tree).
 pub fn compare(vcs: &dyn GitExecutor, root: &Path, name: &str) -> TgResult<String> {
-    vcs.diff(root, &DiffOpts {
-        left: Some(name.to_string()),
-        ..Default::default()
-    })
+    vcs.diff(
+        root,
+        &DiffOpts {
+            left: Some(name.to_string()),
+            ..Default::default()
+        },
+    )
 }
 
 /// Diff the working tree against `name` (alias of [`compare`]).
 pub fn compare_working(vcs: &dyn GitExecutor, root: &Path, name: &str) -> TgResult<String> {
-    vcs.diff(root, &DiffOpts {
-        left: Some(name.to_string()),
-        ..Default::default()
-    })
+    vcs.diff(
+        root,
+        &DiffOpts {
+            left: Some(name.to_string()),
+            ..Default::default()
+        },
+    )
 }
 
 /// Local branch names present in EVERY root.
@@ -113,7 +119,7 @@ pub fn create_all(
         let path = id.as_path().to_path_buf();
         let res = match vcs.branch_create(&path, name, true, start_point) {
             Ok(()) => {
-                if let Some(branches) = vcs.branches(&path).ok() {
+                if let Ok(branches) = vcs.branches(&path) {
                     if let Some(r) = mgr.roots.iter_mut().find(|r| r.id == id) {
                         r.branches = branches;
                     }
@@ -139,7 +145,7 @@ pub fn checkout_all(
         let path = id.as_path().to_path_buf();
         let res = match vcs.branch_checkout(&path, name) {
             Ok(()) => {
-                if let Some(branches) = vcs.branches(&path).ok() {
+                if let Ok(branches) = vcs.branches(&path) {
                     if let Some(r) = mgr.roots.iter_mut().find(|r| r.id == id) {
                         r.branches = branches;
                     }
