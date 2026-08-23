@@ -70,6 +70,24 @@ pub struct Branch {
 /// SHA-1 hex string.
 pub type CommitId = String;
 
+/// Kind of a git ref decoration attached to a commit (issue #12 ref chips).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GitRefKind {
+    /// Local branch (`refs/heads/…`).
+    Branch,
+    /// Remote-tracking branch (`refs/remotes/<remote>/<name>`).
+    Remote,
+    /// Tag (`refs/tags/…`).
+    Tag,
+}
+
+/// One named ref pointing at a commit (branch / remote branch / tag).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitRef {
+    pub kind: GitRefKind,
+    pub name: String,
+}
+
 /// An author / committer signature.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signature {
@@ -292,17 +310,8 @@ pub enum DateFormat {
     Iso,
 }
 
-/// UI color theme.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ThemeMode {
-    #[default]
-    Dark,
-    Light,
-    HighContrast,
-}
-
 /// Project + per-root settings, serialized under `.turbogit/`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VcsSettings {
     /// Path to the git executable (empty = resolve from PATH).
     pub git_executable: String,
@@ -332,8 +341,6 @@ pub struct VcsSettings {
     pub date_format: DateFormat,
     /// IDE-wide "do not run git commit hooks".
     pub no_commit_hooks: bool,
-    /// UI color theme.
-    pub theme: ThemeMode,
 }
 
 impl Default for VcsSettings {
@@ -353,25 +360,15 @@ impl Default for VcsSettings {
             gutter_markers: true,
             date_format: DateFormat::default(),
             no_commit_hooks: false,
-            theme: ThemeMode::default(),
         }
     }
 }
 
 /// On-disk project state persisted under `.turbogit/`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ProjectState {
     pub mappings: Vec<DirMapping>,
     pub settings: VcsSettings,
-}
-
-impl Default for ProjectState {
-    fn default() -> Self {
-        Self {
-            mappings: Vec::new(),
-            settings: VcsSettings::default(),
-        }
-    }
 }
 
 /// Options for a log query.

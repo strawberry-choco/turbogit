@@ -56,14 +56,18 @@ impl GitExecutor for CliExecutor {
                     Some(x) => x,
                     None => continue,
                 };
-                let path = nth_field(rest, 7).split('\t').next().unwrap_or("").to_string();
+                let path = nth_field(rest, 7)
+                    .split('\t')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
                 if path.is_empty() {
                     continue;
                 }
                 let status = map_xy(xy);
                 // Porcelain v2 `1 <XY>`: first char is the index (staged)
                 // status; a space means the index is unchanged → unstaged.
-                let staged = xy.chars().next() != Some(' ');
+                let staged = !xy.starts_with(' ');
                 changes.push(Change {
                     path: PathBuf::from(path),
                     status,
@@ -105,14 +109,18 @@ impl GitExecutor for CliExecutor {
             // Other porcelain lines ("2" rename summary, etc.) are ignored.
         }
 
-        Ok(RootStatus { changes, conflicted })
+        Ok(RootStatus {
+            changes,
+            conflicted,
+        })
     }
 
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
         let mut a: Vec<String> = vec![
             "log".to_string(),
-            "--pretty=format:%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%s%x1e"
-                .to_string(),
+            // %B carries the FULL raw message (subject + body); rows show its
+            // first line while the details pane shows all of it (issue #12).
+            "--pretty=format:%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%B%x1e".to_string(),
         ];
         if let Some(n) = opts.max_count {
             a.push(format!("-n{}", n));
@@ -153,7 +161,9 @@ impl GitExecutor for CliExecutor {
             let cn = f[4].to_string();
             let ce = f[5].to_string();
             let time: i64 = f[6].trim().parse().unwrap_or(0);
-            let message = f[7].to_string();
+            // %B ends with git's trailing newline; rows/labels expect the
+            // message without it.
+            let message = f[7].trim_end().to_string();
             commits.push(Commit {
                 id,
                 parents,
@@ -173,6 +183,58 @@ impl GitExecutor for CliExecutor {
             });
         }
         Ok(commits)
+    }
+
+    fn ref_decorations(&self, root: &Path) -> TgResult<Vec<(CommitId, Vec<CommitRef>)>> {
+        let (out, _, _) = self.run(
+            root,
+            &[
+                "for-each-ref",
+                "--format=%(objectname)%09%(refname)",
+                "--sort=-committerdate",
+            ],
+        )?;
+        let mut order: Vec<CommitId> = Vec::new();
+        let mut by_sha: std::collections::HashMap<CommitId, Vec<CommitRef>> =
+            std::collections::HashMap::new();
+        for line in out.lines() {
+            let Some((sha, refname)) = line.split_once('\t') else {
+                continue;
+            };
+            if sha.len() < 40 {
+                continue;
+            }
+            if let Some(r) = parse_ref_name(refname) {
+                let sha = sha.to_string();
+                if !by_sha.contains_key(&sha) {
+                    order.push(sha.clone());
+                }
+                by_sha.entry(sha).or_default().push(r);
+            }
+        }
+        Ok(order
+            .into_iter()
+            .map(|id| {
+                let refs = by_sha.remove(&id).unwrap_or_default();
+                (id, refs)
+            })
+            .collect())
+    }
+
+    fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
+        // --root covers parentless commits; -r recurses into trees.
+        let (out, _, _) = self.run(
+            root,
+            &[
+                "diff-tree",
+                "--no-commit-id",
+                "--name-status",
+                "-r",
+                "--root",
+                commit,
+            ],
+        )?;
+        Ok(out.lines().filter_map(parse_name_status_line).collect())
     }
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
@@ -211,8 +273,7 @@ impl GitExecutor for CliExecutor {
                 None
             };
 
-            let (kind, disp_name) = if name.starts_with("remotes/") {
-                let without = &name["remotes/".len()..];
+            let (kind, disp_name) = if let Some(without) = name.strip_prefix("remotes/") {
                 let local = match without.find('/') {
                     Some(i) => &without[i + 1..],
                     None => without,
@@ -241,12 +302,15 @@ impl GitExecutor for CliExecutor {
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>> {
         match self.run(root, &["symbolic-ref", "--short", "HEAD"]) {
             Ok((out, _, _)) => Ok(Some(out.trim().to_string())),
-            Err(TgError::Cli { code, stderr }) => {
+            Err(TgError::Cli { stderr, .. }) => {
                 // Detached HEAD: "fatal: ref HEAD is not a symbolic ref".
-                if stderr.contains("not a symbolic") || code == 128 {
+                // Only that case maps to `None`; every other failure (e.g.
+                // "not a git repository") must propagate so repo discovery
+                // does not mistake arbitrary directories for repositories.
+                if stderr.contains("not a symbolic") {
                     Ok(None)
                 } else {
-                    Err(TgError::Cli { code, stderr })
+                    Err(TgError::Cli { code: 128, stderr })
                 }
             }
             Err(e) => Err(e),
@@ -266,9 +330,33 @@ impl GitExecutor for CliExecutor {
             ],
         )?;
         let mut parts = out.trim().split('\t');
-        let behind = parts.next().and_then(|s| s.trim().parse::<usize>().ok()).unwrap_or(0);
-        let ahead = parts.next().and_then(|s| s.trim().parse::<usize>().ok()).unwrap_or(0);
+        let behind = parts
+            .next()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let ahead = parts
+            .next()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(0);
         Ok((ahead, behind))
+    }
+
+    fn outgoing_commits(
+        &self,
+        root: &Path,
+        branch: &str,
+        upstream: &str,
+    ) -> TgResult<Vec<CommitId>> {
+        // `git rev-list upstream..branch` prints one full SHA per line,
+        // newest-first — the same commits, in the same order, as
+        // `git log @{u}..HEAD`.
+        let (out, _, _) = self.run(root, &["rev-list", &format!("{upstream}..{branch}")])?;
+        Ok(out
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect())
     }
 
     fn remotes(&self, root: &Path) -> TgResult<Vec<Remote>> {
@@ -327,26 +415,32 @@ impl GitExecutor for CliExecutor {
         let mut cur_path: Option<PathBuf> = None;
         let mut cur_branch = String::new();
 
-        let flush = |path: Option<PathBuf>, branch: String, root: &Path, out: &mut Vec<Worktree>| {
-            if let Some(p) = path {
-                if &p != root {
-                    let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
-                        stripped.to_string()
-                    } else {
-                        branch
-                    };
-                    out.push(Worktree {
-                        path: p,
-                        branch: b,
-                        root: RootId(root.to_path_buf()),
-                    });
+        let flush =
+            |path: Option<PathBuf>, branch: String, root: &Path, out: &mut Vec<Worktree>| {
+                if let Some(p) = path {
+                    if p != root {
+                        let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
+                            stripped.to_string()
+                        } else {
+                            branch
+                        };
+                        out.push(Worktree {
+                            path: p,
+                            branch: b,
+                            root: RootId(root.to_path_buf()),
+                        });
+                    }
                 }
-            }
-        };
+            };
 
         for line in out.lines() {
             if let Some(rest) = line.strip_prefix("worktree ") {
-                flush(cur_path.take(), std::mem::take(&mut cur_branch), root, &mut result);
+                flush(
+                    cur_path.take(),
+                    std::mem::take(&mut cur_branch),
+                    root,
+                    &mut result,
+                );
                 cur_path = Some(PathBuf::from(rest.trim()));
             } else if let Some(rest) = line.strip_prefix("branch ") {
                 cur_branch = rest.trim().to_string();
@@ -366,7 +460,7 @@ impl GitExecutor for CliExecutor {
             }
             // Leading status char + space, then path (optionally " (commit)").
             let rest = &line[1..];
-            let path = rest.trim_start().split_whitespace().next().unwrap_or("");
+            let path = rest.split_whitespace().next().unwrap_or("");
             if !path.is_empty() {
                 result.push(PathBuf::from(path));
             }
@@ -463,6 +557,25 @@ impl GitExecutor for CliExecutor {
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         self.run(root, &args)?;
         Ok(())
+    }
+
+    fn push_dry_run(
+        &self,
+        root: &Path,
+        remote: &str,
+        branch: &str,
+        force: bool,
+    ) -> TgResult<String> {
+        let mut a: Vec<String> = vec!["push".to_string(), "--dry-run".to_string()];
+        if force {
+            a.push("--force-with-lease".to_string());
+        }
+        a.push(remote.to_string());
+        a.push(branch.to_string());
+        let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+        // The human-readable dry-run report goes to stderr; stdout stays empty.
+        let (_, stderr, _) = self.run(root, &args)?;
+        Ok(stderr)
     }
 
     fn commit(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId> {
@@ -585,7 +698,7 @@ impl GitExecutor for CliExecutor {
             })
             .collect();
         let base_rev = format!("{}~1", plan[0].commit);
-        let tmp = std::env::temp_dir().join(format!("turbogit-rebase-{}.txt", &plan[0].commit));
+        let tmp = std::env::temp_dir().join(format!("turbogit-rebase-{}.txt", plan[0].commit));
         std::fs::write(&tmp, todo)?;
         let bin = crate::model::git_binary(&self.settings);
         let todo_str = tmp.to_string_lossy().replace('\\', "/");
@@ -745,7 +858,11 @@ impl GitExecutor for CliExecutor {
 
     fn branch_delete(&self, root: &Path, name: &str, force: bool) -> TgResult<()> {
         let mut a: Vec<String> = vec!["branch".to_string()];
-        a.push(if force { "-D".to_string() } else { "-d".to_string() });
+        a.push(if force {
+            "-D".to_string()
+        } else {
+            "-d".to_string()
+        });
         a.push(name.to_string());
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         self.run(root, &args)?;
@@ -783,7 +900,11 @@ impl GitExecutor for CliExecutor {
 
     fn tag_list(&self, root: &Path) -> TgResult<Vec<String>> {
         let (out, _, _) = self.run(root, &["tag", "-l"])?;
-        Ok(out.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        Ok(out
+            .lines()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect())
     }
 
     fn tag_checkout(&self, root: &Path, name: &str) -> TgResult<()> {
@@ -874,7 +995,6 @@ impl GitExecutor for CliExecutor {
         self.run(root, &args)?;
         Ok(())
     }
-
 }
 
 // ----------------------------------------------------------------- helpers -
@@ -904,6 +1024,54 @@ fn map_xy(xy: &str) -> ChangeStatus {
     }
 }
 
+/// Map a `for-each-ref` refname to a [`CommitRef`] decoration (issue #12).
+///
+/// Local branches keep their short name; remote-tracking branches collapse
+/// `refs/remotes/<remote>/<name…>` to `<remote>/<name…>`; tags drop the
+/// `refs/tags/` prefix. Other namespaces (notes, stash, …) are ignored.
+fn parse_ref_name(refname: &str) -> Option<CommitRef> {
+    let (kind, name) = if let Some(name) = refname.strip_prefix("refs/heads/") {
+        (GitRefKind::Branch, name)
+    } else if let Some(rest) = refname.strip_prefix("refs/remotes/") {
+        let rest = if rest.is_empty() { return None } else { rest };
+        (GitRefKind::Remote, rest)
+    } else {
+        (GitRefKind::Tag, refname.strip_prefix("refs/tags/")?)
+    };
+    Some(CommitRef {
+        kind,
+        name: name.to_string(),
+    })
+}
+/// Parse one `git diff-tree --name-status` line into a [`Change`].
+///
+/// Shapes: `X\tpath` and rename/copy `X<score>\told\tnew` (the new path wins).
+fn parse_name_status_line(line: &str) -> Option<Change> {
+    let mut parts = line.splitn(3, '\t');
+    let code = parts.next()?.trim();
+    let status = match code.chars().next()? {
+        'A' => ChangeStatus::Added,
+        'D' => ChangeStatus::Deleted,
+        'R' => ChangeStatus::Renamed,
+        'C' => ChangeStatus::Copied,
+        // Typechange and anything unexpected read as Modified.
+        _ => ChangeStatus::Modified,
+    };
+    let path = match status {
+        ChangeStatus::Renamed | ChangeStatus::Copied => parts.nth(1)?.to_string(),
+        _ => parts.next()?.to_string(),
+    };
+    if path.is_empty() {
+        return None;
+    }
+    Some(Change {
+        path: PathBuf::from(path),
+        status,
+        chunks: vec![],
+        staged: false,
+    })
+}
+
 /// Parse `git blame --line-porcelain` output into per-line records.
 fn parse_blame(s: &str) -> Vec<BlameLine> {
     let mut out: Vec<BlameLine> = Vec::new();
@@ -922,7 +1090,10 @@ fn parse_blame(s: &str) -> Vec<BlameLine> {
                 content: rest.to_string(),
             });
             line_no += 1;
-        } else if line.len() >= 40 && line.is_char_boundary(40) && line[..40].chars().all(|c| c.is_ascii_hexdigit()) {
+        } else if line.len() >= 40
+            && line.is_char_boundary(40)
+            && line[..40].chars().all(|c| c.is_ascii_hexdigit())
+        {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 3 {
                 commit = parts[0].to_string();
