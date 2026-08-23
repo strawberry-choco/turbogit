@@ -330,6 +330,9 @@ pub struct AppState {
     /// Native folder-picker seam for the Welcome Open/Initialize flows.
     /// Production wires `rfd`; tests inject closures returning fixed paths.
     pub dir_picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
+    /// Headless-harness mode: completed ops refresh root status synchronously
+    /// instead of spawning background rescans (see `for_roots`).
+    sync_refresh: bool,
 }
 
 impl AppState {
@@ -377,6 +380,7 @@ impl AppState {
             ahead_behind: HashMap::new(),
             recents_config_dir,
             dir_picker: None,
+            sync_refresh: false,
         };
 
         // Global recents (ADR-0005) load before anything is open so the
@@ -407,6 +411,65 @@ impl AppState {
             }
         }
         state
+    }
+
+    /// Headless-harness constructor (see CONTEXT.md "Headless harness"): a
+    /// deterministic [`AppState`] over explicit repository roots.
+    ///
+    /// Roots are registered synchronously through the same registration path
+    /// production uses ([`crate::core::multi_root::register_all`]); no background
+    /// threads are spawned, and completed operations refresh root status
+    /// synchronously instead of rescanning on workers. Panics if any root cannot
+    /// be snapshotted — a broken test fixture should fail at construction.
+    pub fn for_roots(project_dir: &Path, roots: &[PathBuf]) -> Self {
+        let (tx, rx) = unbounded();
+        let settings = VcsSettings::default();
+        let executor: Arc<dyn GitExecutor> = Arc::new(crate::engine::cli::CliExecutor {
+            settings: settings.clone(),
+        });
+        let mut state = Self {
+            project_dir: project_dir.to_path_buf(),
+            executor,
+            settings,
+            multi: MultiRootManager::default(),
+            tx,
+            rx,
+            selected_root: None,
+            clone_url: String::new(),
+            last_error: None,
+            // Bare UiState defaults (toolbar/status bar hidden), matching what
+            // the headless suites assert against — NOT launch_in's visible shell.
+            ui: UiState::default(),
+            log_cache: HashMap::new(),
+            ref_cache: HashMap::new(),
+            files_cache: HashMap::new(),
+            log_path_cache: HashMap::new(),
+            ahead_behind: HashMap::new(),
+            recents_config_dir: None,
+            dir_picker: None,
+            sync_refresh: true,
+        };
+        let results =
+            crate::core::multi_root::register_all(state.executor.as_ref(), &mut state.multi, roots);
+        for r in results {
+            if let Err(e) = r {
+                panic!("for_roots: failed to snapshot root: {e}");
+            }
+        }
+        state.selected_root = state.multi.roots.first().map(|r| r.id.clone());
+        state
+    }
+
+    /// Override the Git engine (e.g. a recording test double).
+    pub fn with_executor(mut self, executor: Arc<dyn GitExecutor>) -> Self {
+        self.executor = executor;
+        self
+    }
+
+    /// Override canonical engine settings (e.g. protected-branch patterns).
+    pub fn with_settings(mut self, settings: VcsSettings) -> Self {
+        self.settings = settings;
+        self
     }
 
     /// The effective config dir for the global recents file (ADR-0005).
@@ -660,11 +723,21 @@ impl AppState {
                     match result {
                         Ok(()) => {
                             self.ui.toast = Some(Toast::success(label));
-                            // Refresh roots (status/branches/remotes) + log.
-                            self.rescan();
-                            if let Some(id) = &self.selected_root {
-                                let id = id.clone();
-                                self.fetch_log(id);
+                            if self.sync_refresh {
+                                // Headless harness: refresh status synchronously, no threads.
+                                let executor = self.executor.clone();
+                                for root in &mut self.multi.roots {
+                                    if let Ok(s) = executor.status(&root.path) {
+                                        root.status = s;
+                                    }
+                                }
+                            } else {
+                                // Refresh roots (status/branches/remotes) + log.
+                                self.rescan();
+                                if let Some(id) = &self.selected_root {
+                                    let id = id.clone();
+                                    self.fetch_log(id);
+                                }
                             }
                         }
                         Err(e) => {
