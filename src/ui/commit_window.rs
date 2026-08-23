@@ -1,20 +1,25 @@
 //! Commit tool window redesigned onto canonical changelist buckets (issue #11).
 //!
-//! Layout: left pane = collapsible canonical groups ("Default Changelist",
-//! "Unversioned Files", "Merge conflicts") with count badges. For multi-root
-//! projects each group nests per-root sub-groups with count badges and a
-//! select-all checkbox; single-root projects list files flat. Right pane =
-//! unified diff preview of the selected file above the message editor and the
-//! Amend / Commit / Commit-and-Push action row. Commit stays disabled until a
-//! non-empty message AND at least one included change exist. User-created
-//! changelists remain backlog.
+//! Layout: a sub-tab strip (Local Changes / Unversioned Files / Shelf / Stash,
+//! issue #18) above two panes — collapsible canonical groups with count
+//! badges on the left, unified diff preview of the selected file above the
+//! message editor and the Amend / Commit / Commit-and-Push action row on the
+//! right. Local Changes shows the "Default Changelist" and "Merge conflicts"
+//! groups; Unversioned Files lists untracked files includable in commits.
+//! For multi-root projects each group nests per-root sub-groups with count
+//! badges and a select-all checkbox; single-root projects list files flat.
+//! Commit stays disabled until a non-empty message AND at least one included
+//! change exist. Shelf / Stash are clickable tabs whose panes are labeled
+//! placeholders until Phase J (ADR-0008); the "Advanced options..." control
+//! renders per the mockup but is deliberately inert in v1 (ADR-0010).
+//! User-created changelists remain backlog.
 
 use crate::core::changes;
 use crate::model::{Change, ChangeStatus, RootId};
-use crate::state::{AppState, Dialog, PendingConfirm};
+use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
-use egui::{Color32, Ui};
+use egui::{Color32, RichText, Ui};
 
 /// Canonical bucket names (user-created changelists are backlog).
 pub const DEFAULT_CHANGELIST: &str = "Default Changelist";
@@ -89,20 +94,82 @@ fn toggle_included(state: &mut AppState, root: &RootId, c: &Change, include: boo
 }
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    // Two panes: changelists on the left, diff preview + message editor on
-    // the right (issue #11 layout).
-    ui.columns(2, |cols| {
-        changelist_pane(&mut cols[0], state);
-        preview_and_editor_pane(&mut cols[1], state);
-    });
+    sub_tab_strip(ui, state);
+    match state.ui.commit_subtab {
+        CommitSubTab::LocalChanges => local_changes_body(ui, state),
+        CommitSubTab::UnversionedFiles => unversioned_body(ui, state),
+        // Phase-J scope: clickable tabs with labeled placeholder panes
+        // (ADR-0008) instead of hidden or disabled-looking tabs.
+        CommitSubTab::Shelf => placeholder_pane(ui, "Shelf"),
+        CommitSubTab::Stash => placeholder_pane(ui, "Stash"),
+    }
 
-    // Conflict resolution tools (ours / theirs / 3-way merge editor).
+    // Conflict resolution tools (ours / theirs / 3-way merge editor); the
+    // renderer no-ops while nothing is conflicted.
     crate::ui::conflicts::render(ui, state);
 
     if let Some(err) = &state.last_error {
         ui.separator();
         ui.colored_label(Color32::RED, format!("⚠ {err}"));
     }
+}
+
+// --------------------------------------------------------- sub-tab strip --
+
+/// Sub-tabs in strip order. Shelf / Stash are Phase-J placeholders (ADR-0008).
+const SUB_TABS: [(CommitSubTab, &str); 4] = [
+    (CommitSubTab::LocalChanges, "Local Changes"),
+    (CommitSubTab::UnversionedFiles, "Unversioned Files"),
+    (CommitSubTab::Shelf, "Shelf"),
+    (CommitSubTab::Stash, "Stash"),
+];
+
+fn sub_tab_strip(ui: &mut Ui, state: &mut AppState) {
+    ui.horizontal(|ui| {
+        for (tab, label) in SUB_TABS {
+            if ui
+                .selectable_label(state.ui.commit_subtab == tab, label)
+                .clicked()
+            {
+                state.ui.commit_subtab = tab;
+            }
+        }
+    });
+    ui.separator();
+}
+
+// ------------------------------------------------------------ tab bodies --
+
+fn local_changes_body(ui: &mut Ui, state: &mut AppState) {
+    // Two panes: changelists on the left, diff preview + message editor on
+    // the right (issue #11 layout).
+    ui.columns(2, |cols| {
+        changelist_pane(&mut cols[0], state);
+        preview_and_editor_pane(&mut cols[1], state);
+    });
+}
+
+fn unversioned_body(ui: &mut Ui, state: &mut AppState) {
+    // Same two-pane layout; the left pane lists only untracked files so they
+    // can be reviewed and included in commits on their own sub-tab.
+    ui.columns(2, |cols| {
+        unversioned_pane(&mut cols[0], state);
+        preview_and_editor_pane(&mut cols[1], state);
+    });
+}
+
+/// Labeled placeholder for a sub-tab whose feature has not landed yet
+/// (ADR-0008): explicit on-screen copy instead of a hidden or disabled tab.
+fn placeholder_pane(ui: &mut Ui, name: &str) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(48.0);
+        ui.colored_label(Color32::GRAY, format!("{name} arrives in a later phase."));
+        ui.add_space(4.0);
+        ui.colored_label(
+            Color32::GRAY,
+            "This pane is a deliberate placeholder (Phase J).",
+        );
+    });
 }
 
 // ------------------------------------------------------- changelist pane --
@@ -120,15 +187,64 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
+    bucket_groups(ui, state, &canonical_buckets(state), "No local changes.");
+}
+
+/// Untracked files of every root as one canonical bucket per root (issue #18:
+/// the Unversioned Files sub-tab's active data).
+fn unversioned_buckets(state: &AppState) -> Vec<Bucket> {
+    let mut out = Vec::new();
+    for root in &state.multi.roots {
+        let untracked: Vec<Change> = root
+            .status
+            .changes
+            .iter()
+            .filter(|c| matches!(c.status, ChangeStatus::Unversioned))
+            .cloned()
+            .collect();
+        if !untracked.is_empty() {
+            out.push(Bucket {
+                name: UNVERSIONED_FILES,
+                root_id: root.id.clone(),
+                changes: untracked,
+            });
+        }
+    }
+    out
+}
+
+fn unversioned_pane(ui: &mut Ui, state: &mut AppState) {
+    ui.heading("Commit");
+    recent_messages_row(ui, state);
+    staging_toolbar_row(ui, state);
+
+    let Some(root_id) = state.selected_root.clone() else {
+        ui.colored_label(Color32::GRAY, "Select a repository to see changes.");
+        return;
+    };
+    if state.multi.by_id(&root_id).is_none() {
+        return;
+    }
+
+    bucket_groups(
+        ui,
+        state,
+        &unversioned_buckets(state),
+        "No unversioned files.",
+    );
+}
+
+/// Collapsible count-badged groups; per-root sub-groups with select-all for
+/// multi-root projects, flat file rows otherwise.
+fn bucket_groups(ui: &mut Ui, state: &mut AppState, buckets: &[Bucket], empty_text: &str) {
     let multi_root = state.multi.roots.len() > 1;
-    let buckets = canonical_buckets(state);
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         if buckets.is_empty() {
-            ui.colored_label(Color32::GRAY, "No local changes.");
+            ui.colored_label(Color32::GRAY, empty_text);
             return;
         }
-        for bucket in &buckets {
+        for bucket in buckets {
             let header = format!("{} ({})", bucket.name, bucket.changes.len());
             egui::CollapsingHeader::new(header)
                 .default_open(true)
@@ -331,6 +447,15 @@ fn message_editor(ui: &mut Ui, state: &mut AppState) {
             ui.colored_label(Color32::from_rgb(230, 120, 110), "(keep ≤ 50)");
         }
     });
+
+    // Rendered per the mockup, but deliberately inert in v1: the advanced
+    // commit surface (C10) has no backing feature yet (ADR-0010).
+    if ui
+        .button(RichText::new("Advanced options...").color(Palette::BRAND))
+        .clicked()
+    {
+        // Intentionally inert — activating must change no state.
+    }
 
     ui.horizontal(|ui| {
         ui.checkbox(&mut state.ui.amend, "Amend");

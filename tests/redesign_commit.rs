@@ -5,9 +5,18 @@
 //! conflicted files, asserting painted labels (canonical groups, count
 //! badges, M/A/C file-row badges) and public `AppState` transitions only.
 //!
-//! Harness helpers are local to this file (per issue spec: do not edit
+//! Issue #18 extends this suite to the Commit window's sub-tab strip:
+//! Local Changes / Unversioned Files carry active data, Shelf / Stash are
+//! clickable placeholder panes (ADR-0008), and the "Advanced options..."
+//! control is visible but inert (ADR-0010).
+//!
+//! Painted-text assertions come from `tests/common`; harness helpers beyond
+//! those remain local to this file (per issue spec: do not edit
 //! `tests/redesign_harness.rs`).
 
+mod common;
+
+use common::{assert_not_painted, assert_painted};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,7 +25,7 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use turbogit::engine::{AppEvent, GitExecutor};
 use turbogit::model::{Root, RootId, VcsSettings};
-use turbogit::state::{AppState, Dialog};
+use turbogit::state::{AppState, CommitSubTab, Dialog};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -481,4 +490,146 @@ fn diff_preview_reflects_selected_file() {
         Some(PathBuf::from("added.txt"))
     );
     h.get_by_label("Preview: added.txt");
+}
+
+// ------------------------------------------------- issue #18 sub-tabs --
+
+#[test]
+fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "subtab-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // All four sub-tabs render; Local Changes is the default active view.
+    h.get_by_label("Local Changes");
+    h.get_by_label("Unversioned Files");
+    h.get_by_label("Shelf");
+    h.get_by_label("Stash");
+    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
+    h.get_by_label("Default Changelist (1)");
+
+    // Clicking a sub-tab switches the active sub-tab…
+    h.get_by_label("Shelf").click();
+    h.run();
+    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Shelf);
+
+    // …and switching back restores the active changelist data.
+    h.get_by_label("Local Changes").click();
+    h.run();
+    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
+    h.get_by_label("Default Changelist (1)");
+}
+
+#[test]
+fn shelf_and_stash_show_labeled_placeholder_panes() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "placeholder-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // No placeholder copy leaks onto the active data views.
+    assert_not_painted(&h, "arrives in a later phase");
+
+    h.get_by_label("Shelf").click();
+    h.run();
+    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Shelf);
+    assert_painted(&h, "Shelf arrives in a later phase.");
+    // The placeholder replaces the changelist data instead of stacking on it.
+    assert_not_painted(&h, "Default Changelist");
+    assert_not_painted(&h, "M base.txt");
+
+    h.get_by_label("Stash").click();
+    h.run();
+    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Stash);
+    assert_painted(&h, "Stash arrives in a later phase.");
+    assert_not_painted(&h, "M base.txt");
+}
+
+#[test]
+fn unversioned_sub_tab_lists_untracked_files_includable_in_commit() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "untracked-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+    std::fs::write(repo.path.join("untracked.txt"), "untracked\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("Unversioned Files").click();
+    h.run();
+    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::UnversionedFiles);
+
+    // Only untracked files are listed on this sub-tab…
+    h.get_by_label("? untracked.txt");
+    assert_not_painted(&h, "M base.txt");
+
+    // …and checking one includes it in the next commit.
+    h.get_by_label("? untracked.txt").click();
+    h.state_mut().ui.commit_message = "issue18: include untracked".into();
+    h.run();
+    commit_action_button(&h).click();
+    h.run();
+
+    assert!(
+        wait_until(15_000, || repo
+            .subjects()
+            .contains(&"issue18: include untracked".to_string())),
+        "commit should land in the temp repository, got {:?}",
+        repo.subjects()
+    );
+    let last_files = git(&repo.path, &["show", "--name-only", "--format=", "HEAD"]);
+    assert!(
+        last_files.lines().any(|l| l == "untracked.txt"),
+        "the previously-untracked file must be committed, got {last_files:?}"
+    );
+    assert!(
+        !last_files.lines().any(|l| l == "base.txt"),
+        "unchecked modifications must stay out of the commit, got {last_files:?}"
+    );
+}
+
+#[test]
+fn advanced_options_control_is_visible_but_inert() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "inert-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // Rendered per the mockup…
+    h.get_by_label("Advanced options...");
+
+    #[derive(Debug, PartialEq)]
+    struct CommitUiSnap {
+        subtab: CommitSubTab,
+        dialog: Option<Dialog>,
+        message: String,
+        amend: bool,
+        selected_len: usize,
+        toast: Option<String>,
+        busy: bool,
+    }
+    fn snap(h: &Harness<'_, AppState>) -> CommitUiSnap {
+        let s = h.state();
+        CommitUiSnap {
+            subtab: s.ui.commit_subtab,
+            dialog: s.ui.dialog,
+            message: s.ui.commit_message.clone(),
+            amend: s.ui.amend,
+            selected_len: s.ui.selected.len(),
+            toast: s.ui.toast.clone(),
+            busy: s.ui.busy,
+        }
+    }
+
+    // …but activating it changes no state (ADR-0010).
+    let before = snap(&h);
+    h.get_by_label("Advanced options...").click();
+    h.run();
+    assert_eq!(
+        snap(&h),
+        before,
+        "Advanced options... is inert chrome (ADR-0010): activating must change no state"
+    );
 }
