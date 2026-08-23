@@ -280,9 +280,16 @@ fn ref_kind(kind: GitRefKind) -> RefKind {
 pub fn show_log(ui: &mut Ui, state: &mut AppState) {
     ensure_log_data(state);
 
-    // Pane 1 — branches (left, 210px).
+    // Fixed spec widths shrink proportionally on narrow windows so the graph
+    // pane always keeps positive width and nothing clips irrecoverably
+    // (issue #23: minimum sizes hold at small window sizes).
+    let avail_w = ui.available_width();
+    let branches_w = BRANCHES_WIDTH.min((avail_w * 0.25).max(140.0));
+    let files_w = FILES_WIDTH.min((avail_w * 0.32).max(180.0));
+
+    // Pane 1 — branches (left, 210px at full size).
     Panel::left("log_branches_pane")
-        .exact_size(BRANCHES_WIDTH)
+        .exact_size(branches_w)
         .resizable(false)
         .frame(
             Frame::new()
@@ -293,12 +300,15 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
 
     // Panes 3+4 — right column: changed files on top, details pinned below.
     Panel::right("log_right_column")
-        .exact_size(FILES_WIDTH)
+        .exact_size(files_w)
         .resizable(false)
         .frame(Frame::new().fill(Palette::BG))
         .show(ui, |ui| {
+            // The 200px details pane yields to short windows so the changed-
+            // files pane above it never collapses to zero height.
+            let details_h = DETAILS_HEIGHT.min((ui.available_height() - 80.0).max(96.0));
             Panel::bottom("log_details_pane")
-                .exact_size(DETAILS_HEIGHT)
+                .exact_size(details_h)
                 .resizable(false)
                 .frame(
                     Frame::new()
@@ -434,6 +444,7 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
     );
     response
         .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, "All roots".to_owned()));
+    widgets::focus_ring(ui, &response);
     if response.clicked() {
         state.ui.log_root_filter = None;
     }
@@ -474,6 +485,7 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
         response.widget_info(move || {
             WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone())
         });
+        widgets::focus_ring(ui, &response);
         if response.clicked() {
             state.ui.log_root_filter = Some(root.id.clone());
         }
@@ -701,6 +713,7 @@ fn commit_row(
     let closure_label = format!("{} {}", short(&c.id), subject);
     response
         .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
+    widgets::focus_ring(ui, &response);
     if response.clicked() {
         state.ui.selected_commit = Some(c.id.clone());
         state.ui.log_selected_file = None;
@@ -839,6 +852,7 @@ fn file_row(
     let closure_label = path_str.clone();
     response
         .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
+    widgets::focus_ring(ui, &response);
     if response.clicked() {
         state.ui.log_selected_file = Some(change.path.clone());
         state.ui.diff = Some(DiffTarget {

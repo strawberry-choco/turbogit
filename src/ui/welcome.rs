@@ -85,11 +85,19 @@ fn brand_header(ui: &mut Ui) {
 // --- Two-column grid -----------------------------------------------------------
 
 fn columns(ui: &mut Ui, state: &mut AppState) {
+    // Spacing-aware split guaranteed to fit: auto item spacing around the
+    // explicit gap plus both columns never exceeds the viewport, so neither
+    // column is ever clipped out of reach (issue #23).
     let avail = ui.available_width();
-    let recents_w = RECENTS_WIDTH.min(avail * 0.4);
-    let left_w = (avail - recents_w - COLUMN_GAP).max(320.0);
+    let gaps = COLUMN_GAP + 2.0 * ui.style().spacing.item_spacing.x;
+    let usable = (avail - gaps).max(160.0);
+    let recents_w = RECENTS_WIDTH.min(usable * 0.4);
+    let left_w = (usable - recents_w).max(usable * 0.5);
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
+            // Pin exactly: inputs size themselves from available width, so
+            // an uncapped column would grow frame over frame (issue #23).
+            ui.set_min_width(left_w);
             ui.set_max_width(left_w);
             action_cards(ui, state, left_w);
             ui.add_space(20.0);
@@ -97,6 +105,7 @@ fn columns(ui: &mut Ui, state: &mut AppState) {
         });
         ui.add_space(COLUMN_GAP);
         ui.vertical(|ui| {
+            ui.set_min_width(recents_w);
             ui.set_max_width(recents_w);
             recents_column(ui, state);
         });
@@ -116,7 +125,9 @@ enum CardAction {
 }
 
 fn action_cards(ui: &mut Ui, state: &mut AppState, left_w: f32) {
-    let card_w = ((left_w - 2.0 * CARD_GAP) / 3.0).max(140.0);
+    // No hard floor: cards shrink with their column so three always fit
+    // (issue #23). At spec widths this equals the mockup's ~226px card.
+    let card_w = (left_w - 2.0 * CARD_GAP) / 3.0;
     ui.horizontal(|ui| {
         action_card(
             ui,
@@ -221,6 +232,7 @@ fn action_card(
     // Accessibility / headless-test queryability.
     let label = title.to_owned();
     response.widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, label.clone()));
+    widgets::focus_ring(ui, &response);
     if !response.clicked() {
         return;
     }
@@ -418,6 +430,7 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &crate::recents::Recen
     // project name.
     let label = project.name.clone();
     response.widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, label.clone()));
+    widgets::focus_ring(ui, &response);
     if response.clicked() {
         state.open_project(&project.path);
     }

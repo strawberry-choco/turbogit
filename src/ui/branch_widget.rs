@@ -279,7 +279,9 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             // permanently culling lower rows; demanding the region up front
             // keeps the list scrollable at a stable size instead.
             let view_h = ctx.input(|i| i.raw.screen_rect.map_or(568.0, |r| r.height()));
-            let body_h = (view_h - 48.0).clamp(240.0, 620.0);
+            // Floor lowered from 240 so short viewports can still fit the
+            // popup without clipping the checkout actions irrecoverably.
+            let body_h = (view_h - 48.0).clamp(160.0, 620.0);
             ui.allocate_ui_with_layout(
                 vec2(ui.available_width(), body_h),
                 Layout::top_down(Align::Min),
