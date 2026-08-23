@@ -38,7 +38,7 @@ use turbogit::core::multi_root::build_root;
 use turbogit::engine::{AppEvent, GitExecutor};
 use turbogit::error::TgError;
 use turbogit::model::{RootId, VcsSettings};
-use turbogit::state::{AppState, Dialog};
+use turbogit::state::{AppState, Dialog, Toast};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -228,7 +228,7 @@ fn drain_events(state: &mut AppState) {
                 state.ui.busy = false;
                 match result {
                     Ok(()) => {
-                        state.ui.toast = Some(format!("✓ {label}"));
+                        state.ui.toast = Some(Toast::success(label));
                         for root in &mut state.multi.roots {
                             if let Ok(s) = state.executor.status(&root.path) {
                                 root.status = s;
@@ -236,7 +236,7 @@ fn drain_events(state: &mut AppState) {
                         }
                     }
                     Err(e) => {
-                        state.ui.toast = Some(format!("✗ {label}: {e}"));
+                        state.ui.toast = Some(Toast::error(format!("{label}: {e}")));
                         state.last_error = Some(e.to_string());
                     }
                 }
@@ -312,10 +312,11 @@ fn dialog_push_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
 }
 
 /// The painted toast galley carrying the last op result, if visible.
+/// Op toasts render as `Push` (success) or `Push: <error>` (issue #22 typed
+/// toasts replaced the ✓/✗ glyph prefixes); the colon disambiguates the
+/// failure toast from the bare toolbar Push button.
 fn toast_galley(h: &Harness<'_, AppState>) -> Option<String> {
-    painted_text(h)
-        .into_iter()
-        .find(|t| t.contains("✗ Push") || t.contains("✓ Push"))
+    painted_text(h).into_iter().find(|t| t.starts_with("Push:"))
 }
 
 // ------------------------------------------------------------------ tests --
@@ -485,7 +486,7 @@ fn per_root_failure_is_surfaced_while_other_roots_succeed() {
     for _ in 0..40 {
         if let Some(toast) = toast_galley(&h) {
             assert!(
-                toast.contains("✗ Push"),
+                toast.contains("Push"),
                 "expected a failure toast, got: {toast}"
             );
             assert!(

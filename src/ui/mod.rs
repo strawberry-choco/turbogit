@@ -27,7 +27,8 @@ pub mod shell;
 pub mod welcome;
 pub mod widgets;
 
-use crate::state::{AppState, Dialog, PendingConfirm};
+use crate::state::{AppState, Dialog, PendingConfirm, Toast, ToastKind};
+use crate::theme::Palette;
 use egui::{Color32, Context, Ui};
 
 /// Render one full frame: the IDE shell plus its floating surfaces.
@@ -155,7 +156,7 @@ fn settings_inline(ui: &mut Ui, state: &mut AppState) {
             settings: state.settings.clone(),
         });
         state.persist_ui();
-        state.ui.toast = Some("✓ Settings saved".into());
+        state.ui.toast = Some(Toast::success("Settings saved"));
     }
 }
 
@@ -174,42 +175,68 @@ fn settings_window(ui: &mut Ui, state: &mut AppState) {
 
 // ----------------------------------------------------------------- toast ---
 
-fn render_toast(ui: &mut Ui, state: &mut AppState) {
-    if let Some(msg) = state.ui.toast.clone() {
-        // Track when the toast first appeared so it can auto-dismiss (Epic H1).
-        let now = ui.ctx().input(|i| i.time);
-        if state.ui.toast_shown_at.is_none() {
-            state.ui.toast_shown_at = Some(now);
-        }
-        let shown = now - state.ui.toast_shown_at.unwrap_or(now);
-        if shown > 4.0 {
-            state.ui.toast = None;
-            state.ui.toast_shown_at = None;
-            return;
-        }
-        let ctx: Context = ui.ctx().clone();
-        egui::Window::new("Notice")
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -40.0))
-            .resizable(false)
-            .title_bar(false)
-            .show(&ctx, |ui| {
-                let col = if msg.starts_with("✗") {
-                    Color32::RED
-                } else {
-                    Color32::GREEN
-                };
-                ui.horizontal(|ui| {
-                    ui.colored_label(col, &msg);
-                    if ui.small_button("Dismiss").clicked() {
-                        state.ui.toast = None;
-                        state.ui.toast_shown_at = None;
-                    }
-                });
-            });
+/// The STATE_* token a toast kind paints with (issue #22, spec §2).
+fn toast_kind_color(kind: ToastKind) -> Color32 {
+    match kind {
+        ToastKind::Success => Palette::STATE_SUCCESS,
+        ToastKind::Warning => Palette::STATE_WARNING,
+        ToastKind::Error => Palette::STATE_ERROR,
+        ToastKind::Info => Palette::STATE_INFO,
     }
 }
 
-/// Confirmation dialog for destructive actions (Epic C8).
+/// The matching Lucide icon for a toast kind (issue #22).
+fn toast_kind_icon(kind: ToastKind) -> icons::Icon {
+    match kind {
+        ToastKind::Success => icons::Icon::CHECK,
+        ToastKind::Warning => icons::Icon::ALERT_TRIANGLE,
+        ToastKind::Error => icons::Icon::ALERT_CIRCLE,
+        ToastKind::Info => icons::Icon::BELL,
+    }
+}
+
+fn render_toast(ui: &mut Ui, state: &mut AppState) {
+    let Some(toast) = state.ui.toast.clone() else {
+        return;
+    };
+    // Track when the toast first appeared so it can auto-dismiss (Epic H1).
+    let now = ui.ctx().input(|i| i.time);
+    if state.ui.toast_shown_at.is_none() {
+        state.ui.toast_shown_at = Some(now);
+    }
+    let shown = now - state.ui.toast_shown_at.unwrap_or(now);
+    if shown > 4.0 {
+        state.ui.toast = None;
+        state.ui.toast_shown_at = None;
+        return;
+    }
+    // Semantic kind drives accent bar, icon, and message tint (issue #22).
+    let color = toast_kind_color(toast.kind);
+    let icon = toast_kind_icon(toast.kind);
+    let ctx: Context = ui.ctx().clone();
+    egui::Window::new("Notice")
+        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -40.0))
+        .resizable(false)
+        .title_bar(false)
+        .show(&ctx, |ui| {
+            ui.horizontal(|ui| {
+                // Kind-colored accent bar along the message (spec §10).
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(rect, egui::CornerRadius::same(2), color);
+                icons::icon(ui, icon, 16.0, color);
+                ui.colored_label(color, &toast.message);
+                if ui.small_button("Dismiss").clicked() {
+                    state.ui.toast = None;
+                    state.ui.toast_shown_at = None;
+                }
+            });
+        });
+}
+
+/// Confirmation dialog for destructive actions (Epic C8), restyled to the
+/// dialog header/footer chrome (issue #22). OK still executes the pending
+/// action; Cancel and the header X both dismiss it.
 fn render_confirm(ui: &mut Ui, state: &mut AppState) {
     let confirm = match &state.ui.confirm {
         Some(c) => c.clone(),
@@ -232,14 +259,19 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
         PendingConfirm::CloneRepo => "Clone the repository at the given URL?".to_string(),
     };
     let ctx = ui.ctx().clone();
-    let mut open = true;
     egui::Window::new("Confirm")
-        .open(&mut open)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .resizable(false)
+        .title_bar(false)
         .show(&ctx, |ui| {
+            let header = widgets::dialog_header(ui, "Confirm");
+            if header.close.clicked() {
+                state.ui.confirm = None;
+            }
+            ui.separator();
             ui.label(&msg);
-            ui.horizontal(|ui| {
+            ui.add_space(4.0);
+            widgets::dialog_footer(ui, |ui| {
                 if ui.button("OK").clicked() {
                     state.run_confirmed(confirm.clone());
                     state.ui.confirm = None;
@@ -249,7 +281,4 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 }
             });
         });
-    if !open {
-        state.ui.confirm = None;
-    }
 }

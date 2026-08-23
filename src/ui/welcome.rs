@@ -12,7 +12,7 @@
 //! Branch indicators on recent rows are computed live at render time through
 //! the engine seam and cached in memory only (never persisted).
 
-use crate::state::AppState;
+use crate::state::{AppState, Toast};
 use crate::theme::Palette;
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke,
@@ -243,12 +243,14 @@ fn action_card(
 /// cancelled picks surface a toast instead of failing silently.
 fn pick_dir(state: &mut AppState, purpose: &str) -> Option<std::path::PathBuf> {
     let Some(pick) = state.dir_picker.as_ref() else {
-        state.ui.toast = Some(format!("✗ {purpose}: no folder picker available"));
+        state.ui.toast = Some(Toast::error(format!(
+            "{purpose}: no folder picker available"
+        )));
         return None;
     };
     let picked = pick();
     if picked.is_none() {
-        state.ui.toast = Some(format!("✗ {purpose}: no folder selected"));
+        state.ui.toast = Some(Toast::error(format!("{purpose}: no folder selected")));
     }
     picked
 }
@@ -289,7 +291,7 @@ fn clone_from_url(state: &mut AppState) {
         .trim_end_matches('/')
         .to_string();
     if url.is_empty() {
-        state.ui.toast = Some("✗ Clone: enter a repository URL first".into());
+        state.ui.toast = Some(Toast::error("Clone: enter a repository URL first"));
         return;
     }
     let Some(parent) = pick_dir(state, "Clone") else {
@@ -305,7 +307,9 @@ fn clone_from_url(state: &mut AppState) {
         .trim_end_matches(".git")
         .to_string();
     if name.is_empty() {
-        state.ui.toast = Some("✗ Clone: could not derive a folder name from the URL".into());
+        state.ui.toast = Some(Toast::error(
+            "Clone: could not derive a folder name from the URL",
+        ));
         return;
     }
     let dest = parent.join(name);
@@ -314,11 +318,11 @@ fn clone_from_url(state: &mut AppState) {
         Ok(()) => {
             state.ui.welcome_clone_url.clear();
             state.open_project(&dest);
-            state.ui.toast = Some("✓ Repository cloned".into());
+            state.ui.toast = Some(Toast::success("Repository cloned"));
         }
         Err(e) => {
             state.last_error = Some(e.to_string());
-            state.ui.toast = Some(format!("✗ Clone failed: {e}"));
+            state.ui.toast = Some(Toast::error(format!("Clone failed: {e}")));
         }
     }
 }

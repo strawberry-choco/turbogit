@@ -150,6 +150,58 @@ pub enum DiffComparison {
     Local,
 }
 
+/// Semantic category of a transient feedback message (issue #22). Drives the
+/// toast's icon and STATE_* color; replaces the old ✓/✗ string-prefix
+/// sniffing with a typed kind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ToastKind {
+    /// Operation succeeded (`STATE_SUCCESS`, check icon).
+    Success,
+    /// Attention needed but nothing failed (`STATE_WARNING`).
+    Warning,
+    /// Operation failed (`STATE_ERROR`).
+    Error,
+    /// Neutral information (`STATE_INFO`).
+    Info,
+}
+
+/// One transient feedback message with its semantic kind (issue #22).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Toast {
+    pub kind: ToastKind,
+    pub message: String,
+}
+
+impl Toast {
+    pub fn success(message: impl Into<String>) -> Self {
+        Self {
+            kind: ToastKind::Success,
+            message: message.into(),
+        }
+    }
+
+    pub fn warning(message: impl Into<String>) -> Self {
+        Self {
+            kind: ToastKind::Warning,
+            message: message.into(),
+        }
+    }
+
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            kind: ToastKind::Error,
+            message: message.into(),
+        }
+    }
+
+    pub fn info(message: impl Into<String>) -> Self {
+        Self {
+            kind: ToastKind::Info,
+            message: message.into(),
+        }
+    }
+}
+
 /// UI-only ephemeral state (never persisted).
 #[derive(Default)]
 pub struct UiState {
@@ -208,7 +260,8 @@ pub struct UiState {
     pub command_palette: bool,
     pub command_query: String,
     // transient
-    pub toast: Option<String>,
+    /// Last feedback message with its semantic kind (issue #22).
+    pub toast: Option<Toast>,
     pub toast_shown_at: Option<f64>,
     pub busy: bool,
     // confirmation-gated destructive actions (Epic C8)
@@ -599,7 +652,7 @@ impl AppState {
                     self.ui.busy = false;
                     match result {
                         Ok(()) => {
-                            self.ui.toast = Some(format!("✓ {label}"));
+                            self.ui.toast = Some(Toast::success(label));
                             // Refresh roots (status/branches/remotes) + log.
                             self.rescan();
                             if let Some(id) = &self.selected_root {
@@ -608,7 +661,7 @@ impl AppState {
                             }
                         }
                         Err(e) => {
-                            self.ui.toast = Some(format!("✗ {label}: {e}"));
+                            self.ui.toast = Some(Toast::error(format!("{label}: {e}")));
                             self.last_error = Some(e.to_string());
                         }
                     }
