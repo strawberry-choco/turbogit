@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{Color32, Pos2, Rect, Shape};
+use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
 use egui_kittest::{kittest::Queryable, Harness};
 use tempfile::TempDir;
 use turbogit::engine::cli::CliExecutor;
@@ -104,10 +104,13 @@ struct Seed {
     alpha: PathBuf,
     /// Second root for multi-root cases.
     beta: PathBuf,
-    /// `alpha` HEAD~1 — carries branch `main`, remote `origin/main`, tag `v1.0`.
+    /// `alpha` HEAD~2 — carries branch `main`, remote `origin/main`, tag `v1.0`.
     c1: String,
-    /// `alpha` HEAD — plain commit with a parent and a multiline message.
+    /// `alpha` HEAD~1 — plain commit with a parent and a multiline message.
     c2: String,
+    /// `alpha` HEAD — docs-only commit touching just `README.md`, so
+    /// path-scoped history has off-path commits to hide (issue #19).
+    c3: String,
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> String {
@@ -180,6 +183,10 @@ fn seeded_project() -> Seed {
     );
     let c2 = run_git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
 
+    // Docs-only HEAD commit: touches neither file.txt nor feature.txt, so a
+    // path-scoped history for those files has something to hide (issue #19).
+    let c3 = commit_file(&alpha, "README.md", "alpha: docs commit");
+
     // --- beta: an independent second root ---
     run_git(&beta, &["init", "-b", "main"]);
     run_git(&beta, &["config", "user.email", "test@example.com"]);
@@ -193,6 +200,7 @@ fn seeded_project() -> Seed {
         beta,
         c1,
         c2,
+        c3,
     }
 }
 
@@ -586,4 +594,126 @@ fn changed_files_pane_lists_selected_commit_files_with_status_badges() {
         .find(|(r, c)| *c == expected && r.contains(pos))
         .expect("modified badge pill not painted with its token tint");
     assert!(badge.0.width() < 40.0, "badges are compact pills");
+}
+
+// --- Issue #19: path-scoped file history from the log context menu ------------
+
+/// Drive the full user path: select `row_label`, right-click its changed-file
+/// entry `file`, and activate "Show history for file..." in the context menu.
+fn scope_log_to_file(harness: &mut Harness<'_, AppState>, row_label: &str, file: &str) {
+    harness.get_by_label(row_label).click();
+    settle(harness);
+    harness.get_by_label(file).click_secondary();
+    settle(harness);
+    harness.get_by_label("Show history for file...").click();
+    settle(harness);
+}
+
+#[test]
+fn show_history_for_file_scopes_the_log_to_touching_commits() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+
+    // Unscoped: every alpha commit plus beta's are painted.
+    assert_painted(&harness, "alpha: docs commit");
+    assert_painted(&harness, "alpha: second commit");
+    assert_painted(&harness, "beta: root commit");
+
+    // Right-click README.md on the docs commit → scope the log to that path.
+    let docs_label = format!("{} alpha: docs commit", short(&seed.c3));
+    scope_log_to_file(&mut harness, &docs_label, "README.md");
+
+    assert!(
+        harness.state().ui.log_path_scope.is_some(),
+        "activating the action must record the path scope"
+    );
+    // ONLY commits touching README.md remain visible.
+    assert_painted(&harness, "alpha: docs commit");
+    assert_not_painted(&harness, "alpha: second commit");
+    assert_not_painted(&harness, "alpha: initial commit");
+    assert_not_painted(&harness, "beta: root commit");
+}
+
+#[test]
+fn scoped_history_keeps_graph_and_details_functional() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+
+    // Scope to file.txt from the second commit's changed-file entry.
+    let label = format!("{} alpha: second commit", short(&seed.c2));
+    scope_log_to_file(&mut harness, &label, "file.txt");
+
+    // Scoped listing: both file.txt commits, nothing else.
+    assert_painted(&harness, "alpha: second commit");
+    assert_painted(&harness, "alpha: initial commit");
+    assert_not_painted(&harness, "alpha: docs commit");
+    assert_not_painted(&harness, "beta: root commit");
+
+    // Graph interaction still works inside the scope: clicking a scoped row
+    // feeds the details pane…
+    let scoped_row = format!("{} alpha: initial commit", short(&seed.c1));
+    harness.get_by_label(&scoped_row).click();
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().ui.selected_commit.as_deref(),
+        Some(seed.c1.as_str()),
+        "rows inside the scope must stay selectable"
+    );
+    assert_painted(&harness, "Hash:");
+    assert_painted(&harness, &short(&seed.c1));
+    assert_painted(&harness, "Author:");
+    assert_painted(&harness, "Parents:");
+
+    // …and the changed-files pane still lists the selected commit's files.
+    assert_painted(&harness, "CHANGED FILES (1)");
+    assert_painted(&harness, "file.txt");
+}
+
+#[test]
+fn clearing_the_path_scope_restores_the_full_log() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+
+    let docs_label = format!("{} alpha: docs commit", short(&seed.c3));
+    scope_log_to_file(&mut harness, &docs_label, "README.md");
+    assert_not_painted(&harness, "beta: root commit");
+
+    harness.get_by_label("Clear path history").click();
+    settle(&mut harness);
+
+    assert_eq!(
+        harness.state().ui.log_path_scope,
+        None,
+        "clearing must drop the path scope"
+    );
+    assert_painted(&harness, "alpha: docs commit");
+    assert_painted(&harness, "alpha: second commit");
+    assert_painted(&harness, "beta: root commit");
+}
+
+#[test]
+fn history_tab_is_gone_and_navigation_lands_only_on_valid_windows() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+
+    // Contract step: the legacy History tab is deleted from the strip.
+    assert_not_painted(&harness, "History");
+
+    // Every remaining tab is reachable and lands on its tool window.
+    // ("Commit" is intentionally reached by keyboard only — its label also
+    // exists on the toolbar button, and kittest rejects ambiguous queries.)
+    for (label, expected) in [("Settings", Tab::Settings), ("Log", Tab::Log)] {
+        harness.get_by_label(label).click();
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().ui.tab,
+            expected,
+            "{label} tab must land on its tool window"
+        );
+    }
+
+    // Keyboard navigation stays valid: Ctrl+K always lands on Commit.
+    harness.key_press_modifiers(Modifiers::CTRL, Key::K);
+    settle(&mut harness);
+    assert_eq!(harness.state().ui.tab, Tab::Commit);
 }
