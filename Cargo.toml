@@ -21,7 +21,7 @@ toml = "1.1.4"
 
 [dev-dependencies]
 crossbeam-channel = "0.5.16"
-egui_kittest = "0.35.0"
+egui_kittest = { version = "0.35.0", features = ["snapshot", "wgpu"] }
 tempfile = "3.27.0"
 
 # Optional fast read-path; all mutating ops always go through the git CLI.

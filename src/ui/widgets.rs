@@ -90,11 +90,6 @@ pub enum ButtonVariant {
 }
 
 impl ButtonVariant {
-    /// Whether this variant is solid-filled with the brand token.
-    fn is_primary(self) -> bool {
-        matches!(self, Self::Primary)
-    }
-
     /// Token-driven fill for one interactive state (§2.5 table + §7.2 rules).
     pub fn fill(self, state: WidgetState) -> Color32 {
         use WidgetState::{Active, Disabled, Hovered, Idle};

@@ -108,3 +108,23 @@ except where noted.
 `app.rs` requests repaints only when worker events drain; no continuous or
 timer-driven repaint exists anywhere in the redesign. Welcome branch
 indicators are TTL-cached (5s). No issues found.
+
+## Acceptance-matrix screenshots (issue #24)
+
+Regenerated on every run of 	ests/redesign_acceptance.rs (evidence renders,
+not pixel-CI gates — per-page regression assertions live in each page's own
+suite):
+
+| Page | Screenshot |
+|---|---|
+| Welcome | 	urbogit-screens/redesign/01-welcome.png |
+| Commit | 	urbogit-screens/redesign/02-commit.png |
+| Git Log | 	urbogit-screens/redesign/03-git-log.png |
+| Diff | 	urbogit-screens/redesign/04-diff.png |
+| Branches popup | 	urbogit-screens/redesign/05-branches-popup.png |
+| Push dialog | 	urbogit-screens/redesign/06-push-dialog.png |
+| Merge editor | 	urbogit-screens/redesign/07-merge-editor.png |
+| Settings modal | 	urbogit-screens/redesign/08-settings-modal.png |
+
+Note: snapshot capture requires the gui_kittest wgpu feature (enabled in
+Cargo.toml); rendering is headless via wgpu.
