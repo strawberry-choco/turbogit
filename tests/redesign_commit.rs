@@ -135,6 +135,7 @@ fn app_state(roots: &[PathBuf]) -> AppState {
         dir_picker: None,
         ref_cache: Default::default(),
         files_cache: Default::default(),
+        log_path_cache: Default::default(),
     };
     for r in roots {
         let id = RootId(r.clone());
