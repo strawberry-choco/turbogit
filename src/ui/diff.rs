@@ -23,6 +23,7 @@ use crate::model::DiffOpts;
 use crate::state::{AppState, DiffComparison};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
+use crate::ui::widgets;
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Response, ScrollArea,
     Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
@@ -361,6 +362,7 @@ fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Option<u
         resp.widget_info(move || {
             WidgetInfo::labeled(WidgetType::Button, true, (*option).to_owned())
         });
+        widgets::focus_ring(ui, &resp);
         if resp.clicked() {
             clicked = Some(i);
         }
@@ -422,6 +424,7 @@ fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response {
         .rect_filled(rect, CornerRadius::same(CHIP_H as u8 / 2), bg);
     paint_centered(ui.painter(), rect, label, font_id, fg);
     response.widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, label.to_owned()));
+    widgets::focus_ring(ui, &response);
     response
 }
 
@@ -484,6 +487,7 @@ fn nav_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
     response.widget_info(move || {
         WidgetInfo::labeled(WidgetType::Button, enabled, closure_label.clone())
     });
+    widgets::focus_ring(ui, &response);
     response
 }
 

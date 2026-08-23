@@ -275,40 +275,61 @@ fn render_toolbar(ui: &mut Ui, state: &mut AppState) {
         )
         .show(ui, |ui| {
             ui.style_mut().spacing.item_spacing.x = 4.0;
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                // Inert IDE chrome (v1): visible, no behavior.
-                widgets::toolbar_button(ui, Icon::PLAY, "Run", false);
-                widgets::toolbar_button(ui, Icon::BUG, "Debug", false);
-                widgets::toolbar_button(ui, Icon::SEARCH, "Search", false);
-                ui.add_space(6.0);
-                // The sole primary action of the toolbar.
-                if widgets::toolbar_button(ui, Icon::GIT_COMMIT, "Commit", true).clicked() {
-                    switch_tab(state, Tab::Commit);
+            // One 34px row: the settings gear stays PINNED to the right edge
+            // (spec §6.2 — first child of the right-to-left layout) while the
+            // action cluster scrolls horizontally on narrow windows, so
+            // neither ever leaves the viewport irrecoverably (issue #23).
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if widgets::icon_button(ui, Icon::SETTINGS).clicked() {
+                    state.ui.settings_open = true;
                 }
-                if widgets::toolbar_button(ui, Icon::REFRESH_CW, "Update Project", false).clicked()
-                {
-                    rescan_and_refresh_log(state);
-                }
-                if widgets::toolbar_button(ui, Icon::ARROW_DOWN, "Pull", false).clicked() {
-                    popups::run_action(state, Action::Pull);
-                }
-                if widgets::toolbar_button(ui, Icon::DOWNLOAD, "Fetch", false).clicked() {
-                    popups::run_action(state, Action::Fetch);
-                }
-                if widgets::toolbar_button(ui, Icon::UPLOAD, "Push", false).clicked() {
-                    popups::run_action(state, Action::Push);
-                }
-                if widgets::toolbar_button(ui, Icon::GIT_BRANCH, "Branches", false).clicked() {
-                    popups::run_action(state, Action::Branches);
-                }
-                if widgets::toolbar_button(ui, Icon::TAG, "Tags", false).clicked() {
-                    popups::run_action(state, Action::Tag);
-                }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if widgets::icon_button(ui, Icon::SETTINGS).clicked() {
-                        state.ui.settings_open = true;
-                    }
-                });
+                egui::ScrollArea::horizontal()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            // Inert IDE chrome (v1): visible, no behavior.
+                            widgets::toolbar_button(ui, Icon::PLAY, "Run", false);
+                            widgets::toolbar_button(ui, Icon::BUG, "Debug", false);
+                            widgets::toolbar_button(ui, Icon::SEARCH, "Search", false);
+                            ui.add_space(6.0);
+                            // The sole primary action of the toolbar.
+                            if widgets::toolbar_button(ui, Icon::GIT_COMMIT, "Commit", true)
+                                .clicked()
+                            {
+                                switch_tab(state, Tab::Commit);
+                            }
+                            if widgets::toolbar_button(
+                                ui,
+                                Icon::REFRESH_CW,
+                                "Update Project",
+                                false,
+                            )
+                            .clicked()
+                            {
+                                rescan_and_refresh_log(state);
+                            }
+                            if widgets::toolbar_button(ui, Icon::ARROW_DOWN, "Pull", false)
+                                .clicked()
+                            {
+                                popups::run_action(state, Action::Pull);
+                            }
+                            if widgets::toolbar_button(ui, Icon::DOWNLOAD, "Fetch", false).clicked()
+                            {
+                                popups::run_action(state, Action::Fetch);
+                            }
+                            if widgets::toolbar_button(ui, Icon::UPLOAD, "Push", false).clicked() {
+                                popups::run_action(state, Action::Push);
+                            }
+                            if widgets::toolbar_button(ui, Icon::GIT_BRANCH, "Branches", false)
+                                .clicked()
+                            {
+                                popups::run_action(state, Action::Branches);
+                            }
+                            if widgets::toolbar_button(ui, Icon::TAG, "Tags", false).clicked() {
+                                popups::run_action(state, Action::Tag);
+                            }
+                        });
+                    });
             });
             paint_edge_line(ui, Edge::Bottom);
         });
@@ -362,6 +383,7 @@ fn rail_button(ui: &mut Ui, state: &mut AppState, icon: Icon, label: &str, targe
         Palette::INK_3
     };
     paint_icon_centered(ui, icon, rect.center(), RAIL_ICON_SIZE, ink);
+    widgets::focus_ring(ui, &response);
     let closure_label = label.to_owned();
     response
         .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
@@ -469,6 +491,7 @@ fn tab_item(
     painter.galley_with_override_text_color(Pos2::new(cx, cy - galley.size().y / 2.0), galley, ink);
 
     let closure_label = label.to_owned();
+    widgets::focus_ring(ui, &response);
     response
         .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
     if response.clicked() {
