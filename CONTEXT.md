@@ -35,6 +35,13 @@ The module that talks to git. Its interface is `GitExecutor`; production uses
 the CLI adapter, tests use an in-memory adapter.
 _Avoid_: VCS manager, executor wrapper, git backend
 
+**Headless harness**:
+The deterministic way headless tests construct the app: an `AppState` over
+explicitly given repository roots, registered synchronously through the
+production registration path, with no background threads — completed
+operations refresh root status synchronously. Built via `AppState::for_roots`.
+_Avoid_: test fixture, mock app, fake state
+
 **Shell**:
 The always-present frame of the main window — topbar, toolbar, sidebar rail,
 tab strip, status bar. Everything else renders inside it.
