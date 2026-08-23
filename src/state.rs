@@ -59,6 +59,23 @@ pub enum Tab {
     Settings,
 }
 
+/// Which Commit-window sub-tab is active (issue #18).
+///
+/// Local Changes / Unversioned Files carry active data; Shelf / Stash render
+/// labeled placeholder panes until their Phase-J features land (ADR-0008).
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CommitSubTab {
+    /// Tracked modifications + merge conflicts (the classic commit surface).
+    #[default]
+    LocalChanges,
+    /// Untracked files, includable in commits.
+    UnversionedFiles,
+    /// IDE-managed patch store — Phase J placeholder.
+    Shelf,
+    /// Git-native stash — Phase J placeholder.
+    Stash,
+}
+
 /// A modal dialog currently open.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dialog {
@@ -123,6 +140,8 @@ pub struct UiState {
     pub amend: bool,
     pub selected: HashSet<PathBuf>,
     pub recent_messages: Vec<String>,
+    /// Active sub-tab inside the Commit tool window (issue #18).
+    pub commit_subtab: CommitSubTab,
     // tabs / popups
     pub tab: Tab,
     pub branches_popup: bool,
