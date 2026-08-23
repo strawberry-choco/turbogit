@@ -78,6 +78,17 @@ pub fn push_all(
     mgr: &MultiRootManager,
     settings: &VcsSettings,
 ) -> Vec<(RootId, TgResult<()>)> {
+    push_all_forced(vcs, mgr, settings, false)
+}
+
+/// Like [`push_all`], but honors `force` (`--force-with-lease`) for every
+/// root; protected branches are still refused per root by [`push`].
+pub fn push_all_forced(
+    vcs: &dyn GitExecutor,
+    mgr: &MultiRootManager,
+    settings: &VcsSettings,
+    force: bool,
+) -> Vec<(RootId, TgResult<()>)> {
     mgr.roots
         .iter()
         .map(|root| {
@@ -101,7 +112,7 @@ pub fn push_all(
                             .map(|r| r.name.clone())
                             .unwrap_or_else(|| "origin".to_string()),
                     };
-                    push(vcs, &root.path, &remote, branch, false, settings)
+                    push(vcs, &root.path, &remote, branch, force, settings)
                 }
                 None => Ok(()),
             };
