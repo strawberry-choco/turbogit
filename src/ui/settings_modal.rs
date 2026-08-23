@@ -49,13 +49,19 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         state.ui.settings_draft = Some(state.settings.clone());
     }
 
+    // Sense the real viewport height from the shell-level clip rect —
+    // `RawInput::screen_rect` is not populated by headless harnesses
+    // (issue #23).
+    let view_h = ui.clip_rect().height();
+    let panel_h = PANEL_HEIGHT.min((view_h - 170.0).max(240.0));
+
     let ctx = ui.ctx().clone();
     let mut open = state.ui.settings_open;
     egui::Window::new("Settings")
         .open(&mut open)
         .default_width(MODAL_WIDTH)
         .resizable(false)
-        .show(&ctx, |ui| body(ui, state));
+        .show(&ctx, |ui| body(ui, state, panel_h));
     // Two close paths meet here: the window X / Esc flip `open`, the footer
     // Cancel cleared `settings_open` from inside the body. Either discards.
     let body_cancelled = !state.ui.settings_open;
@@ -67,11 +73,13 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
 // --- Body ---------------------------------------------------------------------
 
-fn body(ui: &mut Ui, state: &mut AppState) {
+fn body(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
+    // The spec's 420px body yields to short viewports so the footer stays on
+    // screen instead of being clipped away (issue #23).
     ui.horizontal(|ui| {
-        category_list(ui);
-        paint_vertical_line(ui, PANEL_HEIGHT);
-        settings_panel(ui, state);
+        category_list(ui, panel_h);
+        paint_vertical_line(ui, panel_h);
+        settings_panel(ui, state, panel_h);
     });
     ui.add_space(10.0);
     footer(ui, state);
@@ -79,8 +87,8 @@ fn body(ui: &mut Ui, state: &mut AppState) {
 
 // --- Left column: category list -------------------------------------------------
 
-fn category_list(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(CATEGORY_WIDTH, PANEL_HEIGHT), Sense::hover());
+fn category_list(ui: &mut Ui, panel_h: f32) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(CATEGORY_WIDTH, panel_h), Sense::hover());
     let mut col = ui.new_child(
         UiBuilder::new()
             .max_rect(rect)
@@ -131,6 +139,7 @@ fn category_row(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool
     response.widget_info(move || {
         WidgetInfo::labeled(WidgetType::Button, enabled, closure_label.clone())
     });
+    widgets::focus_ring(ui, &response);
 
     if !enabled {
         response.on_disabled_hover_text("No configurable settings here yet");
@@ -141,19 +150,19 @@ fn category_row(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool
 
 // --- Right pane: setting rows ---------------------------------------------------
 
-fn settings_panel(ui: &mut Ui, state: &mut AppState) {
+fn settings_panel(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
     let Some(draft) = state.ui.settings_draft.as_mut() else {
         return;
     };
     // Fixed-size pane: the ScrollArea scrolls, it never resizes the window.
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(PANEL_WIDTH, PANEL_HEIGHT), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(PANEL_WIDTH, panel_h), Sense::hover());
     let mut pane = ui.new_child(
         UiBuilder::new()
             .max_rect(rect)
             .layout(egui::Layout::top_down(Align::Min)),
     );
     egui::ScrollArea::vertical()
-        .max_height(PANEL_HEIGHT)
+        .max_height(panel_h)
         .show(&mut pane, |ui| version_control_page(ui, draft));
 }
 

@@ -198,6 +198,26 @@ impl RefKind {
     }
 }
 
+// --- Focus -------------------------------------------------------------------
+
+/// Paint the token-spec keyboard-focus ring (§7.2): a 1px `BRAND` stroke just
+/// outside the widget rect, approximating the mockups' CSS box-shadow spread.
+///
+/// The vocabulary buttons ([`button_response_sized`]) and inputs
+/// ([`input_frame`]) paint their own rings inline; this helper is for the
+/// custom-drawn controls (rows, tabs, rail buttons, chips, cards) so keyboard
+/// focus is never ambiguous anywhere in the shell (issue #23).
+pub fn focus_ring(ui: &Ui, response: &Response) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect.expand(1.0),
+            CornerRadius::same(RADIUS_SM),
+            Stroke::new(1.0, Palette::BRAND),
+            StrokeKind::Outside,
+        );
+    }
+}
+
 // --- Row decisions -----------------------------------------------------------
 
 /// Tree/list row fill decision (§7.2): a selected row paints solid BRAND no
@@ -477,6 +497,7 @@ fn row_impl(ui: &mut Ui, selected: bool, contents: impl FnOnce(&mut Ui)) -> Resp
         bg.set_layer_id(egui::LayerId::new(egui::Order::Background, response.id));
         bg.rect_filled(rect, CornerRadius::same(RADIUS_SM), fill);
     }
+    focus_ring(ui, &response);
 
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), ""));
     response

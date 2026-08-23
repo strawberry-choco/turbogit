@@ -192,7 +192,7 @@ fn drain_events(state: &mut AppState) {
                 state.ui.busy = false;
                 match result {
                     Ok(()) => {
-                        state.ui.toast = Some(turbogit::state::Toast::success(format!("{label}")));
+                        state.ui.toast = Some(turbogit::state::Toast::success(label.to_string()));
                         for root in &mut state.multi.roots {
                             if let Ok(s) = state.executor.status(&root.path) {
                                 root.status = s;
@@ -200,7 +200,8 @@ fn drain_events(state: &mut AppState) {
                         }
                     }
                     Err(e) => {
-                        state.ui.toast = Some(turbogit::state::Toast::error(format!("{label}: {e}")));
+                        state.ui.toast =
+                            Some(turbogit::state::Toast::error(format!("{label}: {e}")));
                         state.last_error = Some(e.to_string());
                     }
                 }

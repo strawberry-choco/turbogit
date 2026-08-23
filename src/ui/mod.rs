@@ -28,7 +28,7 @@ pub mod shell;
 pub mod welcome;
 pub mod widgets;
 
-use crate::state::{AppState, Dialog, PendingConfirm, Toast, ToastKind};
+use crate::state::{AppState, Dialog, PendingConfirm, ToastKind};
 use crate::theme::Palette;
 use egui::{Color32, Context, Ui};
 
