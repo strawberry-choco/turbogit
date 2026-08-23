@@ -115,11 +115,13 @@ fn initial_render_paints_the_shell_over_an_empty_project() {
         assert_painted(&harness, label);
     }
     // Tab strip: the legacy History tab was deleted in issue #19; file
-    // history lives in Git Log's path-scoped view.
-    for label in ["Commit", "Log", "Settings"] {
+    // history lives in Git Log's path-scoped view. Settings left the strip
+    // in issue #16 — it is a gear-only modal now (spec §9.1 correction).
+    for label in ["Commit", "Log"] {
         assert_painted(&harness, label);
     }
     assert_not_painted(&harness, "History");
+    assert_not_painted(&harness, "Settings");
     // No project open → central body routes to the Welcome page (issue #10).
     assert_painted(&harness, "TurboGit");
 }
@@ -244,12 +246,16 @@ fn tab_strip_controls_the_active_tool_window() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("Settings").click();
-    settle(&mut harness);
-    assert_eq!(harness.state().ui.tab, Tab::Settings);
-
     harness.get_by_label("Log").click();
     settle(&mut harness);
+    assert_eq!(harness.state().ui.tab, Tab::Log);
+
+    // Settings is no longer a tab at all (issue #16): the strip offers no
+    // such entry and clicking it can never switch the tool window.
+    assert!(
+        harness.query_by_label("Settings").is_none(),
+        "the tab strip must not offer a Settings entry"
+    );
     assert_eq!(harness.state().ui.tab, Tab::Log);
 }
 
@@ -289,9 +295,10 @@ fn ctrl_k_returns_to_the_commit_tool_window() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("Settings").click();
+    // Park on the Log tool window first (Settings is a modal since #16).
+    harness.get_by_label("Git Log").click();
     settle(&mut harness);
-    assert_eq!(harness.state().ui.tab, Tab::Settings);
+    assert_eq!(harness.state().ui.tab, Tab::Log);
 
     harness.key_press_modifiers(Modifiers::CTRL, Key::K);
     settle(&mut harness);
