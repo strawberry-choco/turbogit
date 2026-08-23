@@ -295,8 +295,11 @@ fn clone_from_url(state: &mut AppState) {
     let Some(parent) = pick_dir(state, "Clone") else {
         return;
     };
+    // Derive the folder name from the URL's last path segment. Split on both
+    // separators so pasted Windows paths ("C:\repos\origin") work like URLs.
     let name = url
-        .rsplit('/')
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or("repo")
         .trim_end_matches(".git")
