@@ -10,6 +10,18 @@
 //!   action still batches across ALL roots
 //! - edited Remote/Branch fields propagate into the narrowed execution
 //! - per-root failures surface while healthy roots still succeed
+//!
+//! Issue #21 — Push safety:
+//! - Preview runs a REAL `git push --dry-run` through the engine seam and
+//!   paints the report VERBATIM in-dialog (success and rejection render
+//!   distinctly)
+//! - checking the force-push acknowledgment switches the executed push to
+//!   `--force-with-lease` (asserted at the executor boundary via a recording
+//!   executor)
+//! - force-push to a protected branch (settings.protected_branch_patterns,
+//!   keyed off the exact Remote/Branch fields) is BLOCKED in-dialog: nothing
+//!   reaches the engine and the block is painted instead of silently
+//!   downgrading
 
 #![allow(dead_code)]
 
@@ -19,11 +31,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::{assert_not_painted, assert_painted, painted_text};
+use common::{assert_not_painted, assert_painted, painted_text, RecordingExecutor};
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
 use turbogit::core::multi_root::build_root;
 use turbogit::engine::{AppEvent, GitExecutor};
+use turbogit::error::TgError;
 use turbogit::model::{RootId, VcsSettings};
 use turbogit::state::{AppState, Dialog};
 
@@ -115,14 +128,61 @@ fn repo_ahead_of_origin(parent: &Path, name: &str) -> Repo {
     }
 }
 
+/// `repo_ahead_of_origin` plus true divergence: a second clone fast-forwards
+/// the bare remote to its own commit d1, so the original repo (c2, c3) and
+/// the remote (d1) have divergent `main` tips. The original repo fetches
+/// afterwards so git reports `(non-fast-forward)` rather than `(fetch first)`.
+///
+/// Returns the repo plus the remote-side d1 SHA.
+fn repo_diverged_from_origin(parent: &Path, name: &str) -> (Repo, String) {
+    let repo = repo_ahead_of_origin(parent, name);
+
+    let other = parent.join(format!("{name}-other"));
+    git(
+        parent,
+        &[
+            "clone",
+            repo.remote.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    // The bare remote's HEAD may be unborn; land on main before committing.
+    git(&other, &["checkout", "main"]);
+    git(&other, &["config", "user.email", "test@example.com"]);
+    git(&other, &["config", "user.name", "Test"]);
+    std::fs::write(other.join("divergent.txt"), "d1\n").unwrap();
+    git(&other, &["add", "."]);
+    let d1_msg = format!("{name} divergent");
+    git(&other, &["commit", "-q", "-m", &d1_msg]);
+    let d1 = head_sha(&other);
+    git(&other, &["push", "-q", "origin", "main"]);
+
+    // Teach the original repo about d1 (updates origin/main only).
+    git(&repo.path, &["fetch", "origin"]);
+
+    (repo, d1)
+}
+
 /// Build an `AppState` over fully-built roots (branches/remotes/tracking
 /// included via `build_root`) with synchronous scans — no background threads.
 fn app_state(project_dir: &Path, roots: &[PathBuf]) -> AppState {
-    let (tx, rx) = crossbeam_channel::unbounded();
     let settings = VcsSettings::default();
     let executor: Arc<dyn GitExecutor> = Arc::new(turbogit::engine::cli::CliExecutor {
         settings: settings.clone(),
     });
+    app_state_with(project_dir, roots, executor, settings)
+}
+
+/// [`app_state`] with an injected engine and settings — lets tests assert at
+/// the executor boundary through [`RecordingExecutor`] and configure
+/// protected-branch patterns.
+fn app_state_with(
+    project_dir: &Path,
+    roots: &[PathBuf],
+    executor: Arc<dyn GitExecutor>,
+    settings: VcsSettings,
+) -> AppState {
+    let (tx, rx) = crossbeam_channel::unbounded();
     let mut st = AppState {
         project_dir: project_dir.to_path_buf(),
         executor,
@@ -439,4 +499,248 @@ fn per_root_failure_is_surfaced_while_other_roots_succeed() {
         std::thread::sleep(Duration::from_millis(25));
     }
     assert!(surfaced, "per-root failure must surface in the op toast");
+}
+
+// ------------------------------------------------------- issue #21: safety --
+
+/// A real CLI engine behind a recording wrapper, plus the settings clone to
+/// hand to [`app_state_with`].
+fn recording_engine(settings: VcsSettings) -> (Arc<RecordingExecutor>, VcsSettings) {
+    let cli: Arc<dyn GitExecutor> = Arc::new(turbogit::engine::cli::CliExecutor {
+        settings: settings.clone(),
+    });
+    let rec = Arc::new(RecordingExecutor::new(cli));
+    (rec, settings)
+}
+
+#[test]
+fn preview_runs_real_dry_run_and_paints_report_verbatim() {
+    let parent = tempfile::tempdir().unwrap();
+    let solo = repo_ahead_of_origin(parent.path(), "solo");
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    // Expected VERBATIM report, captured straight from the engine seam before
+    // the UI runs (dry-run is non-mutating, so the second invocation inside
+    // the dialog must produce byte-identical output).
+    let expected = rec
+        .inner
+        .push_dry_run(&solo.path, "origin", "main", false)
+        .expect("dry-run succeeds when ahead of origin");
+    assert!(expected.contains("main -> main"));
+
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&solo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    h.get_by_label("Preview dry-run").click();
+    h.run();
+
+    // The ENTIRE git report is painted verbatim (single galley substring).
+    let texts = painted_text(&h);
+    assert!(
+        texts.iter().any(|t| t.contains(expected.trim_end())),
+        "verbatim dry-run report not painted;\nexpected:\n{expected}\n\npainted:\n{texts:#?}"
+    );
+    assert_painted(&h, "Dry-run report (verbatim):");
+
+    // REAL dry-run: the remote ref is provably untouched.
+    let c1 = solo.shas[0].clone();
+    assert_eq!(
+        bare_ref(&solo.remote, "refs/heads/main").as_deref(),
+        Some(c1.as_str()),
+        "preview must not mutate the remote"
+    );
+
+    // Flag selection asserted at the executor boundary.
+    assert!(
+        rec.contains_dry_run("origin", "main", false),
+        "expected PushDryRun {{ origin, main, force: false }}, got: {:?}",
+        rec.recorded()
+    );
+}
+
+#[test]
+fn preview_shows_rejection_verbatim_when_diverged() {
+    let parent = tempfile::tempdir().unwrap();
+    let (solo, d1) = repo_diverged_from_origin(parent.path(), "solo");
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let err = rec
+        .inner
+        .push_dry_run(&solo.path, "origin", "main", false)
+        .expect_err("diverged push must be rejected");
+    let expected = match &err {
+        TgError::Cli { stderr, .. } => stderr.clone(),
+        other => panic!("expected TgError::Cli, got: {other:?}"),
+    };
+    assert!(expected.contains("[rejected]"));
+    assert!(expected.contains("(non-fast-forward)"));
+
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&solo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    h.get_by_label("Preview dry-run").click();
+    h.run();
+
+    // Rejected output renders VERBATIM, distinctly from the success case.
+    let texts = painted_text(&h);
+    assert!(
+        texts.iter().any(|t| t.contains(expected.trim_end())),
+        "verbatim rejection output not painted;\nexpected:\n{expected}\n\npainted:\n{texts:#?}"
+    );
+    assert_painted(&h, "Push rejected by git:");
+    assert_not_painted(&h, "Dry-run report (verbatim):");
+
+    // Still non-mutating: the remote tip remains the divergent d1 commit.
+    assert_eq!(
+        bare_ref(&solo.remote, "refs/heads/main").as_deref(),
+        Some(d1.as_str()),
+        "rejected preview must not mutate the remote"
+    );
+}
+
+#[test]
+fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
+    let parent = tempfile::tempdir().unwrap();
+    // Clear the default protected patterns so 'main' may be force-pushed
+    // here; the blocking behavior has its own dedicated test below.
+    let mut settings = VcsSettings::default();
+    settings.protected_branch_patterns.clear();
+
+    // Phase 1: checking the acknowledgment box sends force=true downstream.
+    let ack = repo_ahead_of_origin(parent.path(), "ack");
+    let (rec, settings) = recording_engine(settings);
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&ack.path),
+        dyn_exec,
+        settings.clone(),
+    ));
+    open_push_dialog(&mut h);
+
+    h.get_by_label("Force push (--force-with-lease)").click();
+    h.run();
+    h.get_by_label("Push current branch only").click();
+    h.run();
+    dialog_push_button(&h).click();
+    h.run();
+
+    assert!(
+        wait_until(15_000, || rec.contains_push("origin", "main", true)),
+        "acknowledged force push must reach the boundary as force=true, got: {:?}",
+        rec.recorded()
+    );
+    // The real --force-with-lease push landed too (lease matched: we pushed
+    // the base commit ourselves during setup). Recording precedes the actual
+    // subprocess, so poll the remote rather than asserting immediately.
+    let ack_tip = head_sha(&ack.path);
+    assert!(
+        wait_until(15_000, || {
+            bare_ref(&ack.remote, "refs/heads/main").as_deref() == Some(ack_tip.as_str())
+        }),
+        "--force-with-lease push must update the remote"
+    );
+
+    // Phase 2: without the acknowledgment the boundary sees force=false.
+    let plain = repo_ahead_of_origin(parent.path(), "plain");
+    let (rec2, settings2) = recording_engine(settings);
+    let dyn_exec2: Arc<dyn GitExecutor> = rec2.clone();
+    let mut h2 = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&plain.path),
+        dyn_exec2,
+        settings2,
+    ));
+    open_push_dialog(&mut h2);
+
+    h2.get_by_label("Push current branch only").click();
+    h2.run();
+    dialog_push_button(&h2).click();
+    h2.run();
+
+    assert!(
+        wait_until(15_000, || rec2.contains_push("origin", "main", false)),
+        "plain push must reach the boundary as force=false, got: {:?}",
+        rec2.recorded()
+    );
+    assert!(
+        !rec2.contains_push("origin", "main", true),
+        "unchecked acknowledgment must never send force=true"
+    );
+}
+
+#[test]
+fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
+    let parent = tempfile::tempdir().unwrap();
+    let guarded = repo_ahead_of_origin(parent.path(), "guarded");
+    // Default settings protect 'main'; the Branch field prefills to 'main'.
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&guarded.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    // Acknowledge force against the protected branch and narrow the scope so
+    // the exact Remote/Branch fields drive execution…
+    h.get_by_label("Force push (--force-with-lease)").click();
+    h.run();
+    h.get_by_label("Push current branch only").click();
+    h.run();
+
+    // …the block surfaces IN-DIALOG…
+    assert_painted(&h, "is protected");
+    assert_painted(&h, "force-push blocked");
+
+    // …and clicking Push neither dispatches anything nor closes the dialog.
+    dialog_push_button(&h).click();
+    h.run();
+    std::thread::sleep(Duration::from_millis(400));
+    h.run();
+    assert!(
+        rec.recorded().is_empty(),
+        "blocked force-push must never reach the engine, got: {:?}",
+        rec.recorded()
+    );
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Push),
+        "a blocked push keeps the dialog open"
+    );
+    let c3 = guarded.shas[2].clone();
+    assert_ne!(
+        bare_ref(&guarded.remote, "refs/heads/main").as_deref(),
+        Some(c3.as_str()),
+        "blocked force-push must leave the remote untouched"
+    );
+
+    // Keyed off the EXACT Branch field: retargeting an unprotected branch
+    // lifts the block, and the executed push KEEPS force=true (no silent
+    // downgrade to a regular push).
+    h.state_mut().ui.dlg.push_branch = "feature".into();
+    h.run();
+    assert_not_painted(&h, "force-push blocked");
+
+    dialog_push_button(&h).click();
+    h.run();
+    assert!(
+        wait_until(15_000, || rec.contains_push("origin", "feature", true)),
+        "unprotected target must execute with force=true at the boundary, got: {:?}",
+        rec.recorded()
+    );
 }
