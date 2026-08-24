@@ -395,14 +395,14 @@ impl GitExecutor for CliExecutor {
             if let Some(colon) = line.find(": ") {
                 let prefix = &line[..colon];
                 let message = line[colon + 2..].to_string();
-                if let (Some(s), Some(e)) = (prefix.find('{'), prefix.find('}')) {
-                    if let Ok(index) = prefix[s + 1..e].parse::<usize>() {
-                        result.push(Stash {
-                            message,
-                            root: RootId(root.to_path_buf()),
-                            index,
-                        });
-                    }
+                if let (Some(s), Some(e)) = (prefix.find('{'), prefix.find('}'))
+                    && let Ok(index) = prefix[s + 1..e].parse::<usize>()
+                {
+                    result.push(Stash {
+                        message,
+                        root: RootId(root.to_path_buf()),
+                        index,
+                    });
                 }
             }
         }
@@ -417,19 +417,19 @@ impl GitExecutor for CliExecutor {
 
         let flush =
             |path: Option<PathBuf>, branch: String, root: &Path, out: &mut Vec<Worktree>| {
-                if let Some(p) = path {
-                    if p != root {
-                        let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
-                            stripped.to_string()
-                        } else {
-                            branch
-                        };
-                        out.push(Worktree {
-                            path: p,
-                            branch: b,
-                            root: RootId(root.to_path_buf()),
-                        });
-                    }
+                if let Some(p) = path
+                    && p != root
+                {
+                    let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
+                        stripped.to_string()
+                    } else {
+                        branch
+                    };
+                    out.push(Worktree {
+                        path: p,
+                        branch: b,
+                        root: RootId(root.to_path_buf()),
+                    });
                 }
             };
 

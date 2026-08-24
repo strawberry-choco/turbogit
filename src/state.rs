@@ -9,7 +9,7 @@ use crate::engine::{AppEvent, GitExecutor};
 use crate::error::TgResult;
 use crate::model::*;
 use crate::root_caches::{Affected, RootCaches};
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -860,10 +860,9 @@ fn current_branch_ahead_behind(exec: &dyn GitExecutor, root: &Path) -> TgResult<
     if let Some(b) = branches
         .iter()
         .find(|b| b.kind == BranchKind::Local && cur.as_deref() == Some(&b.name))
+        && let Some(up) = &b.tracking
     {
-        if let Some(up) = &b.tracking {
-            return exec.ahead_behind(root, b.name.as_str(), up);
-        }
+        return exec.ahead_behind(root, b.name.as_str(), up);
     }
     Ok((0, 0))
 }

@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::{assert_not_painted, assert_painted, painted_text, RecordingExecutor};
+use common::{RecordingExecutor, assert_not_painted, assert_painted, painted_text};
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
 use turbogit::engine::GitExecutor;

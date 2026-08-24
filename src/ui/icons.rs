@@ -655,11 +655,7 @@ fn push_arc(
         let dot = ux * vx + uy * vy;
         let len = (ux * ux + uy * uy).sqrt() * (vx * vx + vy * vy).sqrt();
         let a = (dot / len).clamp(-1.0, 1.0).acos();
-        if ux * vy - uy * vx < 0.0 {
-            -a
-        } else {
-            a
-        }
+        if ux * vy - uy * vx < 0.0 { -a } else { a }
     }
     let theta1 = angle(1.0, 0.0, (x1p - cxp) / rx, (y1p - cyp) / ry);
     let mut delta = angle(

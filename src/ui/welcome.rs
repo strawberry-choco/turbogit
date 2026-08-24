@@ -440,10 +440,10 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &crate::recents::Recen
 /// seam when missing or older than [`BRANCH_TTL`], otherwise served from the
 /// in-memory cache. Detached HEAD / non-repos cache as `None`.
 fn cached_branch(state: &mut AppState, path: &std::path::Path) -> Option<String> {
-    if let Some((branch, at)) = state.ui.welcome_branch_cache.get(path) {
-        if at.elapsed() < BRANCH_TTL {
-            return branch.clone();
-        }
+    if let Some((branch, at)) = state.ui.welcome_branch_cache.get(path)
+        && at.elapsed() < BRANCH_TTL
+    {
+        return branch.clone();
     }
     let branch = state.executor.current_branch(path).ok().flatten();
     state

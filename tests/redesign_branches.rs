@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use common::{assert_not_painted, assert_painted, galley_origin, painted_text};
 use egui::Key;
-use egui_kittest::{kittest::Queryable as _, Harness};
+use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
 use turbogit::state::{AppState, Dialog};
 use turbogit::theme::Palette;

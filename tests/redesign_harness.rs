@@ -21,7 +21,7 @@ use common::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, settle, shell_harness,
 };
 use egui::{Color32, Key, Modifiers, Rect};
-use egui_kittest::{kittest::Queryable, Harness};
+use egui_kittest::{Harness, kittest::Queryable};
 use turbogit::state::{AppState, Dialog, Tab};
 use turbogit::theme::Palette;
 
