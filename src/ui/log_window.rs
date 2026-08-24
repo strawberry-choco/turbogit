@@ -15,7 +15,7 @@
 //! 4. **Commit details** (right-bottom, ~200px SURFACE): key-value hash /
 //!    author / date / parents plus the full message below.
 
-use crate::model::{ChangeStatus, Commit, CommitRef, DateFormat, GitRefKind, RootId};
+use crate::model::{ChangeStatus, Commit, DateFormat, GitRefKind, RootId};
 use crate::state::{AppState, DiffTarget};
 use crate::theme::Palette;
 use crate::ui::icons;
@@ -172,45 +172,27 @@ fn visible_root_ids(state: &AppState) -> Vec<RootId> {
 /// Lazily load (through the engine seam, cached) everything the four panes
 /// need beyond the log itself: ref decorations per visible root, the
 /// changed-file list of the selected commit, and — when a path scope is
-/// active (issue #19) — the path-scoped commit listing.
+/// active (issue #19) — the path-scoped commit listing. All fills happen
+/// behind the [`crate::root_caches::RootCaches`] interface.
 fn ensure_log_data(state: &mut AppState) {
     for id in visible_root_ids(state) {
-        if !state.ref_cache.contains_key(&id) {
-            let deco = state.executor.ref_decorations(&id.0).unwrap_or_default();
-            state.ref_cache.insert(id, deco.into_iter().collect());
-        }
+        state.caches.ensure_refs(state.executor.as_ref(), &id);
     }
     if let (Some(root), Some(cid)) = (
         state.selected_root.clone(),
         state.ui.selected_commit.clone(),
     ) {
-        let key = (root.clone(), cid.clone());
-        if !state.files_cache.contains_key(&key) {
-            let files = state
-                .executor
-                .commit_files(&root.0, &cid)
-                .unwrap_or_default();
-            state.files_cache.insert(key, files);
-        }
+        state
+            .caches
+            .ensure_files(state.executor.as_ref(), &root, &cid);
     }
     // Path-scoped history (issue #19): fill the scoped cache through the
     // engine seam's `LogOpts::path` support (`git log -- <path>`).
     if let (Some(root), Some(path)) = (state.selected_root.clone(), state.ui.log_path_scope.clone())
     {
-        let key = (root.clone(), path);
-        if !state.log_path_cache.contains_key(&key) {
-            let commits = state
-                .executor
-                .log(
-                    &root.0,
-                    &crate::model::LogOpts {
-                        path: Some(key.1.clone()),
-                        ..Default::default()
-                    },
-                )
-                .unwrap_or_default();
-            state.log_path_cache.insert(key, commits);
-        }
+        state
+            .caches
+            .ensure_path_log(state.executor.as_ref(), &root, &path);
     }
 }
 
@@ -220,11 +202,15 @@ fn ensure_log_data(state: &mut AppState) {
 /// details pane, changed-files parent lookup).
 fn commits_for(state: &AppState, root: &RootId) -> Vec<Commit> {
     if let Some(path) = &state.ui.log_path_scope {
-        if let Some(commits) = state.log_path_cache.get(&(root.clone(), path.clone())) {
-            return commits.clone();
+        if let Some(commits) = state.caches.path_log(root, path) {
+            return commits.to_vec();
         }
     }
-    state.log_cache.get(root).cloned().unwrap_or_default()
+    state
+        .caches
+        .log(root)
+        .map(|c| c.to_vec())
+        .unwrap_or_default()
 }
 
 /// The commits currently displayed: union across visible roots (newest first,
@@ -240,7 +226,7 @@ fn visible_commits(state: &AppState) -> Vec<Commit> {
     } else {
         visible_root_ids(state)
             .iter()
-            .filter_map(|id| state.log_cache.get(id))
+            .filter_map(|id| state.caches.log(id))
             .flatten()
             .cloned()
             .collect()
@@ -256,15 +242,6 @@ fn visible_commits(state: &AppState) -> Vec<Commit> {
             || c.author.name.to_lowercase().contains(&filter)
     });
     commits
-}
-
-fn refs_for(state: &AppState, root: &RootId, cid: &str) -> Vec<CommitRef> {
-    state
-        .ref_cache
-        .get(root)
-        .and_then(|m| m.get(cid))
-        .cloned()
-        .unwrap_or_default()
 }
 
 fn ref_kind(kind: GitRefKind) -> RefKind {
@@ -337,10 +314,7 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
     let mut remote: Vec<String> = Vec::new();
     let mut tags: Vec<String> = Vec::new();
     for id in &ids {
-        let Some(map) = state.ref_cache.get(id) else {
-            continue;
-        };
-        for refs in map.values() {
+        for refs in state.caches.ref_groups(id) {
             for r in refs {
                 let bucket = match r.kind {
                     GitRefKind::Branch => &mut local,
@@ -706,7 +680,7 @@ fn commit_row(
         Palette::INK,
     );
     mx += subject_w + 6.0;
-    for r in refs_for(state, &c.root, &c.id) {
+    for r in state.caches.refs_for(&c.root, &c.id) {
         mx = paint_ref_chip(&painter, r.name.clone(), ref_kind(r.kind), mx, cy);
     }
 
@@ -753,8 +727,8 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         .selected_root
         .clone()
         .zip(state.ui.selected_commit.clone())
-        .and_then(|(root, cid)| state.files_cache.get(&(root, cid)))
-        .cloned()
+        .and_then(|(root, cid)| state.caches.files_for(&root, &cid))
+        .map(|f| f.to_vec())
         .unwrap_or_default();
 
     widgets::toolwindow_header(ui, &format!("Changed files ({})", files.len()), |_ui| {});
@@ -934,9 +908,9 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
 
     // File summary badges ("2 modified · 1 added").
     let files = state
-        .files_cache
-        .get(&(root_id, commit.id.clone()))
-        .cloned()
+        .caches
+        .files_for(&root_id, &commit.id)
+        .map(|f| f.to_vec())
         .unwrap_or_default();
     let modified = files
         .iter()

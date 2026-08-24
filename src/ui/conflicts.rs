@@ -7,6 +7,7 @@
 //! explicitly deferred).
 
 use crate::core::conflict;
+use crate::root_caches::Affected;
 use crate::state::{AppState, Toast};
 use crate::theme::Palette;
 use egui::{Color32, CornerRadius, Margin, Rect, RichText, ScrollArea, Stroke, Ui, Vec2};
@@ -246,24 +247,32 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             if ui.button("Ours").clicked() {
                 let r = root.clone();
                 let p = path.clone();
-                state.run_git("Accept ours".into(), move |v| {
-                    if let Some(r) = &r {
-                        conflict::accept_ours(v, r, &p)
-                    } else {
-                        Ok(())
-                    }
-                });
+                state.run_git(
+                    "Accept ours".into(),
+                    Affected::from_optional_root(r.as_deref()),
+                    move |v| {
+                        if let Some(r) = &r {
+                            conflict::accept_ours(v, r, &p)
+                        } else {
+                            Ok(())
+                        }
+                    },
+                );
             }
             if ui.button("Theirs").clicked() {
                 let r = root.clone();
                 let p = path.clone();
-                state.run_git("Accept theirs".into(), move |v| {
-                    if let Some(r) = &r {
-                        conflict::accept_theirs(v, r, &p)
-                    } else {
-                        Ok(())
-                    }
-                });
+                state.run_git(
+                    "Accept theirs".into(),
+                    Affected::from_optional_root(r.as_deref()),
+                    move |v| {
+                        if let Some(r) = &r {
+                            conflict::accept_theirs(v, r, &p)
+                        } else {
+                            Ok(())
+                        }
+                    },
+                );
             }
             if ui.button("Merge…").clicked() {
                 // Open the structured 3-way editor (Epic E6 / issue #15).
@@ -379,13 +388,17 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             let r = state.selected_path();
                             let p = path.clone();
                             let content = compose(&segs, &state.ui.conflict_res);
-                            state.run_git("Apply merge resolution".into(), move |v| {
-                                if let Some(r) = &r {
-                                    conflict::write_resolution(v, r, &p, &content)
-                                } else {
-                                    Ok(())
-                                }
-                            });
+                            state.run_git(
+                                "Apply merge resolution".into(),
+                                Affected::from_optional_root(r.as_deref()),
+                                move |v| {
+                                    if let Some(r) = &r {
+                                        conflict::write_resolution(v, r, &p, &content)
+                                    } else {
+                                        Ok(())
+                                    }
+                                },
+                            );
                             state.ui.conflict_open = None;
                         }
                         if ui.button("Cancel").clicked() {
