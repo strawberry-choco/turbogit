@@ -4,6 +4,7 @@
 
 use crate::core::{branch_service, history_editor, integrate_service, shelve_stash};
 use crate::model::{MergeOpts, RebaseAction, RebaseOpts};
+use crate::root_caches::Affected;
 use crate::state::{AppState, Dialog};
 use egui::Ui;
 
@@ -62,13 +63,17 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
                 Some(state.ui.dlg.new_branch_start.clone())
             };
             let co = state.ui.dlg.new_branch_checkout;
-            state.run_git(format!("Create branch {name}"), move |v| {
-                if let Some(r) = &root {
-                    branch_service::create(v, r, &name, start.as_deref(), co)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                format!("Create branch {name}"),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        branch_service::create(v, r, &name, start.as_deref(), co)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
             close(state);
         }
         if ui.button("Cancel").clicked() {
@@ -99,13 +104,17 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
                 ..Default::default()
             };
             let clean = state.settings.clean_tree_method;
-            state.run_git(format!("Merge {target}"), move |v| {
-                if let Some(r) = &root {
-                    integrate_service::smart_merge(v, r, &target, &opts, clean)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                format!("Merge {target}"),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        integrate_service::smart_merge(v, r, &target, &opts, clean)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
             close(state);
         }
         if ui.button("Cancel").clicked() {
@@ -138,13 +147,17 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                 autosquash: state.ui.dlg.rebase_autosquash,
                 ..Default::default()
             };
-            state.run_git("Rebase".into(), move |v| {
-                if let Some(r) = &root {
-                    integrate_service::rebase(v, r, &onto_arg, &opts)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Rebase".into(),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        integrate_service::rebase(v, r, &onto_arg, &opts)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
             close(state);
         }
         if ui.button("Cancel").clicked() {
@@ -165,7 +178,7 @@ fn interactive_rebase(ui: &mut Ui, state: &mut AppState) {
                         .first()
                         .map(|_| ())
                         .and(root.head.clone())
-                        .and_then(|_| state.log_cache.get(id))
+                        .and_then(|_| state.caches.log(id))
                         .and_then(|cs| cs.iter().find(|c| &c.id == cid))
                     {
                         let base = commit.parents.first().cloned();
@@ -232,13 +245,17 @@ fn interactive_rebase(ui: &mut Ui, state: &mut AppState) {
         if ui.button("Start Rebase").clicked() {
             let root = state.selected_path();
             let plan2 = state.ui.dlg.rebase_plan.clone().unwrap_or_default();
-            state.run_git("Interactive rebase".into(), move |v| {
-                if let Some(r) = &root {
-                    history_editor::execute(v, r, &plan2)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Interactive rebase".into(),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        history_editor::execute(v, r, &plan2)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
             state.ui.dlg.rebase_plan = None;
             close(state);
         }
@@ -261,22 +278,26 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
             let name = state.ui.dlg.tag_name.clone();
             let msg = state.ui.dlg.tag_msg.clone();
             let push = state.ui.dlg.tag_push;
-            state.run_git(format!("Create tag {name}"), move |v| {
-                if let Some(r) = &root {
-                    v.tag_create(r, &name, if msg.is_empty() { None } else { Some(&msg) })?;
-                    if push {
-                        let remote = v
-                            .remotes(r)?
-                            .first()
-                            .map(|x| x.name.clone())
-                            .unwrap_or_else(|| "origin".into());
-                        v.tag_push(r, &remote, Some(&name), false)?;
+            state.run_git(
+                format!("Create tag {name}"),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        v.tag_create(r, &name, if msg.is_empty() { None } else { Some(&msg) })?;
+                        if push {
+                            let remote = v
+                                .remotes(r)?
+                                .first()
+                                .map(|x| x.name.clone())
+                                .unwrap_or_else(|| "origin".into());
+                            v.tag_push(r, &remote, Some(&name), false)?;
+                        }
+                        Ok(())
+                    } else {
+                        Ok(())
                     }
-                    Ok(())
-                } else {
-                    Ok(())
-                }
-            });
+                },
+            );
             close(state);
         }
         if ui.button("Cancel").clicked() {
@@ -305,14 +326,18 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
             state.ui.shelves.push(shelf);
             let _ = shelve_stash::save_shelves(&state.project_dir, &state.ui.shelves);
             let root = state.selected_path();
-            state.run_git("Shelve".into(), move |v| {
-                if let Some(r) = &root {
-                    // Stash the working changes so they are parked.
-                    v.stash_push(r, &name, false)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Shelve".into(),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        // Stash the working changes so they are parked.
+                        v.stash_push(r, &name, false)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
             close(state);
         }
         if ui.button("Cancel").clicked() {
@@ -330,24 +355,32 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
             let root = state.selected_path();
             let msg = state.ui.dlg.stash_msg.clone();
             let keep = state.ui.dlg.stash_keep;
-            state.run_git("Stash".into(), move |v| {
-                if let Some(r) = &root {
-                    v.stash_push(r, &msg, keep)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Stash".into(),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        v.stash_push(r, &msg, keep)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
             close(state);
         }
         if ui.button("Pop latest").clicked() {
             let root = state.selected_path();
-            state.run_git("Stash pop".into(), move |v| {
-                if let Some(r) = &root {
-                    v.stash_pop(r, 0)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Stash pop".into(),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        v.stash_pop(r, 0)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
             close(state);
         }
         if ui.button("Cancel").clicked() {

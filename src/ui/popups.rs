@@ -4,6 +4,7 @@
 //! opens the command palette: a fuzzy-searchable list of every action, the
 //! IntelliJ "Find Action" hallmark.
 
+use crate::root_caches::Affected;
 use crate::state::{AppState, Dialog, Tab, Toast};
 use egui::Ui;
 
@@ -104,33 +105,37 @@ impl Action {
 pub fn run_action(state: &mut AppState, action: Action) {
     let root = state.selected_path();
     match action {
-        Action::Refresh => {
-            state.rescan();
-            if let Some(id) = &state.selected_root {
-                let id = id.clone();
-                state.fetch_log(id);
-            }
-        }
+        // Manual refresh (decision 8): the full scoped refresh — drops every
+        // cache entry (decorations and path history included) and rescans.
+        Action::Refresh => state.refresh(Affected::All),
         Action::Fetch => {
             let r = root.clone();
-            state.run_git("Fetch".into(), move |v| {
-                if let Some(r) = &r {
-                    v.fetch(r, None)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Fetch".into(),
+                Affected::from_optional_root(r.as_deref()),
+                move |v| {
+                    if let Some(r) = &r {
+                        v.fetch(r, None)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
         }
         Action::Pull => {
             let r = root.clone();
             let rebase = state.settings.update_method == crate::model::UpdateMethod::Rebase;
-            state.run_git("Pull".into(), move |v| {
-                if let Some(r) = &r {
-                    v.pull(r, rebase)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Pull".into(),
+                Affected::from_optional_root(r.as_deref()),
+                move |v| {
+                    if let Some(r) = &r {
+                        v.pull(r, rebase)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
         }
         Action::Push => state.ui.dialog = Some(Dialog::Push),
         Action::Branches => state.ui.branches_popup = true,
