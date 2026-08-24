@@ -31,10 +31,10 @@
 //! - The picker seam is invoked only behind user-initiated flows
 
 use egui::Shape;
-use egui_kittest::{kittest::Queryable, Harness};
+use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use turbogit::recents::{load, recents_file, record, save, RecentProject, Recents};
+use turbogit::recents::{RecentProject, Recents, load, recents_file, record, save};
 use turbogit::state::AppState;
 
 // --- Locally-defined harness helpers -----------------------------------------

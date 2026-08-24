@@ -27,8 +27,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
-use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use turbogit::model::RootId;
 use turbogit::state::AppState;
 use turbogit::theme::Palette;

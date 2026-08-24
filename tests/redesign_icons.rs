@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use egui::epaint::ColorMode;
 use egui::{Color32, Pos2, Shape};
-use turbogit::theme::{icon_color, Palette};
+use turbogit::theme::{Palette, icon_color};
 use turbogit::ui::icons;
 
 /// Run one headless frame painting via `paint`; return all painted shapes.
@@ -221,13 +221,13 @@ mod log_capture {
         }
 
         fn log(&self, record: &log::Record) {
-            if self.enabled(record.metadata()) {
-                if let Some(records) = RECORDS.get() {
-                    records
-                        .lock()
-                        .expect("log capture mutex")
-                        .push((record.level(), record.args().to_string()));
-                }
+            if self.enabled(record.metadata())
+                && let Some(records) = RECORDS.get()
+            {
+                records
+                    .lock()
+                    .expect("log capture mutex")
+                    .push((record.level(), record.args().to_string()));
             }
         }
 

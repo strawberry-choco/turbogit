@@ -131,7 +131,9 @@ fn acceptance_matrix_screenshots() {
     // every run refreshes the committed renders (wgpu antialiasing jitters
     // a few hundred pixels between runs, which would flake a comparison).
     // Real regression protection lives in each page's own assertion suite.
-    std::env::set_var("UPDATE_SNAPSHOTS", "1");
+    // Safe: single-threaded test process; no other thread reads the env
+    // concurrently while this runs.
+    unsafe { std::env::set_var("UPDATE_SNAPSHOTS", "1") };
     std::fs::create_dir_all(SNAPSHOT_DIR).unwrap();
     let mut results = egui_kittest::SnapshotResults::default();
 

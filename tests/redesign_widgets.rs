@@ -16,7 +16,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use egui::{Color32, Shape};
-use egui_kittest::{kittest::Queryable, Harness};
+use egui_kittest::{Harness, kittest::Queryable};
 use turbogit::theme::Palette;
 use turbogit::ui::icons::Icon;
 use turbogit::ui::widgets::{self, BadgeKind, ButtonVariant, RefKind, WidgetState};

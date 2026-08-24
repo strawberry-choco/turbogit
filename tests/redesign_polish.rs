@@ -22,13 +22,13 @@ mod common;
 
 use common::{assert_painted, galley_origin, settle, shell_harness};
 use egui::{Key, Modifiers, Pos2, Rect, Shape, Vec2};
-use egui_kittest::{kittest::Queryable, Harness};
+use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
 use turbogit::engine::cli::CliExecutor;
 use turbogit::engine::{AppEvent, GitExecutor};
 use turbogit::model::{LogOpts, VcsSettings};
 use turbogit::state::{AppState, Dialog, Tab};
-use turbogit::theme::{configure_style, install_fonts, Palette};
+use turbogit::theme::{Palette, configure_style, install_fonts};
 
 // --- Shared helpers -----------------------------------------------------------
 
@@ -222,10 +222,10 @@ fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, A
     // Select the head commit; its changed-file list is computed lazily by the
     // Log window's ensure_files on first render — a deterministic engine call,
     // so the panes still render deterministically.
-    if let Some(root) = state.multi.roots.first().cloned() {
-        if let Some(head) = state.caches.log(&root.id).and_then(|c| c.first().cloned()) {
-            state.ui.selected_commit = Some(head.id.clone());
-        }
+    if let Some(root) = state.multi.roots.first().cloned()
+        && let Some(head) = state.caches.log(&root.id).and_then(|c| c.first().cloned())
+    {
+        state.ui.selected_commit = Some(head.id.clone());
     }
     state.ui.tab = tab;
 

@@ -19,9 +19,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use egui::{Color32, Pos2, Rect, Shape};
-use egui_kittest::{kittest::Queryable, Harness};
+use egui_kittest::{Harness, kittest::Queryable};
 use turbogit::state::{AppState, DiffComparison};
-use turbogit::theme::{configure_style, install_fonts, Palette};
+use turbogit::theme::{Palette, configure_style, install_fonts};
 
 // --- git seeding -------------------------------------------------------------
 

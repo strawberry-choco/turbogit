@@ -223,25 +223,23 @@ fn ensure_target_defaults(state: &mut AppState) {
     if !state.ui.dlg.push_remote.is_empty() {
         return;
     }
-    if let Some(id) = state.selected_root.clone() {
-        if let Some(root) = state.multi.by_id(&id) {
-            if let Some(b) = root.branches.iter().find(|b| {
-                b.kind == BranchKind::Local && root.current_branch.as_deref() == Some(&b.name)
-            }) {
-                if let Some(t) = &b.tracking {
-                    let parts: Vec<&str> = t.splitn(2, '/').collect();
-                    state.ui.dlg.push_remote = parts[0].to_string();
-                    state.ui.dlg.push_branch =
-                        parts.get(1).copied().unwrap_or(b.name.as_str()).to_string();
-                } else {
-                    state.ui.dlg.push_remote = root
-                        .remotes
-                        .first()
-                        .map(|r| r.name.clone())
-                        .unwrap_or_else(|| "origin".into());
-                    state.ui.dlg.push_branch = root.current_branch.clone().unwrap_or_default();
-                }
-            }
+    if let Some(id) = state.selected_root.clone()
+        && let Some(root) = state.multi.by_id(&id)
+        && let Some(b) = root.branches.iter().find(|b| {
+            b.kind == BranchKind::Local && root.current_branch.as_deref() == Some(&b.name)
+        })
+    {
+        if let Some(t) = &b.tracking {
+            let parts: Vec<&str> = t.splitn(2, '/').collect();
+            state.ui.dlg.push_remote = parts[0].to_string();
+            state.ui.dlg.push_branch = parts.get(1).copied().unwrap_or(b.name.as_str()).to_string();
+        } else {
+            state.ui.dlg.push_remote = root
+                .remotes
+                .first()
+                .map(|r| r.name.clone())
+                .unwrap_or_else(|| "origin".into());
+            state.ui.dlg.push_branch = root.current_branch.clone().unwrap_or_default();
         }
     }
 }
