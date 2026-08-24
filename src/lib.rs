@@ -8,6 +8,7 @@ pub mod error;
 pub mod model;
 pub mod persistence;
 pub mod recents;
+pub mod root_caches;
 pub mod state;
 pub mod theme;
 pub mod ui;

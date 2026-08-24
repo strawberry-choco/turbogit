@@ -17,7 +17,7 @@ use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
 use egui_kittest::{kittest::Queryable, Harness};
 use tempfile::TempDir;
 use turbogit::engine::cli::CliExecutor;
-use turbogit::engine::GitExecutor;
+use turbogit::engine::{AppEvent, GitExecutor};
 use turbogit::model::{LogOpts, RootId, VcsSettings};
 use turbogit::state::{AppState, Tab};
 use turbogit::theme::{configure_style, install_fonts, Palette};
@@ -205,8 +205,9 @@ fn seeded_project() -> Seed {
 }
 
 /// Harness rendering the full shell with the Log tool window active over the
-/// seeded project. The log cache is populated synchronously through the engine
-/// seam (production fills it asynchronously via `AppEvent::LogLoaded`).
+/// seeded project. The log cache is primed through the production event path
+/// (`AppEvent::LogLoaded` via `state.tx` + `drain_events()`); production
+/// fills it the same way, asynchronously.
 fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
     let mut state = AppState::new(seed.project.clone());
     assert_eq!(state.multi.roots.len(), 2, "both roots discovered");
@@ -215,8 +216,15 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
     };
     for root in state.multi.roots.clone() {
         let commits = engine.log(&root.path, &LogOpts::default()).expect("log");
-        state.log_cache.insert(root.id.clone(), commits);
+        state
+            .tx
+            .send(AppEvent::LogLoaded {
+                root: root.id.clone(),
+                commits: Ok(commits),
+            })
+            .expect("send LogLoaded");
     }
+    state.drain_events();
     state.ui.tab = Tab::Log;
 
     let mut fonts_installed = false;

@@ -8,6 +8,7 @@ use crate::core::changes;
 use crate::engine::{AppEvent, GitExecutor};
 use crate::error::TgResult;
 use crate::model::*;
+use crate::root_caches::{Affected, RootCaches};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -313,16 +314,10 @@ pub struct AppState {
     pub clone_url: String,
     pub last_error: Option<String>,
     pub ui: UiState,
-    /// Cached commit logs keyed by root (refreshed on demand / after ops).
-    pub log_cache: HashMap<RootId, Vec<Commit>>,
-    /// Cached ref decorations keyed by root, then commit id (issue #12).
-    pub ref_cache: HashMap<RootId, HashMap<CommitId, Vec<CommitRef>>>,
-    /// Cached changed-file lists keyed by (root, commit id) (issue #12).
-    pub files_cache: HashMap<(RootId, CommitId), Vec<Change>>,
-    /// Cached path-scoped logs keyed by (root, scoped path) (issue #19).
-    pub log_path_cache: HashMap<(RootId, PathBuf), Vec<Commit>>,
-    /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
-    pub ahead_behind: HashMap<RootId, (usize, usize)>,
+    /// The root-keyed cache layer (logs, ref decorations, changed files,
+    /// path-scoped logs, ahead/behind) behind one interface (CONTEXT.md
+    /// "Root caches").
+    pub caches: RootCaches,
     /// Override for the OS config dir hosting the global recents file
     /// (ADR-0005). `None` → `recents::default_config_dir()`. Tests inject a
     /// temp dir so the real user configuration is never touched.
@@ -373,11 +368,7 @@ impl AppState {
                 show_status_bar: true,
                 ..UiState::default()
             },
-            log_cache: HashMap::new(),
-            ref_cache: HashMap::new(),
-            files_cache: HashMap::new(),
-            log_path_cache: HashMap::new(),
-            ahead_behind: HashMap::new(),
+            caches: RootCaches::default(),
             recents_config_dir,
             dir_picker: None,
             sync_refresh: false,
@@ -440,11 +431,7 @@ impl AppState {
             // Bare UiState defaults (toolbar/status bar hidden), matching what
             // the headless suites assert against — NOT launch_in's visible shell.
             ui: UiState::default(),
-            log_cache: HashMap::new(),
-            ref_cache: HashMap::new(),
-            files_cache: HashMap::new(),
-            log_path_cache: HashMap::new(),
-            ahead_behind: HashMap::new(),
+            caches: RootCaches::default(),
             recents_config_dir: None,
             dir_picker: None,
             sync_refresh: true,
@@ -527,20 +514,7 @@ impl AppState {
             let tx2 = tx.clone();
             let rp = root.id.0.clone();
             std::thread::spawn(move || {
-                let ab = (|| -> TgResult<(usize, usize)> {
-                    let branches = exec2.branches(&rp)?;
-                    let cur = exec2.current_branch(&rp)?;
-                    if let Some(b) = branches
-                        .iter()
-                        .find(|b| b.kind == BranchKind::Local && cur.as_deref() == Some(&b.name))
-                    {
-                        if let Some(up) = &b.tracking {
-                            return exec2.ahead_behind(&rp, b.name.as_str(), up);
-                        }
-                    }
-                    Ok((0, 0))
-                })();
-                if let Ok((ahead, behind)) = ab {
+                if let Ok((ahead, behind)) = current_branch_ahead_behind(exec2.as_ref(), &rp) {
                     let _ = tx2.send(AppEvent::AheadBehind {
                         root: RootId(rp),
                         ahead,
@@ -561,10 +535,93 @@ impl AppState {
         });
     }
 
+    /// The one refresh seam for completed operations and manual refresh
+    /// (root-caches deepening, decision 7): drop the affected roots' cache
+    /// entries, refresh those roots' snapshots + ahead/behind — no root
+    /// DISCOVERY here (clone/init/open have their own paths) — and refetch
+    /// the selected root's log iff it is in scope.
+    ///
+    /// Snapshot refresh goes through [`crate::core::multi_root::register_all`],
+    /// which replaces the registered snapshot per id (branches / HEAD /
+    /// status) without scanning for new roots — what kept branch indicators
+    /// fresh after checkouts pre-refactor, now scoped to the affected roots.
+    ///
+    /// Production computes ahead/behind on worker threads; the headless
+    /// harness (`sync_refresh`) mirrors the same steps synchronously.
+    pub fn refresh(&mut self, affected: Affected) {
+        self.caches.invalidate(affected.clone());
+        // Only roots that are actually registered take part in the refresh.
+        let roots: Vec<RootId> = match &affected {
+            Affected::All => self.multi.roots.iter().map(|r| r.id.clone()).collect(),
+            Affected::Root(id) => self
+                .multi
+                .roots
+                .iter()
+                .filter(|r| &r.id == id)
+                .map(|r| r.id.clone())
+                .collect(),
+        };
+        let paths: Vec<PathBuf> = roots.iter().map(|id| id.0.clone()).collect();
+        let results =
+            crate::core::multi_root::register_all(self.executor.as_ref(), &mut self.multi, &paths);
+        for r in &results {
+            if let Err(e) = r {
+                self.last_error = Some(e.to_string());
+            }
+        }
+
+        // Ahead/behind of each affected root's current branch vs upstream.
+        if self.sync_refresh {
+            // Headless harness: refresh synchronously, no threads.
+            let executor = self.executor.clone();
+            for root in &roots {
+                if let Ok(ab) = current_branch_ahead_behind(executor.as_ref(), &root.0) {
+                    self.caches.store_ahead_behind(root.clone(), ab);
+                }
+            }
+        } else {
+            let executor = self.executor.clone();
+            let tx = self.tx.clone();
+            for root in roots {
+                let exec2 = executor.clone();
+                let tx2 = tx.clone();
+                let rp = root.0.clone();
+                std::thread::spawn(move || {
+                    if let Ok((ahead, behind)) = current_branch_ahead_behind(exec2.as_ref(), &rp) {
+                        let _ = tx2.send(AppEvent::AheadBehind {
+                            root: RootId(rp),
+                            ahead,
+                            behind,
+                        });
+                    }
+                });
+            }
+        }
+
+        // Refetch the selected root's log iff it is inside the scope.
+        if let Some(sel) = self.selected_root.clone() {
+            let in_scope = match &affected {
+                Affected::All => true,
+                Affected::Root(id) => *id == sel,
+            };
+            if in_scope {
+                if self.sync_refresh {
+                    if let Ok(commits) = self.executor.log(&sel.0, &LogOpts::default()) {
+                        self.caches.store_log(sel, commits);
+                    }
+                } else {
+                    self.fetch_log(sel);
+                }
+            }
+        }
+    }
+
     /// Dispatch a git operation on a worker thread. `work` receives the
     /// engine (`GitExecutor`) and returns a `TgResult<()>`; the result is posted as an
-    /// `OpCompleted` event and the UI re-scans on completion.
-    pub fn run_git<W>(&mut self, label: String, work: W)
+    /// `OpCompleted` event and the affected roots' caches and status are
+    /// refreshed on completion ([`AppState::refresh`]). Every call site
+    /// declares its scope via `affected`.
+    pub fn run_git<W>(&mut self, label: String, affected: Affected, work: W)
     where
         W: FnOnce(&dyn GitExecutor) -> TgResult<()> + Send + 'static,
     {
@@ -573,7 +630,11 @@ impl AppState {
         self.ui.busy = true;
         std::thread::spawn(move || {
             let res = work(executor.as_ref());
-            let _ = tx.send(AppEvent::OpCompleted { label, result: res });
+            let _ = tx.send(AppEvent::OpCompleted {
+                label,
+                affected,
+                result: res,
+            });
         });
     }
 
@@ -583,7 +644,8 @@ impl AppState {
         match c {
             PendingConfirm::Discard { changes } => {
                 let root = self.selected_path();
-                self.run_git("Discard changes".into(), move |v| {
+                let affected = Affected::from_optional_root(root.as_deref());
+                self.run_git("Discard changes".into(), affected, move |v| {
                     if let Some(r) = &root {
                         changes::discard_changes(v, r, &changes)
                     } else {
@@ -593,7 +655,8 @@ impl AppState {
             }
             PendingConfirm::DeleteLocalBranch { name } => {
                 let root = self.selected_path();
-                self.run_git(format!("Delete branch {name}"), move |v| {
+                let affected = Affected::from_optional_root(root.as_deref());
+                self.run_git(format!("Delete branch {name}"), affected, move |v| {
                     if let Some(r) = &root {
                         v.branch_delete(r, &name, false)
                     } else {
@@ -603,7 +666,8 @@ impl AppState {
             }
             PendingConfirm::DeleteRemoteBranch { remote, name } => {
                 let root = self.selected_path();
-                self.run_git("Delete remote branch".into(), move |v| {
+                let affected = Affected::from_optional_root(root.as_deref());
+                self.run_git("Delete remote branch".into(), affected, move |v| {
                     if let Some(r) = &root {
                         v.branch_delete_remote(r, &remote, &name)
                     } else {
@@ -633,8 +697,9 @@ impl AppState {
         self.project_dir = dir.to_path_buf();
         self.multi = MultiRootManager::default();
         self.selected_root = None;
-        self.log_cache.clear();
-        self.ahead_behind.clear();
+        // Drop every cache entry: the old project's roots must not leak into
+        // the new one (bug fix — only logs/ahead-behind were cleared before).
+        self.caches.invalidate_all();
         self.rescan();
         self.ui.welcome_visible = false;
         self.record_recent(dir);
@@ -656,8 +721,7 @@ impl AppState {
     pub fn close_all_projects(&mut self) {
         self.multi = MultiRootManager::default();
         self.selected_root = None;
-        self.log_cache.clear();
-        self.ahead_behind.clear();
+        self.caches.invalidate_all();
         self.ui.welcome_visible = true;
     }
 
@@ -713,32 +777,19 @@ impl AppState {
                     }
                 }
                 AppEvent::LogLoaded { root, commits } => match commits {
-                    Ok(c) => {
-                        self.log_cache.insert(root, c);
-                    }
+                    Ok(c) => self.caches.store_log(root, c),
                     Err(e) => self.last_error = Some(e.to_string()),
                 },
-                AppEvent::OpCompleted { label, result } => {
+                AppEvent::OpCompleted {
+                    label,
+                    affected,
+                    result,
+                } => {
                     self.ui.busy = false;
                     match result {
                         Ok(()) => {
                             self.ui.toast = Some(Toast::success(label));
-                            if self.sync_refresh {
-                                // Headless harness: refresh status synchronously, no threads.
-                                let executor = self.executor.clone();
-                                for root in &mut self.multi.roots {
-                                    if let Ok(s) = executor.status(&root.path) {
-                                        root.status = s;
-                                    }
-                                }
-                            } else {
-                                // Refresh roots (status/branches/remotes) + log.
-                                self.rescan();
-                                if let Some(id) = &self.selected_root {
-                                    let id = id.clone();
-                                    self.fetch_log(id);
-                                }
-                            }
+                            self.refresh(affected);
                         }
                         Err(e) => {
                             self.ui.toast = Some(Toast::error(format!("{label}: {e}")));
@@ -776,7 +827,7 @@ impl AppState {
                     ahead,
                     behind,
                 } => {
-                    self.ahead_behind.insert(root, (ahead, behind));
+                    self.caches.store_ahead_behind(root, (ahead, behind));
                 }
                 _ => {}
             }
@@ -797,4 +848,22 @@ impl AppState {
     pub fn show_welcome(&self) -> bool {
         self.multi.roots.is_empty() || self.ui.welcome_visible
     }
+}
+
+/// Ahead/behind of `root`'s current branch vs its upstream (Epic D3);
+/// `(0, 0)` when no local branch with an upstream is checked out. Shared by
+/// the asynchronous rescan and the synchronous refresh paths so both fill
+/// the cache identically.
+fn current_branch_ahead_behind(exec: &dyn GitExecutor, root: &Path) -> TgResult<(usize, usize)> {
+    let branches = exec.branches(root)?;
+    let cur = exec.current_branch(root)?;
+    if let Some(b) = branches
+        .iter()
+        .find(|b| b.kind == BranchKind::Local && cur.as_deref() == Some(&b.name))
+    {
+        if let Some(up) = &b.tracking {
+            return exec.ahead_behind(root, b.name.as_str(), up);
+        }
+    }
+    Ok((0, 0))
 }

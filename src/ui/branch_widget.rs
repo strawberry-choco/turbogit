@@ -12,6 +12,7 @@
 
 use crate::core::branch_service;
 use crate::model::{Branch, BranchKind, RootId};
+use crate::root_caches::Affected;
 use crate::state::{AppState, Dialog};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
@@ -369,11 +370,12 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
 /// Dispatch one row's checkout through the engine seam and close the popup.
 fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
     let path = id.0.clone();
+    let affected = Affected::Root(id.clone());
     match e {
         PopupEntry::Recent { name, .. } | PopupEntry::Local { name, .. } => {
             push_recent(&mut state.ui.recent_branches, name);
             let nm = name.clone();
-            state.run_git(format!("Checkout {nm}"), move |v| {
+            state.run_git(format!("Checkout {nm}"), affected.clone(), move |v| {
                 v.branch_checkout(&path, &nm)
             });
         }
@@ -381,13 +383,15 @@ fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
             push_recent(&mut state.ui.recent_branches, name);
             let nm = name.clone();
             let start = format!("origin/{name}");
-            state.run_git(format!("Checkout {nm} (new local)"), move |v| {
-                v.branch_create(&path, &nm, true, Some(&start))
-            });
+            state.run_git(
+                format!("Checkout {nm} (new local)"),
+                affected.clone(),
+                move |v| v.branch_create(&path, &nm, true, Some(&start)),
+            );
         }
         PopupEntry::Tag { name } => {
             let nm = name.clone();
-            state.run_git(format!("Checkout {nm}"), move |v| {
+            state.run_git(format!("Checkout {nm}"), affected, move |v| {
                 v.tag_checkout(&path, &nm)
             });
         }

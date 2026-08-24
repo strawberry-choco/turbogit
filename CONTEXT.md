@@ -30,6 +30,13 @@ The part of the multi-root module that discovers candidate roots under the
 project directory and builds `Root` snapshots through the engine interface.
 _Avoid_: discovery service, scan helper, VCS manager
 
+**Root caches**:
+The in-memory cache layer keyed by repository root: commit logs, ref
+decorations, changed-file lists, path-scoped logs, and ahead/behind counts.
+Invalidated as one unit through one interface — per root or all roots — never
+poked field-by-field by callers.
+_Avoid_: log cache / ref cache (as if separate concepts), cache clearing
+
 **Git engine**:
 The module that talks to git. Its interface is `GitExecutor`; production uses
 the CLI adapter, tests use an in-memory adapter.
