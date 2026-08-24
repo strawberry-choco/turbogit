@@ -69,7 +69,9 @@ fn active_tab_rect(harness: &Harness<'_, AppState>) -> Rect {
             && r.height() <= 35.0
             && r.width() < 400.0
             && r.top() >= toolbar_top - 2.0
-            && r.top() <= toolbar_top + 8.0
+            // egui 0.36 tightened CentralPanel padding by 1px, pushing the
+            // tab strip one pixel lower than in 0.35.
+            && r.top() <= toolbar_top + 10.0
     })
 }
 

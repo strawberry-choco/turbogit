@@ -183,7 +183,8 @@ fn install_fonts_applies_the_embedded_stack_to_the_context() {
     install_fonts(&ctx);
 
     // Font definitions take effect at the next pass begin.
-    let _ = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+    let mut full = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+    full.textures_delta.clear();
 
     ctx.fonts(|f| {
         let defs = f.definitions();
