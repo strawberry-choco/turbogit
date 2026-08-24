@@ -20,6 +20,7 @@ use egui::{
 use super::icons::Icon;
 use super::popups::{self, Action};
 use super::widgets;
+use crate::root_caches::Affected;
 use crate::state::{AppState, Dialog, Tab};
 use crate::theme::Palette;
 
@@ -95,7 +96,9 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         state.ui.dialog = Some(Dialog::Push);
     }
     if ks.refresh {
-        rescan_and_refresh_log(state);
+        // Manual refresh (decision 8): the full scoped refresh — drops every
+        // cache entry (decorations and path history included) and rescans.
+        state.refresh(Affected::All);
     }
     if ks.find {
         state.ui.command_palette = true;
@@ -113,14 +116,6 @@ struct Shortcut {
 fn switch_tab(state: &mut AppState, tab: Tab) {
     state.ui.tab = tab;
     state.persist_ui();
-}
-
-/// Rescan roots and refresh the selected root's log (Ctrl+T semantics).
-fn rescan_and_refresh_log(state: &mut AppState) {
-    state.rescan();
-    if let Some(id) = state.selected_root.clone() {
-        state.fetch_log(id);
-    }
 }
 
 // --- Shared painting helpers ---------------------------------------------------
@@ -306,7 +301,7 @@ fn render_toolbar(ui: &mut Ui, state: &mut AppState) {
                             )
                             .clicked()
                             {
-                                rescan_and_refresh_log(state);
+                                state.refresh(Affected::All);
                             }
                             if widgets::toolbar_button(ui, Icon::ARROW_DOWN, "Pull", false)
                                 .clicked()
@@ -525,11 +520,11 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
                             root.status.unversioned(),
                             root.status.conflicted.len(),
                         )));
-                        if let Some((ahead, behind)) = state.ahead_behind.get(&root.id) {
-                            if *ahead > 0 {
+                        if let Some((ahead, behind)) = state.caches.ahead_behind(&root.id) {
+                            if ahead > 0 {
                                 ui.colored_label(Palette::STATE_SUCCESS, format!("↑{ahead}"));
                             }
-                            if *behind > 0 {
+                            if behind > 0 {
                                 ui.colored_label(Palette::STATE_WARNING, format!("↓{behind}"));
                             }
                         }
@@ -554,7 +549,7 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
 fn show_tool_window(ui: &mut Ui, state: &mut AppState) {
     if state.ui.tab == Tab::Log && state.selected_root.is_some() {
         let id = state.selected_root.clone().unwrap();
-        if !state.log_cache.contains_key(&id) {
+        if state.caches.log(&id).is_none() {
             state.fetch_log(id);
         }
     }

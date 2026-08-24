@@ -7,6 +7,7 @@
 
 use egui_kittest::Harness;
 use std::path::{Path, PathBuf};
+use turbogit::model::RootId;
 use turbogit::state::{AppState, Dialog};
 use turbogit::theme::{configure_style, install_fonts};
 
@@ -159,7 +160,10 @@ fn acceptance_matrix_screenshots() {
     // Git Log four panes with decorated history.
     h.state_mut().ui.tab = turbogit::state::Tab::Log;
     settle(&mut h);
-    assert!(!h.state().log_cache.is_empty(), "log should be loaded");
+    assert!(
+        h.state().caches.log(&RootId(repo.clone())).is_some(),
+        "log should be loaded"
+    );
     snap(&mut h, "03-git-log");
 
     // Diff viewer over the working-tree change.

@@ -32,7 +32,16 @@ use turbogit::theme::{configure_style, install_fonts};
 /// embedded JetBrains Mono installed once.
 pub fn shell_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
     let project = tempfile::tempdir().expect("temp project dir");
-    let state = AppState::new(project.path().to_path_buf());
+    // Inject an empty throwaway config dir so the developer's real global
+    // recents file never leaks into headless tests (ADR-0005 test seam —
+    // `AppState` docs: "Tests inject a temp dir so the real user
+    // configuration is never touched"). Deliberately leaked: the harness
+    // outlives this function, and a deleted config dir would make later
+    // recents reads/writes racy.
+    let cfg = tempfile::tempdir().expect("temp config dir");
+    let cfg_path = cfg.path().to_path_buf();
+    std::mem::forget(cfg);
+    let state = AppState::launch_in(Some(project.path().to_path_buf()), Some(cfg_path));
     assert!(
         state.multi.roots.is_empty(),
         "test project must discover no roots"

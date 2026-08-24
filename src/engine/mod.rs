@@ -17,6 +17,10 @@ use crate::error::TgResult;
 use crate::model::*;
 use std::path::{Path, PathBuf};
 
+// The op-scope vocabulary lives with the caches it drives; re-exported here
+// where `AppEvent` (its transport) is defined.
+pub use crate::root_caches::Affected;
+
 /// Events posted from worker threads back to the UI thread over a channel.
 ///
 /// The app drains these in `update()` and calls `ctx.request_repaint()`.
@@ -39,8 +43,14 @@ pub enum AppEvent {
         root: RootId,
         commits: TgResult<Vec<Commit>>,
     },
-    /// Generic asynchronous completion (e.g. push/pull finished).
-    OpCompleted { label: String, result: TgResult<()> },
+    /// Generic asynchronous completion (e.g. push/pull finished). `affected`
+    /// declares which roots the op touched so the post-op refresh can be
+    /// scoped (root-caches deepening, decision 6).
+    OpCompleted {
+        label: String,
+        affected: Affected,
+        result: TgResult<()>,
+    },
     /// Fatal / unexpected error to surface in the UI.
     Error(String),
     /// App is ready (roots initialized, first scan dispatched).

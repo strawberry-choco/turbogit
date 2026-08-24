@@ -16,6 +16,7 @@
 
 use crate::core::changes;
 use crate::model::{Change, ChangeStatus, RootId};
+use crate::root_caches::Affected;
 use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
@@ -374,13 +375,17 @@ fn staging_toolbar_row(ui: &mut Ui, state: &mut AppState) {
         {
             let ch = selected_changes(state);
             let root = state.selected_path();
-            state.run_git("Stage".into(), move |v| {
-                if let Some(r) = &root {
-                    changes::stage_selected(v, r, &ch)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Stage".into(),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        changes::stage_selected(v, r, &ch)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
         }
         if ui
             .button("Unstage selected")
@@ -389,13 +394,17 @@ fn staging_toolbar_row(ui: &mut Ui, state: &mut AppState) {
         {
             let ch = selected_changes(state);
             let root = state.selected_path();
-            state.run_git("Unstage".into(), move |v| {
-                if let Some(r) = &root {
-                    changes::unstage_selected(v, r, &ch)
-                } else {
-                    Ok(())
-                }
-            });
+            state.run_git(
+                "Unstage".into(),
+                Affected::from_optional_root(root.as_deref()),
+                move |v| {
+                    if let Some(r) = &root {
+                        changes::unstage_selected(v, r, &ch)
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
         }
         if ui
             .button("Discard")
@@ -517,14 +526,18 @@ fn do_commit(state: &mut AppState, and_push: bool) {
     let msg = state.ui.commit_message.clone();
     let amend = state.ui.amend;
     let recent = msg.clone();
-    state.run_git("Commit".into(), move |v| {
-        if let Some(r) = &root {
-            let _ = changes::commit_selected(v, r, &msg, &changes, amend)?;
-            Ok(())
-        } else {
-            Ok(())
-        }
-    });
+    state.run_git(
+        "Commit".into(),
+        Affected::from_optional_root(root.as_deref()),
+        move |v| {
+            if let Some(r) = &root {
+                let _ = changes::commit_selected(v, r, &msg, &changes, amend)?;
+                Ok(())
+            } else {
+                Ok(())
+            }
+        },
+    );
     // Record recent message + reset fields.
     if !state.ui.recent_messages.contains(&recent) {
         state.ui.recent_messages.insert(0, recent);
