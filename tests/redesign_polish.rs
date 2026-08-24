@@ -25,7 +25,7 @@ use egui::{Key, Modifiers, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{kittest::Queryable, Harness};
 use tempfile::TempDir;
 use turbogit::engine::cli::CliExecutor;
-use turbogit::engine::GitExecutor;
+use turbogit::engine::{AppEvent, GitExecutor};
 use turbogit::model::{LogOpts, VcsSettings};
 use turbogit::state::{AppState, Dialog, Tab};
 use turbogit::theme::{configure_style, install_fonts, Palette};
@@ -190,10 +190,11 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// Harness over the seeded project with deterministic log/files caches (the
-/// production app fills them asynchronously; seeding keeps these tests off
-/// wall-clock timing except where real git work is unavoidable). Drains the
-/// worker-event channel every frame like `app.rs` does.
+/// Harness over the seeded project with deterministic caches (the production
+/// app fills them asynchronously; priming through the production event path
+/// keeps these tests off wall-clock timing except where real git work is
+/// unavoidable). Drains the worker-event channel every frame like `app.rs`
+/// does.
 fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, AppState> {
     let mut state = AppState::new(seed.project.clone());
     assert!(
@@ -203,26 +204,27 @@ fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, A
     let engine = CliExecutor {
         settings: VcsSettings::default(),
     };
+    // Prime the log cache through the production event path (decision 9):
+    // AppEvent::LogLoaded via state.tx + drain_events().
     for root in state.multi.roots.clone() {
         let commits = engine
             .log(&root.path, &LogOpts::default())
             .expect("seeded log");
-        state.log_cache.insert(root.id.clone(), commits);
+        state
+            .tx
+            .send(AppEvent::LogLoaded {
+                root: root.id.clone(),
+                commits: Ok(commits),
+            })
+            .expect("send LogLoaded");
     }
-    // Select the head commit and cache its changed files so the Log panes
-    // render deterministically.
+    state.drain_events();
+    // Select the head commit; its changed-file list is computed lazily by the
+    // Log window's ensure_files on first render — a deterministic engine call,
+    // so the panes still render deterministically.
     if let Some(root) = state.multi.roots.first().cloned() {
-        if let Some(head) = state
-            .log_cache
-            .get(&root.id)
-            .and_then(|c| c.first().cloned())
-        {
-            let cid = head.id.clone();
-            let files = engine.commit_files(&root.path, &cid).unwrap_or_default();
-            state
-                .files_cache
-                .insert((root.id.clone(), cid.clone()), files);
-            state.ui.selected_commit = Some(cid);
+        if let Some(head) = state.caches.log(&root.id).and_then(|c| c.first().cloned()) {
+            state.ui.selected_commit = Some(head.id.clone());
         }
     }
     state.ui.tab = tab;

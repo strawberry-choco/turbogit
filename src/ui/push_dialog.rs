@@ -19,6 +19,7 @@
 use crate::core::sync_service;
 use crate::error::TgError;
 use crate::model::{BranchKind, ChangeStatus, Commit, LogOpts, Signature};
+use crate::root_caches::Affected;
 use crate::state::{AppState, OutgoingRoot};
 use crate::theme::Palette;
 use egui::{Color32, RichText, Ui};
@@ -332,7 +333,8 @@ fn rel_time(epoch_secs: i64) -> String {
 }
 
 /// Changed files across outgoing commits, filtered by the clicked root node
-/// ONLY (ADR-0006). Files are cached per (root, commit) in `files_cache`.
+/// ONLY (ADR-0006). Files are cached per (root, commit) behind
+/// `caches.ensure_files`.
 fn changed_files_preview(ui: &mut Ui, state: &mut AppState) {
     egui::CollapsingHeader::new("Changed files")
         .default_open(true)
@@ -349,18 +351,10 @@ fn changed_files_preview(ui: &mut Ui, state: &mut AppState) {
                     Err(_) => continue,
                 };
                 for c in commits {
-                    let key = (entry.id.clone(), c.id.clone());
-                    let files = match state.files_cache.get(&key) {
-                        Some(f) => f.clone(),
-                        None => {
-                            let f = state
-                                .executor
-                                .commit_files(&entry.id.0, &c.id)
-                                .unwrap_or_default();
-                            state.files_cache.insert(key, f.clone());
-                            f
-                        }
-                    };
+                    let files =
+                        state
+                            .caches
+                            .ensure_files(state.executor.as_ref(), &entry.id, &c.id);
                     for ch in files {
                         any = true;
                         ui.label(format!(
@@ -397,13 +391,18 @@ fn execute_push(state: &mut AppState) {
         let root = state.selected_path();
         let remote = state.ui.dlg.push_remote.clone();
         let branch = state.ui.dlg.push_branch.clone();
-        state.run_git("Push".into(), move |v| match root {
-            Some(r) => sync_service::push(v, &r, &remote, &branch, force, &settings),
-            None => Ok(()),
-        });
+        state.run_git(
+            "Push".into(),
+            Affected::from_optional_root(root.as_deref()),
+            move |v| match root {
+                Some(r) => sync_service::push(v, &r, &remote, &branch, force, &settings),
+                None => Ok(()),
+            },
+        );
     } else {
         let mgr = state.multi.clone();
-        state.run_git("Push".into(), move |v| {
+        // Batch push (ADR-0006) touches every root with an upstream.
+        state.run_git("Push".into(), Affected::All, move |v| {
             let results = sync_service::push_all_forced(v, &mgr, &settings, force);
             let failures: Vec<String> = results
                 .into_iter()
