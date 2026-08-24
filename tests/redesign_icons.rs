@@ -19,8 +19,9 @@ fn painted_shapes(paint: impl Fn(&mut egui::Ui)) -> Vec<Shape> {
         )),
         ..Default::default()
     };
-    ctx.run_ui(raw, |ui| paint(ui))
-        .shapes
+    let mut full = ctx.run_ui(raw, |ui| paint(ui));
+    full.textures_delta.clear();
+    full.shapes
         .into_iter()
         .map(|clipped| clipped.shape)
         .collect()
