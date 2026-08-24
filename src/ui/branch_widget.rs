@@ -17,7 +17,7 @@ use crate::state::{AppState, Dialog};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
-use egui::{vec2, Align, Color32, Key, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Color32, Key, Layout, RichText, ScrollArea, Ui, vec2};
 
 /// Favorite-star ink: the central warning token (spec §8.5 row anatomy).
 pub const STAR_COLOR: Color32 = Palette::STATE_WARNING;

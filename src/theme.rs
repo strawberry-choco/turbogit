@@ -104,9 +104,9 @@ fn dark_visuals() -> Visuals {
     v.widgets.open.weak_bg_fill = Palette::SURFACE;
     v.window_corner_radius = CornerRadius::same(8); // radius-lg
     v.menu_corner_radius = CornerRadius::same(6); // radius-md
-                                                  // Popup chrome (issue #22, spec §10): every floating surface (dialogs,
-                                                  // popups, palette, toast) gets the LINE border stroke over its SURFACE
-                                                  // fill; radius + fill are already mapped above.
+    // Popup chrome (issue #22, spec §10): every floating surface (dialogs,
+    // popups, palette, toast) gets the LINE border stroke over its SURFACE
+    // fill; radius + fill are already mapped above.
     v.window_stroke = Stroke::new(1.0, Palette::LINE);
     v
 }

@@ -20,8 +20,8 @@ use common::{assert_not_painted, assert_painted};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use turbogit::state::{AppState, CommitSubTab, Dialog};
 
 // ---------------------------------------------------------------- helpers --

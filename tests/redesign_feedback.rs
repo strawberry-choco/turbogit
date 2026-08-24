@@ -22,7 +22,7 @@ use std::time::Duration;
 use common::{assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text};
 use egui::epaint::ColorMode;
 use egui::{Color32, Pos2, Rect, Shape, Vec2};
-use egui_kittest::{kittest::Queryable as _, Harness};
+use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
 use turbogit::state::{AppState, PendingConfirm, Tab, Toast, ToastKind};
 use turbogit::theme::Palette;
@@ -186,10 +186,11 @@ fn popup_chrome(harness: &Harness<'_, AppState>, what: &str) -> (Rect, usize) {
         }
     }
     for (i, clipped) in harness.output().shapes.iter().enumerate() {
-        if let Some(rect) = find(&clipped.shape) {
-            if rect.width() > 300.0 && rect.height() > 150.0 {
-                return (rect, i);
-            }
+        if let Some(rect) = find(&clipped.shape)
+            && rect.width() > 300.0
+            && rect.height() > 150.0
+        {
+            return (rect, i);
         }
     }
     panic!("{what} must render with popup chrome (SURFACE fill + LINE border)")

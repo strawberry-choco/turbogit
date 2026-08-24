@@ -201,10 +201,10 @@ fn ensure_log_data(state: &mut AppState) {
 /// replaces the root's full log everywhere in this window (graph rows,
 /// details pane, changed-files parent lookup).
 fn commits_for(state: &AppState, root: &RootId) -> Vec<Commit> {
-    if let Some(path) = &state.ui.log_path_scope {
-        if let Some(commits) = state.caches.path_log(root, path) {
-            return commits.to_vec();
-        }
+    if let Some(path) = &state.ui.log_path_scope
+        && let Some(commits) = state.caches.path_log(root, path)
+    {
+        return commits.to_vec();
     }
     state
         .caches
@@ -540,11 +540,7 @@ fn mono_font() -> FontId {
 }
 
 fn row_ink(active: bool) -> Color32 {
-    if active {
-        Palette::INK
-    } else {
-        Palette::INK_2
-    }
+    if active { Palette::INK } else { Palette::INK_2 }
 }
 
 fn allocate_row(ui: &mut Ui) -> (Rect, Response) {

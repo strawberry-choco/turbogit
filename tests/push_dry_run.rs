@@ -6,8 +6,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use turbogit::engine::cli::CliExecutor;
 use turbogit::engine::GitExecutor;
+use turbogit::engine::cli::CliExecutor;
 use turbogit::error::TgError;
 use turbogit::model::VcsSettings;
 

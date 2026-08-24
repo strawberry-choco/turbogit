@@ -13,8 +13,8 @@ mod common;
 
 use common::{assert_not_painted, assert_painted, settle, shell_harness};
 use egui::accesskit::Role;
-use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
+use egui_kittest::kittest::{NodeT, Queryable};
 use turbogit::model::VcsSettings;
 use turbogit::persistence;
 use turbogit::state::{AppState, Tab};

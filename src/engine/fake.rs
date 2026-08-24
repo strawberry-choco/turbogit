@@ -101,13 +101,12 @@ impl GitExecutor for FakeExecutor {
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
         let mut out = self.branches.get(root).cloned().unwrap_or_default();
-        if let Some(cur) = self.local_branch(root) {
-            if !out
+        if let Some(cur) = self.local_branch(root)
+            && !out
                 .iter()
                 .any(|b| b.kind == BranchKind::Local && b.name == cur.name)
-            {
-                out.push(cur);
-            }
+        {
+            out.push(cur);
         }
         Ok(out)
     }

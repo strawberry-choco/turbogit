@@ -78,10 +78,10 @@ fn hunk_starts(header: &str) -> (usize, usize) {
             if let Some(n) = rest.split(',').next().and_then(|v| v.parse().ok()) {
                 old = n;
             }
-        } else if let Some(rest) = tok.strip_prefix('+') {
-            if let Some(n) = rest.split(',').next().and_then(|v| v.parse().ok()) {
-                new = n;
-            }
+        } else if let Some(rest) = tok.strip_prefix('+')
+            && let Some(n) = rest.split(',').next().and_then(|v| v.parse().ok())
+        {
+            new = n;
         }
     }
     (old, new)

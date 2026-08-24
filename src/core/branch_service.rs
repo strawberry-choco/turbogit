@@ -44,19 +44,19 @@ pub fn delete_remote(vcs: &dyn GitExecutor, root: &Path, remote: &str, name: &st
 
 /// Toggle the `favorite` flag on a branch within the given root.
 pub fn toggle_favorite(mgr: &mut MultiRootManager, root: &RootId, name: &str) {
-    if let Some(r) = mgr.roots.iter_mut().find(|r| &r.id == root) {
-        if let Some(b) = r.branches.iter_mut().find(|b| b.name == name) {
-            b.favorite = !b.favorite;
-        }
+    if let Some(r) = mgr.roots.iter_mut().find(|r| &r.id == root)
+        && let Some(b) = r.branches.iter_mut().find(|b| b.name == name)
+    {
+        b.favorite = !b.favorite;
     }
 }
 
 /// Set the `protected` flag on a branch within the given root.
 pub fn set_protected(mgr: &mut MultiRootManager, root: &RootId, name: &str, protected: bool) {
-    if let Some(r) = mgr.roots.iter_mut().find(|r| &r.id == root) {
-        if let Some(b) = r.branches.iter_mut().find(|b| b.name == name) {
-            b.protected = protected;
-        }
+    if let Some(r) = mgr.roots.iter_mut().find(|r| &r.id == root)
+        && let Some(b) = r.branches.iter_mut().find(|b| b.name == name)
+    {
+        b.protected = protected;
     }
 }
 
@@ -119,10 +119,10 @@ pub fn create_all(
         let path = id.as_path().to_path_buf();
         let res = match vcs.branch_create(&path, name, true, start_point) {
             Ok(()) => {
-                if let Ok(branches) = vcs.branches(&path) {
-                    if let Some(r) = mgr.roots.iter_mut().find(|r| r.id == id) {
-                        r.branches = branches;
-                    }
+                if let Ok(branches) = vcs.branches(&path)
+                    && let Some(r) = mgr.roots.iter_mut().find(|r| r.id == id)
+                {
+                    r.branches = branches;
                 }
                 Ok(())
             }
@@ -145,10 +145,10 @@ pub fn checkout_all(
         let path = id.as_path().to_path_buf();
         let res = match vcs.branch_checkout(&path, name) {
             Ok(()) => {
-                if let Ok(branches) = vcs.branches(&path) {
-                    if let Some(r) = mgr.roots.iter_mut().find(|r| r.id == id) {
-                        r.branches = branches;
-                    }
+                if let Ok(branches) = vcs.branches(&path)
+                    && let Some(r) = mgr.roots.iter_mut().find(|r| r.id == id)
+                {
+                    r.branches = branches;
                 }
                 Ok(())
             }

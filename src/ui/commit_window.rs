@@ -71,12 +71,12 @@ fn canonical_buckets(state: &AppState) -> Vec<Bucket> {
 /// Collect the `Change` objects of the selected root whose path is included.
 fn selected_changes(state: &AppState) -> Vec<Change> {
     let mut out = Vec::new();
-    if let Some(id) = &state.selected_root {
-        if let Some(root) = state.multi.by_id(id) {
-            for c in &root.status.changes {
-                if state.ui.selected.contains(&root.id.0.join(&c.path)) {
-                    out.push(c.clone());
-                }
+    if let Some(id) = &state.selected_root
+        && let Some(root) = state.multi.by_id(id)
+    {
+        for c in &root.status.changes {
+            if state.ui.selected.contains(&root.id.0.join(&c.path)) {
+                out.push(c.clone());
             }
         }
     }

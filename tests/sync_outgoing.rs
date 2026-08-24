@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use turbogit::core::multi_root::{build_root, register};
 use turbogit::core::sync_service::outgoing_per_root;
-use turbogit::engine::cli::CliExecutor;
 use turbogit::engine::GitExecutor;
+use turbogit::engine::cli::CliExecutor;
 use turbogit::model::{MultiRootManager, RootId, VcsSettings};
 
 /// Run `git <args>` in `dir`, asserting success; returns stdout.

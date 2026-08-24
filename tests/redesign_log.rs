@@ -14,13 +14,13 @@
 use std::path::{Path, PathBuf};
 
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
-use egui_kittest::{kittest::Queryable, Harness};
+use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
 use turbogit::engine::cli::CliExecutor;
 use turbogit::engine::{AppEvent, GitExecutor};
 use turbogit::model::{LogOpts, RootId, VcsSettings};
 use turbogit::state::{AppState, Tab};
-use turbogit::theme::{configure_style, install_fonts, Palette};
+use turbogit::theme::{Palette, configure_style, install_fonts};
 
 // --- Locally-defined harness helpers (issue #12; mirrors tests/common) -------
 

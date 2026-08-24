@@ -169,29 +169,23 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
 fn interactive_rebase(ui: &mut Ui, state: &mut AppState) {
     // Build the plan on first open from the selected commit (rebase its
     // ancestors up to HEAD).
-    if state.ui.dlg.rebase_plan.is_none() {
-        if let Some(cid) = &state.ui.selected_commit {
-            if let Some(id) = &state.selected_root {
-                if let Some(root) = state.multi.by_id(id) {
-                    if let Some(commit) = root
-                        .branches
-                        .first()
-                        .map(|_| ())
-                        .and(root.head.clone())
-                        .and_then(|_| state.caches.log(id))
-                        .and_then(|cs| cs.iter().find(|c| &c.id == cid))
-                    {
-                        let base = commit.parents.first().cloned();
-                        if let Some(base) = base {
-                            state.ui.dlg.rebase_base = Some(base.clone());
-                            if let Ok(plan) =
-                                history_editor::build_plan(state.executor.as_ref(), &id.0, &base)
-                            {
-                                state.ui.dlg.rebase_plan = Some(plan);
-                            }
-                        }
-                    }
-                }
+    if state.ui.dlg.rebase_plan.is_none()
+        && let Some(cid) = &state.ui.selected_commit
+        && let Some(id) = &state.selected_root
+        && let Some(root) = state.multi.by_id(id)
+        && let Some(commit) = root
+            .branches
+            .first()
+            .map(|_| ())
+            .and(root.head.clone())
+            .and_then(|_| state.caches.log(id))
+            .and_then(|cs| cs.iter().find(|c| &c.id == cid))
+    {
+        let base = commit.parents.first().cloned();
+        if let Some(base) = base {
+            state.ui.dlg.rebase_base = Some(base.clone());
+            if let Ok(plan) = history_editor::build_plan(state.executor.as_ref(), &id.0, &base) {
+                state.ui.dlg.rebase_plan = Some(plan);
             }
         }
     }
@@ -313,12 +307,12 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
         if ui.button("Shelve selected").clicked() {
             let name = state.ui.dlg.shelve_name.clone();
             let mut changes = Vec::new();
-            if let Some(id) = &state.selected_root {
-                if let Some(root) = state.multi.by_id(id) {
-                    for c in &root.status.changes {
-                        if state.ui.selected.contains(&c.path) {
-                            changes.push(c.clone());
-                        }
+            if let Some(id) = &state.selected_root
+                && let Some(root) = state.multi.by_id(id)
+            {
+                for c in &root.status.changes {
+                    if state.ui.selected.contains(&c.path) {
+                        changes.push(c.clone());
                     }
                 }
             }

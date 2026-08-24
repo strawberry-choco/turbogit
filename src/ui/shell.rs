@@ -382,10 +382,10 @@ fn rail_button(ui: &mut Ui, state: &mut AppState, icon: Icon, label: &str, targe
     let closure_label = label.to_owned();
     response
         .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
-    if let Some(tab) = target {
-        if response.clicked() {
-            switch_tab(state, tab);
-        }
+    if let Some(tab) = target
+        && response.clicked()
+    {
+        switch_tab(state, tab);
     }
 }
 
