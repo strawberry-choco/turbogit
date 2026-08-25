@@ -21,6 +21,16 @@ use std::path::{Path, PathBuf};
 // where `AppEvent` (its transport) is defined.
 pub use crate::root_caches::Affected;
 
+/// Direction for [`GitExecutor::apply_patch_to_index`]: stage a patch into
+/// the index (forward) or unstage it by reverse-applying against the index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyDirection {
+    /// Apply the patch as-is (`git apply --cached`).
+    Forward,
+    /// Reverse-apply the patch (`git apply --cached --reverse`).
+    Reverse,
+}
+
 /// Events posted from worker threads back to the UI thread over a channel.
 ///
 /// The app drains these in `update()` and calls `ctx.request_repaint()`.
@@ -215,9 +225,20 @@ pub trait GitExecutor: Send + Sync {
     /// Discard working-tree changes to paths (`git checkout -- <paths>`).
     fn restore(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()>;
 
-    /// Stage a patch into the index (`git apply --cached`). Used for partial
-    /// (hunk/line) commits.
-    fn apply_patch_to_index(&self, root: &Path, patch: &str) -> TgResult<()>;
+    /// Stage or unstage a patch against the index (`git apply --cached`,
+    /// optionally `--reverse` per `direction`). Used for partial (hunk/line)
+    /// commits.
+    fn apply_patch_to_index(
+        &self,
+        root: &Path,
+        patch: &str,
+        direction: ApplyDirection,
+    ) -> TgResult<()>;
+
+    /// Mark paths as intent-to-add (`git add -N -- <paths>`), recording them
+    /// in the index without their content so partial patches can be applied
+    /// to previously untracked files.
+    fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()>;
 
     // ---- branches ----
     /// Create a branch (`git branch [<start>]`), optionally checking it out.

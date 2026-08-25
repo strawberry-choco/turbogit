@@ -149,3 +149,16 @@ A branch pattern for which force-push is forbidden.
 **Conflict**:
 A file whose three index versions (base, ours, theirs) disagree and await
 resolution.
+
+**Hunk**:
+A contiguous block of changed lines in a diff, as emitted by git's unified
+diff format. The unit of granular review; selectable as a whole or narrowed
+to individual lines within it.
+_Avoid_: chunk
+
+**Partial staging**:
+Staging or unstaging a subset of a file's changes — by hunk or by line —
+instead of whole files. Covers both directions (stage and unstage);
+discard remains a whole-file operation. Not available on conflicted files,
+which resolve through the conflict modal.
+_Avoid_: interactive add, chunk staging

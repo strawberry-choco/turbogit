@@ -77,10 +77,19 @@ pub fn record(config_dir: &Path, path: &Path) -> Recents {
 /// In-memory upsert used by [`record`] (pure, unit-testable).
 pub fn record_into(recents: &mut Recents, path: &Path) {
     recents.projects.retain(|p| p.path != path);
+    // Millisecond clocks can hand back the same value twice within one
+    // millisecond (e.g. a rapid re-open). Bump past the newest stored entry
+    // so the just-touched row always sorts above it deterministically.
+    let mut now = chrono::Utc::now().timestamp_millis();
+    if let Some(newest) = recents.projects.iter().map(|p| p.last_opened).max()
+        && now <= newest
+    {
+        now = newest + 1;
+    }
     recents.projects.push(RecentProject {
         path: path.to_path_buf(),
         name: project_name(path),
-        last_opened: chrono::Utc::now().timestamp_millis(),
+        last_opened: now,
     });
     recents
         .projects

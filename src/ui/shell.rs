@@ -72,6 +72,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             show_tool_window(ui, state);
         }
     });
+
+    // While an async op is in flight, keep frames coming so its completion
+    // (OpCompleted → refresh → preview reload) lands without waiting for
+    // unrelated input — the headless harness relies on the same signal
+    // `app.rs` gets from drain_events in production (spec R2 story 8).
+    if state.ui.busy || state.ui.diff_loading {
+        ui.ctx().request_repaint();
+    }
 }
 
 /// The five frozen shortcuts (ADR-0009), dispatched exactly as before the

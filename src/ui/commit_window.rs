@@ -20,7 +20,7 @@ use crate::root_caches::Affected;
 use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType};
 
 /// Canonical bucket names (user-created changelists are backlog).
 pub const DEFAULT_CHANGELIST: &str = "Default Changelist";
@@ -35,7 +35,8 @@ struct Bucket {
 }
 
 /// Split one root's status into the three canonical buckets (empty buckets
-/// are dropped so the tree only shows groups that have content).
+/// are dropped so the tree only shows groups that have content). Paths that
+/// granular staging fully staged (spec R2 story 9) are not listed anymore.
 fn canonical_buckets(state: &AppState) -> Vec<Bucket> {
     let mut out = Vec::new();
     for root in &state.multi.roots {
@@ -43,6 +44,13 @@ fn canonical_buckets(state: &AppState) -> Vec<Bucket> {
         let mut unversioned = Vec::new();
         let mut conflicts = Vec::new();
         for c in &root.status.changes {
+            if state
+                .ui
+                .granularly_completed
+                .contains(&root.id.0.join(&c.path))
+            {
+                continue;
+            }
             match c.status {
                 ChangeStatus::Conflicted => conflicts.push(c.clone()),
                 ChangeStatus::Unversioned => unversioned.push(c.clone()),
@@ -192,7 +200,8 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// Untracked files of every root as one canonical bucket per root (issue #18:
-/// the Unversioned Files sub-tab's active data).
+/// the Unversioned Files sub-tab's active data). Granularly completed paths
+/// are skipped (spec R2 story 9).
 fn unversioned_buckets(state: &AppState) -> Vec<Bucket> {
     let mut out = Vec::new();
     for root in &state.multi.roots {
@@ -201,6 +210,12 @@ fn unversioned_buckets(state: &AppState) -> Vec<Bucket> {
             .changes
             .iter()
             .filter(|c| matches!(c.status, ChangeStatus::Unversioned))
+            .filter(|c| {
+                !state
+                    .ui
+                    .granularly_completed
+                    .contains(&root.id.0.join(&c.path))
+            })
             .cloned()
             .collect();
         if !untracked.is_empty() {
@@ -240,26 +255,32 @@ fn unversioned_pane(ui: &mut Ui, state: &mut AppState) {
 fn bucket_groups(ui: &mut Ui, state: &mut AppState, buckets: &[Bucket], empty_text: &str) {
     let multi_root = state.multi.roots.len() > 1;
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        if buckets.is_empty() {
-            ui.colored_label(Color32::GRAY, empty_text);
-            return;
-        }
-        for bucket in buckets {
-            let header = format!("{} ({})", bucket.name, bucket.changes.len());
-            egui::CollapsingHeader::new(header)
-                .default_open(true)
-                .show(ui, |ui| {
-                    if multi_root {
-                        root_subgroup(ui, state, bucket);
-                    } else {
-                        for c in &bucket.changes {
-                            change_row(ui, state, &bucket.root_id, c);
+    // Named id salt: `ui.columns` gives both panes the same stable child id,
+    // and egui's default ScrollArea salt is constant — two unnamed areas
+    // would share one persisted state and flip-flop scrollbar visibility
+    // (a zero-delay repaint loop).
+    egui::ScrollArea::vertical()
+        .id_salt("changelist_scroll")
+        .show(ui, |ui| {
+            if buckets.is_empty() {
+                ui.colored_label(Color32::GRAY, empty_text);
+                return;
+            }
+            for bucket in buckets {
+                let header = format!("{} ({})", bucket.name, bucket.changes.len());
+                egui::CollapsingHeader::new(header)
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        if multi_root {
+                            root_subgroup(ui, state, bucket);
+                        } else {
+                            for c in &bucket.changes {
+                                change_row(ui, state, &bucket.root_id, c);
+                            }
                         }
-                    }
-                });
-        }
-    });
+                    });
+            }
+        });
 }
 
 /// Per-root sub-group with count badge + select-all (multi-root projects).
@@ -326,11 +347,41 @@ fn badge_letter(status: ChangeStatus) -> &'static str {
     }
 }
 
+/// Coarse partially-staged marker (spec R2 story 12): a small warning-tinted
+/// dot beside the status glyph, accessibility-labeled so tooling and screen
+/// readers can spot partially staged rows without opening the diff.
+fn partially_staged_dot(ui: &mut Ui) {
+    const CELL: f32 = 14.0;
+    const DOT_R: f32 = 2.5;
+    let (rect, resp) = ui.allocate_exact_size(Vec2::splat(CELL), Sense::hover());
+    ui.painter()
+        .circle_filled(rect.center(), DOT_R, Palette::STATE_WARNING);
+    let label = "Partially staged".to_owned();
+    resp.widget_info(move || WidgetInfo::labeled(WidgetType::Label, true, label.clone()));
+    resp.on_hover_text("Partially staged");
+}
+
 /// One file row: inclusion checkbox ("M base.txt"), status icon, and a
-/// path button that selects the file for the diff preview pane.
+/// path button that selects the file for the diff preview pane. Conflicted
+/// files render as a single review row ("C conf.txt") instead — an unmerged
+/// path cannot be staged or committed until resolved, so there is nothing
+/// to include; clicking it opens the diff preview. Partially staged files
+/// (staged AND unstaged, spec R2 story 12) carry the coarse warning dot.
 fn change_row(ui: &mut Ui, state: &mut AppState, root_id: &RootId, c: &Change) {
     let key = root_id.0.join(&c.path);
     let path_text = c.path.display().to_string();
+    if c.status == ChangeStatus::Conflicted {
+        let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
+        let (glyph, tint) = status_glyph(c.status);
+        let label = format!("{} {}", badge_letter(c.status), path_text);
+        ui.horizontal(|ui| {
+            if ui.selectable_label(previewing, label).clicked() {
+                state.ui.preview_change = Some(c.path.clone());
+            }
+            icons::icon(ui, glyph, 14.0, tint);
+        });
+        return;
+    }
     ui.horizontal(|ui| {
         let mut included = state.ui.selected.contains(&key);
         let label = format!("{} {}", badge_letter(c.status), path_text);
@@ -339,6 +390,9 @@ fn change_row(ui: &mut Ui, state: &mut AppState, root_id: &RootId, c: &Change) {
         }
         let (glyph, tint) = status_glyph(c.status);
         icons::icon(ui, glyph, 14.0, tint);
+        if c.staged && c.unstaged {
+            partially_staged_dot(ui);
+        }
         let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
         if ui.selectable_label(previewing, path_text).clicked() {
             state.ui.preview_change = Some(c.path.clone());
@@ -522,7 +576,12 @@ fn message_editor(ui: &mut Ui, state: &mut AppState) {
 
 fn do_commit(state: &mut AppState, and_push: bool) {
     let root = state.selected_path();
-    let changes = selected_changes(state);
+    // Files whose index already diverges from HEAD carry a — possibly
+    // granular — staged selection (spec R2); re-staging them whole would
+    // blow it away (ADR-0013). They commit as-is from the index; untouched
+    // files keep the stage-then-commit flow.
+    let (untouched, partial): (Vec<Change>, Vec<Change>) =
+        selected_changes(state).into_iter().partition(|c| !c.staged);
     let msg = state.ui.commit_message.clone();
     let amend = state.ui.amend;
     let recent = msg.clone();
@@ -531,7 +590,7 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         Affected::from_optional_root(root.as_deref()),
         move |v| {
             if let Some(r) = &root {
-                let _ = changes::commit_selected(v, r, &msg, &changes, amend)?;
+                let _ = changes::commit_selected(v, r, &msg, &untouched, &partial, amend)?;
                 Ok(())
             } else {
                 Ok(())
