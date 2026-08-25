@@ -4,6 +4,8 @@
 //! opens the command palette: a fuzzy-searchable list of every action, the
 //! IntelliJ "Find Action" hallmark.
 
+use crate::core::partial::{self, HunkSelection, Selection};
+use crate::model::ChangeStatus;
 use crate::root_caches::Affected;
 use crate::state::{AppState, Dialog, Tab, Toast};
 use egui::Ui;
@@ -31,6 +33,10 @@ pub enum Action {
     GoToLog,
     OpenWelcome,
     ToggleToolbar,
+    // Partial-staging verbs (spec R2): palette-only, operating on the diff
+    // viewer's hovered hunk. The VCS operations popup set stays frozen.
+    StageHunk,
+    UnstageHunk,
 }
 
 impl Action {
@@ -53,6 +59,8 @@ impl Action {
             Action::GoToLog => "Go to Log",
             Action::OpenWelcome => "Open Welcome",
             Action::ToggleToolbar => "Toggle Toolbar",
+            Action::StageHunk => "Stage Hunk",
+            Action::UnstageHunk => "Unstage Hunk",
         }
     }
 
@@ -98,6 +106,8 @@ impl Action {
             Action::GoToLog,
             Action::OpenWelcome,
             Action::ToggleToolbar,
+            Action::StageHunk,
+            Action::UnstageHunk,
         ]
     }
 }
@@ -158,6 +168,58 @@ pub fn run_action(state: &mut AppState, action: Action) {
         }
         Action::OpenWelcome => state.ui.welcome_visible = true,
         Action::ToggleToolbar => state.ui.show_toolbar = !state.ui.show_toolbar,
+        // Partial-staging verbs (spec R2): stage/unstage the whole hunk the
+        // pointer last rested on in the diff viewer. Every input — root,
+        // preview target, hovered hunk, cached diff text — must exist, or the
+        // verb is a silent no-op; conflicted files are blocked by the core op.
+        Action::StageHunk | Action::UnstageHunk => {
+            let stage = action == Action::StageHunk;
+            let Some(root) = state.selected_path() else {
+                return;
+            };
+            let Some(path) = state.ui.preview_change.clone() else {
+                return;
+            };
+            let Some(hunk) = state.ui.hovered_hunk else {
+                return;
+            };
+            let Some(diff_text) = crate::ui::diff::cached_preview_diff(state, &path) else {
+                return;
+            };
+            let status = crate::ui::diff::preview_status(state, Some(&path));
+            let selection = Selection {
+                hunks: [(hunk, HunkSelection::Whole)].into_iter().collect(),
+            };
+            let label = if stage { "Stage hunk" } else { "Unstage hunk" };
+            // Untracked files stage via intent-to-add + forward apply using
+            // their repo-relative path; unstage keeps the plain reverse-apply.
+            let untracked = stage && status == ChangeStatus::Unversioned;
+            // Post-op the viewer settles on the remaining unstaged changes
+            // (spec R2 story 8).
+            crate::ui::diff::settle_preview_on_unstaged(state);
+            // Story 9: completion decides exclusions/focus for this file.
+            state.ui.pending_granular = Some(path.clone());
+            state.run_git(
+                label.to_owned(),
+                Affected::from_optional_root(Some(root.as_path())),
+                move |v| {
+                    if untracked {
+                        partial::stage_untracked_selection(
+                            v,
+                            &root,
+                            std::slice::from_ref(&path),
+                            &diff_text,
+                            &selection,
+                            status,
+                        )
+                    } else if stage {
+                        partial::stage_selection(v, &root, &diff_text, &selection, status)
+                    } else {
+                        partial::unstage_selection(v, &root, &diff_text, &selection, status)
+                    }
+                },
+            );
+        }
     }
 }
 

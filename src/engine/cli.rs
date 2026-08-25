@@ -6,7 +6,7 @@
 
 #![allow(dead_code)]
 
-use crate::engine::GitExecutor;
+use crate::engine::{ApplyDirection, GitExecutor};
 use crate::error::{TgError, TgResult};
 use crate::model::*;
 use std::path::{Path, PathBuf};
@@ -65,14 +65,18 @@ impl GitExecutor for CliExecutor {
                     continue;
                 }
                 let status = map_xy(xy);
-                // Porcelain v2 `1 <XY>`: first char is the index (staged)
-                // status; a space means the index is unchanged → unstaged.
-                let staged = !xy.starts_with(' ');
+                // Porcelain v2 `1 <XY>`: the first char is the index (staged)
+                // status; '.' means the index matches HEAD → unstaged. The
+                // second char is the worktree status; '.' means the worktree
+                // matches the index → nothing unstaged left.
+                let staged = !xy.starts_with('.');
+                let unstaged = xy.chars().nth(1).is_some_and(|y| y != '.');
                 changes.push(Change {
                     path: PathBuf::from(path),
                     status,
                     chunks: vec![],
                     staged,
+                    unstaged,
                 });
             } else if let Some(rest) = line.strip_prefix("? ") {
                 changes.push(Change {
@@ -80,6 +84,7 @@ impl GitExecutor for CliExecutor {
                     status: ChangeStatus::Unversioned,
                     chunks: vec![],
                     staged: false,
+                    unstaged: false,
                 });
             } else if let Some(rest) = line.strip_prefix("! ") {
                 changes.push(Change {
@@ -87,6 +92,7 @@ impl GitExecutor for CliExecutor {
                     status: ChangeStatus::Ignored,
                     chunks: vec![],
                     staged: false,
+                    unstaged: false,
                 });
             } else if let Some(rest) = line.strip_prefix("u ") {
                 // u <XY> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <hU> <hB> <path>
@@ -103,6 +109,7 @@ impl GitExecutor for CliExecutor {
                     status: ChangeStatus::Conflicted,
                     chunks: vec![],
                     staged: false,
+                    unstaged: false,
                 });
                 conflicted.push(p);
             }
@@ -804,10 +811,19 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
-    fn apply_patch_to_index(&self, root: &Path, patch: &str) -> TgResult<()> {
+    fn apply_patch_to_index(
+        &self,
+        root: &Path,
+        patch: &str,
+        direction: ApplyDirection,
+    ) -> TgResult<()> {
         let bin = crate::model::git_binary(&self.settings);
+        let mut args: Vec<&str> = vec!["apply", "--cached", "--recount"];
+        if direction == ApplyDirection::Reverse {
+            args.push("--reverse");
+        }
         let mut child = Command::new(&bin)
-            .args(["apply", "--cached", "--recount"])
+            .args(&args)
             .current_dir(root)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -824,6 +840,19 @@ impl GitExecutor for CliExecutor {
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             });
         }
+        Ok(())
+    }
+
+    fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let mut a: Vec<String> = vec!["add".to_string(), "-N".to_string(), "--".to_string()];
+        for p in paths {
+            a.push(p.to_string_lossy().to_string());
+        }
+        let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+        self.run(root, &args)?;
         Ok(())
     }
 
@@ -1069,6 +1098,7 @@ fn parse_name_status_line(line: &str) -> Option<Change> {
         status,
         chunks: vec![],
         staged: false,
+        unstaged: false,
     })
 }
 
