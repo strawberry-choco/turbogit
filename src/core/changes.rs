@@ -123,18 +123,20 @@ pub fn unstage_selected(vcs: &dyn GitExecutor, root: &Path, changes: &[Change]) 
 
 /// Commit changes.
 ///
-/// With no selected changes, commits everything tracked (`vcs.commit`). With a
-/// selection, stages the chosen paths then commits the index
-/// (`vcs.commit_index`); `amend` passes through in both paths so Amend works
-/// for full and partial commits alike.
+/// With no selection at all, commits everything tracked (`vcs.commit`). With
+/// a selection of untouched files, stages those paths then commits the index;
+/// files with active partial staging (`partial_changes`) are never re-staged —
+/// they commit as-is from their index state so granular selections survive
+/// (ADR-0013). `amend` passes through in every path.
 pub fn commit_selected(
     vcs: &dyn GitExecutor,
     root: &Path,
     message: &str,
     changes: &[Change],
+    partial_changes: &[Change],
     amend: bool,
 ) -> TgResult<CommitId> {
-    if changes.is_empty() {
+    if changes.is_empty() && partial_changes.is_empty() {
         vcs.commit(root, message, amend)
     } else {
         stage_selected(vcs, root, changes)?;
@@ -162,6 +164,7 @@ mod tests {
             status: ChangeStatus::Modified,
             chunks: vec![],
             staged,
+            unstaged: false,
         }
     }
 
@@ -171,7 +174,7 @@ mod tests {
         let root = PathBuf::from("/repo");
         let selected = [change("a.txt", false), change("b.txt", false)];
 
-        let id = commit_selected(&engine, &root, "msg", &selected, false).unwrap();
+        let id = commit_selected(&engine, &root, "msg", &selected, &[], false).unwrap();
         assert_eq!(id, "bbbb", "partial commits go through commit_index");
         assert_eq!(
             engine.calls.lock().unwrap().as_slice(),
@@ -188,12 +191,49 @@ mod tests {
         let engine = FakeExecutor::new();
         let root = PathBuf::from("/repo");
 
-        let id = commit_selected(&engine, &root, "msg", &[], true).unwrap();
+        let id = commit_selected(&engine, &root, "msg", &[], &[], true).unwrap();
         assert_eq!(id, "aaaa");
         assert_eq!(
             engine.calls.lock().unwrap().as_slice(),
             [Call::CommitAll],
             "empty selection uses -a commit; amend flag passes through"
+        );
+    }
+
+    #[test]
+    fn commit_with_partial_selection_commits_index_without_restaging() {
+        let engine = FakeExecutor::new();
+        let root = PathBuf::from("/repo");
+        let partial = [change("part.txt", false)];
+
+        let id = commit_selected(&engine, &root, "msg", &[], &partial, false).unwrap();
+
+        assert_eq!(id, "bbbb", "partial commits go through commit_index");
+        assert_eq!(
+            engine.calls.lock().unwrap().as_slice(),
+            [Call::CommitIndex],
+            "a partially staged file must commit as-is from the index — \
+             no whole-file re-stage may blow away the granular selection"
+        );
+    }
+
+    #[test]
+    fn commit_mixed_selection_stages_only_untouched_files() {
+        let engine = FakeExecutor::new();
+        let root = PathBuf::from("/repo");
+        let untouched = [change("normal.txt", false)];
+        let partial = [change("part.txt", false)];
+
+        commit_selected(&engine, &root, "msg", &untouched, &partial, false).unwrap();
+
+        assert_eq!(
+            engine.calls.lock().unwrap().as_slice(),
+            [
+                Call::Add(vec![PathBuf::from("normal.txt")]),
+                Call::CommitIndex,
+            ],
+            "untouched files keep stage-then-commit; the partially staged \
+             file must not appear in the whole-file Add"
         );
     }
 }
