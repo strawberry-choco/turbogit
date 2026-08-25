@@ -121,10 +121,20 @@ fn proportional_family_is_jetbrains_mono_with_segoe_ui_fallback() {
     let defs = font_definitions();
     let fam = &defs.families.get(&egui::FontFamily::Proportional).unwrap();
     assert_eq!(fam[0], "jetbrains-mono-regular", "primary UI font");
-    assert!(
-        fam.iter().any(|f| f == "Segoe UI"),
-        "Segoe UI fallback required"
-    );
+    // The Segoe UI fallback is registered only when the face is actually
+    // present on this machine (Windows); it degrades gracefully by
+    // omission elsewhere (ADR-0002).
+    if cfg!(windows) {
+        assert!(
+            fam.iter().any(|f| f == "Segoe UI"),
+            "Segoe UI fallback required"
+        );
+    } else {
+        assert!(
+            !fam.iter().any(|f| f == "Segoe UI"),
+            "absent system face must be omitted"
+        );
+    }
 }
 
 #[test]
@@ -132,10 +142,17 @@ fn monospace_family_is_jetbrains_mono_with_consolas_fallback() {
     let defs = font_definitions();
     let fam = &defs.families.get(&egui::FontFamily::Monospace).unwrap();
     assert_eq!(fam[0], "jetbrains-mono-regular", "primary mono font");
-    assert!(
-        fam.iter().any(|f| f == "Consolas"),
-        "Consolas fallback required"
-    );
+    if cfg!(windows) {
+        assert!(
+            fam.iter().any(|f| f == "Consolas"),
+            "Consolas fallback required"
+        );
+    } else {
+        assert!(
+            !fam.iter().any(|f| f == "Consolas"),
+            "absent system face must be omitted"
+        );
+    }
 }
 
 #[test]

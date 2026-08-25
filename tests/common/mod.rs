@@ -156,7 +156,7 @@ pub fn settle(harness: &mut Harness<'_, AppState>) {
 // wrapper: every call delegates to a real inner engine while push /
 // push-dry-run invocations are recorded verbatim (remote, branch, force).
 
-/// One recorded mutating push call at the executor boundary.
+/// One recorded mutating call at the executor boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordedCall {
     Push {
@@ -171,6 +171,13 @@ pub enum RecordedCall {
         branch: String,
         force: bool,
     },
+    ApplyPatch {
+        direction: turbogit::engine::ApplyDirection,
+    },
+    AddIntentToAdd(Vec<PathBuf>),
+    Add(Vec<PathBuf>),
+    CommitAll,
+    CommitIndex,
 }
 
 /// Delegating [`GitExecutor`] that records push / dry-run calls.
@@ -362,6 +369,10 @@ impl GitExecutor for RecordingExecutor {
         message: &str,
         amend: bool,
     ) -> turbogit::error::TgResult<turbogit::model::CommitId> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::CommitAll);
         self.inner.commit(root, message, amend)
     }
 
@@ -371,6 +382,10 @@ impl GitExecutor for RecordingExecutor {
         message: &str,
         amend: bool,
     ) -> turbogit::error::TgResult<turbogit::model::CommitId> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::CommitIndex);
         self.inner.commit_index(root, message, amend)
     }
 
@@ -439,6 +454,10 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn add(&self, root: &Path, paths: &[PathBuf]) -> turbogit::error::TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::Add(paths.to_vec()));
         self.inner.add(root, paths)
     }
 
@@ -454,8 +473,25 @@ impl GitExecutor for RecordingExecutor {
         self.inner.restore(root, paths)
     }
 
-    fn apply_patch_to_index(&self, root: &Path, patch: &str) -> turbogit::error::TgResult<()> {
-        self.inner.apply_patch_to_index(root, patch)
+    fn apply_patch_to_index(
+        &self,
+        _root: &Path,
+        _patch: &str,
+        direction: turbogit::engine::ApplyDirection,
+    ) -> turbogit::error::TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::ApplyPatch { direction });
+        self.inner.apply_patch_to_index(_root, _patch, direction)
+    }
+
+    fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> turbogit::error::TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::AddIntentToAdd(paths.to_vec()));
+        self.inner.add_intent_to_add(root, paths)
     }
 
     fn branch_create(

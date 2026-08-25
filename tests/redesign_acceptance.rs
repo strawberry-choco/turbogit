@@ -134,6 +134,14 @@ fn acceptance_matrix_screenshots() {
     // Safe: single-threaded test process; no other thread reads the env
     // concurrently while this runs.
     unsafe { std::env::set_var("UPDATE_SNAPSHOTS", "1") };
+    // Headless CI runners (ubuntu-latest) expose no GPU adapter, so
+    // egui_kittest's wgpu renderer cannot initialize there ("No adapter
+    // found"). Upstream egui also only runs snapshot tests on GPU-backed
+    // runners. Renders refreshed here are never consumed by CI, so skip.
+    if std::env::var_os("CI").is_some() {
+        eprintln!("skipping acceptance-matrix screenshots: no GPU adapter on CI runners");
+        return;
+    }
     std::fs::create_dir_all(SNAPSHOT_DIR).unwrap();
     let mut results = egui_kittest::SnapshotResults::default();
 
