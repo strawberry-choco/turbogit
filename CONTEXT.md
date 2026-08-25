@@ -162,3 +162,10 @@ instead of whole files. Covers both directions (stage and unstage);
 discard remains a whole-file operation. Not available on conflicted files,
 which resolve through the conflict modal.
 _Avoid_: interactive add, chunk staging
+
+**Granular op**:
+One dispatch of partial staging — a single stage or unstage of one hunk or
+line selection on one file, run as one asynchronous operation. The unit the
+granular module owns end-to-end: input resolution, dispatch ordering, and
+completion settlement (exclusions and preview focus).
+_Avoid_: hunk action, partial op

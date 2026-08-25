@@ -1,6 +1,7 @@
 pub mod branch_service;
 pub mod changes;
 pub mod conflict;
+pub mod granular;
 pub mod history_editor;
 pub mod history_service;
 pub mod integrate_service;
