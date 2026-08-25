@@ -135,10 +135,7 @@ fn category_row(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool
         ink,
     );
 
-    let closure_label = label.to_owned();
-    response.widget_info(move || {
-        WidgetInfo::labeled(WidgetType::Button, enabled, closure_label.clone())
-    });
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
     widgets::focus_ring(ui, &response);
 
     if !enabled {
@@ -312,10 +309,7 @@ fn setting_row(ui: &mut Ui, label: &str, description: &str, control: impl FnOnce
 /// repo-wide kittest pattern, cf. `widgets::input_frame`).
 fn labeled_text_input(ui: &mut Ui, label: &str, buf: &mut String) -> egui::Response {
     let resp = ui.add(TextEdit::singleline(buf).desired_width(INPUT_WIDTH));
-    let closure_label = label.to_owned();
-    resp.widget_info(move || {
-        WidgetInfo::labeled(WidgetType::TextEdit, true, closure_label.clone())
-    });
+    resp.widget_info(|| WidgetInfo::labeled(WidgetType::TextEdit, true, label));
     resp
 }
 

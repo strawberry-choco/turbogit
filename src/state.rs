@@ -568,7 +568,7 @@ impl AppState {
     /// Production computes ahead/behind on worker threads; the headless
     /// harness (`sync_refresh`) mirrors the same steps synchronously.
     pub fn refresh(&mut self, affected: Affected) {
-        self.caches.invalidate(affected.clone());
+        self.caches.invalidate(&affected);
         // The diff viewer caches raw patch text outside the root caches;
         // a completed op may have changed exactly what it shows (spec R2
         // story 8), so drop it and let the viewer reload asynchronously.
@@ -584,17 +584,18 @@ impl AppState {
             .collect();
         self.ui.granularly_completed = still_fully_staged;
         // Only roots that are actually registered take part in the refresh.
-        let roots: Vec<RootId> = match &affected {
-            Affected::All => self.multi.roots.iter().map(|r| r.id.clone()).collect(),
+        // The ids' shared `Arc<Path>` handles clone by refcount here and flow
+        // into `register_all` / the ahead-behind refresh unchanged.
+        let paths: Vec<std::sync::Arc<Path>> = match &affected {
+            Affected::All => self.multi.roots.iter().map(|r| r.id.0.clone()).collect(),
             Affected::Root(id) => self
                 .multi
                 .roots
                 .iter()
                 .filter(|r| &r.id == id)
-                .map(|r| r.id.clone())
+                .map(|r| r.id.0.clone())
                 .collect(),
         };
-        let paths: Vec<PathBuf> = roots.iter().map(|id| id.0.clone()).collect();
         let results =
             crate::core::multi_root::register_all(self.executor.as_ref(), &mut self.multi, &paths);
         for r in &results {
@@ -607,18 +608,17 @@ impl AppState {
         if self.sync_refresh {
             // Headless harness: refresh synchronously, no threads.
             let executor = self.executor.clone();
-            for root in &roots {
-                if let Ok(ab) = current_branch_ahead_behind(executor.as_ref(), &root.0) {
-                    self.caches.store_ahead_behind(root.clone(), ab);
+            for path in paths {
+                if let Ok(ab) = current_branch_ahead_behind(executor.as_ref(), &path) {
+                    self.caches.store_ahead_behind(RootId(path), ab);
                 }
             }
         } else {
             let executor = self.executor.clone();
             let tx = self.tx.clone();
-            for root in roots {
+            for rp in paths {
                 let exec2 = executor.clone();
                 let tx2 = tx.clone();
-                let rp = root.0.clone();
                 std::thread::spawn(move || {
                     if let Ok((ahead, behind)) = current_branch_ahead_behind(exec2.as_ref(), &rp) {
                         let _ = tx2.send(AppEvent::AheadBehind {
@@ -665,9 +665,13 @@ impl AppState {
         if !self.is_fully_staged(&path) {
             return;
         }
-        self.ui.granularly_completed.insert(key.clone());
+        // Compute the follow-up preview before inserting the exclusion: the
+        // search already skips `key` itself via its `just_finished`
+        // comparisons, so ordering is equivalent and `key` can move.
+        let next_preview = self.next_preview_candidate(&key);
+        self.ui.granularly_completed.insert(key);
         if self.ui.preview_change.as_ref() == Some(&path) {
-            self.ui.preview_change = self.next_preview_candidate(&key);
+            self.ui.preview_change = next_preview;
         }
     }
 
@@ -956,7 +960,7 @@ impl AppState {
 
     /// The currently selected root's path (or None).
     pub fn selected_path(&self) -> Option<PathBuf> {
-        self.selected_root.as_ref().map(|r| r.0.clone())
+        self.selected_root.as_ref().map(|r| r.0.to_path_buf())
     }
 
     /// Welcome-vs-shell routing (issue #9, spec §9.2): the central body shows

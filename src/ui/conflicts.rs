@@ -295,9 +295,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
     if ui.button("Resolve all simple").clicked() {
         let r = root.clone();
-        let st = state.multi.by_id(&id).cloned();
-        if let (Some(r), Some(root_snap)) = (r, st) {
-            let _ = conflict::resolve_all_simple(state.executor.as_ref(), &r, &root_snap.status);
+        let st = state.multi.by_id(&id).map(|r| r.status.clone());
+        if let (Some(r), Some(status)) = (r, st) {
+            let _ = conflict::resolve_all_simple(state.executor.as_ref(), &r, &status);
             state.rescan();
         }
     }

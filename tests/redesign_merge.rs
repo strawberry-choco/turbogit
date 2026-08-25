@@ -420,7 +420,7 @@ fn apply_writes_composed_result_and_clears_conflict_state() {
     );
 
     // The editor closes and the root rescans to zero conflicts.
-    let root_id = RootId(repo.path.clone());
+    let root_id = RootId(repo.path.clone().into());
     let start = Instant::now();
     loop {
         h.run();

@@ -26,6 +26,7 @@ use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Frame, Layout, Margin, Panel, Pos2, Rect,
     Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
+use std::path::PathBuf;
 
 // --- Pane metrics (spec §8.3) -------------------------------------------------
 
@@ -109,8 +110,9 @@ fn root_color(idx: usize) -> Color32 {
 }
 
 /// Assign each commit a lane color using a lightweight DAG walk so the list
-/// reads like a commit graph (Epic D1). Newest-first input assumed.
-fn assign_colors(commits: &[Commit]) -> std::collections::HashMap<String, usize> {
+/// reads like a commit graph (Epic D1). Newest-first input assumed. Takes
+/// borrowed commits — the union is never owned (plan §1.3).
+fn assign_colors(commits: &[&Commit]) -> std::collections::HashMap<String, usize> {
     use std::collections::HashMap;
     let mut color_of: HashMap<String, usize> = HashMap::new();
     let mut lanes: Vec<Option<String>> = Vec::new();
@@ -118,7 +120,7 @@ fn assign_colors(commits: &[Commit]) -> std::collections::HashMap<String, usize>
     for c in commits {
         let idx = lanes
             .iter()
-            .position(|l| l.as_deref() == Some(&c.id))
+            .position(|l| l.as_deref() == Some(c.id.as_str()))
             .unwrap_or_else(|| {
                 if let Some(e) = lanes.iter().position(|l| l.is_none()) {
                     e
@@ -199,36 +201,56 @@ fn ensure_log_data(state: &mut AppState) {
 /// Commits for `root` honoring the active path scope (issue #19): when a
 /// path scope is active and its scoped query is cached, that listing
 /// replaces the root's full log everywhere in this window (graph rows,
-/// details pane, changed-files parent lookup).
-fn commits_for(state: &AppState, root: &RootId) -> Vec<Commit> {
+/// details pane, changed-files parent lookup). Borrows the cache slices —
+/// no per-frame commit clones (plan §1.3).
+fn commits_for<'a>(state: &'a AppState, root: &RootId) -> Vec<&'a Commit> {
     if let Some(path) = &state.ui.log_path_scope
         && let Some(commits) = state.caches.path_log(root, path)
     {
-        return commits.to_vec();
+        return commits.iter().collect();
     }
     state
         .caches
         .log(root)
-        .map(|c| c.to_vec())
+        .map(|c| c.iter().collect())
         .unwrap_or_default()
+}
+
+/// The cached commit `cid` of `root`, honoring the active path scope like
+/// [`commits_for`] — borrowed over the cache slice instead of cloning the
+/// whole listing for parent lookups (plan §1.3).
+fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a Commit> {
+    if let Some(path) = &state.ui.log_path_scope
+        && let Some(commits) = state.caches.path_log(root, path)
+    {
+        return commits.iter().find(|c| c.id == cid);
+    }
+    state
+        .caches
+        .log(root)
+        .and_then(|commits| commits.iter().find(|c| c.id == cid))
 }
 
 /// The commits currently displayed: union across visible roots (newest first,
 /// live-filtered by the graph search box). With an active path scope (issue
 /// #19) only the selected root's scoped listing is shown — never another
-/// root's unscoped log.
-fn visible_commits(state: &AppState) -> Vec<Commit> {
-    let mut commits: Vec<Commit> = if state.ui.log_path_scope.is_some() {
+/// root's unscoped log. Yields borrowed commits sorted by `(time, id)`
+/// instead of cloning the union per frame (plan §1.3).
+fn visible_commits(state: &AppState) -> Vec<&Commit> {
+    let mut commits: Vec<&Commit> = if state.ui.log_path_scope.is_some() {
         match &state.selected_root {
             Some(root) => commits_for(state, root),
             None => Vec::new(),
         }
     } else {
-        visible_root_ids(state)
-            .iter()
+        let roots: Vec<&RootId> = match &state.ui.log_root_filter {
+            Some(id) => vec![id],
+            None => state.multi.roots.iter().map(|r| &r.id).collect(),
+        };
+        roots
+            .into_iter()
             .filter_map(|id| state.caches.log(id))
             .flatten()
-            .cloned()
             .collect()
     };
     commits.sort_by(|a, b| b.time.cmp(&a.time).then(a.id.cmp(&b.id)));
@@ -416,8 +438,7 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
         galley,
         row_ink(all_active),
     );
-    response
-        .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, "All roots".to_owned()));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "All roots"));
     widgets::focus_ring(ui, &response);
     if response.clicked() {
         state.ui.log_root_filter = None;
@@ -455,9 +476,8 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
             text_galley,
             row_ink(active),
         );
-        let closure_label = label.clone();
-        response.widget_info(move || {
-            WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone())
+        response.widget_info(|| {
+            WidgetInfo::labeled(WidgetType::Button, true, format!("Root {}", root.id.name()))
         });
         widgets::focus_ring(ui, &response);
         if response.clicked() {
@@ -517,9 +537,15 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     let left = ui.cursor().left() + STRIPE_WIDTH;
     header_cells(ui, left);
 
+    // Row clicks are deferred (plan §1.3): the displayed union borrows the
+    // cache slices, so rows render against a shared AppState and the
+    // selection lands after the scroll pass ends.
+    let mut clicked: Option<String> = None;
     ScrollArea::vertical().show(ui, |ui| {
         for c in &commits {
-            commit_row(ui, state, c, &colors, date_mode, multi_root);
+            if commit_row(ui, state, c, &colors, date_mode, multi_root) {
+                clicked = Some(c.id.clone());
+            }
         }
         if commits.is_empty() {
             ui.label(
@@ -529,6 +555,10 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
             );
         }
     });
+    if let Some(id) = clicked {
+        state.ui.selected_commit = Some(id);
+        state.ui.log_selected_file = None;
+    }
 }
 
 fn body_font() -> FontId {
@@ -584,14 +614,17 @@ fn header_cells(ui: &mut Ui, left: f32) {
 }
 
 /// One commit-table row: stripe | node | hash | author | date | message(+chips).
+/// Renders against a shared [`AppState`] (the displayed union borrows the
+/// caches) and reports whether the row was clicked; the caller applies the
+/// selection after rendering (plan §1.3 defer pattern).
 fn commit_row(
     ui: &mut Ui,
-    state: &mut AppState,
+    state: &AppState,
     c: &Commit,
     colors: &std::collections::HashMap<String, usize>,
     date_mode: DateFormat,
     multi_root: bool,
-) {
+) -> bool {
     let selected = state.ui.selected_commit.as_deref() == Some(c.id.as_str());
     let (rect, response) = allocate_row(ui);
 
@@ -680,14 +713,15 @@ fn commit_row(
         mx = paint_ref_chip(&painter, r.name.clone(), ref_kind(r.kind), mx, cy);
     }
 
-    let closure_label = format!("{} {}", short(&c.id), subject);
-    response
-        .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            WidgetType::Button,
+            true,
+            format!("{} {}", short(&c.id), subject),
+        )
+    });
     widgets::focus_ring(ui, &response);
-    if response.clicked() {
-        state.ui.selected_commit = Some(c.id.clone());
-        state.ui.log_selected_file = None;
-    }
+    response.clicked()
 }
 
 /// Paint one `.tg-label` pill (18px, kind colors) at `(x, cy)` and return the
@@ -718,22 +752,32 @@ fn paint_ref_chip(painter: &egui::Painter, text: String, kind: RefKind, x: f32, 
 
 // --- Pane 3: changed files -----------------------------------------------------------
 
+/// Deferred interaction from one changed-file row (plan §1.3): rows render
+/// against a shared [`AppState`] — the selection and the cached file list are
+/// borrowed — so mutations land after the pane finishes rendering.
+enum FileAction {
+    None,
+    /// Row clicked: open its diff; the caller resolves root / commit / parent.
+    OpenDiff(PathBuf),
+    /// Context menu: scope the whole workspace to this file's history.
+    ScopeHistory(PathBuf),
+}
+
 fn files_pane(ui: &mut Ui, state: &mut AppState) {
-    let files = state
+    // Split-borrow the selection up front (plan §1.3): no owned RootId /
+    // CommitId clones per frame, and the cached file list is iterated in
+    // place instead of copied into a fresh Vec.
+    let selection = state
         .selected_root
-        .clone()
-        .zip(state.ui.selected_commit.clone())
-        .and_then(|(root, cid)| state.caches.files_for(&root, &cid))
-        .map(|f| f.to_vec())
-        .unwrap_or_default();
+        .as_ref()
+        .zip(state.ui.selected_commit.as_ref());
+    let files = selection
+        .and_then(|(root, cid)| state.caches.files_for(root, cid))
+        .unwrap_or(&[]);
 
     widgets::toolwindow_header(ui, &format!("Changed files ({})", files.len()), |_ui| {});
 
-    let Some((root_id, cid)) = state
-        .selected_root
-        .clone()
-        .zip(state.ui.selected_commit.clone())
-    else {
+    let Some((root_id, cid)) = selection else {
         ui.label(
             RichText::new("Select a commit to see its changed files.")
                 .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
@@ -742,14 +786,12 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    let parent = commits_for(state, &root_id)
-        .iter()
-        .find(|c| c.id == cid)
-        .and_then(|c| c.parents.first().cloned());
+    let parent = find_commit(state, root_id, cid).and_then(|c| c.parents.first().cloned());
 
+    let mut action = FileAction::None;
     ScrollArea::vertical().show(ui, |ui| {
-        for ch in &files {
-            file_row(ui, state, ch, &root_id, &cid, parent.clone());
+        for ch in files {
+            action = file_row(ui, state, ch);
         }
         if files.is_empty() {
             ui.label(
@@ -759,6 +801,24 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
             );
         }
     });
+
+    match action {
+        FileAction::None => {}
+        FileAction::OpenDiff(path) => {
+            state.ui.log_selected_file = Some(path.clone());
+            state.ui.diff = Some(DiffTarget {
+                root: root_id.clone(),
+                left: parent,
+                right: Some(cid.to_owned()),
+                path: Some(path),
+            });
+        }
+        FileAction::ScopeHistory(path) => {
+            state.ui.log_path_scope = Some(path);
+            state.ui.selected_commit = None;
+            state.ui.log_selected_file = None;
+        }
+    }
 }
 
 fn badge_kind(status: ChangeStatus) -> BadgeKind {
@@ -770,14 +830,11 @@ fn badge_kind(status: ChangeStatus) -> BadgeKind {
     }
 }
 
-fn file_row(
-    ui: &mut Ui,
-    state: &mut AppState,
-    change: &crate::model::Change,
-    root_id: &RootId,
-    cid: &str,
-    parent: Option<String>,
-) {
+/// One changed-file row: status badge + path, click opens the diff preview,
+/// context menu scopes the workspace to the file's history (issue #19).
+/// Renders against a shared [`AppState`] and reports its intent; the caller
+/// applies it after rendering (plan §1.3 defer pattern).
+fn file_row(ui: &mut Ui, state: &AppState, change: &crate::model::Change) -> FileAction {
     let path_str = change.path.display().to_string();
     let selected = state.ui.log_selected_file.as_ref() == Some(&change.path);
     let (rect, response) = allocate_row(ui);
@@ -819,29 +876,23 @@ fn file_row(
         row_ink(selected),
     );
 
-    let closure_label = path_str.clone();
-    response
-        .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
+    response.widget_info(|| {
+        WidgetInfo::labeled(WidgetType::Button, true, change.path.display().to_string())
+    });
     widgets::focus_ring(ui, &response);
     if response.clicked() {
-        state.ui.log_selected_file = Some(change.path.clone());
-        state.ui.diff = Some(DiffTarget {
-            root: root_id.clone(),
-            left: parent,
-            right: Some(cid.to_owned()),
-            path: Some(change.path.clone()),
-        });
+        return FileAction::OpenDiff(change.path.clone());
     }
     // Path-scoped file history (issue #19): right-click a changed file to
     // narrow the whole Git Log workspace to the commits touching it.
+    let mut action = FileAction::None;
     response.context_menu(|ui| {
         if ui.button("Show history for file...").clicked() {
-            state.ui.log_path_scope = Some(change.path.clone());
-            state.ui.selected_commit = None;
-            state.ui.log_selected_file = None;
+            action = FileAction::ScopeHistory(change.path.clone());
             ui.close();
         }
     });
+    action
 }
 
 // --- Pane 4: commit details -----------------------------------------------------------
@@ -851,10 +902,12 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     // Compact vertical rhythm so the full message fits the 200px pane.
     ui.style_mut().spacing.item_spacing.y = 3.0;
 
+    // Split-borrow the selection (plan §1.3): the commit is looked up over
+    // the cache slice and the file summary iterates the cached list in place.
     let Some((root_id, cid)) = state
         .selected_root
-        .clone()
-        .zip(state.ui.selected_commit.clone())
+        .as_ref()
+        .zip(state.ui.selected_commit.as_ref())
     else {
         ui.label(
             RichText::new("Select a commit…")
@@ -864,10 +917,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    let Some(commit) = commits_for(state, &root_id)
-        .into_iter()
-        .find(|c| c.id == cid)
-    else {
+    let Some(commit) = find_commit(state, root_id, cid) else {
         return;
     };
 
@@ -903,11 +953,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     });
 
     // File summary badges ("2 modified · 1 added").
-    let files = state
-        .caches
-        .files_for(&root_id, &commit.id)
-        .map(|f| f.to_vec())
-        .unwrap_or_default();
+    let files = state.caches.files_for(root_id, &commit.id).unwrap_or(&[]);
     let modified = files
         .iter()
         .filter(|f| f.status == ChangeStatus::Modified)

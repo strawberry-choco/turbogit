@@ -372,7 +372,7 @@ fn root_stripes_appear_and_roots_filter_narrows_displayed_commits() {
             .multi
             .roots
             .iter()
-            .any(|r| r.id == RootId(seed.beta.clone())),
+            .any(|r| r.id == RootId(seed.beta.clone().into())),
         "both roots must be registered"
     );
 
@@ -397,7 +397,7 @@ fn root_stripes_appear_and_roots_filter_narrows_displayed_commits() {
     assert_painted(&harness, "alpha: second commit");
     assert_eq!(
         harness.state().ui.log_root_filter,
-        Some(RootId(seed.alpha.clone())),
+        Some(RootId(seed.alpha.clone().into())),
         "roots filter state must track the selection"
     );
 

@@ -104,7 +104,7 @@ fn prime_engine_backed_entries(state: &mut AppState, root_dir: &Path) {
     let exec = CliExecutor {
         settings: VcsSettings::default(),
     };
-    let root = RootId(root_dir.to_path_buf());
+    let root = RootId(root_dir.to_path_buf().into());
     state.caches.ensure_refs(&exec, &root);
     state
         .caches
@@ -165,7 +165,7 @@ fn project_switch_leaves_no_cache_entries_stale() {
 
     let mut state = AppState::for_roots(&first.dir, std::slice::from_ref(&first.alpha));
     state.recents_config_dir = Some(cfg.path().to_path_buf());
-    prime_fake_entries(&mut state, &[RootId(first.alpha.clone())]);
+    prime_fake_entries(&mut state, &[RootId(first.alpha.clone().into())]);
     prime_engine_backed_entries(&mut state, &first.alpha);
     assert!(
         !state.caches.is_empty(),
@@ -188,8 +188,8 @@ fn project_switch_leaves_no_cache_entries_stale() {
 #[test]
 fn scoped_op_completion_keeps_unaffected_roots_cached() {
     let p = two_root_project();
-    let alpha_id = RootId(p.alpha.clone());
-    let beta_id = RootId(p.beta.clone());
+    let alpha_id = RootId(p.alpha.clone().into());
+    let beta_id = RootId(p.beta.clone().into());
 
     let mut state = AppState::for_roots(&p.dir, &[p.alpha.clone(), p.beta.clone()]);
     prime_fake_entries(&mut state, &[alpha_id.clone(), beta_id.clone()]);
@@ -233,8 +233,8 @@ fn scoped_op_completion_keeps_unaffected_roots_cached() {
 #[test]
 fn op_outside_selected_root_does_not_refetch_selected_log() {
     let p = two_root_project();
-    let alpha_id = RootId(p.alpha.clone());
-    let beta_id = RootId(p.beta.clone());
+    let alpha_id = RootId(p.alpha.clone().into());
+    let beta_id = RootId(p.beta.clone().into());
 
     let mut state = AppState::for_roots(&p.dir, &[p.alpha.clone(), p.beta.clone()]);
     prime_fake_entries(&mut state, &[alpha_id.clone(), beta_id.clone()]);
@@ -269,7 +269,7 @@ fn op_outside_selected_root_does_not_refetch_selected_log() {
 #[test]
 fn refresh_all_clears_every_cache_and_refetches_selected_log() {
     let p = two_root_project();
-    let alpha_id = RootId(p.alpha.clone());
+    let alpha_id = RootId(p.alpha.clone().into());
 
     let mut state = AppState::for_roots(&p.dir, std::slice::from_ref(&p.alpha));
     prime_fake_entries(&mut state, std::slice::from_ref(&alpha_id));

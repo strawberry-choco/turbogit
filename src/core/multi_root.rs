@@ -49,18 +49,20 @@ fn scan_dir(_engine: &dyn GitExecutor, dir: &Path, depth: usize, found: &mut Vec
         if !is_dir {
             continue;
         }
-        // A directory containing `.git` is a repo root.
-        if path.join(".git").exists() {
-            found.push(path.clone());
-        }
+        // A directory containing `.git` is a repo root. Recurse before pushing
+        // so `path` can move; order is irrelevant because the caller sorts and
+        // dedups the result.
         scan_dir(_engine, &path, depth + 1, found);
+        if path.join(".git").exists() {
+            found.push(path);
+        }
     }
 }
 
 /// Build a full [`Root`] snapshot for `path` through the engine seam.
 pub fn root_snapshot(engine: &dyn GitExecutor, path: &Path) -> TgResult<Root> {
     Ok(Root {
-        id: RootId(path.to_path_buf()),
+        id: RootId(path.into()),
         path: path.to_path_buf(),
         remotes: engine.remotes(path)?,
         branches: engine.branches(path)?,
@@ -94,15 +96,15 @@ pub fn register(mgr: &mut MultiRootManager, root: Root) {
 }
 
 /// Build & register a root for each `paths` entry. Returns one result per path.
-pub fn register_all(
+pub fn register_all<P: AsRef<Path>>(
     engine: &dyn GitExecutor,
     mgr: &mut MultiRootManager,
-    paths: &[PathBuf],
+    paths: &[P],
 ) -> Vec<TgResult<()>> {
     paths
         .iter()
         .map(|p| {
-            let root = build_root(engine, p)?;
+            let root = build_root(engine, p.as_ref())?;
             register(mgr, root);
             Ok(())
         })
@@ -156,7 +158,7 @@ mod tests {
         let repo = tmp.path().join("r");
         repo_at(&repo);
         let mut engine = FakeExecutor::new();
-        let root_id = RootId(repo.clone());
+        let root_id = RootId(repo.clone().into());
         engine.branches.insert(
             repo.clone(),
             vec![Branch {

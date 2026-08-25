@@ -117,8 +117,8 @@ fn outgoing_per_root_returns_one_list_per_root() {
     let results = outgoing_per_root(&engine, &mgr);
 
     assert_eq!(results.len(), 2, "one entry per registered root");
-    assert_eq!(results[0].0, RootId(repo1.clone()));
-    assert_eq!(results[1].0, RootId(repo2.clone()));
+    assert_eq!(results[0].0, RootId(repo1.clone().into()));
+    assert_eq!(results[1].0, RootId(repo2.clone().into()));
 
     let out1 = results[0].1.as_ref().expect("root 1 result is Ok");
     let out2 = results[1].1.as_ref().expect("root 2 result is Ok");
@@ -163,14 +163,14 @@ fn outgoing_per_root_yields_empty_for_root_without_upstream() {
     }
 
     let good = by_id
-        .get(&RootId(good_repo.clone()))
+        .get(&RootId(good_repo.clone().into()))
         .expect("good root present")
         .as_ref()
         .expect("good root result is Ok");
     assert_eq!(good, &vec![shas[2].clone(), shas[1].clone()]);
 
     let solo = by_id
-        .get(&RootId(solo_repo.clone()))
+        .get(&RootId(solo_repo.clone().into()))
         .expect("solo root present")
         .as_ref()
         .expect("missing upstream must be graceful Ok, not Err");

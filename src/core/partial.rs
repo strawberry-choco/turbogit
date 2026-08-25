@@ -5,6 +5,7 @@
 //! unselected hunks are dropped. Line counts inside kept headers are left
 //! untouched; the engine applies patches with `git apply --recount`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::engine::{ApplyDirection, GitExecutor};
@@ -49,10 +50,10 @@ pub fn compose_patch(diff: &str, selection: &Selection) -> String {
 
     let mut out = String::new();
     for (idx, (header, body)) in hunks.iter().enumerate() {
-        let kept = match selection.hunks.get(&idx) {
-            Some(HunkSelection::Whole) => Some(body.clone()),
+        let kept: Option<Cow<'_, str>> = match selection.hunks.get(&idx) {
+            Some(HunkSelection::Whole) => Some(Cow::Borrowed(body.as_str())),
             Some(HunkSelection::Lines(lines)) if !lines.is_empty() => {
-                Some(filter_body(body, lines))
+                Some(Cow::Owned(filter_body(body, lines)))
             }
             _ => None,
         };

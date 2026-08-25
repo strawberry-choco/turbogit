@@ -269,8 +269,11 @@ fn open_card_opens_a_real_repository_into_the_shell() {
         "opening a real repository must enter the shell"
     );
     assert_eq!(s.multi.roots.len(), 1, "the opened repo is registered");
-    assert_eq!(s.multi.roots[0].id.0, repo);
-    assert_eq!(s.selected_root.as_ref().map(|r| r.0.clone()), Some(repo));
+    assert_eq!(s.multi.roots[0].id.as_path(), repo.as_path());
+    assert_eq!(
+        s.selected_root.as_ref().map(|r| r.0.to_path_buf()),
+        Some(repo)
+    );
     // The welcome page is gone; the shell status bar reports the root.
     assert_not_painted(&fx.harness, "A fast, keyboard-friendly Git client");
     assert_painted(&fx.harness, "modified:");
@@ -296,7 +299,7 @@ fn initialize_card_creates_a_repo_and_enters_it() {
     let s = fx.harness.state();
     assert!(!s.show_welcome(), "initializing must enter the shell");
     assert_eq!(s.multi.roots.len(), 1);
-    assert_eq!(s.multi.roots[0].id.0, target);
+    assert_eq!(s.multi.roots[0].id.as_path(), target.as_path());
 }
 
 // --- Cycle 3: seeded recents render and reopen --------------------------------
@@ -384,7 +387,10 @@ fn clicking_a_recent_reopens_the_project() {
 
     let s = harness.state();
     assert!(!s.show_welcome(), "clicking a recent must enter the shell");
-    assert_eq!(s.selected_root.as_ref().map(|r| r.0.clone()), Some(repo));
+    assert_eq!(
+        s.selected_root.as_ref().map(|r| r.0.to_path_buf()),
+        Some(repo)
+    );
     assert!(!s.ui.welcome_visible);
 }
 
@@ -590,9 +596,9 @@ fn clone_card_clones_full_history_from_a_local_path_into_the_picked_destination(
     let s = fx.harness.state();
     assert!(!s.show_welcome(), "a successful clone enters the shell");
     assert_eq!(s.multi.roots.len(), 1);
-    assert_eq!(s.multi.roots[0].id.0, dest);
+    assert_eq!(s.multi.roots[0].id.as_path(), dest.as_path());
     assert_eq!(
-        s.selected_root.as_ref().map(|r| r.0.clone()),
+        s.selected_root.as_ref().map(|r| r.0.to_path_buf()),
         Some(dest.clone())
     );
     assert!(
@@ -643,7 +649,7 @@ fn clone_card_shallow_checkbox_limits_cloned_history_to_depth_one() {
 
     let s = fx.harness.state();
     assert!(!s.show_welcome());
-    assert_eq!(s.multi.roots[0].id.0, dest);
+    assert_eq!(s.multi.roots[0].id.as_path(), dest.as_path());
     assert_offered_in_recents(&fx, &dest);
 }
 

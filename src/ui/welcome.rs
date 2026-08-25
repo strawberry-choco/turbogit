@@ -230,8 +230,7 @@ fn action_card(
     );
 
     // Accessibility / headless-test queryability.
-    let label = title.to_owned();
-    response.widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, label.clone()));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, title));
     widgets::focus_ring(ui, &response);
     if !response.clicked() {
         return;
@@ -428,8 +427,7 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &crate::recents::Recen
 
     // Accessibility / headless-test queryability: rows are labelled by the
     // project name.
-    let label = project.name.clone();
-    response.widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, label.clone()));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, project.name.as_str()));
     widgets::focus_ring(ui, &response);
     if response.clicked() {
         state.open_project(&project.path);
