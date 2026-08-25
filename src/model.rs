@@ -58,6 +58,25 @@ pub struct Root {
     pub status: RootStatus,
 }
 
+impl Root {
+    /// Resolve a changed file by repo-relative or absolute path. Single owner
+    /// of the canonical path-key rule: a query matches either the change's
+    /// repo-relative form or its root-joined absolute form. Comparison stays
+    /// exact (`Path` equality) — Windows paths remain case-sensitive.
+    pub fn resolve_change(&self, path: &Path) -> Option<&Change> {
+        self.status
+            .changes
+            .iter()
+            .find(|c| c.path == path || self.id.0.join(&c.path) == *path)
+    }
+
+    /// The absolute bucket-key form of `change`'s path — the root-joined form
+    /// selection/exclusion sets are keyed by (see [`Root::resolve_change`]).
+    pub fn canonical_key(&self, change: &Change) -> PathBuf {
+        self.id.0.join(&change.path)
+    }
+}
+
 /// Reference to a branch by name (local or fully-qualified remote).
 pub type BranchRef = String;
 

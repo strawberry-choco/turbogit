@@ -15,7 +15,7 @@
 //! User-created changelists remain backlog.
 
 use crate::core::changes;
-use crate::model::{Change, ChangeStatus, RootId};
+use crate::model::{Change, ChangeStatus, Root};
 use crate::root_caches::Affected;
 use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use crate::theme::Palette;
@@ -33,7 +33,7 @@ pub const MERGE_CONFLICTS: &str = "Merge conflicts";
 /// their clicks are deferred (plan §1.4), so no change is cloned per frame.
 struct Bucket<'a> {
     name: &'static str,
-    root_id: &'a RootId,
+    root: &'a Root,
     changes: Vec<&'a Change>,
 }
 
@@ -60,7 +60,7 @@ fn canonical_buckets(state: &AppState) -> Vec<Bucket<'_>> {
             if state
                 .ui
                 .granularly_completed
-                .contains(&root.id.0.join(&c.path))
+                .contains(&root.canonical_key(c))
             {
                 continue;
             }
@@ -80,7 +80,7 @@ fn canonical_buckets(state: &AppState) -> Vec<Bucket<'_>> {
             if !changes.is_empty() {
                 out.push(Bucket {
                     name,
-                    root_id: &root.id,
+                    root,
                     changes,
                 });
             }
@@ -112,7 +112,7 @@ fn selected_changes(state: &AppState) -> Vec<Change> {
         && let Some(root) = state.multi.by_id(id)
     {
         for c in &root.status.changes {
-            if state.ui.selected.contains(&root.id.0.join(&c.path)) {
+            if state.ui.selected.contains(&root.canonical_key(c)) {
                 out.push(c.clone());
             }
         }
@@ -128,7 +128,7 @@ fn has_selected_changes(state: &AppState) -> bool {
             root.status
                 .changes
                 .iter()
-                .any(|c| state.ui.selected.contains(&root.id.0.join(&c.path)))
+                .any(|c| state.ui.selected.contains(&root.canonical_key(c)))
         })
     })
 }
@@ -248,13 +248,13 @@ fn unversioned_buckets(state: &AppState) -> Vec<Bucket<'_>> {
                 !state
                     .ui
                     .granularly_completed
-                    .contains(&root.id.0.join(&c.path))
+                    .contains(&root.canonical_key(c))
             })
             .collect();
         if !untracked.is_empty() {
             out.push(Bucket {
                 name: UNVERSIONED_FILES,
-                root_id: &root.id,
+                root,
                 changes: untracked,
             });
         }
@@ -314,7 +314,7 @@ fn bucket_groups(
                             root_subgroup(ui, state, bucket, actions);
                         } else {
                             for c in &bucket.changes {
-                                change_row(ui, state, bucket.root_id, c, actions);
+                                change_row(ui, state, bucket.root, c, actions);
                             }
                         }
                     });
@@ -324,15 +324,15 @@ fn bucket_groups(
 
 /// Per-root sub-group with count badge + select-all (multi-root projects).
 fn root_subgroup(ui: &mut Ui, state: &AppState, bucket: &Bucket, actions: &mut Vec<RowAction>) {
-    let root_name = bucket.root_id.name();
+    let root_name = bucket.root.id.name();
     let all_included = bucket
         .changes
         .iter()
-        .all(|c| state.ui.selected.contains(&bucket.root_id.0.join(&c.path)));
+        .all(|c| state.ui.selected.contains(&bucket.root.canonical_key(c)));
     let any_included = bucket
         .changes
         .iter()
-        .any(|c| state.ui.selected.contains(&bucket.root_id.0.join(&c.path)));
+        .any(|c| state.ui.selected.contains(&bucket.root.canonical_key(c)));
 
     ui.horizontal(|ui| {
         let mut select_all = all_included;
@@ -342,7 +342,7 @@ fn root_subgroup(ui: &mut Ui, state: &AppState, bucket: &Bucket, actions: &mut V
         {
             for c in &bucket.changes {
                 actions.push(RowAction::Toggle {
-                    key: bucket.root_id.0.join(&c.path),
+                    key: bucket.root.canonical_key(c),
                     include: select_all,
                 });
             }
@@ -357,10 +357,10 @@ fn root_subgroup(ui: &mut Ui, state: &AppState, bucket: &Bucket, actions: &mut V
         ui.colored_label(tint, badge);
     });
     ui.indent(
-        ui.id().with(("subgroup", &bucket.root_id, bucket.name)),
+        ui.id().with(("subgroup", &bucket.root.id, bucket.name)),
         |ui| {
             for c in &bucket.changes {
-                change_row(ui, state, bucket.root_id, c, actions);
+                change_row(ui, state, bucket.root, c, actions);
             }
         },
     );
@@ -413,11 +413,11 @@ fn partially_staged_dot(ui: &mut Ui) {
 fn change_row(
     ui: &mut Ui,
     state: &AppState,
-    root_id: &RootId,
+    root: &Root,
     c: &Change,
     actions: &mut Vec<RowAction>,
 ) {
-    let key = root_id.0.join(&c.path);
+    let key = root.canonical_key(c);
     let path_text = c.path.display().to_string();
     if c.status == ChangeStatus::Conflicted {
         let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
