@@ -97,22 +97,20 @@ pub fn push_all_forced(
                     // Resolve the upstream remote from the branch's tracking ref
                     // when present; otherwise fall back to the first remote, or
                     // "origin" if the root has no remotes configured.
-                    let tracking = root
+                    let remote = match root
                         .branches
                         .iter()
                         .find(|b| &b.name == branch)
-                        .and_then(|b| b.tracking.clone());
-                    let remote = match tracking {
-                        Some(t) if t.contains('/') => {
-                            t.split('/').next().unwrap_or("origin").to_string()
-                        }
+                        .and_then(|b| b.tracking.as_deref())
+                    {
+                        Some(t) if t.contains('/') => t.split('/').next().unwrap_or("origin"),
                         _ => root
                             .remotes
                             .first()
-                            .map(|r| r.name.clone())
-                            .unwrap_or_else(|| "origin".to_string()),
+                            .map(|r| r.name.as_str())
+                            .unwrap_or("origin"),
                     };
-                    push(vcs, &root.path, &remote, branch, force, settings)
+                    push(vcs, &root.path, remote, branch, force, settings)
                 }
                 None => Ok(()),
             };
@@ -137,9 +135,9 @@ pub fn outgoing_per_root(
                         .branches
                         .iter()
                         .find(|b| &b.name == branch)
-                        .and_then(|b| b.tracking.clone())
+                        .and_then(|b| b.tracking.as_deref())
                     {
-                        Some(upstream) => vcs.outgoing_commits(&root.path, branch, &upstream),
+                        Some(upstream) => vcs.outgoing_commits(&root.path, branch, upstream),
                         // No tracking ref = nothing known to be ahead.
                         None => Ok(Vec::new()),
                     }

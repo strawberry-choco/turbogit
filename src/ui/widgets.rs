@@ -387,14 +387,14 @@ fn button_response_sized(
     }
 
     // Accessibility: labeled buttons are queryable/clickable via kittest and
-    // screen readers alike.
-    let info_label = label
-        .map(str::to_owned)
-        .or_else(|| icon.map(|i| i.name().to_owned()))
-        .unwrap_or_default();
-    let closure_label = info_label.clone();
-    response.widget_info(move || {
-        WidgetInfo::labeled(WidgetType::Button, enabled, closure_label.clone())
+    // screen readers alike. The label is materialized only when the info is
+    // actually requested (interaction events) — never eagerly per frame.
+    response.widget_info(|| {
+        WidgetInfo::labeled(
+            WidgetType::Button,
+            enabled,
+            label.or_else(|| icon.map(|i| i.name())).unwrap_or_default(),
+        )
     });
     response
 }
@@ -445,7 +445,7 @@ fn chip(ui: &mut Ui, text: &str, colors: ChipColors) -> Response {
         colors.fg,
     );
 
-    response.widget_info(move || WidgetInfo::labeled(WidgetType::Label, true, text.to_owned()));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, text));
     response
 }
 
@@ -538,10 +538,7 @@ fn input_frame(ui: &mut Ui, placeholder: &str, buf: &mut String, search_icon: bo
                     .desired_width(edit_w)
                     .frame(egui::Frame::new()),
             );
-            let closure_label = placeholder.to_owned();
-            resp.widget_info(move || {
-                WidgetInfo::labeled(WidgetType::TextEdit, true, closure_label.clone())
-            });
+            resp.widget_info(|| WidgetInfo::labeled(WidgetType::TextEdit, true, placeholder));
             resp
         })
         .inner

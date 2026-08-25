@@ -8,10 +8,16 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Identity of a git repository root: its absolute path.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct RootId(pub PathBuf);
+///
+/// The path is shared through an [`Arc`] so the dozens of identity clones per
+/// operation burst (cache keys, event payloads, `'static` worker captures)
+/// are refcount bumps instead of heap allocations. `Arc<Path>` hashes and
+/// compares exactly like the underlying [`Path`], so map keys are unaffected.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct RootId(pub Arc<Path>);
 
 impl RootId {
     pub fn as_path(&self) -> &Path {
@@ -22,6 +28,21 @@ impl RootId {
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.0.to_string_lossy().into_owned())
+    }
+}
+
+// Serde is manual because `Path` itself is not `Deserialize`: read a plain
+// `PathBuf` and share it through the arc. Serialization goes through `&Path`,
+// which emits exactly what the previous `PathBuf` field emitted.
+impl Serialize for RootId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.as_path().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RootId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(RootId(Arc::from(PathBuf::deserialize(deserializer)?)))
     }
 }
 

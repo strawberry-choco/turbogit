@@ -146,7 +146,9 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
             ui.label(&msg);
             ui.horizontal(|ui| {
                 if ui.button("OK").clicked() {
-                    state.run_confirmed(confirm.clone());
+                    // `Window::show` takes `FnOnce`, so `confirm` moves here —
+                    // the outer clone above is the only copy.
+                    state.run_confirmed(confirm);
                     state.ui.confirm = None;
                 }
                 if ui.button("Cancel").clicked() {

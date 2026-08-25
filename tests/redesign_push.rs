@@ -293,7 +293,7 @@ fn clicking_root_node_filters_preview_but_push_still_batches_all_roots() {
     assert_not_painted(&h, "beta-c3.txt");
     assert_eq!(
         h.state().ui.dlg.push_preview_root,
-        Some(RootId(alpha.path.clone())),
+        Some(RootId(alpha.path.clone().into())),
         "root click must set the preview filter"
     );
 

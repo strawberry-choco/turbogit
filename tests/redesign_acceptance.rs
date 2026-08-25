@@ -171,7 +171,7 @@ fn acceptance_matrix_screenshots() {
     h.state_mut().ui.tab = turbogit::state::Tab::Log;
     settle(&mut h);
     assert!(
-        h.state().caches.log(&RootId(repo.clone())).is_some(),
+        h.state().caches.log(&RootId(repo.clone().into())).is_some(),
         "log should be loaded"
     );
     snap(&mut h, "03-git-log");
