@@ -21,23 +21,36 @@ use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use egui::{Color32, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType};
+use std::path::PathBuf;
 
 /// Canonical bucket names (user-created changelists are backlog).
 pub const DEFAULT_CHANGELIST: &str = "Default Changelist";
 pub const UNVERSIONED_FILES: &str = "Unversioned Files";
 pub const MERGE_CONFLICTS: &str = "Merge conflicts";
 
-/// One canonical bucket: its name plus that root's changes.
-struct Bucket {
+/// One canonical bucket: its name plus that root's changes. Borrows the
+/// root's status snapshot — rows render against a shared [`AppState`] and
+/// their clicks are deferred (plan §1.4), so no change is cloned per frame.
+struct Bucket<'a> {
     name: &'static str,
-    root_id: RootId,
-    changes: Vec<Change>,
+    root_id: &'a RootId,
+    changes: Vec<&'a Change>,
+}
+
+/// Deferred row interaction collected while rendering borrowed buckets;
+/// applied after the pane finishes (same pattern as the widget button seam).
+enum RowAction {
+    /// Include/exclude one change, keyed by absolute path so multi-root
+    /// projects never conflate same-named files across roots.
+    Toggle { key: PathBuf, include: bool },
+    /// Select a file for the diff preview pane.
+    Preview(PathBuf),
 }
 
 /// Split one root's status into the three canonical buckets (empty buckets
 /// are dropped so the tree only shows groups that have content). Paths that
 /// granular staging fully staged (spec R2 story 9) are not listed anymore.
-fn canonical_buckets(state: &AppState) -> Vec<Bucket> {
+fn canonical_buckets(state: &AppState) -> Vec<Bucket<'_>> {
     let mut out = Vec::new();
     for root in &state.multi.roots {
         let mut default = Vec::new();
@@ -52,11 +65,11 @@ fn canonical_buckets(state: &AppState) -> Vec<Bucket> {
                 continue;
             }
             match c.status {
-                ChangeStatus::Conflicted => conflicts.push(c.clone()),
-                ChangeStatus::Unversioned => unversioned.push(c.clone()),
+                ChangeStatus::Conflicted => conflicts.push(c),
+                ChangeStatus::Unversioned => unversioned.push(c),
                 // Ignored files never belong in the commit window.
                 ChangeStatus::Ignored => {}
-                _ => default.push(c.clone()),
+                _ => default.push(c),
             }
         }
         for (name, changes) in [
@@ -67,13 +80,29 @@ fn canonical_buckets(state: &AppState) -> Vec<Bucket> {
             if !changes.is_empty() {
                 out.push(Bucket {
                     name,
-                    root_id: root.id.clone(),
+                    root_id: &root.id,
                     changes,
                 });
             }
         }
     }
     out
+}
+
+/// Apply the row interactions collected during one pane's render pass.
+fn apply_actions(state: &mut AppState, actions: Vec<RowAction>) {
+    for action in actions {
+        match action {
+            RowAction::Toggle { key, include } => {
+                if include {
+                    state.ui.selected.insert(key);
+                } else {
+                    state.ui.selected.remove(&key);
+                }
+            }
+            RowAction::Preview(path) => state.ui.preview_change = Some(path),
+        }
+    }
 }
 
 /// Collect the `Change` objects of the selected root whose path is included.
@@ -91,15 +120,17 @@ fn selected_changes(state: &AppState) -> Vec<Change> {
     out
 }
 
-/// Toggle inclusion of one change (keyed by absolute path so multi-root
-/// projects never conflate same-named files across roots).
-fn toggle_included(state: &mut AppState, root: &RootId, c: &Change, include: bool) {
-    let key = root.0.join(&c.path);
-    if include {
-        state.ui.selected.insert(key);
-    } else {
-        state.ui.selected.remove(&key);
-    }
+/// Whether the selected root has at least one included change — the Commit
+/// buttons' gate, computed without building an owned change list (plan §1.4).
+fn has_selected_changes(state: &AppState) -> bool {
+    state.selected_root.as_ref().is_some_and(|id| {
+        state.multi.by_id(id).is_some_and(|root| {
+            root.status
+                .changes
+                .iter()
+                .any(|c| state.ui.selected.contains(&root.id.0.join(&c.path)))
+        })
+    })
 }
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
@@ -196,16 +227,19 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    bucket_groups(ui, state, &canonical_buckets(state), "No local changes.");
+    let buckets = canonical_buckets(state);
+    let mut actions = Vec::new();
+    bucket_groups(ui, state, &buckets, "No local changes.", &mut actions);
+    apply_actions(state, actions);
 }
 
 /// Untracked files of every root as one canonical bucket per root (issue #18:
 /// the Unversioned Files sub-tab's active data). Granularly completed paths
-/// are skipped (spec R2 story 9).
-fn unversioned_buckets(state: &AppState) -> Vec<Bucket> {
+/// are skipped (spec R2 story 9). Borrows the status snapshots (plan §1.4).
+fn unversioned_buckets(state: &AppState) -> Vec<Bucket<'_>> {
     let mut out = Vec::new();
     for root in &state.multi.roots {
-        let untracked: Vec<Change> = root
+        let untracked: Vec<&Change> = root
             .status
             .changes
             .iter()
@@ -216,12 +250,11 @@ fn unversioned_buckets(state: &AppState) -> Vec<Bucket> {
                     .granularly_completed
                     .contains(&root.id.0.join(&c.path))
             })
-            .cloned()
             .collect();
         if !untracked.is_empty() {
             out.push(Bucket {
                 name: UNVERSIONED_FILES,
-                root_id: root.id.clone(),
+                root_id: &root.id,
                 changes: untracked,
             });
         }
@@ -242,17 +275,23 @@ fn unversioned_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    bucket_groups(
-        ui,
-        state,
-        &unversioned_buckets(state),
-        "No unversioned files.",
-    );
+    let buckets = unversioned_buckets(state);
+    let mut actions = Vec::new();
+    bucket_groups(ui, state, &buckets, "No unversioned files.", &mut actions);
+    apply_actions(state, actions);
 }
 
 /// Collapsible count-badged groups; per-root sub-groups with select-all for
-/// multi-root projects, flat file rows otherwise.
-fn bucket_groups(ui: &mut Ui, state: &mut AppState, buckets: &[Bucket], empty_text: &str) {
+/// multi-root projects, flat file rows otherwise. Renders against a shared
+/// [`AppState`] (buckets borrow the status snapshots) and collects row
+/// interactions into `actions` for the caller to apply (plan §1.4).
+fn bucket_groups(
+    ui: &mut Ui,
+    state: &AppState,
+    buckets: &[Bucket],
+    empty_text: &str,
+    actions: &mut Vec<RowAction>,
+) {
     let multi_root = state.multi.roots.len() > 1;
 
     // Named id salt: `ui.columns` gives both panes the same stable child id,
@@ -272,10 +311,10 @@ fn bucket_groups(ui: &mut Ui, state: &mut AppState, buckets: &[Bucket], empty_te
                     .default_open(true)
                     .show(ui, |ui| {
                         if multi_root {
-                            root_subgroup(ui, state, bucket);
+                            root_subgroup(ui, state, bucket, actions);
                         } else {
                             for c in &bucket.changes {
-                                change_row(ui, state, &bucket.root_id, c);
+                                change_row(ui, state, bucket.root_id, c, actions);
                             }
                         }
                     });
@@ -284,7 +323,7 @@ fn bucket_groups(ui: &mut Ui, state: &mut AppState, buckets: &[Bucket], empty_te
 }
 
 /// Per-root sub-group with count badge + select-all (multi-root projects).
-fn root_subgroup(ui: &mut Ui, state: &mut AppState, bucket: &Bucket) {
+fn root_subgroup(ui: &mut Ui, state: &AppState, bucket: &Bucket, actions: &mut Vec<RowAction>) {
     let root_name = bucket.root_id.name();
     let all_included = bucket
         .changes
@@ -302,7 +341,10 @@ fn root_subgroup(ui: &mut Ui, state: &mut AppState, bucket: &Bucket) {
             .changed()
         {
             for c in &bucket.changes {
-                toggle_included(state, &bucket.root_id, c, select_all);
+                actions.push(RowAction::Toggle {
+                    key: bucket.root_id.0.join(&c.path),
+                    include: select_all,
+                });
             }
         }
         // Count badge (shaded when partially selected).
@@ -318,7 +360,7 @@ fn root_subgroup(ui: &mut Ui, state: &mut AppState, bucket: &Bucket) {
         ui.id().with(("subgroup", &bucket.root_id, bucket.name)),
         |ui| {
             for c in &bucket.changes {
-                change_row(ui, state, &bucket.root_id, c);
+                change_row(ui, state, bucket.root_id, c, actions);
             }
         },
     );
@@ -356,8 +398,7 @@ fn partially_staged_dot(ui: &mut Ui) {
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(CELL), Sense::hover());
     ui.painter()
         .circle_filled(rect.center(), DOT_R, Palette::STATE_WARNING);
-    let label = "Partially staged".to_owned();
-    resp.widget_info(move || WidgetInfo::labeled(WidgetType::Label, true, label.clone()));
+    resp.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, "Partially staged"));
     resp.on_hover_text("Partially staged");
 }
 
@@ -367,7 +408,15 @@ fn partially_staged_dot(ui: &mut Ui) {
 /// path cannot be staged or committed until resolved, so there is nothing
 /// to include; clicking it opens the diff preview. Partially staged files
 /// (staged AND unstaged, spec R2 story 12) carry the coarse warning dot.
-fn change_row(ui: &mut Ui, state: &mut AppState, root_id: &RootId, c: &Change) {
+/// Interactions are pushed onto `actions` and applied by the caller after
+/// rendering (plan §1.4 defer pattern).
+fn change_row(
+    ui: &mut Ui,
+    state: &AppState,
+    root_id: &RootId,
+    c: &Change,
+    actions: &mut Vec<RowAction>,
+) {
     let key = root_id.0.join(&c.path);
     let path_text = c.path.display().to_string();
     if c.status == ChangeStatus::Conflicted {
@@ -376,7 +425,7 @@ fn change_row(ui: &mut Ui, state: &mut AppState, root_id: &RootId, c: &Change) {
         let label = format!("{} {}", badge_letter(c.status), path_text);
         ui.horizontal(|ui| {
             if ui.selectable_label(previewing, label).clicked() {
-                state.ui.preview_change = Some(c.path.clone());
+                actions.push(RowAction::Preview(c.path.clone()));
             }
             icons::icon(ui, glyph, 14.0, tint);
         });
@@ -386,7 +435,10 @@ fn change_row(ui: &mut Ui, state: &mut AppState, root_id: &RootId, c: &Change) {
         let mut included = state.ui.selected.contains(&key);
         let label = format!("{} {}", badge_letter(c.status), path_text);
         if ui.checkbox(&mut included, label).changed() {
-            toggle_included(state, root_id, c, included);
+            actions.push(RowAction::Toggle {
+                key,
+                include: included,
+            });
         }
         let (glyph, tint) = status_glyph(c.status);
         icons::icon(ui, glyph, 14.0, tint);
@@ -395,7 +447,7 @@ fn change_row(ui: &mut Ui, state: &mut AppState, root_id: &RootId, c: &Change) {
         }
         let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
         if ui.selectable_label(previewing, path_text).clicked() {
-            state.ui.preview_change = Some(c.path.clone());
+            actions.push(RowAction::Preview(c.path.clone()));
         }
     });
 }
@@ -541,8 +593,7 @@ fn message_editor(ui: &mut Ui, state: &mut AppState) {
     // Action row beneath the preview: primary Commit first.
     ui.separator();
     ui.horizontal(|ui| {
-        let can_commit =
-            !state.ui.commit_message.trim().is_empty() && !selected_changes(state).is_empty();
+        let can_commit = !state.ui.commit_message.trim().is_empty() && has_selected_changes(state);
         if ui
             .add_enabled(can_commit, egui::Button::new("Commit"))
             .on_hover_text("Commit included changes")
@@ -584,7 +635,12 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         selected_changes(state).into_iter().partition(|c| !c.staged);
     let msg = state.ui.commit_message.clone();
     let amend = state.ui.amend;
-    let recent = msg.clone();
+    // Record the recent message before `msg` moves into the 'static closure
+    // (plan Phase 3): no extra String clone per commit.
+    if !state.ui.recent_messages.contains(&msg) {
+        state.ui.recent_messages.insert(0, msg.clone());
+        state.ui.recent_messages.truncate(12);
+    }
     state.run_git(
         "Commit".into(),
         Affected::from_optional_root(root.as_deref()),
@@ -597,11 +653,7 @@ fn do_commit(state: &mut AppState, and_push: bool) {
             }
         },
     );
-    // Record recent message + reset fields.
-    if !state.ui.recent_messages.contains(&recent) {
-        state.ui.recent_messages.insert(0, recent);
-        state.ui.recent_messages.truncate(12);
-    }
+    // Reset fields (the recent message was recorded above).
     state.ui.commit_message.clear();
     state.ui.selected.clear();
     state.persist_ui();

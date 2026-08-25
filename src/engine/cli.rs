@@ -142,7 +142,7 @@ impl GitExecutor for CliExecutor {
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         let (out, _, _) = self.run(root, &args)?;
 
-        let root_id = RootId(root.to_path_buf());
+        let root_id = RootId(root.into());
         let mut commits = Vec::new();
         for raw in out.split('\u{1e}') {
             // git emits a record separator (`\x1e`) followed by a newline
@@ -407,7 +407,7 @@ impl GitExecutor for CliExecutor {
                 {
                     result.push(Stash {
                         message,
-                        root: RootId(root.to_path_buf()),
+                        root: RootId(root.into()),
                         index,
                     });
                 }
@@ -435,7 +435,7 @@ impl GitExecutor for CliExecutor {
                     out.push(Worktree {
                         path: p,
                         branch: b,
-                        root: RootId(root.to_path_buf()),
+                        root: RootId(root.into()),
                     });
                 }
             };

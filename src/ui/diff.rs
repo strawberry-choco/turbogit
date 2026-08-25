@@ -34,7 +34,9 @@ use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Response, ScrollArea,
     Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
+use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::rc::Rc;
 use std::sync::Arc;
 
 // --- metrics -----------------------------------------------------------------
@@ -182,6 +184,30 @@ fn parse(text: &str) -> Vec<Row> {
     rows
 }
 
+// Single-entry memo of the last parsed diff (plan §2.2): UI rendering runs
+// on one thread, so the parsed [`Row`]s of the most recently rendered diff
+// live in a thread-local slot beside the raw-text cache instead of being
+// rebuilt from scratch every frame. Keyed by the raw text itself — not the
+// diff cache key — because ops invalidate and refetch the cache under an
+// unchanged key with changed bytes.
+thread_local! {
+    static PARSED_ROWS: RefCell<Option<(String, Rc<Vec<Row>>)>> = const { RefCell::new(None) };
+}
+
+/// Rows for the cached diff `text`, parsing into the memo only when the
+/// text changed (plan §2.2). Hands back an [`Rc`] handle — a refcount bump,
+/// never a row-by-row copy — so nothing here holds a borrow of [`AppState`]
+/// past this expression.
+fn parsed_rows(text: &str) -> Rc<Vec<Row>> {
+    PARSED_ROWS.with(|slot| {
+        let mut memo = slot.borrow_mut();
+        if !matches!(&*memo, Some((existing, _)) if existing == text) {
+            *memo = Some((text.to_owned(), Rc::new(parse(text))));
+        }
+        Rc::clone(&memo.as_ref().expect("memo filled above").1)
+    })
+}
+
 // --- engine access -----------------------------------------------------------
 
 /// Build a cache key that uniquely identifies this diff request.
@@ -325,11 +351,22 @@ pub fn render_diff(
     let key = diff_key(&root, &eff_left, &eff_right, staged, ignore_ws, path);
 
     // Parsed rows from the cache (absent while loading / before first load).
-    let cached = state.ui.diff_cache.clone().filter(|(k, _)| *k == key);
-    let parsed = cached
+    // Borrowed, not cloned (plan §1.1): both probes below end the immutable
+    // borrow of `state.ui` immediately — before any `&mut state` use below —
+    // and the parse itself is memoized (plan §2.2).
+    let cached = state
+        .ui
+        .diff_cache
         .as_ref()
+        .filter(|(k, _)| k == &key)
+        .is_some();
+    let parsed = state
+        .ui
+        .diff_cache
+        .as_ref()
+        .filter(|(k, _)| k == &key)
         .filter(|(_, t)| !t.trim().is_empty())
-        .map(|(_, t)| parse(t));
+        .map(|(_, t)| parsed_rows(t));
     let total_hunks = parsed.as_ref().map_or(0, |rs| {
         rs.iter().filter(|r| r.kind == RowKind::Hunk).count()
     });
@@ -357,19 +394,19 @@ pub fn render_diff(
         return;
     }
 
-    let rows = match (cached, parsed) {
-        (_, Some(rows)) => rows,
-        (None, None) => {
+    let rows = match parsed {
+        Some(rows) => rows,
+        None if cached => {
+            ui.label("(no differences)");
+            return;
+        }
+        None => {
             if state.ui.diff_loading {
                 ui.spinner();
                 ui.label("Computing diff…");
             } else {
                 ui.label("(no diff)");
             }
-            return;
-        }
-        (Some(_), None) => {
-            ui.label("(no differences)");
             return;
         }
     };
@@ -651,9 +688,7 @@ fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Option<u
             Palette::INK_2
         };
         paint_centered(ui.painter(), seg, option, font_id.clone(), ink);
-        resp.widget_info(move || {
-            WidgetInfo::labeled(WidgetType::Button, true, (*option).to_owned())
-        });
+        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, *option));
         widgets::focus_ring(ui, &resp);
         if resp.clicked() {
             clicked = Some(i);
@@ -715,7 +750,7 @@ fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response {
     ui.painter()
         .rect_filled(rect, CornerRadius::same(CHIP_H as u8 / 2), bg);
     paint_centered(ui.painter(), rect, label, font_id, fg);
-    response.widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, label.to_owned()));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
     widgets::focus_ring(ui, &response);
     response
 }
@@ -775,10 +810,7 @@ fn nav_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
         Palette::INK_2
     };
     paint_icon_at(ui, icon, rect.center(), ICON_SIZE, ink);
-    let closure_label = label.to_owned();
-    response.widget_info(move || {
-        WidgetInfo::labeled(WidgetType::Button, enabled, closure_label.clone())
-    });
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
     widgets::focus_ring(ui, &response);
     response
 }
@@ -827,10 +859,7 @@ fn gutter_button(
         Palette::INK_2
     };
     paint_centered(ui.painter(), rect, glyph, mono_font(), ink);
-    let closure_label = label.to_owned();
-    response.widget_info(move || {
-        WidgetInfo::labeled(WidgetType::Button, enabled, closure_label.clone())
-    });
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
     widgets::focus_ring(ui, &response);
     if enabled {
         response.on_hover_text(tooltip)
@@ -1022,8 +1051,7 @@ fn render_unified(
         if toggleable {
             // Accessibility: the row is labeled by its content text so
             // tooling can target individual changed lines.
-            let label = row.text.clone();
-            resp.widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, label.clone()));
+            resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, row.text.as_str()));
             if resp.clicked() {
                 toggle_line_selection(state, path, row.hunk, row.line_ord);
             }
@@ -1165,8 +1193,7 @@ fn cell_band(
         paint_selection_bar(painter, &rect);
     }
     if toggleable {
-        let label = text.to_owned();
-        resp.widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, label.clone()));
+        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, text));
     }
     if num > 0 {
         let galley = painter.layout_no_wrap(num.to_string(), font.clone(), Palette::INK_3);

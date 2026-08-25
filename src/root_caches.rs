@@ -31,7 +31,7 @@ impl Affected {
     /// no-ops when none is selected: [`Affected::Root`] when present,
     /// [`Affected::All`] otherwise (harmless — the closure no-ops too).
     pub fn from_optional_root(root: Option<&Path>) -> Self {
-        root.map(|p| Affected::Root(RootId(p.to_path_buf())))
+        root.map(|p| Affected::Root(RootId(p.into())))
             .unwrap_or(Affected::All)
     }
 }
@@ -67,12 +67,14 @@ impl RootCaches {
     }
 
     /// Cached ref decorations for one commit of `root` (empty when absent).
-    pub fn refs_for(&self, root: &RootId, commit: &CommitId) -> Vec<CommitRef> {
+    /// Borrows the cache (plan §1.2): called per visible log row per frame,
+    /// so it must not clone the decoration list.
+    pub fn refs_for(&self, root: &RootId, commit: &CommitId) -> &[CommitRef] {
         self.ref_cache
             .get(root)
             .and_then(|m| m.get(commit))
-            .cloned()
-            .unwrap_or_default()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Every cached decoration group of `root` (empty when not loaded) —
@@ -110,45 +112,58 @@ impl RootCaches {
     }
 
     /// The changed files of `(root, commit)`, computed through the engine
-    /// seam on miss and cached.
+    /// seam on miss and cached. Returns a borrow of the cached list (plan
+    /// §1.2): neither path deep-clones the file list anymore. Callers must
+    /// not touch the caches (or any other `&mut AppState` state) while
+    /// holding the slice.
     pub fn ensure_files(
         &mut self,
         exec: &dyn GitExecutor,
         root: &RootId,
         commit: &CommitId,
-    ) -> Vec<Change> {
+    ) -> &[Change] {
         let key = (root.clone(), commit.clone());
-        if let Some(files) = self.files_cache.get(&key) {
-            return files.clone();
+        if !self.files_cache.contains_key(&key) {
+            let files = exec.commit_files(&root.0, commit).unwrap_or_default();
+            self.files_cache.insert(key.clone(), files);
         }
-        let files = exec.commit_files(&root.0, commit).unwrap_or_default();
-        self.files_cache.insert(key, files.clone());
-        files
+        // Reborrow after the optional fill so the returned slice always
+        // aliases the cache. The tuple key cannot be probed in borrowed form
+        // (`HashMap` has no mixed-reference `Borrow` for tuples), so the
+        // owned key is built once up front and cloned only for the insert.
+        self.files_cache
+            .get(&key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// The commits touching `path` in `root` (`git log -- <path>`),
     /// computed through the engine seam on miss and cached (issue #19).
+    /// Returns a borrow of the cached list — same fill-and-reborrow shape
+    /// as [`RootCaches::ensure_files`] (plan §1.2).
     pub fn ensure_path_log(
         &mut self,
         exec: &dyn GitExecutor,
         root: &RootId,
         path: &Path,
-    ) -> Vec<Commit> {
+    ) -> &[Commit] {
         let key = (root.clone(), path.to_path_buf());
-        if let Some(commits) = self.log_path_cache.get(&key) {
-            return commits.clone();
+        if !self.log_path_cache.contains_key(&key) {
+            let commits = exec
+                .log(
+                    &root.0,
+                    &LogOpts {
+                        path: Some(key.1.clone()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_default();
+            self.log_path_cache.insert(key.clone(), commits);
         }
-        let commits = exec
-            .log(
-                &root.0,
-                &LogOpts {
-                    path: Some(key.1.clone()),
-                    ..Default::default()
-                },
-            )
-            .unwrap_or_default();
-        self.log_path_cache.insert(key, commits.clone());
-        commits
+        self.log_path_cache
+            .get(&key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     // --- Event-fed writes (called from drain_events) ------------------------
@@ -167,11 +182,11 @@ impl RootCaches {
 
     /// Drop all five caches' entries for the affected scope. There are no
     /// per-cache exceptions (policy uniformity): even immutable-by-commit-id
-    /// entries go.
-    pub fn invalidate(&mut self, affected: Affected) {
+    /// entries go. Borrows `affected` — it is only read (plan Phase 3).
+    pub fn invalidate(&mut self, affected: &Affected) {
         match affected {
             Affected::All => self.invalidate_all(),
-            Affected::Root(ref root) => {
+            Affected::Root(root) => {
                 self.log_cache.remove(root);
                 self.ref_cache.remove(root);
                 self.files_cache.retain(|(r, _), _| r != root);

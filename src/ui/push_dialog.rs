@@ -18,7 +18,7 @@
 
 use crate::core::sync_service;
 use crate::error::TgError;
-use crate::model::{BranchKind, ChangeStatus, Commit, LogOpts, Signature};
+use crate::model::{BranchKind, ChangeStatus, Commit, LogOpts, RootId, Signature};
 use crate::root_caches::Affected;
 use crate::state::{AppState, OutgoingRoot};
 use crate::theme::Palette;
@@ -245,12 +245,15 @@ fn ensure_target_defaults(state: &mut AppState) {
 }
 
 /// Project node → per-root nodes → commit rows. Root-node clicks set the
-/// PREVIEW filter only (ADR-0006); they never affect push scope.
+/// PREVIEW filter only (ADR-0006); they never affect push scope. The
+/// snapshot is borrowed, not cloned (plan §1.5); node clicks are collected
+/// during the scroll pass and applied after it (defer pattern).
 fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
+    let mut select_root: Option<Option<RootId>> = None;
     egui::ScrollArea::vertical()
         .max_height(220.0)
         .show(ui, |ui| {
-            let snapshot = state.ui.dlg.push_outgoing.clone().unwrap_or_default();
+            let snapshot = state.ui.dlg.push_outgoing.as_deref().unwrap_or(&[]);
             if snapshot.is_empty() {
                 ui.label("No repositories to push.");
                 return;
@@ -265,7 +268,7 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
                 .selectable_label(state.ui.dlg.push_preview_root.is_none(), &project_node)
                 .clicked()
             {
-                state.ui.dlg.push_preview_root = None;
+                select_root = Some(None);
             }
 
             let total: usize = snapshot
@@ -276,18 +279,18 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
                 ui.label("No outgoing commits.");
             }
 
-            for entry in &snapshot {
+            for entry in snapshot {
                 let n = entry.commits.as_ref().map_or(0, |c| c.len());
                 let node = format!("{} — {n} commits ahead", entry.name);
                 let selected = state.ui.dlg.push_preview_root.as_ref() == Some(&entry.id);
                 ui.indent(entry.id.0.as_os_str(), |ui| {
                     if ui.selectable_label(selected, &node).clicked() {
                         // Toggle: clicking the selected root returns to all roots.
-                        state.ui.dlg.push_preview_root = if selected {
+                        select_root = Some(if selected {
                             None
                         } else {
                             Some(entry.id.clone())
-                        };
+                        });
                     }
                     if let Ok(commits) = &entry.commits {
                         ui.indent((entry.id.0.as_os_str(), "commits"), |ui| {
@@ -299,6 +302,9 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
                 });
             }
         });
+    if let Some(next) = select_root {
+        state.ui.dlg.push_preview_root = next;
+    }
 }
 
 fn commit_row(ui: &mut Ui, c: &Commit) {
@@ -332,17 +338,18 @@ fn rel_time(epoch_secs: i64) -> String {
 
 /// Changed files across outgoing commits, filtered by the clicked root node
 /// ONLY (ADR-0006). Files are cached per (root, commit) behind
-/// `caches.ensure_files`.
+/// `caches.ensure_files`. Snapshot and filter are borrowed (plan §1.5); the
+/// `dlg` borrow is disjoint from the `caches` fill, so no clone is needed.
 fn changed_files_preview(ui: &mut Ui, state: &mut AppState) {
     egui::CollapsingHeader::new("Changed files")
         .default_open(true)
         .show(ui, |ui| {
-            let snapshot = state.ui.dlg.push_outgoing.clone().unwrap_or_default();
-            let filter = state.ui.dlg.push_preview_root.clone();
+            let snapshot = state.ui.dlg.push_outgoing.as_deref().unwrap_or(&[]);
+            let filter = state.ui.dlg.push_preview_root.as_ref();
             let mut any = false;
             for entry in snapshot
                 .iter()
-                .filter(|e| filter.as_ref().is_none_or(|f| f == &e.id))
+                .filter(|e| filter.is_none_or(|f| f == &e.id))
             {
                 let commits = match &entry.commits {
                     Ok(c) => c,

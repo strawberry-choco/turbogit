@@ -113,14 +113,13 @@ pub fn create_all(
     name: &str,
     start_point: Option<&str>,
 ) -> Vec<TgResult<()>> {
-    let ids: Vec<RootId> = mgr.roots.iter().map(|r| r.id.clone()).collect();
-    let mut results = Vec::with_capacity(ids.len());
-    for id in ids {
-        let path = id.as_path().to_path_buf();
+    let paths = mgr.roots.iter().map(|r| r.id.0.clone()).collect::<Vec<_>>();
+    let mut results = Vec::with_capacity(paths.len());
+    for path in paths {
         let res = match vcs.branch_create(&path, name, true, start_point) {
             Ok(()) => {
                 if let Ok(branches) = vcs.branches(&path)
-                    && let Some(r) = mgr.roots.iter_mut().find(|r| r.id == id)
+                    && let Some(r) = mgr.roots.iter_mut().find(|r| r.id.0 == path)
                 {
                     r.branches = branches;
                 }
@@ -139,14 +138,13 @@ pub fn checkout_all(
     mgr: &mut MultiRootManager,
     name: &str,
 ) -> Vec<TgResult<()>> {
-    let ids: Vec<RootId> = mgr.roots.iter().map(|r| r.id.clone()).collect();
-    let mut results = Vec::with_capacity(ids.len());
-    for id in ids {
-        let path = id.as_path().to_path_buf();
+    let paths = mgr.roots.iter().map(|r| r.id.0.clone()).collect::<Vec<_>>();
+    let mut results = Vec::with_capacity(paths.len());
+    for path in paths {
         let res = match vcs.branch_checkout(&path, name) {
             Ok(()) => {
                 if let Ok(branches) = vcs.branches(&path)
-                    && let Some(r) = mgr.roots.iter_mut().find(|r| r.id == id)
+                    && let Some(r) = mgr.roots.iter_mut().find(|r| r.id.0 == path)
                 {
                     r.branches = branches;
                 }

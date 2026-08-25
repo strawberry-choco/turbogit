@@ -387,9 +387,7 @@ fn rail_button(ui: &mut Ui, state: &mut AppState, icon: Icon, label: &str, targe
     };
     paint_icon_centered(ui, icon, rect.center(), RAIL_ICON_SIZE, ink);
     widgets::focus_ring(ui, &response);
-    let closure_label = label.to_owned();
-    response
-        .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
     if let Some(tab) = target
         && response.clicked()
     {
@@ -493,10 +491,8 @@ fn tab_item(
     cx += TAB_ICON_SIZE + 6.0;
     painter.galley_with_override_text_color(Pos2::new(cx, cy - galley.size().y / 2.0), galley, ink);
 
-    let closure_label = label.to_owned();
     widgets::focus_ring(ui, &response);
-    response
-        .widget_info(move || WidgetInfo::labeled(WidgetType::Button, true, closure_label.clone()));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
     if response.clicked() {
         switch_tab(state, tab);
     }
