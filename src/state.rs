@@ -5,6 +5,7 @@
 //! [`AppState::run_git`].
 
 use crate::core::changes;
+use crate::core::granular;
 use crate::engine::{AppEvent, GitExecutor};
 use crate::error::TgResult;
 use crate::model::*;
@@ -573,16 +574,10 @@ impl AppState {
         // a completed op may have changed exactly what it shows (spec R2
         // story 8), so drop it and let the viewer reload asynchronously.
         self.ui.diff_cache = None;
-        // Exclusions only hold while the path is still fully staged; a new
-        // unstaged edit (or unstage, or deletion) puts it back in the list.
-        let still_fully_staged: HashSet<PathBuf> = self
-            .ui
-            .granularly_completed
-            .iter()
-            .filter(|p| self.is_fully_staged(p))
-            .cloned()
-            .collect();
-        self.ui.granularly_completed = still_fully_staged;
+        // Granular exclusions follow a refresh-scoped lifetime rule owned by
+        // the granular module: they only hold while the path is still fully
+        // staged.
+        granular::prune_on_refresh(self);
         // Only roots that are actually registered take part in the refresh.
         // The ids' shared `Arc<Path>` handles clone by refcount here and flow
         // into `register_all` / the ahead-behind refresh unchanged.
@@ -647,90 +642,6 @@ impl AppState {
                 }
             }
         }
-    }
-
-    /// Story 9 completion: the pending granular op's file just got its
-    /// post-op status. When nothing unstaged remains, the file leaves the
-    /// changelist and — if it was being previewed — focus advances to the
-    /// next changed file in display order (or clears).
-    fn settle_granular_completion(&mut self) {
-        let Some(path) = self.ui.pending_granular.take() else {
-            return;
-        };
-        // Store the exclusion under the same absolute key form the bucket
-        // builders compare (root join), regardless of how `path` arrived.
-        let Some(key) = self.granular_key(&path) else {
-            return;
-        };
-        if !self.is_fully_staged(&path) {
-            return;
-        }
-        // Compute the follow-up preview before inserting the exclusion: the
-        // search already skips `key` itself via its `just_finished`
-        // comparisons, so ordering is equivalent and `key` can move.
-        let next_preview = self.next_preview_candidate(&key);
-        self.ui.granularly_completed.insert(key);
-        if self.ui.preview_change.as_ref() == Some(&path) {
-            self.ui.preview_change = next_preview;
-        }
-    }
-
-    /// The absolute bucket-key form of `path` (repo-relative or absolute),
-    /// when it currently appears in the selected root's changes.
-    fn granular_key(&self, path: &Path) -> Option<PathBuf> {
-        let id = self.selected_root.as_ref()?;
-        let root = self.multi.by_id(id)?;
-        root.status.changes.iter().find_map(|c| {
-            (c.path == path || root.id.0.join(&c.path) == *path).then(|| root.id.0.join(&c.path))
-        })
-    }
-
-    /// Whether `path` (repo-relative or absolute, matching
-    /// [`crate::ui::diff`]'s resolution) currently has staged content and no
-    /// unstaged counterpart.
-    fn is_fully_staged(&self, path: &Path) -> bool {
-        let Some(id) = &self.selected_root else {
-            return false;
-        };
-        let Some(root) = self.multi.by_id(id) else {
-            return false;
-        };
-        root.status.changes.iter().any(|c| {
-            (c.path == path || root.id.0.join(&c.path) == *path) && c.staged && !c.unstaged
-        })
-    }
-
-    /// First changed file of the selected root that is still listed — same
-    /// bucket order as the Commit window (Default → Unversioned → Conflicts)
-    /// — skipping excluded paths and `just_finished`.
-    fn next_preview_candidate(&self, just_finished: &Path) -> Option<PathBuf> {
-        let id = self.selected_root.as_ref()?;
-        let root = self.multi.by_id(id)?;
-        let rank = |s: ChangeStatus| match s {
-            ChangeStatus::Conflicted => 2,
-            ChangeStatus::Unversioned => 1,
-            _ => 0,
-        };
-        for target in 0..=2u8 {
-            if let Some(c) = root
-                .status
-                .changes
-                .iter()
-                .filter(|c| c.status != ChangeStatus::Ignored)
-                .find(|c| {
-                    rank(c.status) == target
-                        && !self
-                            .ui
-                            .granularly_completed
-                            .contains(&root.id.0.join(&c.path))
-                        && c.path != just_finished
-                        && root.id.0.join(&c.path) != just_finished
-                })
-            {
-                return Some(c.path.clone());
-            }
-        }
-        None
     }
 
     /// Dispatch a git operation on a worker thread. `work` receives the
@@ -907,15 +818,12 @@ impl AppState {
                         Ok(()) => {
                             self.ui.toast = Some(Toast::success(label));
                             self.refresh(affected);
-                            // Story 9: decide exclusions/focus only now — the
-                            // refreshed status is what says whether anything
-                            // unstaged remains for the operated file.
-                            self.settle_granular_completion();
+                            granular::settle(self);
                         }
                         Err(e) => {
                             self.ui.toast = Some(Toast::error(format!("{label}: {e}")));
                             self.last_error = Some(e.to_string());
-                            self.ui.pending_granular = None;
+                            granular::on_op_failed(self);
                         }
                     }
                 }

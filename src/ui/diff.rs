@@ -22,10 +22,9 @@
 //!   patch from the cached raw diff (ADR-0013) and applying it through the
 //!   async op seam. Conflicted files keep the controls visible but inert.
 
-use crate::core::partial::{self, HunkSelection, Selection};
+use crate::core::granular::{self, comparison_triple, diff_key};
 use crate::engine::AppEvent;
 use crate::model::{ChangeStatus, DiffOpts};
-use crate::root_caches::Affected;
 use crate::state::{AppState, DiffComparison};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
@@ -210,18 +209,6 @@ fn parsed_rows(text: &str) -> Rc<Vec<Row>> {
 
 // --- engine access -----------------------------------------------------------
 
-/// Build a cache key that uniquely identifies this diff request.
-fn diff_key(
-    root: &std::path::Path,
-    left: &Option<String>,
-    right: &Option<String>,
-    staged: bool,
-    ignore_whitespace: bool,
-    path: &Option<std::path::PathBuf>,
-) -> String {
-    format!("{root:?}|{left:?}|{right:?}|staged={staged}|ws={ignore_whitespace}|{path:?}")
-}
-
 /// Synthesize a creation unified-diff for an untracked preview (spec R2):
 /// `git diff` cannot see untracked files, so the worktree content is dressed
 /// as a whole-file addition and fed through the normal cache/parse path —
@@ -282,15 +269,10 @@ fn ensure_diff(
     if stale && !state.ui.diff_loading {
         state.ui.diff_error = None;
         state.ui.diff_current_hunk = 0;
-        // The hovered hunk refers to the outgoing content; drop it with the
-        // rest of the per-diff navigation state (spec R2).
-        state.ui.hovered_hunk = None;
-        // Sub-hunk line selections likewise describe the outgoing content
-        // and are cleared on every cache change — which also covers each
-        // successful granular op, since ops invalidate the cache (story 3).
-        if let Some(p) = path {
-            state.ui.line_selections.remove(p);
-        }
+        // The hovered hunk and the sub-hunk line selections refer to the
+        // outgoing content; the granular module drops them with the rest of
+        // the per-diff navigation state (spec R2, story 3).
+        granular::on_diff_changed(state, path.as_deref());
 
         // Untracked previews never reach `git diff`; synthesize a creation
         // diff from worktree content synchronously and populate the cache
@@ -445,50 +427,6 @@ fn hunk_needs_scroll(ui: &Ui, diff_key: &str, idx: usize) -> bool {
 
 // --- partial staging (spec R2) ----------------------------------------------
 
-/// Effective comparison triple for a diff target: the revision chips only
-/// apply to working-tree comparisons (left/right both unset, spec §8.4);
-/// explicit commit-to-commit targets pass through untouched. Shared by the
-/// viewer and the palette's Stage/Unstage Hunk verbs so both address the
-/// same cache entry.
-fn comparison_triple(
-    left: &Option<String>,
-    right: &Option<String>,
-    comparison: DiffComparison,
-) -> (Option<String>, Option<String>, bool) {
-    if left.is_none() && right.is_none() {
-        match comparison {
-            DiffComparison::Repo => (Some("HEAD".to_owned()), None, false),
-            DiffComparison::Staged => (None, None, true),
-            DiffComparison::Local => (None, None, false),
-        }
-    } else {
-        (left.clone(), right.clone(), false)
-    }
-}
-
-/// Raw unified-diff text the viewer currently renders for `path` (the
-/// commit window's preview target), or None when nothing is cached. The
-/// palette's Stage/Unstage Hunk verbs compose their patches from exactly
-/// these bytes (ADR-0013).
-pub(crate) fn cached_preview_diff(state: &AppState, path: &std::path::Path) -> Option<String> {
-    let root = state.selected_path()?;
-    let (eff_left, eff_right, staged) = comparison_triple(&None, &None, state.ui.diff_comparison);
-    let key = diff_key(
-        &root,
-        &eff_left,
-        &eff_right,
-        staged,
-        state.ui.diff_ignore_whitespace,
-        &Some(path.to_path_buf()),
-    );
-    state
-        .ui
-        .diff_cache
-        .as_ref()
-        .filter(|(k, _)| k == &key)
-        .map(|(_, t)| t.clone())
-}
-
 /// Resolve the previewed file's [`ChangeStatus`] from the selected root's
 /// cached changelists (read-only per frame). The commit window previews
 /// root-relative paths; absolute paths match too so other callers stay safe.
@@ -501,12 +439,9 @@ pub(crate) fn preview_status(state: &AppState, path: Option<&std::path::Path>) -
     };
     if let Some(id) = &state.selected_root
         && let Some(root) = state.multi.by_id(id)
+        && let Some(c) = root.resolve_change(path)
     {
-        for c in &root.status.changes {
-            if c.path == path || root.id.0.join(&c.path) == *path {
-                return c.status;
-            }
-        }
+        return c.status;
     }
     ChangeStatus::Modified
 }
@@ -535,28 +470,6 @@ fn paint_selection_bar(painter: &egui::Painter, rect: &Rect) {
     );
 }
 
-/// Toggle one changed line's membership in the accumulated sub-hunk
-/// selection (spec R2 story 3). Empty sets are pruned so a fully deselected
-/// hunk falls back to whole-hunk semantics.
-fn toggle_line_selection(
-    state: &mut AppState,
-    path: &Option<std::path::PathBuf>,
-    hunk: usize,
-    ord: usize,
-) {
-    let Some(p) = path else {
-        return;
-    };
-    let hunks = state.ui.line_selections.entry(p.clone()).or_default();
-    let lines = hunks.entry(hunk).or_default();
-    if !lines.insert(ord) {
-        lines.remove(&ord);
-    }
-    if lines.is_empty() {
-        hunks.remove(&hunk);
-    }
-}
-
 /// The accumulated line selection for one hunk, when any.
 fn line_selection_for(
     state: &AppState,
@@ -570,81 +483,26 @@ fn line_selection_for(
     (!lines.is_empty()).then(|| lines.clone())
 }
 
-/// Dispatch granular stage/unstage of one whole hunk (spec R2): compose the
-/// patch from the cached raw diff text — the entry matching `diff_key` is
-/// guaranteed current at render time — and apply it through the async op
-/// seam. Untracked files stage via intent-to-add + forward apply using their
-/// repo-relative path (the only form git accepts there). Conflicted files
-/// are rejected again inside the core op, but the UI already renders inert
-/// controls for them.
+/// Dispatch granular stage/unstage of one whole hunk or the accumulated
+/// sub-hunk line selection (spec R2): pure intent — the core granular module
+/// resolves the cached patch text (ADR-0013), status, routing, label, and
+/// scope.
 fn dispatch_hunk_action(
     state: &mut AppState,
-    diff_key: &str,
     hunk: usize,
     stage: bool,
-    status: ChangeStatus,
     path: &Option<std::path::PathBuf>,
 ) {
-    let Some(diff_text) = state
-        .ui
-        .diff_cache
-        .as_ref()
-        .filter(|(k, _)| k == diff_key)
-        .map(|(_, t)| t.clone())
-    else {
-        return;
-    };
-    let selection = match line_selection_for(state, path, hunk) {
+    let target = match line_selection_for(state, path, hunk) {
         // Story 3: an accumulated sub-hunk selection narrows the patch to
         // exactly the toggled lines; otherwise the whole hunk applies.
-        Some(lines) => Selection {
-            hunks: [(hunk, HunkSelection::Lines(lines))].into_iter().collect(),
-        },
-        None => Selection {
-            hunks: [(hunk, HunkSelection::Whole)].into_iter().collect(),
-        },
+        Some(lines) => granular::HunkTarget::Lines(hunk, lines),
+        None => granular::HunkTarget::Whole(hunk),
     };
-    let root = state.selected_path();
-    let affected = Affected::from_optional_root(root.as_deref());
-    let label = if stage { "Stage hunk" } else { "Unstage hunk" };
-    // Only staging reroutes for untracked files; unstage keeps the plain
-    // reverse-apply so both paths stay predictable.
-    let untracked_rel = match (stage, status) {
-        (true, ChangeStatus::Unversioned) => path.clone(),
-        _ => None,
+    let Some(path) = path.clone() else {
+        return;
     };
-    settle_preview_on_unstaged(state);
-    // Story 9: remember which file the granular op targeted so its
-    // completion can decide exclusions/focus with fresh status.
-    state.ui.pending_granular = path.clone();
-    state.run_git(label.to_owned(), affected, move |v| {
-        if let Some(r) = &root {
-            if stage && let Some(rel) = &untracked_rel {
-                partial::stage_untracked_selection(
-                    v,
-                    r,
-                    std::slice::from_ref(rel),
-                    &diff_text,
-                    &selection,
-                    status,
-                )
-            } else if stage {
-                partial::stage_selection(v, r, &diff_text, &selection, status)
-            } else {
-                partial::unstage_selection(v, r, &diff_text, &selection, status)
-            }
-        } else {
-            Ok(())
-        }
-    });
-}
-
-/// IntelliJ-style post-op preview focus (spec R2 story 8): after a granular
-/// stage/unstage the viewer lands on the remaining UNSTAGED changes — the
-/// Local (index↔worktree) comparison. Called at the dispatch sites right
-/// before `run_git`, so no-op paths (missing inputs) never move the mode.
-pub(crate) fn settle_preview_on_unstaged(state: &mut AppState) {
-    state.ui.diff_comparison = DiffComparison::Local;
+    granular::dispatch(state, path, target, stage);
 }
 
 // --- toolbar widgets ---------------------------------------------------------
@@ -918,10 +776,10 @@ fn hunk_gutter_actions(
     );
 
     if stage.clicked() {
-        dispatch_hunk_action(state, diff_key, hunk, true, status, path);
+        dispatch_hunk_action(state, hunk, true, path);
     }
     if unstage.clicked() {
-        dispatch_hunk_action(state, diff_key, hunk, false, status, path);
+        dispatch_hunk_action(state, hunk, false, path);
     }
 }
 
@@ -1053,7 +911,7 @@ fn render_unified(
             // tooling can target individual changed lines.
             resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, row.text.as_str()));
             if resp.clicked() {
-                toggle_line_selection(state, path, row.hunk, row.line_ord);
+                granular::toggle_line_selection(state, path, row.hunk, row.line_ord);
             }
         }
         match row.kind {
@@ -1372,7 +1230,7 @@ fn render_side_by_side(
                                 selected,
                             );
                             if cell.clicked() {
-                                toggle_line_selection(state, path, d.hunk, d.line_ord);
+                                granular::toggle_line_selection(state, path, d.hunk, d.line_ord);
                             }
                             cell
                         } else {
@@ -1406,7 +1264,7 @@ fn render_side_by_side(
                                 selected,
                             );
                             if cell.clicked() {
-                                toggle_line_selection(state, path, a.hunk, a.line_ord);
+                                granular::toggle_line_selection(state, path, a.hunk, a.line_ord);
                             }
                             cell
                         } else {
