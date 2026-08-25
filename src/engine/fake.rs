@@ -32,6 +32,10 @@ pub enum Call {
         branch: String,
         force: bool,
     },
+    ApplyPatch {
+        direction: crate::engine::ApplyDirection,
+    },
+    AddIntentToAdd(Vec<PathBuf>),
 }
 
 /// In-memory fake. Configure per-test state through the public fields before
@@ -279,7 +283,24 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn apply_patch_to_index(&self, _root: &Path, _patch: &str) -> TgResult<()> {
+    fn apply_patch_to_index(
+        &self,
+        _root: &Path,
+        _patch: &str,
+        direction: crate::engine::ApplyDirection,
+    ) -> TgResult<()> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(Call::ApplyPatch { direction });
+        Ok(())
+    }
+
+    fn add_intent_to_add(&self, _root: &Path, paths: &[PathBuf]) -> TgResult<()> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(Call::AddIntentToAdd(paths.to_vec()));
         Ok(())
     }
 

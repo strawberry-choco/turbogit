@@ -156,6 +156,11 @@ pub struct Change {
     pub status: ChangeStatus,
     pub chunks: Vec<Chunk>,
     pub staged: bool,
+    /// Whether the worktree still differs from the index (porcelain v2
+    /// `Y ≠ '.'`). With [`Change::staged`] this distinguishes a partially
+    /// staged file (`MM`) from a fully staged one (`M.`) — spec R2 story 9.
+    #[serde(default)]
+    pub unstaged: bool,
 }
 
 /// A named, user-organized bucket of local changes (IntelliJ changelist model).
