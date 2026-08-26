@@ -573,6 +573,15 @@ impl GitExecutor for RecordingExecutor {
         self.inner.show_file(root, rev, path)
     }
 
+    fn show_file_bytes(
+        &self,
+        root: &Path,
+        rev: &str,
+        path: &Path,
+    ) -> turbogit::error::TgResult<Vec<u8>> {
+        self.inner.show_file_bytes(root, rev, path)
+    }
+
     fn revert(&self, root: &Path, commit: &str) -> turbogit::error::TgResult<()> {
         self.inner.revert(root, commit)
     }

@@ -191,3 +191,23 @@ A `/`-triggered text filter over the changed-file list in the Commit tool
 window; shared by both sub-tabs. Distinct from log search, which filters
 commits.
 _Avoid_: search (reserved for log search), quick filter
+
+**Image diff**:
+A diff of a file whose versions are both decodable images (PNG, JPEG, GIF,
+WebP). Shown as the two picture versions side by side with their dimensions
+and byte sizes, instead of line content. An oversized or undecodable image
+falls back to a binary change.
+_Avoid_: picture compare, photo diff
+
+**Binary change**:
+A diff of a file whose content is not text on at least one side. Shown as a
+one-line description — kind of change plus byte sizes before/after — never as
+line content, and never a target of partial staging.
+_Avoid_: binary file diff, non-text diff
+
+**Rename header**:
+The diff-view line naming a detected rename ("renamed from X · N% similar")
+shown above the renamed file's content diff, paired with an arrow annotation
+on its changed-file list entry. Metadata only — never staged text. Detection
+follows git's own defaults, unpinned by TurboGit.
+_Avoid_: move marker, path change

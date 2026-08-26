@@ -270,6 +270,14 @@ pub struct UiState {
     pub diff_loading: bool,
     pub diff_error: Option<String>,
     pub diff_side_by_side: bool,
+    /// Non-text diff pane results (image textures + binary sizes, spec R8)
+    /// keyed by load key. Bounded few entries, evicts oldest; invalidated
+    /// wholesale with root refreshes like `diff_cache` (CONTEXT.md "Root
+    /// caches" philosophy).
+    pub pane_bytes: crate::ui::diff::PaneCache,
+    /// Load key currently being fetched on a worker thread — one in-flight
+    /// non-text pane load at a time (mirrors `diff_loading`).
+    pub pane_bytes_loading: Option<String>,
     /// The single hunk of the open diff that all hunk navigation and
     /// granular verbs act on (CONTEXT.md "Current hunk"): buttons, hover,
     /// and keyboard navigation set it; stage/unstage consume it. Reset to
@@ -588,6 +596,10 @@ impl AppState {
         // a completed op may have changed exactly what it shows (spec R2
         // story 8), so drop it and let the viewer reload asynchronously.
         self.ui.diff_cache = None;
+        // Non-text pane bytes/textures follow the same wholesale rule
+        // (spec R8): dropped with root refreshes, never poked per field.
+        self.ui.pane_bytes.clear();
+        self.ui.pane_bytes_loading = None;
         // Granular exclusions follow a refresh-scoped lifetime rule owned by
         // the granular module: they only hold while the path is still fully
         // staged.
@@ -865,6 +877,20 @@ impl AppState {
                             }
                         }
                     }
+                }
+                AppEvent::FileBytesReady { key, old, new } => {
+                    // The in-flight slot frees for the next wanted pane even
+                    // when this result is already stale.
+                    if self.ui.pane_bytes_loading.as_deref() == Some(key.as_str()) {
+                        self.ui.pane_bytes_loading = None;
+                    }
+                    self.ui.pane_bytes.store(
+                        key,
+                        crate::ui::diff::PaneEntry {
+                            old: old.map(crate::ui::diff::PaneSide::from_blob),
+                            new: new.map(crate::ui::diff::PaneSide::from_blob),
+                        },
+                    );
                 }
                 AppEvent::AheadBehind {
                     root,
