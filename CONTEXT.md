@@ -169,3 +169,11 @@ line selection on one file, run as one asynchronous operation. The unit the
 granular module owns end-to-end: input resolution, dispatch ordering, and
 completion settlement (exclusions and preview focus).
 _Avoid_: hunk action, partial op
+
+**Display row**:
+One visual line of the diff view. In side-by-side mode a paired deletion and
+addition occupy a single display row with two cells; every other diff line is
+its own display row. The unit the diff viewer scrolls and positions by.
+Unified mode pages by underlying diff lines, so it shows more rows than
+side-by-side for the same diff whenever pairs exist.
+_Avoid_: row model, diff line (a display row may pair two)

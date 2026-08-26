@@ -6,6 +6,11 @@
 //! - **Async + cached** engine access through the [`GitExecutor`] seam
 //!   (Epic E7/J1): diffs are computed on a worker thread and cached, so no
 //!   `git diff` runs synchronously per frame.
+//! - **Virtualized rendering (ADR-0014)**: rows paint through
+//!   [`ScrollArea::show_rows`] over a memoized display-row model built once
+//!   per diff beside `diff_cache` — parsing and side-by-side pairing never
+//!   run per frame, and hunk navigation scrolls by row index so unrealized
+//!   rows stay reachable.
 //! - **Segmented control** toggles Side-by-Side | Unified rendering.
 //! - **Revision chips** select the working-tree comparison pair:
 //!   Repo = HEAD↔worktree, Staged = HEAD↔index, Local = index↔worktree.
@@ -35,6 +40,7 @@ use egui::{
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -81,6 +87,9 @@ struct Row {
     old_no: usize,
     /// 1-based new-file line number (0 when not applicable).
     new_no: usize,
+    /// Ordinal of this row in parse order — the unified-mode paging index
+    /// (ADR-0014): unified windows are ranges over these ordinals.
+    ord: usize,
 }
 
 /// `@@ -a,b +c,d @@` → `(a, c)` (defaults to 1 when absent).
@@ -125,6 +134,7 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: 0,
                 old_no: 0,
                 new_no: 0,
+                ord: 0,
             });
             enclosing = hunk;
             hunk += 1;
@@ -143,6 +153,7 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: 0,
                 old_no: 0,
                 new_no: 0,
+                ord: 0,
             });
         } else if let Some(body) = line.strip_prefix('+') {
             rows.push(Row {
@@ -152,6 +163,7 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: changed,
                 old_no: 0,
                 new_no,
+                ord: 0,
             });
             changed += 1;
             new_no += 1;
@@ -163,6 +175,7 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: changed,
                 old_no,
                 new_no: 0,
+                ord: 0,
             });
             changed += 1;
             old_no += 1;
@@ -175,33 +188,157 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: 0,
                 old_no,
                 new_no,
+                ord: 0,
             });
             old_no += 1;
             new_no += 1;
         }
     }
+    for (ord, row) in rows.iter_mut().enumerate() {
+        row.ord = ord;
+    }
     rows
 }
 
+// --- display-row model (ADR-0014) --------------------------------------------
+
+/// One virtualized display row: the unit [`ScrollArea::show_rows`] pages
+/// over. Side-by-side mode renders each element as one [`ROW_H`] band;
+/// unified mode ignores pairing and flattens every contained row back into
+/// its own band — both modes read from this one cached vector.
+enum DisplayRow {
+    /// Full-width row: meta, hunk header, or context.
+    Full(Row),
+    /// A side-by-side pair sharing one [`ROW_H`] band: one Del and/or one
+    /// Add (`None` fills the missing half with an empty cell).
+    Pair(Option<Row>, Option<Row>),
+}
+
+/// Everything rendering needs from one diff, built once per diff text and
+/// memoized beside `diff_cache` (ADR-0014): the display-row vector plus the
+/// index maps hunk navigation — and future R7 keyboard nav — scroll by.
+struct DiffModel {
+    display: Vec<DisplayRow>,
+    /// Underlying parsed-row count: the unified-mode `show_rows` total
+    /// (pairing ignored, each underlying row = one paging slot).
+    raw_count: usize,
+    /// Underlying-row ordinal → display index, so a unified window over raw
+    /// ordinals finds the (possibly mid-pair) display elements covering it.
+    raw_to_display: Vec<u32>,
+    /// Hunk ordinal → first display index of its header row.
+    hunk_first_display: Vec<u32>,
+}
+
+impl DiffModel {
+    /// Number of parsed hunks.
+    fn hunk_count(&self) -> usize {
+        self.hunk_first_display.len()
+    }
+
+    /// First display-row index aiming at `hunk`: the paired-model index in
+    /// side-by-side mode, otherwise the underlying-row ordinal of the header
+    /// (unified pages over underlying rows). This is the shared hunk→row map
+    /// ADR-0014 commits to — R7 keyboard nav (`F7`/`Shift+F7`) reuses it.
+    fn first_row_for_hunk(&self, hunk: usize, side_by_side: bool) -> Option<usize> {
+        let disp = *self.hunk_first_display.get(hunk)? as usize;
+        Some(if side_by_side {
+            disp
+        } else {
+            match &self.display[disp] {
+                DisplayRow::Full(row) => row.ord,
+                // Changed rows are always paired; headers never are.
+                DisplayRow::Pair(..) => disp,
+            }
+        })
+    }
+}
+
+/// Fold a buffered run of consecutive Del/Add rows into paired display rows,
+/// recording each underlying row's display index in parse order.
+fn flush_changed_run(
+    pending: &mut Vec<Row>,
+    display: &mut Vec<DisplayRow>,
+    raw_to_display: &mut Vec<u32>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let start = display.len() as u32;
+    let mut dels: Vec<Row> = Vec::new();
+    let mut adds: Vec<Row> = Vec::new();
+    let mut slots: Vec<u32> = Vec::with_capacity(pending.len());
+    for row in pending.drain(..) {
+        if row.kind == RowKind::Del {
+            slots.push(dels.len() as u32);
+            dels.push(row);
+        } else {
+            slots.push(adds.len() as u32);
+            adds.push(row);
+        }
+    }
+    let pairs = dels.len().max(adds.len());
+    let mut dels = dels.into_iter();
+    let mut adds = adds.into_iter();
+    for _ in 0..pairs {
+        display.push(DisplayRow::Pair(dels.next(), adds.next()));
+    }
+    raw_to_display.extend(slots.iter().map(|p| start + p));
+}
+
+/// Fold parsed rows into the cached display-row model (ADR-0014):
+/// consecutive Del/Add runs collapse into paired display rows while
+/// meta/hunk/context stay full-width. Also records the index maps so
+/// per-frame work is O(visible rows).
+fn build_model(rows: Vec<Row>) -> DiffModel {
+    let raw_count = rows.len();
+    let mut display = Vec::new();
+    let mut raw_to_display = Vec::with_capacity(raw_count);
+    let mut hunk_first_display = Vec::new();
+    let mut pending: Vec<Row> = Vec::new();
+    for row in rows {
+        match row.kind {
+            RowKind::Del | RowKind::Add => pending.push(row),
+            RowKind::Meta | RowKind::Context => {
+                flush_changed_run(&mut pending, &mut display, &mut raw_to_display);
+                raw_to_display.push(display.len() as u32);
+                display.push(DisplayRow::Full(row));
+            }
+            RowKind::Hunk => {
+                flush_changed_run(&mut pending, &mut display, &mut raw_to_display);
+                hunk_first_display.push(display.len() as u32);
+                raw_to_display.push(display.len() as u32);
+                display.push(DisplayRow::Full(row));
+            }
+        }
+    }
+    flush_changed_run(&mut pending, &mut display, &mut raw_to_display);
+    DiffModel {
+        display,
+        raw_count,
+        raw_to_display,
+        hunk_first_display,
+    }
+}
+
 // Single-entry memo of the last parsed diff (plan §2.2): UI rendering runs
-// on one thread, so the parsed [`Row`]s of the most recently rendered diff
-// live in a thread-local slot beside the raw-text cache instead of being
+// on one thread, so the display model of the most recently rendered diff
+// lives in a thread-local slot beside the raw-text cache instead of being
 // rebuilt from scratch every frame. Keyed by the raw text itself — not the
 // diff cache key — because ops invalidate and refetch the cache under an
 // unchanged key with changed bytes.
 thread_local! {
-    static PARSED_ROWS: RefCell<Option<(String, Rc<Vec<Row>>)>> = const { RefCell::new(None) };
+    static PARSED_ROWS: RefCell<Option<(String, Rc<DiffModel>)>> = const { RefCell::new(None) };
 }
 
-/// Rows for the cached diff `text`, parsing into the memo only when the
-/// text changed (plan §2.2). Hands back an [`Rc`] handle — a refcount bump,
-/// never a row-by-row copy — so nothing here holds a borrow of [`AppState`]
-/// past this expression.
-fn parsed_rows(text: &str) -> Rc<Vec<Row>> {
+/// Display model for the cached diff `text`, parsed and folded into the memo
+/// only when the text changed (plan §2.2, ADR-0014). Hands back an [`Rc`]
+/// handle — a refcount bump, never a row-by-row copy — so nothing here holds
+/// a borrow of [`AppState`] past this expression.
+fn diff_model(text: &str) -> Rc<DiffModel> {
     PARSED_ROWS.with(|slot| {
         let mut memo = slot.borrow_mut();
         if !matches!(&*memo, Some((existing, _)) if existing == text) {
-            *memo = Some((text.to_owned(), Rc::new(parse(text))));
+            *memo = Some((text.to_owned(), Rc::new(build_model(parse(text)))));
         }
         Rc::clone(&memo.as_ref().expect("memo filled above").1)
     })
@@ -332,26 +469,24 @@ pub fn render_diff(
     ensure_diff(state, &root, &eff_left, &eff_right, staged, ignore_ws, path);
     let key = diff_key(&root, &eff_left, &eff_right, staged, ignore_ws, path);
 
-    // Parsed rows from the cache (absent while loading / before first load).
+    // Cached display model (absent while loading / before first load).
     // Borrowed, not cloned (plan §1.1): both probes below end the immutable
     // borrow of `state.ui` immediately — before any `&mut state` use below —
-    // and the parse itself is memoized (plan §2.2).
+    // and the model itself is memoized beside the raw cache (ADR-0014).
     let cached = state
         .ui
         .diff_cache
         .as_ref()
         .filter(|(k, _)| k == &key)
         .is_some();
-    let parsed = state
+    let model = state
         .ui
         .diff_cache
         .as_ref()
         .filter(|(k, _)| k == &key)
         .filter(|(_, t)| !t.trim().is_empty())
-        .map(|(_, t)| parsed_rows(t));
-    let total_hunks = parsed.as_ref().map_or(0, |rs| {
-        rs.iter().filter(|r| r.kind == RowKind::Hunk).count()
-    });
+        .map(|(_, t)| diff_model(t));
+    let total_hunks = model.as_ref().map_or(0, |m| m.hunk_count());
 
     // Toolbar chrome (spec §8.4): mode · chips · hunk nav · whitespace.
     // Wrapped so narrow panes (commit preview) push the toggle to a second
@@ -376,8 +511,8 @@ pub fn render_diff(
         return;
     }
 
-    let rows = match parsed {
-        Some(rows) => rows,
+    let model = match model {
+        Some(model) => model,
         None if cached => {
             ui.label("(no differences)");
             return;
@@ -397,25 +532,74 @@ pub fn render_diff(
     // resolved once per frame from the cached changelists.
     let status = preview_status(state, path.as_deref());
 
+    let side_by_side = state.ui.diff_side_by_side;
+    // Paging total (ADR-0014): side-by-side walks the paired display rows,
+    // unified ignores pairing and pages one slot per underlying row.
+    let total_rows = if side_by_side {
+        model.display.len()
+    } else {
+        model.raw_count
+    };
+
+    // Side-by-side pane header band (spec §8.4), pinned above the paged
+    // rows: `show_rows` reserves exactly the uniform-height row window, so
+    // the fixed-height band leaves the scrolled content. Floating scrollbars
+    // reserve no width, so the panes below still measure the same `half`.
+    if side_by_side {
+        let width = ui.available_width();
+        let gap = ui.style().spacing.item_spacing.x;
+        let half = ((width - gap * 2.0) / 2.0).max(120.0);
+        let (left_label, right_label) = pane_labels(comparison);
+        ui.horizontal(|ui| {
+            header_band(ui, half, &format!("Before {left_label}"));
+            header_band(ui, half, &format!("After {right_label}"));
+        });
+    }
+
     // Named id salt: the commit window's `ui.columns` panes share one stable
     // child id, and egui's default ScrollArea salt is constant — an unnamed
     // area here would share persisted scrollbar state with the changelist
     // pane's area and flip-flop visibility (a zero-delay repaint loop).
-    ScrollArea::vertical()
-        .id_salt("diff_viewer")
-        .show(ui, |ui| {
+    ScrollArea::vertical().id_salt("diff_viewer").show_rows(
+        ui,
+        ROW_H,
+        total_rows,
+        |ui, visible| {
+            // Hunk navigation (ADR-0014): index-based — aim the aimed hunk's
+            // first display row at the viewport center instead of relying on
+            // a realized widget (`resp.scroll_to_me` cannot reach rows this
+            // window didn't build). Issued inside the closure because egui
+            // consumes scroll targets set by an area's content; ones set
+            // before the area begins are stashed for outer areas. At most
+            // once per (diff, hunk) — re-issuing every frame would keep the
+            // ScrollArea repainting forever.
+            if state.ui.diff_current_hunk > 0
+                && let Some(row_idx) =
+                    model.first_row_for_hunk(state.ui.diff_current_hunk, side_by_side)
+                && hunk_needs_scroll(ui, &key, state.ui.diff_current_hunk)
+            {
+                let pitch = ROW_H + ui.spacing().item_spacing.y;
+                let y = ui.max_rect().top() + (row_idx as f32 - visible.start as f32) * pitch;
+                let rect = Rect::from_min_size(
+                    Pos2::new(ui.max_rect().left(), y),
+                    Vec2::new(ui.max_rect().width(), ROW_H),
+                );
+                ui.scroll_to_rect(rect, Some(Align::Center));
+            }
             // The match above guarantees the rendered diff is `key`, so hunk
             // scroll-dedup state can be namespaced per diff with it (issue #11).
-            if state.ui.diff_side_by_side {
-                render_side_by_side(ui, state, &rows, comparison, &key, status, path);
+            if side_by_side {
+                render_side_by_side(ui, state, &model, visible, &key, status, path);
             } else {
-                render_unified(ui, state, &rows, &key, status, path);
+                render_unified(ui, state, &model, visible, &key, status, path);
             }
-        });
+        },
+    );
 }
 
 /// Issue the hunk scroll request at most once per (diff, hunk): re-issuing
-/// `scroll_to_me` every frame would keep the ScrollArea repainting forever.
+/// the index-based scroll every frame would keep the ScrollArea repainting
+/// forever.
 fn hunk_needs_scroll(ui: &Ui, diff_key: &str, idx: usize) -> bool {
     let id = egui::Id::new(("diff_hunk_scrolled", diff_key, idx));
     let done = ui.ctx().memory(|m| m.data.get_temp::<bool>(id)) == Some(true);
@@ -873,10 +1057,15 @@ fn commit_hover(
     }
 }
 
+/// Unified mode (spec §8.4): one full-width band per underlying row, paging
+/// only the visible window of the cached display model (ADR-0014). Pairs are
+/// flattened back into their constituent rows, so output is pixel-identical
+/// to the pre-virtualization loop.
 fn render_unified(
     ui: &mut Ui,
     state: &mut AppState,
-    rows: &[Row],
+    model: &DiffModel,
+    visible: Range<usize>,
     diff_key: &str,
     status: ChangeStatus,
     path: &Option<std::path::PathBuf>,
@@ -884,123 +1073,184 @@ fn render_unified(
     let width = ui.available_width();
     let painter = ui.painter().clone();
     let font = mono_font();
-    // Hover tracking (spec R2): which hunk sits under the pointer this frame.
-    let mut frame_hover: Option<usize> = None;
-    let mut rows_rect: Option<Rect> = None;
-    for row in rows {
-        // Changed lines are clickable toggles (spec R2 story 3); everything
-        // else stays hover-only.
-        let toggleable = matches!(row.kind, RowKind::Del | RowKind::Add);
-        let (rect, resp) = ui.allocate_exact_size(
-            Vec2::new(width, ROW_H),
-            if toggleable {
-                Sense::click()
-            } else {
-                Sense::hover()
-            },
-        );
-        rows_rect = Some(match rows_rect {
-            Some(union) => union.union(rect),
-            None => rect,
-        });
-        if row.kind != RowKind::Meta && resp.hovered() {
-            frame_hover = Some(row.hunk);
+
+    let end = visible.end.min(model.raw_count);
+    let start = visible.start.min(end);
+    if start < end {
+        // Hover tracking (spec R2): which hunk sits under the pointer this
+        // frame — visible rows only, which is correct under virtualization.
+        let mut frame_hover: Option<usize> = None;
+        let mut rows_rect: Option<Rect> = None;
+        // The underlying-row window may open or close mid-pair; visit every
+        // display element touching it and keep only the rows inside it.
+        let first = model.raw_to_display[start] as usize;
+        let last = model.raw_to_display[end - 1] as usize;
+        for disp in &model.display[first..=last] {
+            match disp {
+                DisplayRow::Full(row) => {
+                    if visible.contains(&row.ord) {
+                        unified_row(
+                            ui,
+                            state,
+                            row,
+                            width,
+                            &painter,
+                            &font,
+                            diff_key,
+                            status,
+                            path,
+                            &mut frame_hover,
+                            &mut rows_rect,
+                        );
+                    }
+                }
+                DisplayRow::Pair(del, add) => {
+                    for row in [del.as_ref(), add.as_ref()].into_iter().flatten() {
+                        if visible.contains(&row.ord) {
+                            unified_row(
+                                ui,
+                                state,
+                                row,
+                                width,
+                                &painter,
+                                &font,
+                                diff_key,
+                                status,
+                                path,
+                                &mut frame_hover,
+                                &mut rows_rect,
+                            );
+                        }
+                    }
+                }
+            }
         }
+        commit_hover(state, ui, rows_rect, frame_hover);
+    }
+}
+
+/// One unified band: allocation, hover tracking, click toggle, and the
+/// token-exact paint for a single underlying row (spec §8.4/R2). Hunk
+/// scrolling is handled centrally by the [`ScrollArea::show_rows`] caller.
+#[allow(clippy::too_many_arguments)]
+fn unified_row(
+    ui: &mut Ui,
+    state: &mut AppState,
+    row: &Row,
+    width: f32,
+    painter: &egui::Painter,
+    font: &FontId,
+    diff_key: &str,
+    status: ChangeStatus,
+    path: &Option<std::path::PathBuf>,
+    frame_hover: &mut Option<usize>,
+    rows_rect: &mut Option<Rect>,
+) {
+    // Changed lines are clickable toggles (spec R2 story 3); everything
+    // else stays hover-only.
+    let toggleable = matches!(row.kind, RowKind::Del | RowKind::Add);
+    let (rect, resp) = ui.allocate_exact_size(
+        Vec2::new(width, ROW_H),
         if toggleable {
-            // Accessibility: the row is labeled by its content text so
-            // tooling can target individual changed lines.
-            resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, row.text.as_str()));
-            if resp.clicked() {
-                granular::toggle_line_selection(state, path, row.hunk, row.line_ord);
-            }
-        }
-        match row.kind {
-            RowKind::Meta => {
-                paint_cell(
-                    &painter,
-                    rect.left() + TEXT_X,
-                    &rect,
-                    &row.text,
-                    Palette::INK_3,
-                    &font,
-                );
-            }
-            RowKind::Hunk => {
-                painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-                paint_cell(
-                    &painter,
-                    rect.left() + TEXT_X,
-                    &rect,
-                    &row.text,
-                    Palette::INK_3,
-                    &font,
-                );
-                hunk_gutter_actions(ui, state, rect, diff_key, row.hunk, status, path);
-                if state.ui.diff_current_hunk > 0
-                    && row.hunk == state.ui.diff_current_hunk
-                    && hunk_needs_scroll(ui, diff_key, row.hunk)
-                {
-                    resp.scroll_to_me(Some(Align::Center));
-                }
-            }
-            RowKind::Context => {
-                paint_gutter(&painter, &rect, " ", row.new_no, Palette::INK_3, &font);
-                paint_cell(
-                    &painter,
-                    rect.left() + TEXT_X,
-                    &rect,
-                    &row.text,
-                    Palette::INK,
-                    &font,
-                );
-            }
-            RowKind::Del => {
-                painter.rect_filled(rect, CornerRadius::ZERO, Palette::DIFF_DEL_BG);
-                if line_selected(state, path, row.hunk, row.line_ord) {
-                    paint_selection_bar(&painter, &rect);
-                }
-                paint_gutter(
-                    &painter,
-                    &rect,
-                    "-",
-                    row.old_no,
-                    Palette::DIFF_DEL_TEXT,
-                    &font,
-                );
-                paint_cell(
-                    &painter,
-                    rect.left() + TEXT_X,
-                    &rect,
-                    &row.text,
-                    Palette::DIFF_DEL_TEXT,
-                    &font,
-                );
-            }
-            RowKind::Add => {
-                painter.rect_filled(rect, CornerRadius::ZERO, Palette::DIFF_ADD_BG);
-                if line_selected(state, path, row.hunk, row.line_ord) {
-                    paint_selection_bar(&painter, &rect);
-                }
-                paint_gutter(
-                    &painter,
-                    &rect,
-                    "+",
-                    row.new_no,
-                    Palette::DIFF_ADD_TEXT,
-                    &font,
-                );
-                paint_cell(
-                    &painter,
-                    rect.left() + TEXT_X,
-                    &rect,
-                    &row.text,
-                    Palette::DIFF_ADD_TEXT,
-                    &font,
-                );
-            }
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+    *rows_rect = Some(match *rows_rect {
+        Some(union) => union.union(rect),
+        None => rect,
+    });
+    if row.kind != RowKind::Meta && resp.hovered() {
+        *frame_hover = Some(row.hunk);
+    }
+    if toggleable {
+        // Accessibility: the row is labeled by its content text so
+        // tooling can target individual changed lines.
+        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, row.text.as_str()));
+        if resp.clicked() {
+            granular::toggle_line_selection(state, path, row.hunk, row.line_ord);
         }
     }
-    commit_hover(state, ui, rows_rect, frame_hover);
+    match row.kind {
+        RowKind::Meta => {
+            paint_cell(
+                painter,
+                rect.left() + TEXT_X,
+                &rect,
+                &row.text,
+                Palette::INK_3,
+                font,
+            );
+        }
+        RowKind::Hunk => {
+            painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
+            paint_cell(
+                painter,
+                rect.left() + TEXT_X,
+                &rect,
+                &row.text,
+                Palette::INK_3,
+                font,
+            );
+            hunk_gutter_actions(ui, state, rect, diff_key, row.hunk, status, path);
+        }
+        RowKind::Context => {
+            paint_gutter(painter, &rect, " ", row.new_no, Palette::INK_3, font);
+            paint_cell(
+                painter,
+                rect.left() + TEXT_X,
+                &rect,
+                &row.text,
+                Palette::INK,
+                font,
+            );
+        }
+        RowKind::Del => {
+            painter.rect_filled(rect, CornerRadius::ZERO, Palette::DIFF_DEL_BG);
+            if line_selected(state, path, row.hunk, row.line_ord) {
+                paint_selection_bar(painter, &rect);
+            }
+            paint_gutter(
+                painter,
+                &rect,
+                "-",
+                row.old_no,
+                Palette::DIFF_DEL_TEXT,
+                font,
+            );
+            paint_cell(
+                painter,
+                rect.left() + TEXT_X,
+                &rect,
+                &row.text,
+                Palette::DIFF_DEL_TEXT,
+                font,
+            );
+        }
+        RowKind::Add => {
+            painter.rect_filled(rect, CornerRadius::ZERO, Palette::DIFF_ADD_BG);
+            if line_selected(state, path, row.hunk, row.line_ord) {
+                paint_selection_bar(painter, &rect);
+            }
+            paint_gutter(
+                painter,
+                &rect,
+                "+",
+                row.new_no,
+                Palette::DIFF_ADD_TEXT,
+                font,
+            );
+            paint_cell(
+                painter,
+                rect.left() + TEXT_X,
+                &rect,
+                &row.text,
+                Palette::DIFF_ADD_TEXT,
+                font,
+            );
+        }
+    }
 }
 
 /// Side-by-side pane header band (SURFACE, spec §8.4).
@@ -1083,11 +1333,16 @@ fn cell_band(
     resp
 }
 
+/// Side-by-side mode (spec §8.4): paired Del/Add bands plus full-width
+/// context/hunk/meta rows, paging only the visible window of the cached
+/// display model (ADR-0014). The pane header band is pinned by the caller.
+/// Hover tracking and toggles apply to visible rows only — correct under
+/// virtualization.
 fn render_side_by_side(
     ui: &mut Ui,
     state: &mut AppState,
-    rows: &[Row],
-    comparison: DiffComparison,
+    model: &DiffModel,
+    visible: Range<usize>,
     diff_key: &str,
     status: ChangeStatus,
     path: &Option<std::path::PathBuf>,
@@ -1095,12 +1350,6 @@ fn render_side_by_side(
     let width = ui.available_width();
     let spacing = ui.style().spacing.item_spacing.x;
     let half = ((width - spacing * 2.0) / 2.0).max(120.0);
-    let (left_label, right_label) = pane_labels(comparison);
-
-    ui.horizontal(|ui| {
-        header_band(ui, half, &format!("Before {left_label}"));
-        header_band(ui, half, &format!("After {right_label}"));
-    });
 
     let painter = ui.painter().clone();
     let font = mono_font();
@@ -1108,187 +1357,161 @@ fn render_side_by_side(
     let mut frame_hover: Option<usize> = None;
     let mut rows_rect: Option<Rect> = None;
 
-    // Pair consecutive Del/Add lines; render context/hunk/meta as full-width.
-    let mut i = 0;
-    while i < rows.len() {
-        match rows[i].kind {
-            RowKind::Meta => {
-                let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-                rows_rect = Some(match rows_rect {
-                    Some(union) => union.union(rect),
-                    None => rect,
-                });
-                paint_cell(
-                    &painter,
-                    rect.left() + TEXT_X,
-                    &rect,
-                    &rows[i].text,
-                    Palette::INK_3,
-                    &font,
-                );
-                i += 1;
-            }
-            RowKind::Hunk => {
-                let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-                rows_rect = Some(match rows_rect {
-                    Some(union) => union.union(rect),
-                    None => rect,
-                });
-                if resp.hovered() {
-                    frame_hover = Some(rows[i].hunk);
-                }
-                painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-                paint_cell(
-                    &painter,
-                    rect.left() + TEXT_X,
-                    &rect,
-                    &rows[i].text,
-                    Palette::INK_3,
-                    &font,
-                );
-                hunk_gutter_actions(ui, state, rect, diff_key, rows[i].hunk, status, path);
-                if state.ui.diff_current_hunk > 0
-                    && rows[i].hunk == state.ui.diff_current_hunk
-                    && hunk_needs_scroll(ui, diff_key, rows[i].hunk)
-                {
-                    resp.scroll_to_me(Some(Align::Center));
-                }
-                i += 1;
-            }
-            RowKind::Context => {
-                let row = &rows[i];
-                let hunk = row.hunk;
-                ui.horizontal(|ui| {
-                    let old_cell = cell_band(
-                        ui,
-                        half,
-                        None,
-                        row.old_no,
-                        ' ',
-                        &row.text,
-                        Palette::INK,
+    let end = visible.end.min(model.display.len());
+    let start = visible.start.min(end);
+    for disp in &model.display[start..end] {
+        match disp {
+            DisplayRow::Full(row) => match row.kind {
+                RowKind::Meta => {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+                    rows_rect = Some(match rows_rect {
+                        Some(union) => union.union(rect),
+                        None => rect,
+                    });
+                    paint_cell(
                         &painter,
-                        &font,
-                        false,
-                        false,
-                    );
-                    let new_cell = cell_band(
-                        ui,
-                        half,
-                        None,
-                        row.new_no,
-                        ' ',
+                        rect.left() + TEXT_X,
+                        &rect,
                         &row.text,
-                        Palette::INK,
-                        &painter,
+                        Palette::INK_3,
                         &font,
-                        false,
-                        false,
                     );
-                    if old_cell.hovered() || new_cell.hovered() {
-                        frame_hover = Some(hunk);
-                    }
-                });
-                i += 1;
-            }
-            RowKind::Del | RowKind::Add => {
-                // Gather a run of Del/Add lines to pair up.
-                let mut dels: Vec<&Row> = Vec::new();
-                let mut adds: Vec<&Row> = Vec::new();
-                while i < rows.len() {
-                    match rows[i].kind {
-                        RowKind::Del => {
-                            dels.push(&rows[i]);
-                            i += 1;
-                        }
-                        RowKind::Add => {
-                            adds.push(&rows[i]);
-                            i += 1;
-                        }
-                        _ => break,
-                    }
                 }
-                let pairs = dels.len().max(adds.len());
-                for p in 0..pairs {
-                    let d = dels.get(p);
-                    let a = adds.get(p);
-                    let hunk = d.map(|r| r.hunk).or(a.map(|r| r.hunk));
+                RowKind::Hunk => {
+                    let (rect, resp) =
+                        ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+                    rows_rect = Some(match rows_rect {
+                        Some(union) => union.union(rect),
+                        None => rect,
+                    });
+                    if resp.hovered() {
+                        frame_hover = Some(row.hunk);
+                    }
+                    painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
+                    paint_cell(
+                        &painter,
+                        rect.left() + TEXT_X,
+                        &rect,
+                        &row.text,
+                        Palette::INK_3,
+                        &font,
+                    );
+                    hunk_gutter_actions(ui, state, rect, diff_key, row.hunk, status, path);
+                }
+                RowKind::Context => {
+                    let hunk = row.hunk;
                     ui.horizontal(|ui| {
-                        let del_cell = if let Some(d) = d {
-                            let selected = line_selected(state, path, d.hunk, d.line_ord);
-                            let cell = cell_band(
-                                ui,
-                                half,
-                                Some(Palette::DIFF_DEL_BG),
-                                d.old_no,
-                                '-',
-                                &d.text,
-                                Palette::DIFF_DEL_TEXT,
-                                &painter,
-                                &font,
-                                true,
-                                selected,
-                            );
-                            if cell.clicked() {
-                                granular::toggle_line_selection(state, path, d.hunk, d.line_ord);
-                            }
-                            cell
-                        } else {
-                            cell_band(
-                                ui,
-                                half,
-                                None,
-                                0,
-                                ' ',
-                                "",
-                                Palette::INK,
-                                &painter,
-                                &font,
-                                false,
-                                false,
-                            )
-                        };
-                        let add_cell = if let Some(a) = a {
-                            let selected = line_selected(state, path, a.hunk, a.line_ord);
-                            let cell = cell_band(
-                                ui,
-                                half,
-                                Some(Palette::DIFF_ADD_BG),
-                                a.new_no,
-                                '+',
-                                &a.text,
-                                Palette::DIFF_ADD_TEXT,
-                                &painter,
-                                &font,
-                                true,
-                                selected,
-                            );
-                            if cell.clicked() {
-                                granular::toggle_line_selection(state, path, a.hunk, a.line_ord);
-                            }
-                            cell
-                        } else {
-                            cell_band(
-                                ui,
-                                half,
-                                None,
-                                0,
-                                ' ',
-                                "",
-                                Palette::INK,
-                                &painter,
-                                &font,
-                                false,
-                                false,
-                            )
-                        };
-                        if (del_cell.hovered() || add_cell.hovered())
-                            && let Some(h) = hunk
-                        {
-                            frame_hover = Some(h);
+                        let old_cell = cell_band(
+                            ui,
+                            half,
+                            None,
+                            row.old_no,
+                            ' ',
+                            &row.text,
+                            Palette::INK,
+                            &painter,
+                            &font,
+                            false,
+                            false,
+                        );
+                        let new_cell = cell_band(
+                            ui,
+                            half,
+                            None,
+                            row.new_no,
+                            ' ',
+                            &row.text,
+                            Palette::INK,
+                            &painter,
+                            &font,
+                            false,
+                            false,
+                        );
+                        if old_cell.hovered() || new_cell.hovered() {
+                            frame_hover = Some(hunk);
                         }
                     });
                 }
+                // Changed rows always live in pairs (build_model invariant).
+                RowKind::Del | RowKind::Add => unreachable!("changed rows are always paired"),
+            },
+            DisplayRow::Pair(d, a) => {
+                let hunk = d.as_ref().map(|r| r.hunk).or(a.as_ref().map(|r| r.hunk));
+                ui.horizontal(|ui| {
+                    let del_cell = if let Some(d) = d {
+                        let selected = line_selected(state, path, d.hunk, d.line_ord);
+                        let cell = cell_band(
+                            ui,
+                            half,
+                            Some(Palette::DIFF_DEL_BG),
+                            d.old_no,
+                            '-',
+                            &d.text,
+                            Palette::DIFF_DEL_TEXT,
+                            &painter,
+                            &font,
+                            true,
+                            selected,
+                        );
+                        if cell.clicked() {
+                            granular::toggle_line_selection(state, path, d.hunk, d.line_ord);
+                        }
+                        cell
+                    } else {
+                        cell_band(
+                            ui,
+                            half,
+                            None,
+                            0,
+                            ' ',
+                            "",
+                            Palette::INK,
+                            &painter,
+                            &font,
+                            false,
+                            false,
+                        )
+                    };
+                    let add_cell = if let Some(a) = a {
+                        let selected = line_selected(state, path, a.hunk, a.line_ord);
+                        let cell = cell_band(
+                            ui,
+                            half,
+                            Some(Palette::DIFF_ADD_BG),
+                            a.new_no,
+                            '+',
+                            &a.text,
+                            Palette::DIFF_ADD_TEXT,
+                            &painter,
+                            &font,
+                            true,
+                            selected,
+                        );
+                        if cell.clicked() {
+                            granular::toggle_line_selection(state, path, a.hunk, a.line_ord);
+                        }
+                        cell
+                    } else {
+                        cell_band(
+                            ui,
+                            half,
+                            None,
+                            0,
+                            ' ',
+                            "",
+                            Palette::INK,
+                            &painter,
+                            &font,
+                            false,
+                            false,
+                        )
+                    };
+                    if (del_cell.hovered() || add_cell.hovered())
+                        && let Some(h) = hunk
+                    {
+                        frame_hover = Some(h);
+                    }
+                });
             }
         }
     }
