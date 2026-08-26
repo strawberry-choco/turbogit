@@ -262,12 +262,11 @@ fn next_preview_candidate(state: &AppState, just_finished: &Path) -> Option<Path
 // --- selection lifetimes (spec R2 stories 3/8) ---------------------------------
 
 /// Selection-lifetime rule: the diff cache changed, so the per-diff
-/// selections describing the outgoing content die with it — the hovered hunk
-/// refers to content no longer shown, and the accumulated sub-hunk line
-/// selections do too (which also covers each successful granular op, since
-/// ops invalidate the cache).
+/// selections describing the outgoing content die with it — the accumulated
+/// sub-hunk line selections refer to content no longer shown. The current
+/// hunk itself is the viewer's own fresh-load reset (`ensure_diff`), which
+/// calls this on the same path.
 pub(crate) fn on_diff_changed(state: &mut AppState, path: Option<&Path>) {
-    state.ui.hovered_hunk = None;
     if let Some(p) = path {
         state.ui.line_selections.remove(p);
     }

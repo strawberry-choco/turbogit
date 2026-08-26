@@ -76,8 +76,8 @@ struct Row {
     kind: RowKind,
     text: String,
     /// Owning hunk index — the header's own ordinal for `Hunk` rows, and
-    /// the enclosing hunk for body rows (hover tracking, spec R2). Meta
-    /// rows own no hunk.
+    /// the enclosing hunk for body rows (aiming the current hunk from the
+    /// pointer, spec R2). Meta rows own no hunk.
     hunk: usize,
     /// 0-based ordinal over the hunk's +/- lines in order (changed rows
     /// only) — exactly [`crate::core::partial::HunkSelection::Lines`]
@@ -406,9 +406,10 @@ fn ensure_diff(
     if stale && !state.ui.diff_loading {
         state.ui.diff_error = None;
         state.ui.diff_current_hunk = 0;
-        // The hovered hunk and the sub-hunk line selections refer to the
-        // outgoing content; the granular module drops them with the rest of
-        // the per-diff navigation state (spec R2, story 3).
+        // The sub-hunk line selections refer to the outgoing content; the
+        // granular module drops them with the rest of the per-diff
+        // navigation state (spec R2, story 3) — the current hunk was reset
+        // to the first hunk above.
         granular::on_diff_changed(state, path.as_deref());
 
         // Untracked previews never reach `git diff`; synthesize a creation
@@ -628,6 +629,37 @@ pub(crate) fn preview_status(state: &AppState, path: Option<&std::path::Path>) -
         return c.status;
     }
     ChangeStatus::Modified
+}
+
+/// Hunk count of the diff the Commit window's preview would render right
+/// now — 0 while nothing is selected, still loading, errored, or the text
+/// parses to no hunks (binary). Reads the memoized display model beside the
+/// cache (ADR-0014), so F7/Shift+F7 (spec R7) can consult it per keypress
+/// without rebuilding any row map.
+pub(crate) fn preview_hunk_count(state: &AppState) -> usize {
+    let Some(root) = state.selected_path() else {
+        return 0;
+    };
+    let Some(path) = state.ui.preview_change.clone() else {
+        return 0;
+    };
+    let (eff_left, eff_right, staged) = comparison_triple(&None, &None, state.ui.diff_comparison);
+    let key = diff_key(
+        &root,
+        &eff_left,
+        &eff_right,
+        staged,
+        state.ui.diff_ignore_whitespace,
+        &Some(path),
+    );
+    state
+        .ui
+        .diff_cache
+        .as_ref()
+        .filter(|(k, _)| k == &key)
+        .filter(|(_, t)| !t.trim().is_empty())
+        .map(|(_, t)| diff_model(t).hunk_count())
+        .unwrap_or(0)
 }
 
 /// Whether one changed line currently sits in the accumulated sub-hunk
@@ -1039,21 +1071,28 @@ fn paint_gutter(
     );
 }
 
-/// Commit the frame's hovered-hunk reading only when the pointer genuinely
-/// rests on the rendered diff rows. Elsewhere — other panes, floating
+/// Aim the current hunk (CONTEXT.md "Current hunk") at the row under the
+/// pointer — but only when the pointer genuinely rests on the rendered diff
+/// rows AND moved this frame. A stationary pointer must not fight keyboard
+/// or button navigation that just scrolled a different hunk underneath it
+/// (spec R7: one canonical selection). Elsewhere — other panes, floating
 /// popups, headless state injection — the previous value stays authoritative,
-/// so the palette verbs operate on the hunk the user last aimed at (spec R2).
-fn commit_hover(
+/// so navigation and the palette verbs operate on the hunk last aimed at.
+fn commit_current_hunk(
     state: &mut AppState,
     ui: &Ui,
     rows_rect: Option<Rect>,
     frame_hover: Option<usize>,
 ) {
+    let moved = ui.input(|i| i.pointer.motion().is_some_and(|d| d != Vec2::ZERO));
     let inside = ui
         .input(|i| i.pointer.hover_pos())
         .is_some_and(|p| rows_rect.is_some_and(|r| r.contains(p)));
-    if inside {
-        state.ui.hovered_hunk = frame_hover;
+    if moved
+        && inside
+        && let Some(hunk) = frame_hover
+    {
+        state.ui.diff_current_hunk = hunk;
     }
 }
 
@@ -1125,7 +1164,7 @@ fn render_unified(
                 }
             }
         }
-        commit_hover(state, ui, rows_rect, frame_hover);
+        commit_current_hunk(state, ui, rows_rect, frame_hover);
     }
 }
 
@@ -1515,5 +1554,5 @@ fn render_side_by_side(
             }
         }
     }
-    commit_hover(state, ui, rows_rect, frame_hover);
+    commit_current_hunk(state, ui, rows_rect, frame_hover);
 }

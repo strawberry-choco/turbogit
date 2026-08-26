@@ -218,6 +218,15 @@ pub struct UiState {
     pub recent_messages: Vec<String>,
     /// Active sub-tab inside the Commit tool window (issue #18).
     pub commit_subtab: CommitSubTab,
+    /// Inline filter over the changed-file list (spec R7, CONTEXT.md "File
+    /// filter"): shared by both active Commit sub-tabs, matched
+    /// case-insensitively against file paths. Persists across root switches
+    /// and refreshes within the session; Esc while focused or manual edits
+    /// clear it.
+    pub file_filter: String,
+    /// Set by `/` or the Filter Files palette action; the Commit window
+    /// focuses the filter input on the next render and clears the flag.
+    pub focus_file_filter: bool,
     // tabs / popups
     pub tab: Tab,
     pub branches_popup: bool,
@@ -261,14 +270,19 @@ pub struct UiState {
     pub diff_loading: bool,
     pub diff_error: Option<String>,
     pub diff_side_by_side: bool,
+    /// The single hunk of the open diff that all hunk navigation and
+    /// granular verbs act on (CONTEXT.md "Current hunk"): buttons, hover,
+    /// and keyboard navigation set it; stage/unstage consume it. Reset to
+    /// the first hunk whenever a fresh diff load starts.
     pub diff_current_hunk: usize,
     // diff viewer working-tree comparison chips + whitespace toggle (issue #13)
     pub diff_comparison: DiffComparison,
     pub diff_ignore_whitespace: bool,
-    /// 0-based hunk index currently under the pointer in the diff viewer
-    /// (spec R2 palette verbs). Tracked while diff rows render and cleared
-    /// when a fresh diff load starts, so it never outlives its content.
-    pub hovered_hunk: Option<usize>,
+    /// Armed edge press for F7/Shift+F7 cross-file navigation (spec R7): the
+    /// direction and instant of the last edge nudge. A same-direction repeat
+    /// inside [`crate::ui::hunk_nav::EDGE_WINDOW`] crosses to the adjacent
+    /// changed file; anything else re-arms.
+    pub hunk_nav_armed_edge: Option<(crate::ui::hunk_nav::Dir, std::time::Instant)>,
     /// The preview path a granular stage/unstage was last dispatched for
     /// (spec R2 story 9). Consumed by the op-completion handler to decide
     /// whether the file just left the changelist.
