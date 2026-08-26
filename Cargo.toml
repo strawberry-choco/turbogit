@@ -11,7 +11,6 @@ eframe = "0.36.1"
 egui = "0.36.1"
 egui_dock = "0.21.1"
 egui_extras = "0.36.1"
-gix = { version = "0.87.0", default-features = false, features = ["status", "blob-diff", "blame", "sha1"], optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 log = "0.4.34"
 ron = "0.12.2"
@@ -19,13 +18,14 @@ rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
 toml = "1.1.4"
+similar = "3.2.0"
+git2 = "0.21.0"
+nucleo-matcher = "0.3.1"
 
 [dev-dependencies]
 crossbeam-channel = "0.5.16"
 egui_kittest = { version = "0.36.1", features = ["snapshot", "wgpu"] }
 tempfile = "3.27.0"
 
-# Optional fast read-path; all mutating ops always go through the git CLI.
 [features]
 default = []
-gix-reader = ["dep:gix"]
