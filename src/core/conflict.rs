@@ -100,6 +100,59 @@ pub fn unresolved(status: &RootStatus) -> usize {
     status.conflicted.len()
 }
 
+/// Parse a file's conflict markers into alternating normal / conflict blocks.
+///
+/// Returns `(segments, conflict_count)` where each segment is
+/// `(ours, theirs, is_conflict)`; for normal segments `theirs` is empty.
+/// This is the canonical marker parser for the merge editor — the UI's
+/// fallback path when no base version is available for a structured 3-way
+/// merge, and the reference the Phase L1 parity tests compare
+/// [`crate::core::diff_engine::merge_segments`] against.
+pub fn parse_conflict_markers(content: &str) -> (Vec<(String, String, bool)>, usize) {
+    let mut segs: Vec<(String, String, bool)> = Vec::new();
+    let mut conflicts = 0usize;
+    let mut normal = String::new();
+    let mut ours = String::new();
+    let mut theirs = String::new();
+    // mode: 0 = normal, 1 = inside ours, 2 = inside theirs
+    let mut mode = 0u8;
+    for line in content.lines() {
+        if line.starts_with("<<<<<<<") {
+            if !normal.is_empty() {
+                segs.push((std::mem::take(&mut normal), String::new(), false));
+            }
+            mode = 1;
+            conflicts += 1;
+            ours.clear();
+            theirs.clear();
+        } else if line.starts_with("=======") && mode == 1 {
+            mode = 2;
+        } else if line.starts_with(">>>>>>>") && (mode == 1 || mode == 2) {
+            segs.push((std::mem::take(&mut ours), std::mem::take(&mut theirs), true));
+            mode = 0;
+        } else {
+            match mode {
+                0 => {
+                    normal.push_str(line);
+                    normal.push('\n');
+                }
+                1 => {
+                    ours.push_str(line);
+                    ours.push('\n');
+                }
+                _ => {
+                    theirs.push_str(line);
+                    theirs.push('\n');
+                }
+            }
+        }
+    }
+    if !normal.is_empty() {
+        segs.push((normal, String::new(), false));
+    }
+    (segs, conflicts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +171,20 @@ mod tests {
         assert_eq!(written, "resolved!");
         let calls = engine.calls.lock().unwrap();
         assert_eq!(calls.len(), 1, "one stage call recorded");
+    }
+
+    #[test]
+    fn parse_conflict_markers_splits_normal_and_conflict_blocks() {
+        let content = "head\n<<<<<<< head\nours\n=======\ntheirs\n>>>>>>> tail\ntail\n";
+        let (segs, n) = parse_conflict_markers(content);
+        assert_eq!(n, 1);
+        assert_eq!(
+            segs,
+            vec![
+                ("head\n".to_owned(), String::new(), false),
+                ("ours\n".to_owned(), "theirs\n".to_owned(), true),
+                ("tail\n".to_owned(), String::new(), false),
+            ]
+        );
     }
 }

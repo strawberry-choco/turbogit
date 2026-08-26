@@ -7,6 +7,7 @@
 //! explicitly deferred).
 
 use crate::core::conflict;
+use crate::core::diff_engine;
 use crate::root_caches::Affected;
 use crate::state::{AppState, Toast};
 use crate::theme::Palette;
@@ -15,49 +16,34 @@ use egui::{Color32, CornerRadius, Margin, Rect, RichText, ScrollArea, Stroke, Ui
 /// Parse a file's conflict markers into alternating normal / conflict blocks.
 /// Returns (segments, conflict_count) where each segment is
 /// `(ours, theirs, is_conflict)`; for normal segments `theirs` is empty.
+///
+/// Thin delegate onto the canonical parser in `core::conflict`, which the
+/// Phase L1 parity tests also compare the structured merge against.
 fn parse_conflicts(content: &str) -> (Vec<(String, String, bool)>, usize) {
-    let mut segs: Vec<(String, String, bool)> = Vec::new();
-    let mut conflicts = 0usize;
-    let mut normal = String::new();
-    let mut ours = String::new();
-    let mut theirs = String::new();
-    // mode: 0 = normal, 1 = inside ours, 2 = inside theirs
-    let mut mode = 0u8;
-    for line in content.lines() {
-        if line.starts_with("<<<<<<<") {
-            if !normal.is_empty() {
-                segs.push((std::mem::take(&mut normal), String::new(), false));
-            }
-            mode = 1;
-            conflicts += 1;
-            ours.clear();
-            theirs.clear();
-        } else if line.starts_with("=======") && mode == 1 {
-            mode = 2;
-        } else if line.starts_with(">>>>>>>") && (mode == 1 || mode == 2) {
-            segs.push((std::mem::take(&mut ours), std::mem::take(&mut theirs), true));
-            mode = 0;
-        } else {
-            match mode {
-                0 => {
-                    normal.push_str(line);
-                    normal.push('\n');
-                }
-                1 => {
-                    ours.push_str(line);
-                    ours.push('\n');
-                }
-                _ => {
-                    theirs.push_str(line);
-                    theirs.push('\n');
-                }
-            }
-        }
+    conflict::parse_conflict_markers(content)
+}
+
+/// Segments opening the merge editor (Phase L1): a structured 3-way merge of
+/// the index's base/ours/theirs when in-process merges are enabled and all
+/// three versions resolve through the engine seam; otherwise the raw-marker
+/// parser over the working-tree file, verbatim. Both produce the same
+/// `(ours, theirs, is_conflict)` tuple stream, so pane rendering, per-block
+/// resolution, and Apply gating are unchanged either way.
+fn merge_editor_segments(
+    state: &AppState,
+    root: &Option<std::path::PathBuf>,
+    path: &std::path::Path,
+    content: &str,
+) -> (Vec<(String, String, bool)>, usize) {
+    if state.settings.in_process_diffs
+        && let Some(root) = root
+        && let Ok(v) = conflict::read_versions(state.executor.as_ref(), root, path)
+    {
+        let segs = diff_engine::merge_segments(&v.base, &v.ours, &v.theirs);
+        let n = segs.iter().filter(|(_, _, c)| *c).count();
+        return (segs, n);
     }
-    if !normal.is_empty() {
-        segs.push((normal, String::new(), false));
-    }
-    (segs, conflicts)
+    parse_conflicts(content)
 }
 
 /// Compose the final file text from segments + per-conflict resolutions.
@@ -279,7 +265,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 if let Some(r) = &root {
                     let full = r.join(path);
                     if let Ok(content) = std::fs::read_to_string(&full) {
-                        let (segs, _n) = parse_conflicts(&content);
+                        let (segs, _n) = merge_editor_segments(state, &root, path, &content);
                         let res: Vec<Option<u8>> =
                             segs.iter().filter(|(_, _, c)| *c).map(|_| None).collect();
                         state.ui.conflict_segs = segs;

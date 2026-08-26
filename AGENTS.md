@@ -6,7 +6,7 @@ TurboGit is a Rust workspace-free binary/library crate built with `eframe`/`egui
 
 - `src/lib.rs` — public module root shared by the binary and integration tests.
 - `src/core/` — repository services and domain logic (branches, history, sync, conflicts, multi-root).
-- `src/engine/` — Git execution layer; mutating operations use the Git CLI, with optional read-only acceleration via the `gix-reader` feature.
+- `src/engine/` — Git execution layer; in-process operations use `git2` (libgit2) by default, with the git CLI as fallback for sync/credential ops, reverse patch apply, intent-to-add, and diff cases the in-process engine can't handle.
 - `src/ui/` — egui windows, dialogs, diffs, and dockable panels.
 - `tests/` — phase-based integration tests (`phase0.rs` … `phase4.rs`).
 - `docs/` — product spec, execution plan, progress tracker, and UI backlog.
@@ -29,7 +29,6 @@ All four gates must pass; a failure in any one blocks the change.
 - `cargo build` — compile the application.
 - `cargo run` — launch the desktop app locally.
 - `cargo test --test phase2` — run one phase suite.
-- `cargo test --features gix-reader` — exercise tests with the optional Gix read path enabled.
 
 ## Coding Style & Naming Conventions
 
