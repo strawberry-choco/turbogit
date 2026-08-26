@@ -33,9 +33,12 @@ pub enum Action {
     OpenWelcome,
     ToggleToolbar,
     // Partial-staging verbs (spec R2): palette-only, operating on the diff
-    // viewer's hovered hunk. The VCS operations popup set stays frozen.
+    // viewer's current hunk. The VCS operations popup set stays frozen.
     StageHunk,
     UnstageHunk,
+    // File filter (spec R7): palette-only discoverability for the `/`
+    // shortcut over the Commit tool window's changed-file list.
+    FilterFiles,
 }
 
 impl Action {
@@ -60,6 +63,7 @@ impl Action {
             Action::ToggleToolbar => "Toggle Toolbar",
             Action::StageHunk => "Stage Hunk",
             Action::UnstageHunk => "Unstage Hunk",
+            Action::FilterFiles => "Filter files (/)",
         }
     }
 
@@ -107,6 +111,7 @@ impl Action {
             Action::ToggleToolbar,
             Action::StageHunk,
             Action::UnstageHunk,
+            Action::FilterFiles,
         ]
     }
 }
@@ -167,20 +172,25 @@ pub fn run_action(state: &mut AppState, action: Action) {
         }
         Action::OpenWelcome => state.ui.welcome_visible = true,
         Action::ToggleToolbar => state.ui.show_toolbar = !state.ui.show_toolbar,
-        // Partial-staging verbs (spec R2): stage/unstage the whole hunk the
-        // pointer last rested on in the diff viewer. Every input — preview
-        // target, hovered hunk, plus root and cached diff text inside the
-        // module — must exist, or the verb is a silent no-op; conflicted
-        // files are blocked by the core op.
+        // Partial-staging verbs (spec R2/R7): stage/unstage the whole
+        // CURRENT hunk — the single selection buttons, hover, and keyboard
+        // navigation all aim (CONTEXT.md "Current hunk"). The preview target
+        // must exist, or the verb is a silent no-op; conflicted files are
+        // blocked by the core op.
         Action::StageHunk | Action::UnstageHunk => {
             let stage = action == Action::StageHunk;
             let Some(path) = state.ui.preview_change.clone() else {
                 return;
             };
-            let Some(hunk) = state.ui.hovered_hunk else {
-                return;
-            };
+            let hunk = state.ui.diff_current_hunk;
             granular::dispatch(state, path, granular::HunkTarget::Whole(hunk), stage);
+        }
+        // File filter (spec R7): surface the Commit tool window and arm
+        // next-frame focus of its inline filter input.
+        Action::FilterFiles => {
+            state.ui.welcome_visible = false;
+            state.ui.tab = Tab::Commit;
+            state.ui.focus_file_filter = true;
         }
     }
 }

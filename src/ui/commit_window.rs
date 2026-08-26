@@ -20,7 +20,8 @@ use crate::root_caches::Affected;
 use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
-use egui::{Color32, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType};
+use crate::ui::widgets;
+use egui::{Color32, Key, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType};
 use std::path::PathBuf;
 
 /// Canonical bucket names (user-created changelists are backlog).
@@ -135,6 +136,7 @@ fn has_selected_changes(state: &AppState) -> bool {
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     sub_tab_strip(ui, state);
+    file_filter_row(ui, state);
     match state.ui.commit_subtab {
         CommitSubTab::LocalChanges => local_changes_body(ui, state),
         CommitSubTab::UnversionedFiles => unversioned_body(ui, state),
@@ -176,6 +178,48 @@ fn sub_tab_strip(ui: &mut Ui, state: &mut AppState) {
         }
     });
     ui.separator();
+}
+
+// ------------------------------------------------------------ file filter --
+
+/// Inline file filter over the changed-file list (spec R7, CONTEXT.md "File
+/// filter"): one header input shared by both active sub-tabs, matched
+/// case-insensitively against file paths. `/` focuses it (via
+/// `focus_file_filter`, armed by the shell or the Filter Files palette
+/// action); Esc while focused clears focus and text; otherwise the text
+/// persists across root switches and refreshes within the session.
+fn file_filter_row(ui: &mut Ui, state: &mut AppState) {
+    ui.horizontal(|ui| {
+        let resp = widgets::search_input(ui, "Filter files", &mut state.ui.file_filter);
+        if state.ui.focus_file_filter {
+            resp.request_focus();
+            state.ui.focus_file_filter = false;
+        }
+        // egui surrenders focus on bare Escape; pair that transition with
+        // clearing the query so Esc means "filter off".
+        if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+            state.ui.file_filter.clear();
+        }
+    });
+}
+
+/// Narrow `buckets` to changes whose path contains the file filter
+/// (case-insensitive substring, log-search style). Returns the filtered
+/// buckets plus the zero-match message to paint — empty when no filter is
+/// active and the caller's own empty text applies.
+fn filter_buckets<'a>(state: &AppState, mut buckets: Vec<Bucket<'a>>) -> (Vec<Bucket<'a>>, String) {
+    let query = state.ui.file_filter.trim().to_lowercase();
+    if query.is_empty() {
+        return (buckets, String::new());
+    }
+    for bucket in &mut buckets {
+        bucket
+            .changes
+            .retain(|c| c.path.display().to_string().to_lowercase().contains(&query));
+    }
+    buckets.retain(|b| !b.changes.is_empty());
+    let shown = state.ui.file_filter.trim();
+    (buckets, format!("No files match '{shown}'."))
 }
 
 // ------------------------------------------------------------ tab bodies --
@@ -227,9 +271,14 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    let buckets = canonical_buckets(state);
+    let (buckets, no_match) = filter_buckets(state, canonical_buckets(state));
+    let empty_text = if no_match.is_empty() {
+        "No local changes."
+    } else {
+        &no_match
+    };
     let mut actions = Vec::new();
-    bucket_groups(ui, state, &buckets, "No local changes.", &mut actions);
+    bucket_groups(ui, state, &buckets, empty_text, &mut actions);
     apply_actions(state, actions);
 }
 
@@ -275,10 +324,31 @@ fn unversioned_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    let buckets = unversioned_buckets(state);
+    let (buckets, no_match) = filter_buckets(state, unversioned_buckets(state));
+    let empty_text = if no_match.is_empty() {
+        "No unversioned files."
+    } else {
+        &no_match
+    };
     let mut actions = Vec::new();
-    bucket_groups(ui, state, &buckets, "No unversioned files.", &mut actions);
+    bucket_groups(ui, state, &buckets, empty_text, &mut actions);
     apply_actions(state, actions);
+}
+
+/// Flat changed-file paths of the active Commit sub-tab in display order —
+/// the F7/Shift+F7 cross-file traversal list (spec R7). Unfiltered by the
+/// file filter: navigation walks the real changelist. The Phase-J
+/// placeholder tabs contribute nothing.
+pub(crate) fn active_subtab_files(state: &AppState) -> Vec<PathBuf> {
+    let buckets = match state.ui.commit_subtab {
+        CommitSubTab::LocalChanges => canonical_buckets(state),
+        CommitSubTab::UnversionedFiles => unversioned_buckets(state),
+        CommitSubTab::Shelf | CommitSubTab::Stash => return Vec::new(),
+    };
+    buckets
+        .iter()
+        .flat_map(|b| b.changes.iter().map(|c| c.path.clone()))
+        .collect()
 }
 
 /// Collapsible count-badged groups; per-root sub-groups with select-all for

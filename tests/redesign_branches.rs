@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use common::{assert_not_painted, assert_painted, galley_origin, painted_text};
 use egui::Key;
-use egui_kittest::{Harness, kittest::Queryable as _};
+use egui_kittest::{Harness, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
 use turbogit::state::{AppState, Dialog};
 use turbogit::theme::Palette;
@@ -280,11 +280,14 @@ fn new_branch_flow_creates_and_checks_out() {
         "New Branch… must open the New Branch dialog"
     );
 
-    // Type into the dialog's first input (Name:).
+    // Type into the dialog's first input (Name:). The Commit window's file
+    // filter (spec R7) also matches Role::TextInput but carries an
+    // accessible label ("Filter files"); the dialog's raw fields are
+    // unlabeled.
     {
         let name_field = harness
             .get_all_by_role(egui::accesskit::Role::TextInput)
-            .next()
+            .find(|n| n.accesskit_node().label().is_none())
             .expect("dialog Name input queryable");
         name_field.focus();
         name_field.type_text("issue14-x");
