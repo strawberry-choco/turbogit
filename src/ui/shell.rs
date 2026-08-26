@@ -7,7 +7,9 @@
 //!
 //! Frozen keyboard shortcuts (ADR-0009) are dispatched here unchanged:
 //! Ctrl+K commit · Ctrl+Shift+K push · Ctrl+T refresh · Ctrl+Shift+A find ·
-//! Alt+` VCS operations.
+//! Alt+` VCS operations. Spec R7 adds F7/Shift+F7 hunk navigation and the
+//! `/` file-filter focus behind a three-tier input gate (dialogs → popups →
+//! focused text fields) — see [`handle_shortcuts`].
 
 use std::sync::Arc;
 
@@ -82,13 +84,35 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The five frozen shortcuts (ADR-0009), dispatched exactly as before the
-/// redesign — no rebinding, no new combos.
+/// Shortcut dispatch (ADR-0009 frozen five + spec R7's F7/Shift+F7 and `/`),
+/// behind the three-tier input gate:
+///
+/// - **Tier 1** — a dimmed modal dialog (dialog, Settings, confirm prompt,
+///   conflict editor) is open: every shell shortcut is suppressed.
+/// - **Tier 2** — a floating popup (VCS operations, command palette,
+///   Branches) is open: the popup owns plain typing through its own widgets,
+///   and the R7 keys pause. The frozen five keep their dispatch-first
+///   contract — they read raw input before any widget by design
+///   (`redesign_polish.rs` pins it), so they still fire here; Alt+` stays
+///   live as the VCS popup's owning key and toggles it closed.
+/// - **Tier 3** — a text field holds keyboard focus: `/` goes to that input
+///   instead of arming the file filter, while F7/Shift+F7 stay live (they
+///   are not text keys).
 fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
-    // VCS Operations popup hotkey: Alt+` (Backquote).
-    let open_popup = ui.input(|i| i.key_pressed(Key::Backtick) && i.modifiers.alt);
-    if open_popup {
-        state.ui.vcs_popup = true;
+    let dialog_open = state.ui.dialog.is_some()
+        || state.ui.settings_open
+        || state.ui.confirm.is_some()
+        || state.ui.conflict_open.is_some();
+
+    // Alt+` opens the VCS operations popup — and closes it again while it is
+    // itself open (its owning key), unless a modal dialog swallowed input.
+    if !dialog_open && ui.input(|i| i.key_pressed(Key::Backtick) && i.modifiers.alt) {
+        state.ui.vcs_popup = !state.ui.vcs_popup;
+    }
+
+    let popup_open = state.ui.vcs_popup || state.ui.command_palette || state.ui.branches_popup;
+    if dialog_open {
+        return;
     }
 
     let ks = ui.input(|i| Shortcut {
@@ -111,6 +135,108 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
     if ks.find {
         state.ui.command_palette = true;
         state.ui.command_query.clear();
+    }
+
+    if popup_open {
+        return;
+    }
+
+    // `/` arms the Commit tool window's file filter (spec R7) — only over
+    // the Commit window itself, and never while any text field (including
+    // the filter input) holds the keyboard: then `/` types into it.
+    let slash = ui.input(|i| i.key_pressed(Key::Slash) && !i.modifiers.any());
+    if slash
+        && state.ui.tab == Tab::Commit
+        && !state.show_welcome()
+        && ui.ctx().memory(|m| m.focused().is_none())
+    {
+        state.ui.focus_file_filter = true;
+    }
+
+    // F7 / Shift+F7 hunk navigation (spec R7).
+    let (f7_next, f7_prev) = ui.input(|i| {
+        (
+            i.key_pressed(Key::F7) && !i.modifiers.shift,
+            i.key_pressed(Key::F7) && i.modifiers.shift,
+        )
+    });
+    if f7_next {
+        apply_hunk_nav(state, super::hunk_nav::Dir::Next);
+    } else if f7_prev {
+        apply_hunk_nav(state, super::hunk_nav::Dir::Prev);
+    }
+}
+
+/// Apply one F7/Shift+F7 press (spec R7): decide via the pure
+/// [`hunk_nav::advance_hunk`] over the active Commit sub-tab's changed-file
+/// list, then move the current hunk, show the transient edge hint, or cross
+/// files by retargeting the preview — the same path a file-list click uses,
+/// so `ensure_diff` loads the new diff and lands on its first hunk.
+fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
+    // Only meaningful over a loaded diff preview in the Commit tool window.
+    if state.ui.tab != Tab::Commit || state.show_welcome() || state.ui.preview_change.is_none() {
+        return;
+    }
+    let total = super::diff::preview_hunk_count(state);
+    if total == 0 {
+        return;
+    }
+
+    // Cross-file traversal list: the active sub-tab's changed files in
+    // display order. Hunk counts are known only for the previewed file's
+    // loaded diff; every other listed entry is presumed navigable (it is
+    // listed because it changed).
+    let files = super::commit_window::active_subtab_files(state);
+    let current_file = files
+        .iter()
+        .position(|p| Some(p) == state.ui.preview_change.as_ref());
+    let counts: Vec<usize> = files
+        .iter()
+        .map(|p| {
+            if Some(p) == state.ui.preview_change.as_ref() {
+                total
+            } else {
+                1
+            }
+        })
+        .collect();
+    let has_adjacent_file = current_file.is_some_and(|from| {
+        super::hunk_nav::adjacent_file_with_hunks(&counts, from, dir).is_some()
+    });
+
+    let now = std::time::Instant::now();
+    match super::hunk_nav::advance_hunk(
+        state.ui.diff_current_hunk,
+        total,
+        dir,
+        now,
+        state.ui.hunk_nav_armed_edge,
+        super::hunk_nav::EDGE_WINDOW,
+        has_adjacent_file,
+    ) {
+        super::hunk_nav::Outcome::Moved(idx) => {
+            state.ui.diff_current_hunk = idx;
+            state.ui.hunk_nav_armed_edge = None;
+        }
+        super::hunk_nav::Outcome::Nudge => {
+            let hint = match dir {
+                super::hunk_nav::Dir::Next => "Press again for next file",
+                super::hunk_nav::Dir::Prev => "Press again for previous file",
+            };
+            state.ui.toast = Some(crate::state::Toast::info(hint));
+            state.ui.hunk_nav_armed_edge = Some((dir, now));
+        }
+        super::hunk_nav::Outcome::CrossFile => {
+            state.ui.hunk_nav_armed_edge = None;
+            if let Some(from) = current_file
+                && let Some(target) = super::hunk_nav::adjacent_file_with_hunks(&counts, from, dir)
+                && let Some(path) = files.get(target)
+            {
+                state.ui.preview_change = Some(path.clone());
+                // Landing hunk: ensure_diff resets to the first hunk on the
+                // fresh load.
+            }
+        }
     }
 }
 

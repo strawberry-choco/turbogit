@@ -343,11 +343,14 @@ fn keyboard_navigation_never_lands_on_a_settings_tab() {
     settle(&mut harness);
 
     // Narrow the action list first (the query field auto-focuses), exactly
-    // like a keyboard user would — the full list scrolls.
+    // like a keyboard user would — the full list scrolls. The Commit
+    // window's file filter (spec R7) also matches Role::TextInput but
+    // carries an accessible label ("Filter files"); the palette query is
+    // unlabeled.
     {
         let query = harness
             .get_all_by_role(Role::TextInput)
-            .next()
+            .find(|n| n.accesskit_node().label().is_none())
             .expect("palette query field queryable");
         query.focus();
         query.type_text("sett");

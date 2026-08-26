@@ -177,3 +177,17 @@ its own display row. The unit the diff viewer scrolls and positions by.
 Unified mode pages by underlying diff lines, so it shows more rows than
 side-by-side for the same diff whenever pairs exist.
 _Avoid_: row model, diff line (a display row may pair two)
+
+**Current hunk**:
+The single hunk of the open diff that all hunk navigation and granular verbs
+act on: buttons, hover, and keyboard navigation set it; stage/unstage consume
+it. There is exactly one at a time. Moving past the last (or before the
+first) hunk does nothing on the first key press; pressing again within a
+short window crosses to the first hunk of the next (or previous) file.
+_Avoid_: hovered hunk, selected hunk (there is only one)
+
+**File filter**:
+A `/`-triggered text filter over the changed-file list in the Commit tool
+window; shared by both sub-tabs. Distinct from log search, which filters
+commits.
+_Avoid_: search (reserved for log search), quick filter

@@ -223,7 +223,7 @@ fn run_palette_entry(h: &mut Harness<'_, AppState>, query: &str, label: &str) {
 }
 
 #[test]
-fn palette_stage_verb_dispatches_forward_apply_for_hovered_hunk() {
+fn palette_stage_verb_dispatches_forward_apply_for_current_hunk() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "palette-stage");
     seed_two_hunk_change(&repo);
@@ -240,8 +240,8 @@ fn palette_stage_verb_dispatches_forward_apply_for_hovered_hunk() {
         "diff preview should load"
     );
 
-    // The pointer rests on hunk 1 (0-based index 0).
-    h.state_mut().ui.hovered_hunk = Some(0);
+    // Aim the current hunk at hunk 1 (0-based index 0).
+    h.state_mut().ui.diff_current_hunk = 0;
     h.run();
 
     run_palette_entry(&mut h, "stage hunk", "Stage Hunk");
@@ -252,14 +252,14 @@ fn palette_stage_verb_dispatches_forward_apply_for_hovered_hunk() {
                 direction: ApplyDirection::Forward
             }
         )),
-        "palette `s` must apply the hovered hunk's composed patch forward, \
+        "palette `s` must apply the current hunk's composed patch forward, \
          recorded={:?}",
         recorder.recorded()
     );
 }
 
 #[test]
-fn palette_stage_verb_no_ops_without_a_hovered_hunk() {
+fn palette_stage_verb_no_ops_without_a_previewed_file() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "palette-noop");
     seed_two_hunk_change(&repo);
@@ -268,14 +268,8 @@ fn palette_stage_verb_no_ops_without_a_hovered_hunk() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    h.get_by_label("words.txt").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "diff preview should load"
-    );
-
-    // No hunk under the pointer: the verb must be a no-op.
+    // No file selected for preview: the verb must be a silent no-op.
+    assert!(h.state().ui.preview_change.is_none());
     run_palette_entry(&mut h, "stage hunk", "Stage Hunk");
 
     std::thread::sleep(Duration::from_millis(300));
@@ -285,14 +279,14 @@ fn palette_stage_verb_no_ops_without_a_hovered_hunk() {
             .recorded()
             .iter()
             .any(|c| matches!(c, RecordedCall::ApplyPatch { .. })),
-        "palette `s` without a hovered hunk must not reach the engine, \
+        "palette `s` without a previewed file must not reach the engine, \
          recorded={:?}",
         recorder.recorded()
     );
 }
 
 #[test]
-fn palette_unstage_verb_dispatches_reverse_apply_for_hovered_hunk() {
+fn palette_unstage_verb_dispatches_reverse_apply_for_current_hunk() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "palette-unstage");
     seed_two_hunk_change(&repo);
@@ -308,7 +302,8 @@ fn palette_unstage_verb_dispatches_reverse_apply_for_hovered_hunk() {
         "diff preview should load"
     );
 
-    h.state_mut().ui.hovered_hunk = Some(0);
+    // Aim the current hunk at hunk 1 (0-based index 0).
+    h.state_mut().ui.diff_current_hunk = 0;
     h.run();
 
     run_palette_entry(&mut h, "unstage hunk", "Unstage Hunk");
@@ -319,7 +314,7 @@ fn palette_unstage_verb_dispatches_reverse_apply_for_hovered_hunk() {
                 direction: ApplyDirection::Reverse
             }
         )),
-        "palette `u` must reverse-apply the hovered hunk's patch against the \
+        "palette `u` must reverse-apply the current hunk's patch against the \
          index, recorded={:?}",
         recorder.recorded()
     );
