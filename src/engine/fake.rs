@@ -45,6 +45,10 @@ pub struct FakeExecutor {
     pub repos: Mutex<Vec<PathBuf>>,
     /// Working-tree file contents served by `show_file` (`:<n>` revs).
     pub files: Mutex<HashMap<PathBuf, String>>,
+    /// Raw binary file contents served by `show_file_bytes` (`:<n>` revs);
+    /// consulted before [`Self::files`] so image/binary tests can stage
+    /// non-UTF-8 blobs (R8).
+    pub files_bytes: Mutex<HashMap<PathBuf, Vec<u8>>>,
     /// Branches returned per repo path.
     pub branches: HashMap<PathBuf, Vec<Branch>>,
     /// Current branch per repo path (`None` = detached).
@@ -70,6 +74,7 @@ impl FakeExecutor {
         Self {
             repos: Mutex::new(Vec::new()),
             files: Mutex::new(HashMap::new()),
+            files_bytes: Mutex::new(HashMap::new()),
             branches: HashMap::new(),
             current_branch: HashMap::new(),
             remotes: HashMap::new(),
@@ -377,6 +382,23 @@ impl GitExecutor for FakeExecutor {
             .get(path)
             .cloned()
             .unwrap_or_default())
+    }
+
+    fn show_file_bytes(&self, _root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
+        // Same rev-agnostic convention as `show_file`: binary content staged
+        // in `files_bytes` wins, text staged in `files` degrades to its UTF-8
+        // bytes; anything else is a clear unknown-path error.
+        let _ = rev;
+        if let Some(bytes) = self.files_bytes.lock().unwrap().get(path) {
+            return Ok(bytes.clone());
+        }
+        if let Some(text) = self.files.lock().unwrap().get(path) {
+            return Ok(text.clone().into_bytes());
+        }
+        Err(crate::error::TgError::Other(format!(
+            "fake executor: no content recorded for `{}`",
+            path.display()
+        )))
     }
 
     // ---- revert / undo ----
