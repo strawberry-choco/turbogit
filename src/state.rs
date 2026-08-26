@@ -391,9 +391,7 @@ impl AppState {
     pub fn launch_in(project_dir: Option<PathBuf>, recents_config_dir: Option<PathBuf>) -> Self {
         let (tx, rx) = unbounded();
         let settings = VcsSettings::default();
-        let executor: Arc<dyn GitExecutor> = Arc::new(crate::engine::cli::CliExecutor {
-            settings: settings.clone(),
-        });
+        let executor = crate::engine::build_executor(&settings);
         let mut state = Self {
             project_dir: project_dir.clone().unwrap_or_default(),
             executor,
@@ -457,9 +455,7 @@ impl AppState {
     pub fn for_roots(project_dir: &Path, roots: &[PathBuf]) -> Self {
         let (tx, rx) = unbounded();
         let settings = VcsSettings::default();
-        let executor: Arc<dyn GitExecutor> = Arc::new(crate::engine::cli::CliExecutor {
-            settings: settings.clone(),
-        });
+        let executor = crate::engine::build_executor(&settings);
         let mut state = Self {
             project_dir: project_dir.to_path_buf(),
             executor,

@@ -8,6 +8,8 @@ use crate::core::granular;
 use crate::root_caches::Affected;
 use crate::state::{AppState, Dialog, Tab, Toast};
 use egui::Ui;
+use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 
 /// Every globally-invokable action, reused by both the VCS popup and the
 /// command palette — and by the shell's Git menu (issue #9).
@@ -219,6 +221,42 @@ pub fn vcs_operations(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
+/// Fuzzy-rank the palette action set against `query` (L3: nucleo-matcher
+/// replaces the old lowercase-substring filter). An empty query keeps every
+/// action in the default order; otherwise non-matching entries are dropped
+/// and survivors sort by descending score, ties broken by default order.
+fn palette_matches(query: &str) -> Vec<Action> {
+    let actions = Action::palette_actions();
+    if query.is_empty() {
+        return actions.to_vec();
+    }
+    // Built per invocation: the palette is a single small list, so reusing a
+    // matcher across frames buys nothing and UI state must stay untouched.
+    let mut matcher = Matcher::new(Config::DEFAULT);
+    // `Pattern::new` splits on whitespace into independently fuzzy-matched
+    // words ("go log" finds "Go to Log") without the `!`/`^`/`'` syntax of
+    // `Pattern::parse`; case-insensitive like the filter it replaces.
+    let pattern = Pattern::new(
+        query,
+        CaseMatching::Ignore,
+        Normalization::Smart,
+        AtomKind::Fuzzy,
+    );
+    let mut buf = Vec::new();
+    let mut scored: Vec<(u32, usize)> = actions
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &a)| {
+            let haystack = Utf32Str::new(a.label(), &mut buf);
+            pattern
+                .score(haystack, &mut matcher)
+                .map(|score| (score, i))
+        })
+        .collect();
+    scored.sort_by_key(|&(score, i)| (std::cmp::Reverse(score), i));
+    scored.into_iter().map(|(_, i)| actions[i]).collect()
+}
+
 /// Command palette (Epic F5 / "Find Action"). Searchable, keyboard-friendly.
 pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.command_palette {
@@ -229,13 +267,9 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
     // Compact rows so the full action set fits unscrolled (issue #22: every
     // entry must stay listed and reachable, ADR-0011).
     let row_h = 24.0;
-    let q = state.ui.command_query.to_lowercase();
-    let match_count = Action::palette_actions()
-        .iter()
-        .filter(|a| q.is_empty() || a.label().to_lowercase().contains(&q))
-        .count();
+    let matches = palette_matches(&state.ui.command_query);
     let view_h = ctx.input(|i| i.viewport_rect().height());
-    let list_h = ((match_count as f32 + 1.0) * row_h).min((view_h - 220.0).max(120.0));
+    let list_h = ((matches.len() as f32 + 1.0) * row_h).min((view_h - 220.0).max(120.0));
 
     let mut open = true;
     egui::Window::new("Find Action")
@@ -251,11 +285,6 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
             ui.text_edit_singleline(&mut state.ui.command_query)
                 .request_focus();
             ui.separator();
-            let matches: Vec<Action> = Action::palette_actions()
-                .iter()
-                .copied()
-                .filter(|a| q.is_empty() || a.label().to_lowercase().contains(&q))
-                .collect();
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.spacing_mut().button_padding = egui::vec2(8.0, 2.0);
             ui.spacing_mut().interact_size.y = 16.0;

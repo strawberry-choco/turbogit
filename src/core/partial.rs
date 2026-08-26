@@ -7,9 +7,10 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use crate::engine::{ApplyDirection, GitExecutor};
-use crate::error::TgResult;
+use crate::error::{TgError, TgResult};
 use crate::model::ChangeStatus;
 use std::path::{Path, PathBuf};
 
@@ -82,6 +83,38 @@ fn ensure_granular_allowed(status: ChangeStatus) -> TgResult<()> {
     Ok(())
 }
 
+/// Whether `err` is git's fail-fast index-lock collision: `git apply` (and
+/// every index writer) takes `.git/index.lock` exclusively and aborts with
+/// exit 128 when anything else — a status refresh over a racy index, an IDE,
+/// a background fetch — holds or is creating it. The collision is momentary
+/// by nature, so it is safe to retry; everything else is a real failure.
+fn is_transient_index_lock(err: &TgError) -> bool {
+    let msg = err.to_string();
+    msg.contains("index.lock") && msg.contains("File exists")
+}
+
+/// Run `op`, retrying briefly while it fails with a transient index-lock
+/// collision ([`is_transient_index_lock`]). Bounded: a handful of attempts
+/// with a growing sub-second backoff, then the last error propagates — a
+/// genuinely stale lock must still surface to the user.
+pub(crate) fn retry_on_transient_lock<T>(mut op: impl FnMut() -> TgResult<T>) -> TgResult<T> {
+    /// Total bounded wait stays well under a second: lock holders here are
+    /// other short-lived git processes, not stuck ones.
+    const ATTEMPTS: usize = 6;
+    const BACKOFF_MS: u64 = 25;
+    let mut attempt = 1usize;
+    loop {
+        match op() {
+            ok @ Ok(_) => return ok,
+            Err(e) if attempt < ATTEMPTS && is_transient_index_lock(&e) => {
+                std::thread::sleep(Duration::from_millis(BACKOFF_MS * attempt as u64));
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Stage the selected hunks/lines of one file's diff into the index.
 ///
 /// Composes the patch from raw diff text (ADR-0013) and applies it forward.
@@ -99,7 +132,7 @@ pub fn stage_selection(
     if patch.is_empty() {
         return Ok(());
     }
-    vcs.apply_patch_to_index(root, &patch, ApplyDirection::Forward)
+    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &patch, ApplyDirection::Forward))
 }
 
 /// Unstage the selected hunks/lines of one file's diff from the index.
@@ -120,7 +153,7 @@ pub fn unstage_selection(
     if patch.is_empty() {
         return Ok(());
     }
-    vcs.apply_patch_to_index(root, &patch, ApplyDirection::Reverse)
+    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &patch, ApplyDirection::Reverse))
 }
 
 /// Stage part of an untracked file's content into the index.
@@ -141,8 +174,10 @@ pub fn stage_untracked_selection(
     if patch.is_empty() {
         return Ok(());
     }
-    vcs.add_intent_to_add(root, paths)?;
-    vcs.apply_patch_to_index(root, &patch, ApplyDirection::Forward)
+    // Both calls take the index lock (`add -N` writes the index too), so
+    // each gets the transient-collision retry independently.
+    retry_on_transient_lock(|| vcs.add_intent_to_add(root, paths))?;
+    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &patch, ApplyDirection::Forward))
 }
 
 /// Keep context lines and the selected changed lines of one hunk body.
@@ -386,5 +421,66 @@ mod tests {
             "blocked operations must not reach the engine — \
              conflicts resolve through the conflict modal"
         );
+    }
+
+    // --- transient index-lock retry ------------------------------------------
+
+    fn lock_error() -> TgError {
+        TgError::Cli {
+            code: 128,
+            stderr: "fatal: Unable to create '/repo/.git/index.lock': File exists.\n\n\
+                     Another git process seems to be running in this repository"
+                .into(),
+        }
+    }
+
+    #[test]
+    fn retry_succeeds_after_a_transient_lock_collision() {
+        let mut calls = 0usize;
+        let result: TgResult<()> = retry_on_transient_lock(|| {
+            calls += 1;
+            if calls == 1 {
+                Err(lock_error())
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_ok(), "one lock collision must be retried away");
+        assert_eq!(calls, 2, "exactly one retry after a transient collision");
+    }
+
+    #[test]
+    fn retry_is_bounded_for_a_persistently_locked_index() {
+        let mut calls = 0usize;
+        let result: TgResult<()> = retry_on_transient_lock(|| {
+            calls += 1;
+            Err(lock_error())
+        });
+        assert!(result.is_err(), "a stale lock must surface as an error");
+        assert!(calls > 1, "transient collisions are retried");
+    }
+
+    #[test]
+    fn retry_does_not_mask_unrelated_failures() {
+        let mut calls = 0usize;
+        let result: TgResult<()> = retry_on_transient_lock(|| {
+            calls += 1;
+            Err(TgError::Cli {
+                code: 1,
+                stderr: "error: patch does not apply".into(),
+            })
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 1, "real patch failures must not be retried");
+    }
+
+    #[test]
+    fn retry_classifier_matches_only_lock_collisions() {
+        assert!(is_transient_index_lock(&lock_error()));
+        assert!(!is_transient_index_lock(&TgError::Cli {
+            code: 1,
+            stderr: "error: patch does not apply".into(),
+        }));
+        assert!(!is_transient_index_lock(&TgError::Other("boom".into())));
     }
 }

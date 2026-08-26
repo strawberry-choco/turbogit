@@ -13,15 +13,13 @@
 //! conversion, commit checks, Manage Remotes, Notifications/Keymap
 //! categories) render visible-but-disabled with tooltips and never persist.
 
-use std::sync::Arc;
-
 use egui::{
     Align, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, RichText, Sense, TextEdit, Ui,
     UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 
 use super::widgets;
-use crate::model::{CleanTreeMethod, DateFormat, UpdateMethod, VcsSettings};
+use crate::model::{CleanTreeMethod, DateFormat, GitBackend, UpdateMethod, VcsSettings};
 use crate::state::{AppState, Toast};
 use crate::theme::Palette;
 
@@ -206,6 +204,20 @@ fn version_control_page(ui: &mut Ui, s: &mut VcsSettings) {
                 ui.selectable_value(&mut s.clean_tree_method, CleanTreeMethod::Shelve, "Shelve");
             });
     });
+    ui.horizontal(|ui| {
+        ui.label("Git backend:");
+        egui::ComboBox::from_id_salt("settings_git_backend")
+            .selected_text(backend_label(s.backend))
+            .width(180.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut s.backend, GitBackend::Cli, "Command-line git");
+                ui.selectable_value(
+                    &mut s.backend,
+                    GitBackend::Libgit2,
+                    "libgit2 (experimental)",
+                );
+            });
+    });
 
     ui.add_space(6.0);
     setting_row(
@@ -285,6 +297,13 @@ fn clean_tree_label(m: CleanTreeMethod) -> &'static str {
     }
 }
 
+fn backend_label(b: GitBackend) -> &'static str {
+    match b {
+        GitBackend::Cli => "Command-line git",
+        GitBackend::Libgit2 => "libgit2",
+    }
+}
+
 fn date_format_label(f: DateFormat) -> &'static str {
     match f {
         DateFormat::Relative => "Relative",
@@ -351,17 +370,15 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// Persist the draft into live state + `.turbogit/state.ron`, rebuild the
-/// engine behind the seam (ADR-0001: a changed git binary applies live), and
-/// keep the modal open with a clean draft.
+/// engine behind the seam (ADR-0001: a changed git binary or backend applies
+/// live), and keep the modal open with a clean draft.
 fn apply_settings(state: &mut AppState) {
     let Some(draft) = state.ui.settings_draft.clone() else {
         return;
     };
     state.settings = draft;
     let _ = crate::persistence::save_settings(&state.project_dir, &state.settings);
-    state.executor = Arc::new(crate::engine::cli::CliExecutor {
-        settings: state.settings.clone(),
-    });
+    state.executor = crate::engine::build_executor(&state.settings);
     state.persist_ui();
     state.ui.toast = Some(Toast::success("Settings saved"));
 }

@@ -35,6 +35,7 @@
 //!   frame path through the same async-event seam as diffs and cache
 //!   decoded results beside them.
 
+use crate::core::diff_engine;
 use crate::core::granular::{self, comparison_triple, diff_key};
 use crate::engine::{AppEvent, DecodedImage, FetchedBlob, GitExecutor};
 use crate::model::{ChangeStatus, DiffOpts};
@@ -209,6 +210,42 @@ fn parse(text: &str) -> Vec<Row> {
     // Raw paging ordinals are assigned by [`build_model`] over the
     // header-prefixed space (ADR-0014, spec R8).
     rows
+}
+
+/// Normalized view of one parsed row (Phase L1 parity seam): the kind tag,
+/// display text, and gutter numbers — exactly what rendering keys on,
+/// flattened for cross-module comparison.
+#[doc(hidden)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowSummary {
+    /// `"meta" | "hunk" | "context" | "del" | "add"`.
+    pub kind: &'static str,
+    pub text: String,
+    pub old_no: usize,
+    pub new_no: usize,
+}
+
+/// Row stream [`parse`] builds from unified-diff text, normalized into
+/// [`RowSummary`]s. Doc-hidden test seam: lets integration tests assert
+/// in-process (`similar`) vs CLI (`git diff`) row-stream equality without
+/// exposing the renderer's private model.
+#[doc(hidden)]
+pub fn parsed_rows(text: &str) -> Vec<RowSummary> {
+    parse(text)
+        .into_iter()
+        .map(|row| RowSummary {
+            kind: match row.kind {
+                RowKind::Meta | RowKind::RenameHeader => "meta",
+                RowKind::Hunk => "hunk",
+                RowKind::Context => "context",
+                RowKind::Del => "del",
+                RowKind::Add => "add",
+            },
+            text: row.text,
+            old_no: row.old_no,
+            new_no: row.new_no,
+        })
+        .collect()
 }
 
 // --- per-file section metadata (R8) ------------------------------------------
@@ -1033,6 +1070,11 @@ fn ensure_diff(
         let executor: Arc<dyn crate::engine::GitExecutor> = state.executor.clone();
         let tx = state.tx.clone();
         let root = root.to_path_buf();
+        // Phase L1: when the setting asks for in-process diffs, the worker
+        // computes the patch with `similar`; `diff_text` itself falls back to
+        // this same CLI call whenever the in-process path cannot produce it
+        // (multi-file targets, unreadable sides, non-UTF-8 content).
+        let in_process = state.settings.in_process_diffs;
         let opts = DiffOpts {
             staged,
             ignore_whitespace,
@@ -1042,7 +1084,11 @@ fn ensure_diff(
             ..DiffOpts::default()
         };
         std::thread::spawn(move || {
-            let res = executor.diff(&root, &opts);
+            let res = if in_process {
+                diff_engine::diff_text(executor.as_ref(), &root, &opts)
+            } else {
+                executor.diff(&root, &opts)
+            };
             let _ = tx.send(AppEvent::DiffReady { key, result: res });
         });
     }

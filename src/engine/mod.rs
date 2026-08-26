@@ -1,17 +1,17 @@
 //! Git engine layer.
 //!
-//! The `GitExecutor` trait is the **only** thing that talks to git. The
-//! primary implementation, [`cli::CliExecutor`], shells out to the system `git`
-//! binary. An optional [`gix_reader`] (feature `gix-reader`) implements the
-//! read-only methods in-process. All mutating ops always go through the CLI.
+//! The `GitExecutor` trait is the **only** thing that talks to git. The plain
+//! [`cli::CliExecutor`] shells out to the system `git` binary; the
+//! [`git2_exec::Git2Executor`] alternative runs supported operations
+//! in-process via libgit2 and falls back to the CLI for the rest. All
+//! mutating ops always go through the CLI.
 //!
 //! See `product-spec.md` §10 and `execution-plan.md` §3.
 
 pub mod cli;
 #[cfg(test)]
 pub mod fake;
-#[cfg(feature = "gix-reader")]
-pub mod gix_reader;
+pub mod git2_exec;
 
 use crate::error::TgResult;
 use crate::model::*;
@@ -334,5 +334,20 @@ pub trait GitExecutor: Send + Sync {
     /// Is `path` inside a git work tree? (used by auto-detect / scanner).
     fn is_repo(&self, path: &Path) -> bool {
         self.current_branch(path).is_ok()
+    }
+}
+
+/// Construct the engine for `settings` behind the seam (ADR-0001): selects
+/// the libgit2-backed executor when `settings.backend` asks for it,
+/// otherwise the plain CLI executor (library-migration plan Phase L2).
+/// Callers rebuild this whenever settings change (e.g. the settings modal's
+/// Apply), exactly like they rebuilt a bare [`cli::CliExecutor`] before.
+pub fn build_executor(settings: &VcsSettings) -> std::sync::Arc<dyn GitExecutor> {
+    let cli = cli::CliExecutor {
+        settings: settings.clone(),
+    };
+    match settings.backend {
+        GitBackend::Libgit2 => std::sync::Arc::new(git2_exec::Git2Executor::new(cli)),
+        GitBackend::Cli => std::sync::Arc::new(cli),
     }
 }

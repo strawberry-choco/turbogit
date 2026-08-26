@@ -360,6 +360,20 @@ pub enum DateFormat {
     Iso,
 }
 
+/// Which engine implementation performs git operations
+/// (library-migration plan Phase L2). Libgit2 is now the default in-process
+/// backend; the CLI remains available as a selectable fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum GitBackend {
+    /// Shell out to the system `git` binary. Selectable fallback; also used
+    /// internally by `Git2Executor` for operations git2 cannot perform
+    /// (sync/credential ops, reverse patch apply, intent-to-add).
+    Cli,
+    /// In-process libgit2 via `git2` for supported operations (default).
+    #[default]
+    Libgit2,
+}
+
 /// Project + per-root settings, serialized under `.turbogit/`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VcsSettings {
@@ -391,6 +405,18 @@ pub struct VcsSettings {
     pub date_format: DateFormat,
     /// IDE-wide "do not run git commit hooks".
     pub no_commit_hooks: bool,
+    /// Git engine backend (library-migration plan Phase L2).
+    #[serde(default)]
+    pub backend: GitBackend,
+    /// Compute unified diffs in-process with `similar` instead of
+    /// post-processing CLI diff text (Phase L1). `false` rolls back to the
+    /// CLI-produced text path.
+    #[serde(default = "default_true")]
+    pub in_process_diffs: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for VcsSettings {
@@ -410,6 +436,8 @@ impl Default for VcsSettings {
             gutter_markers: true,
             date_format: DateFormat::default(),
             no_commit_hooks: false,
+            backend: GitBackend::default(),
+            in_process_diffs: true,
         }
     }
 }
