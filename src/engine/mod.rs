@@ -31,6 +31,25 @@ pub enum ApplyDirection {
     Reverse,
 }
 
+/// A decoded image ready for GPU upload on the UI thread (spec R8):
+/// dimensions plus straight (unmultiplied-alpha) RGBA8 pixels, row-major.
+/// Produced on worker threads; only the upload itself touches egui.
+#[derive(Debug)]
+pub struct DecodedImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// One fetched side of a non-text diff pane (spec R8): the raw byte length
+/// (drives the binary-change caption) plus the decoded image when the side
+/// was decodable within the size cap.
+#[derive(Debug)]
+pub struct FetchedBlob {
+    pub byte_len: u64,
+    pub decoded: Option<DecodedImage>,
+}
+
 /// Events posted from worker threads back to the UI thread over a channel.
 ///
 /// The app drains these in `update()` and calls `ctx.request_repaint()`.
@@ -69,6 +88,16 @@ pub enum AppEvent {
     DiffReady {
         key: String,
         result: TgResult<String>,
+    },
+    /// Raw bytes for the open non-text diff pane (image/binary, spec R8)
+    /// are ready — fetched off the frame path and keyed like
+    /// [`AppEvent::DiffReady`]. A `None` side means missing (new/deleted
+    /// file), unreadable, or over the size cap; the pane falls back to the
+    /// binary-change rendering.
+    FileBytesReady {
+        key: String,
+        old: Option<FetchedBlob>,
+        new: Option<FetchedBlob>,
     },
     /// Ahead/behind counts for a root's current branch were computed.
     AheadBehind {
@@ -284,6 +313,11 @@ pub trait GitExecutor: Send + Sync {
 
     /// Content of a file at a revision (`git show <rev>:<path>`).
     fn show_file(&self, root: &Path, rev: &str, path: &Path) -> TgResult<String>;
+
+    /// Raw bytes of a file at a revision (`git show <rev>:<path>`), captured
+    /// binary-safe: no UTF-8 conversion is applied, so images and other
+    /// non-text blobs survive intact (R8 image/binary diffs).
+    fn show_file_bytes(&self, root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>>;
 
     // ---- revert / undo ----
     /// `git revert <commit>` (inverse commit).

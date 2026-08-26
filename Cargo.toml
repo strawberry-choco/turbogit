@@ -12,6 +12,7 @@ egui = "0.36.1"
 egui_dock = "0.21.1"
 egui_extras = "0.36.1"
 gix = { version = "0.87.0", default-features = false, features = ["status", "blob-diff", "blame", "sha1"], optional = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 log = "0.4.34"
 ron = "0.12.2"
 rfd = "0.17.2"

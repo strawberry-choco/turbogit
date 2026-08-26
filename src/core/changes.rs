@@ -165,6 +165,7 @@ mod tests {
             chunks: vec![],
             staged,
             unstaged: false,
+            orig_path: None,
         }
     }
 

@@ -26,9 +26,17 @@
 //!   "+" / "−" controls that stage / unstage that whole hunk by composing a
 //!   patch from the cached raw diff (ADR-0013) and applying it through the
 //!   async op seam. Conflicted files keep the controls visible but inert.
+//! - **Non-text diffs (spec R8, ADR-0015)**: per-file section metadata is
+//!   scanned beside the rows; rename metadata renders as a leading header
+//!   row (a pure 100% rename shows "No content changes." instead of an
+//!   empty scroller), an image pair renders as decoded pictures with
+//!   dimension/size captions, and a lone binary change renders as a
+//!   one-line description with byte sizes. Non-text bytes fetch off the
+//!   frame path through the same async-event seam as diffs and cache
+//!   decoded results beside them.
 
 use crate::core::granular::{self, comparison_triple, diff_key};
-use crate::engine::AppEvent;
+use crate::engine::{AppEvent, DecodedImage, FetchedBlob, GitExecutor};
 use crate::model::{ChangeStatus, DiffOpts};
 use crate::state::{AppState, DiffComparison};
 use crate::theme::Palette;
@@ -36,10 +44,10 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Response, ScrollArea,
-    Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Sense, TextureOptions, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -63,9 +71,12 @@ fn mono_font() -> FontId {
 
 // --- row model ---------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowKind {
     Meta,
+    /// Rename metadata (CONTEXT.md "Rename header"), synthesized from the
+    /// section scan: leads the content as its own full-width display row.
+    RenameHeader,
     Hunk,
     Context,
     Del,
@@ -87,8 +98,9 @@ struct Row {
     old_no: usize,
     /// 1-based new-file line number (0 when not applicable).
     new_no: usize,
-    /// Ordinal of this row in parse order — the unified-mode paging index
-    /// (ADR-0014): unified windows are ranges over these ordinals.
+    /// Raw ordinal in the display model — parse order plus any leading
+    /// rename-header row — the unified-mode paging index (ADR-0014):
+    /// unified windows are ranges over these ordinals.
     ord: usize,
 }
 
@@ -194,10 +206,242 @@ fn parse(text: &str) -> Vec<Row> {
             new_no += 1;
         }
     }
-    for (ord, row) in rows.iter_mut().enumerate() {
-        row.ord = ord;
-    }
+    // Raw paging ordinals are assigned by [`build_model`] over the
+    // header-prefixed space (ADR-0014, spec R8).
     rows
+}
+
+// --- per-file section metadata (R8) ------------------------------------------
+
+/// Metadata for one `diff --git` file section (spec R8): paths, rename
+/// detection, file-mode changes, and binary-ness — derived purely from the
+/// patch text, never the engine. Rename detection rides on git's own
+/// defaults, so rename/similarity headers may be absent; absence is handled
+/// gracefully.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct FileMeta {
+    /// Path before the change, from the `diff --git a/… b/…` line.
+    old_path: Option<String>,
+    /// Path after the change, from the same line.
+    new_path: Option<String>,
+    /// `similarity index N%` when git emitted a rename estimate.
+    similarity: Option<u32>,
+    /// `rename from`/`rename to` headers were present.
+    renamed: bool,
+    /// `new file mode` header was present.
+    new_file: bool,
+    /// `deleted file mode` header was present.
+    deleted_file: bool,
+    /// The section body carries `Binary files … differ` (no textual hunks).
+    binary: bool,
+}
+
+/// Split the remainder of a `diff --git` line into `(old, new)` paths.
+/// Handles git's quoted form for unusual paths; the plain `a/… b/…` form
+/// splits at the first ` b/` separator.
+fn split_git_paths(rest: &str) -> (Option<String>, Option<String>) {
+    if let Some(first) = rest.strip_prefix('"')
+        && let Some(end) = first.find('"')
+    {
+        let old = &first[..end];
+        let tail = first[end + 1..].trim_start();
+        if let Some(new) = tail.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+            return (Some(old.to_owned()), Some(new.to_owned()));
+        }
+    }
+    match rest.find(" b/") {
+        Some(sep) => (
+            Some(rest[..sep].to_owned()),
+            Some(rest[sep + 1..].to_owned()),
+        ),
+        None => (None, None),
+    }
+}
+
+/// Scan the patch text into per-file section metadata: each `diff --git`
+/// line opens a section that following headers refine. Lines before the
+/// first section (e.g. `git log -p` commit headers) are ignored.
+fn scan_files(text: &str) -> Vec<FileMeta> {
+    let mut files = Vec::new();
+    let mut current: Option<FileMeta> = None;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("diff --git ") {
+            if let Some(done) = current.take() {
+                files.push(done);
+            }
+            let (old_path, new_path) = split_git_paths(rest);
+            current = Some(FileMeta {
+                old_path,
+                new_path,
+                ..FileMeta::default()
+            });
+        } else if let Some(meta) = current.as_mut() {
+            if let Some(pct) = line
+                .strip_prefix("similarity index ")
+                .and_then(|v| v.trim().strip_suffix('%'))
+                .and_then(|v| v.parse().ok())
+            {
+                meta.similarity = Some(pct);
+            } else if line.starts_with("rename from ") || line.starts_with("rename to ") {
+                meta.renamed = true;
+            } else if line.starts_with("new file mode") {
+                meta.new_file = true;
+            } else if line.starts_with("deleted file mode") {
+                meta.deleted_file = true;
+            } else if line.starts_with("Binary files ") && line.ends_with(" differ") {
+                meta.binary = true;
+            }
+        }
+    }
+    files.extend(current);
+    files
+}
+
+/// Formatted rename-header line (CONTEXT.md "Rename header") for a file
+/// section carrying rename metadata; `None` otherwise. The similarity
+/// percentage is omitted when git emitted none.
+fn rename_header_text(meta: &FileMeta) -> Option<String> {
+    if !meta.renamed {
+        return None;
+    }
+    let old = meta
+        .old_path
+        .as_deref()
+        .map(repo_rel_path)
+        .unwrap_or("(unknown)");
+    Some(match meta.similarity {
+        Some(pct) => format!("Renamed from {old} · {pct}% similar"),
+        None => format!("Renamed from {old}"),
+    })
+}
+
+// --- non-text panes (R8, ADR-0015) -------------------------------------------
+
+/// Which pane renders the open diff: text rows, an image pair, or the
+/// binary-change placeholder. Only single-file sections leave the row
+/// model; multi-file texts keep their inline rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaneKind {
+    Text,
+    Image,
+    Binary,
+}
+
+/// Extensions decoded as images (CONTEXT.md "Image diff"). SVG is
+/// deliberately absent — never decoded (ADR-0015); an SVG change renders
+/// as whatever the patch says (text rows or binary placeholder).
+const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
+
+/// Per-image raw-byte cap: over-cap sides fall back to the binary change.
+const IMAGE_CAP_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Decoded-pixel guard: a small blob can still explode into hundreds of MB
+/// of RGBA; beyond this a side counts as undecodable (binary fallback).
+const IMAGE_MAX_PIXELS: u64 = 80_000_000;
+
+/// Extension sniff (case-insensitive) deciding whether a side decodes.
+fn is_image_path(path: &str) -> bool {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+    ext.is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.as_str()))
+}
+
+/// Pane kind of the open diff: an image pair when the single section's
+/// paths both sniff as images, else a lone binary change, else the normal
+/// text rows.
+fn pane_kind(files: &[FileMeta]) -> PaneKind {
+    let [f] = files else {
+        return PaneKind::Text;
+    };
+    let both_images = f.old_path.as_deref().is_some_and(is_image_path)
+        && f.new_path.as_deref().is_some_and(is_image_path);
+    if both_images {
+        PaneKind::Image
+    } else if f.binary {
+        PaneKind::Binary
+    } else {
+        PaneKind::Text
+    }
+}
+
+/// Repo-relative form of a diff-side path: drops git's `a/`/`b/` prefix.
+fn repo_rel_path(path: &str) -> &str {
+    path.strip_prefix("a/")
+        .or_else(|| path.strip_prefix("b/"))
+        .unwrap_or(path)
+}
+
+/// Where one side's bytes come from — mirroring exactly how the viewer's
+/// diff text is requested ([`comparison_triple`] + `CliExecutor::diff`):
+///
+/// | comparison       | old side   | new side     |
+/// |------------------|------------|--------------|
+/// | Repo (HEAD↔wt)   | `HEAD`     | worktree fs  |
+/// | Staged (HEAD↔ix) | `HEAD`     | index `:0`   |
+/// | Local (ix↔wt)    | index `:0` | worktree fs  |
+/// | explicit l..r    | `<left>`   | `<right>`    |
+///
+/// Index revs use git's stage syntax (`:<n>:<path>`), the same style the
+/// conflict reader uses for `:1`/`:2`/`:3`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SideSpec {
+    Rev(String),
+    Worktree,
+    Missing,
+}
+
+/// Byte sources for `(old, new)` of one file section. New files have no old
+/// side; deleted files no new side — those render as the single-image case.
+fn byte_side_specs(
+    left: &Option<String>,
+    right: &Option<String>,
+    staged: bool,
+    meta: &FileMeta,
+) -> (SideSpec, SideSpec) {
+    let old = if meta.new_file {
+        SideSpec::Missing
+    } else {
+        match left {
+            Some(l) => SideSpec::Rev(l.clone()),
+            None if staged => SideSpec::Rev("HEAD".to_owned()),
+            None => SideSpec::Rev(":0".to_owned()),
+        }
+    };
+    let new = if meta.deleted_file {
+        SideSpec::Missing
+    } else {
+        match right {
+            Some(r) => SideSpec::Rev(r.clone()),
+            None if staged => SideSpec::Rev(":0".to_owned()),
+            None => SideSpec::Worktree,
+        }
+    };
+    (old, new)
+}
+
+/// Human-readable byte size ("0 B", "512 B", "1.2 KB", "12 MB") — decimal
+/// units; one decimal below 10 of a unit, whole numbers from there.
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1000.0 && unit + 1 < UNITS.len() {
+        value /= 1000.0;
+        unit += 1;
+    }
+    // Rounding must never print "1000.0 KB" — promote once more instead.
+    if value.round() >= 1000.0 && unit + 1 < UNITS.len() {
+        value /= 1000.0;
+        unit += 1;
+    }
+    let name = UNITS[unit];
+    if unit == 0 || value >= 10.0 {
+        format!("{value:.0} {name}")
+    } else {
+        format!("{value:.1} {name}")
+    }
 }
 
 // --- display-row model (ADR-0014) --------------------------------------------
@@ -216,23 +460,41 @@ enum DisplayRow {
 
 /// Everything rendering needs from one diff, built once per diff text and
 /// memoized beside `diff_cache` (ADR-0014): the display-row vector plus the
-/// index maps hunk navigation — and future R7 keyboard nav — scroll by.
+/// index maps hunk navigation — and R7 keyboard nav — scroll by, and the
+/// per-file section metadata R8 renders from.
 struct DiffModel {
     display: Vec<DisplayRow>,
     /// Underlying parsed-row count: the unified-mode `show_rows` total
-    /// (pairing ignored, each underlying row = one paging slot).
+    /// (pairing ignored, each underlying row = one paging slot). Includes
+    /// any leading rename-header row.
     raw_count: usize,
     /// Underlying-row ordinal → display index, so a unified window over raw
     /// ordinals finds the (possibly mid-pair) display elements covering it.
     raw_to_display: Vec<u32>,
     /// Hunk ordinal → first display index of its header row.
     hunk_first_display: Vec<u32>,
+    /// Per-file section metadata (spec R8), scanned once beside the rows.
+    files: Vec<FileMeta>,
+    /// Formatted rename header (CONTEXT.md "Rename header") of the first
+    /// renamed section, when any — rendered as the leading display row.
+    rename_header: Option<String>,
 }
 
 impl DiffModel {
     /// Number of parsed hunks.
     fn hunk_count(&self) -> usize {
         self.hunk_first_display.len()
+    }
+
+    /// Whether the open diff is a pure rename: a detected rename with 100%
+    /// similarity, no content hunks, and no file-mode creation/deletion —
+    /// the header plus a "no content changes" note stands in for the empty
+    /// scroller (spec R8).
+    fn pure_rename(&self) -> bool {
+        self.hunk_count() == 0
+            && self.files.first().is_some_and(|f| {
+                f.renamed && f.similarity == Some(100) && !f.new_file && !f.deleted_file
+            })
     }
 
     /// First display-row index aiming at `hunk`: the paired-model index in
@@ -285,20 +547,44 @@ fn flush_changed_run(
     raw_to_display.extend(slots.iter().map(|p| start + p));
 }
 
-/// Fold parsed rows into the cached display-row model (ADR-0014):
-/// consecutive Del/Add runs collapse into paired display rows while
-/// meta/hunk/context stay full-width. Also records the index maps so
-/// per-frame work is O(visible rows).
-fn build_model(rows: Vec<Row>) -> DiffModel {
-    let raw_count = rows.len();
+/// Fold parsed rows plus the per-file section scan (spec R8) into the
+/// cached display-row model (ADR-0014): consecutive Del/Add runs collapse
+/// into paired display rows while meta/hunk/context stay full-width, and a
+/// rename header — when the scan found one — leads as its own full-width
+/// row. Also records the index maps so per-frame work is O(visible rows).
+fn build_model(mut rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
     let mut display = Vec::new();
-    let mut raw_to_display = Vec::with_capacity(raw_count);
+    let mut raw_to_display = Vec::with_capacity(rows.len() + 1);
     let mut hunk_first_display = Vec::new();
+
+    // The rename header (CONTEXT.md) leads the content as its own display
+    // row, so every index below — raw ordinals, raw_to_display, and
+    // hunk_first_display — accounts for it and hunks still point at their
+    // own content rows (spec R8, ADR-0014).
+    let rename_header = files.iter().find_map(rename_header_text);
+    if let Some(text) = &rename_header {
+        raw_to_display.push(display.len() as u32);
+        display.push(DisplayRow::Full(Row {
+            kind: RowKind::RenameHeader,
+            text: text.clone(),
+            hunk: 0,
+            line_ord: 0,
+            old_no: 0,
+            new_no: 0,
+            ord: 0,
+        }));
+    }
+    let offset = usize::from(rename_header.is_some());
+    for (raw, row) in rows.iter_mut().enumerate() {
+        row.ord = raw + offset;
+    }
+    let raw_count = rows.len() + offset;
+
     let mut pending: Vec<Row> = Vec::new();
     for row in rows {
         match row.kind {
             RowKind::Del | RowKind::Add => pending.push(row),
-            RowKind::Meta | RowKind::Context => {
+            RowKind::Meta | RowKind::RenameHeader | RowKind::Context => {
                 flush_changed_run(&mut pending, &mut display, &mut raw_to_display);
                 raw_to_display.push(display.len() as u32);
                 display.push(DisplayRow::Full(row));
@@ -317,6 +603,8 @@ fn build_model(rows: Vec<Row>) -> DiffModel {
         raw_count,
         raw_to_display,
         hunk_first_display,
+        files,
+        rename_header,
     }
 }
 
@@ -338,10 +626,327 @@ fn diff_model(text: &str) -> Rc<DiffModel> {
     PARSED_ROWS.with(|slot| {
         let mut memo = slot.borrow_mut();
         if !matches!(&*memo, Some((existing, _)) if existing == text) {
-            *memo = Some((text.to_owned(), Rc::new(build_model(parse(text)))));
+            *memo = Some((
+                text.to_owned(),
+                Rc::new(build_model(parse(text), scan_files(text))),
+            ));
         }
         Rc::clone(&memo.as_ref().expect("memo filled above").1)
     })
+}
+
+// --- non-text pane bytes & textures (R8) -------------------------------------
+
+/// One resolved side of a non-text pane: byte length plus the decoded
+/// image when the side was decodable within the cap. The GPU texture is
+/// built lazily at first paint and kept here so re-showing a file never
+/// re-uploads. Constructed off the frame path via [`PaneSide::from_blob`].
+pub struct PaneSide {
+    pub byte_len: u64,
+    pub image: Option<DecodedImage>,
+    texture: Option<egui::TextureHandle>,
+}
+
+impl PaneSide {
+    pub(crate) fn from_blob(blob: FetchedBlob) -> Self {
+        Self {
+            byte_len: blob.byte_len,
+            image: blob.decoded,
+            texture: None,
+        }
+    }
+}
+
+/// Both sides of one non-text pane result, keyed by load key.
+#[derive(Default)]
+pub struct PaneEntry {
+    pub old: Option<PaneSide>,
+    pub new: Option<PaneSide>,
+}
+
+/// Cache bound: a few entries cover back-and-forth file switching without
+/// pinning every visited image in memory.
+const PANE_CACHE_CAP: usize = 4;
+
+/// Bounded cache of non-text pane results (CONTEXT.md "Root caches"
+/// philosophy): invalidated wholesale with root refreshes through
+/// [`crate::state::AppState::refresh`], never poked field-by-field; evicts
+/// oldest beyond [`PANE_CACHE_CAP`].
+#[derive(Default)]
+pub struct PaneCache {
+    map: HashMap<String, PaneEntry>,
+    order: VecDeque<String>,
+}
+
+impl PaneCache {
+    pub fn get(&self, key: &str) -> Option<&PaneEntry> {
+        self.map.get(key)
+    }
+
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut PaneEntry> {
+        self.map.get_mut(key)
+    }
+
+    /// Insert (or replace), evicting the oldest entry past the cap.
+    pub fn store(&mut self, key: String, entry: PaneEntry) {
+        if !self.map.contains_key(&key) {
+            self.order.push_back(key.clone());
+            while self.order.len() > PANE_CACHE_CAP
+                && let Some(evicted) = self.order.pop_front()
+            {
+                self.map.remove(&evicted);
+            }
+        }
+        self.map.insert(key, entry);
+    }
+
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+}
+
+/// Decode raw bytes into a [`DecodedImage`] when they are an in-cap image.
+/// SVG can never reach this — the extension sniff gates decoding — and a
+/// blob over [`IMAGE_CAP_BYTES`] or with more than [`IMAGE_MAX_PIXELS`]
+/// counts as undecodable so the pane falls back to the binary change.
+fn decode_image(bytes: &[u8]) -> Option<DecodedImage> {
+    if bytes.len() as u64 > IMAGE_CAP_BYTES {
+        return None;
+    }
+    let img = image::load_from_memory(bytes).ok()?;
+    let (width, height) = (img.width(), img.height());
+    if width as u64 * height as u64 > IMAGE_MAX_PIXELS {
+        return None;
+    }
+    Some(DecodedImage {
+        width,
+        height,
+        rgba: img.to_rgba8().into_raw(),
+    })
+}
+
+/// Fetch one side's bytes (worker-thread only): engine blob for rev specs,
+/// filesystem for the worktree — metadata-only when no decode is needed,
+/// since the binary caption wants lengths, not content.
+fn fetch_side(
+    exec: &dyn GitExecutor,
+    root: &std::path::Path,
+    spec: &SideSpec,
+    rel: &str,
+    decode: bool,
+) -> Option<FetchedBlob> {
+    let bytes = match spec {
+        SideSpec::Missing => return None,
+        SideSpec::Worktree => {
+            let full = root.join(rel);
+            if !decode {
+                let len = std::fs::metadata(full).ok()?.len();
+                return Some(FetchedBlob {
+                    byte_len: len,
+                    decoded: None,
+                });
+            }
+            std::fs::read(full).ok()?
+        }
+        SideSpec::Rev(rev) => exec
+            .show_file_bytes(root, rev, std::path::Path::new(rel))
+            .ok()?,
+    };
+    let byte_len = bytes.len() as u64;
+    let decoded = decode.then(|| decode_image(&bytes)).flatten();
+    Some(FetchedBlob { byte_len, decoded })
+}
+
+/// Dispatch the off-frame byte load for a non-text pane when nothing is in
+/// flight and the result is not cached — one in-flight load per target,
+/// mirroring `ensure_diff`. Returns whether an entry for `pane_key` is
+/// already cached.
+#[allow(clippy::too_many_arguments)]
+fn ensure_pane_bytes(
+    state: &mut AppState,
+    pane_key: String,
+    root: &std::path::Path,
+    left: &Option<String>,
+    right: &Option<String>,
+    staged: bool,
+    meta: &FileMeta,
+    decode: bool,
+) -> bool {
+    if state.ui.pane_bytes.get(&pane_key).is_some() {
+        return true;
+    }
+    if state.ui.pane_bytes_loading.is_none() {
+        let (old_spec, new_spec) = byte_side_specs(left, right, staged, meta);
+        // Owned: the worker closure is 'static, the metadata borrow is not.
+        let old_rel = meta
+            .old_path
+            .as_deref()
+            .map(|p| repo_rel_path(p).to_owned())
+            .unwrap_or_default();
+        let new_rel = meta
+            .new_path
+            .as_deref()
+            .map(|p| repo_rel_path(p).to_owned())
+            .unwrap_or_default();
+        let root = root.to_path_buf();
+        let executor = state.executor.clone();
+        let tx = state.tx.clone();
+        state.ui.pane_bytes_loading = Some(pane_key.clone());
+        std::thread::spawn(move || {
+            let old = fetch_side(executor.as_ref(), &root, &old_spec, &old_rel, decode);
+            let new = fetch_side(executor.as_ref(), &root, &new_spec, &new_rel, decode);
+            let _ = tx.send(AppEvent::FileBytesReady {
+                key: pane_key,
+                old,
+                new,
+            });
+        });
+    }
+    false
+}
+
+/// Resolved byte lengths for the binary caption, when both sides resolved.
+fn pane_byte_lens(state: &AppState, pane_key: &str) -> Option<(u64, u64)> {
+    let entry = state.ui.pane_bytes.get(pane_key)?;
+    Some((entry.old.as_ref()?.byte_len, entry.new.as_ref()?.byte_len))
+}
+
+/// Fit `tex` inside `max`, preserving aspect ratio, never upscaling past
+/// the natural pixel size (crisp beats blurry).
+fn fitted(tex: Vec2, max: Vec2) -> Vec2 {
+    if tex.x <= 0.0 || tex.y <= 0.0 {
+        return Vec2::ZERO;
+    }
+    let scale = (max.x / tex.x).min(max.y / tex.y).min(1.0);
+    tex * scale
+}
+
+/// Per-side caption under an image pane: `1920×1080 · 1.2 MB`.
+fn image_caption(side: &PaneSide) -> String {
+    match &side.image {
+        Some(img) => format!(
+            "{}×{} · {}",
+            img.width,
+            img.height,
+            human_size(side.byte_len)
+        ),
+        None => human_size(side.byte_len),
+    }
+}
+
+/// One image cell: the texture fitted into `max`, caption centered below.
+fn image_cell(ui: &mut Ui, side: &PaneSide, max: Vec2) {
+    let tex = side
+        .texture
+        .as_ref()
+        .expect("texture built before painting");
+    ui.with_layout(Layout::top_down(Align::Center), |ui| {
+        ui.add_space(6.0);
+        ui.add(egui::Image::new(tex).fit_to_exact_size(fitted(tex.size_vec2(), max)));
+        ui.add_space(2.0);
+        ui.colored_label(Palette::INK_2, image_caption(side));
+    });
+}
+
+/// Image-diff pane (CONTEXT.md "Image diff", ADR-0015): the two decoded
+/// versions side by side with dimension/size captions, replacing the row
+/// view entirely — the mode toggle has no second layout to switch to and
+/// no hunk affordances exist. Bytes fetch off-frame; while loading a
+/// lightweight note stands in. Over-cap / undecodable / unreadable sides
+/// fall back to the binary-change rendering with whatever sizes resolved;
+/// a new/deleted file renders its single existing side.
+#[allow(clippy::too_many_arguments)]
+fn render_image_pane(
+    ui: &mut Ui,
+    state: &mut AppState,
+    pane_key: &str,
+    root: &std::path::Path,
+    left: &Option<String>,
+    right: &Option<String>,
+    staged: bool,
+    meta: &FileMeta,
+) {
+    if !ensure_pane_bytes(
+        state,
+        pane_key.to_owned(),
+        root,
+        left,
+        right,
+        staged,
+        meta,
+        true,
+    ) {
+        centered_note(ui, "Loading image…");
+        return;
+    }
+    let entry = state
+        .ui
+        .pane_bytes
+        .get_mut(pane_key)
+        .expect("entry cached above");
+    let present: Vec<&PaneSide> = [entry.old.as_ref(), entry.new.as_ref()]
+        .into_iter()
+        .flatten()
+        .collect();
+    if present.is_empty() || present.iter().any(|s| s.image.is_none()) {
+        // Nothing usable decoded: the binary-change fallback (sizes that
+        // did resolve still show).
+        let sizes = match (&entry.old, &entry.new) {
+            (Some(o), Some(n)) => Some((o.byte_len, n.byte_len)),
+            _ => None,
+        };
+        binary_placeholder(ui, sizes);
+        return;
+    }
+    // Lazy GPU upload: decoding happened on the worker; each texture is
+    // built once at first paint and kept in the cache entry.
+    for (i, side) in [entry.old.as_mut(), entry.new.as_mut()]
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        if side.texture.is_none()
+            && let Some(img) = &side.image
+        {
+            let color = egui::ColorImage::from_rgba_unmultiplied(
+                [img.width as usize, img.height as usize],
+                &img.rgba,
+            );
+            side.texture = Some(ui.ctx().load_texture(
+                format!("diff-pane-{pane_key}-{i}"),
+                color,
+                TextureOptions::LINEAR,
+            ));
+        }
+    }
+
+    const CAPTION_H: f32 = 24.0;
+    let avail_h = (ui.available_height() - CAPTION_H).max(ROW_H * 2.0);
+    match (entry.old.as_ref(), entry.new.as_ref()) {
+        (Some(old), Some(new)) => {
+            ui.columns(2, |cols| {
+                let w0 = cols[0].available_width();
+                let w1 = cols[1].available_width();
+                image_cell(&mut cols[0], old, Vec2::new(w0, avail_h));
+                image_cell(&mut cols[1], new, Vec2::new(w1, avail_h));
+            });
+        }
+        // Single-sided (new / deleted file): the lone image, centered.
+        // Covers (None, None) too — the empty-entry fallback above already
+        // returned.
+        (side, None) | (None, side) => {
+            if let Some(side) = side {
+                let width = ui.available_width();
+                image_cell(ui, side, Vec2::new(width, avail_h));
+            }
+        }
+    }
 }
 
 // --- engine access -----------------------------------------------------------
@@ -528,6 +1133,56 @@ pub fn render_diff(
             return;
         }
     };
+
+    // Non-text diffs render outside the display-row model (spec R8,
+    // ADR-0015): a lone binary change or an image pair replaces the rows
+    // entirely — the mode toggle has no second layout to switch to, and
+    // with no hunks there is nothing to navigate or stage. The pane key
+    // inherits the diff cache key, so any reload of the patch text (ops
+    // invalidate it) also refetches the pane bytes.
+    match pane_kind(&model.files) {
+        PaneKind::Text => {}
+        PaneKind::Binary => {
+            let meta = &model.files[0];
+            let pane_key = format!("{key}#bin");
+            ensure_pane_bytes(
+                state,
+                pane_key.clone(),
+                &root,
+                &eff_left,
+                &eff_right,
+                staged,
+                meta,
+                false,
+            );
+            // While loading (or when a side is unreadable) the sizes are
+            // unresolved and the bare description shows — the graceful
+            // fallback text.
+            let sizes = pane_byte_lens(state, &pane_key);
+            binary_placeholder(ui, sizes);
+            return;
+        }
+        PaneKind::Image => {
+            let meta = &model.files[0];
+            let pane_key = format!("{key}#img");
+            render_image_pane(
+                ui, state, &pane_key, &root, &eff_left, &eff_right, staged, meta,
+            );
+            return;
+        }
+    }
+
+    // Pure rename (100% similar, no content hunks): the header plus a note
+    // instead of an empty scroller (spec R8).
+    if model.pure_rename() {
+        if let Some(text) = &model.rename_header {
+            let width = ui.available_width();
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+            paint_rename_header(ui.painter(), &rect, text, &mono_font());
+        }
+        ui.colored_label(Palette::INK_2, "No content changes.");
+        return;
+    }
 
     // Gutter staging controls need the previewed file's status (spec R2);
     // resolved once per frame from the cached changelists.
@@ -1200,7 +1855,7 @@ fn unified_row(
         Some(union) => union.union(rect),
         None => rect,
     });
-    if row.kind != RowKind::Meta && resp.hovered() {
+    if !matches!(row.kind, RowKind::Meta | RowKind::RenameHeader) && resp.hovered() {
         *frame_hover = Some(row.hunk);
     }
     if toggleable {
@@ -1222,6 +1877,7 @@ fn unified_row(
                 font,
             );
         }
+        RowKind::RenameHeader => paint_rename_header(painter, &rect, &row.text, font),
         RowKind::Hunk => {
             painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
             paint_cell(
@@ -1304,6 +1960,50 @@ fn header_band(ui: &mut Ui, width: f32, label: &str) {
         FontId::new(12.0, FontFamily::Proportional),
         Palette::INK,
     );
+}
+
+/// Paint the rename-header text inside a row-shaped band — shared by the
+/// in-scroller display row and the pure-rename static band (spec R8).
+fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &FontId) {
+    paint_cell(
+        painter,
+        rect.left() + TEXT_X,
+        rect,
+        text,
+        Palette::INK_2,
+        font,
+    );
+}
+
+/// Centered muted one-line note filling the remaining pane height.
+fn centered_note(ui: &mut Ui, text: &str) {
+    let width = ui.available_width();
+    let height = ui.available_height().max(ROW_H * 3.0);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    paint_centered(
+        ui.painter(),
+        rect,
+        text,
+        FontId::new(12.0, FontFamily::Proportional),
+        Palette::INK_2,
+    );
+}
+
+/// Binary-change placeholder (CONTEXT.md "Binary change", ADR-0015):
+/// replaces the row-based view for a single binary file section. `sizes`
+/// carries the resolved `(before, after)` byte lengths from the same
+/// off-frame sourcing path the image pane uses; `None` (still loading, or
+/// a side unreadable) renders the bare description.
+fn binary_placeholder(ui: &mut Ui, sizes: Option<(u64, u64)>) {
+    let text = match sizes {
+        Some((before, after)) => format!(
+            "Binary file changed · {} → {}",
+            human_size(before),
+            human_size(after)
+        ),
+        None => "Binary file changed".to_owned(),
+    };
+    centered_note(ui, &text);
 }
 
 /// One side-by-side cell: optional token background band, muted gutter
@@ -1415,6 +2115,14 @@ fn render_side_by_side(
                         Palette::INK_3,
                         &font,
                     );
+                }
+                RowKind::RenameHeader => {
+                    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+                    rows_rect = Some(match rows_rect {
+                        Some(union) => union.union(rect),
+                        None => rect,
+                    });
+                    paint_rename_header(&painter, &rect, &row.text, &font);
                 }
                 RowKind::Hunk => {
                     let (rect, resp) =
@@ -1555,4 +2263,329 @@ fn render_side_by_side(
         }
     }
     commit_current_hunk(state, ui, rows_rect, frame_hover);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rename with content edits: headers plus one hunk (spec R8).
+    const RENAME_WITH_SIMILARITY: &str = "diff --git a/src/old.rs b/src/new.rs\n\
+         similarity index 92%\n\
+         rename from src/old.rs\n\
+         rename to src/new.rs\n\
+         --- a/src/old.rs\n\
+         +++ b/src/new.rs\n\
+         @@ -1 +1 @@\n\
+         -a\n\
+         +b\n";
+
+    #[test]
+    fn diff_rename_header_extracts_similarity() {
+        let files = scan_files(RENAME_WITH_SIMILARITY);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].renamed);
+        assert_eq!(files[0].similarity, Some(92));
+        assert_eq!(files[0].old_path.as_deref(), Some("a/src/old.rs"));
+        assert_eq!(files[0].new_path.as_deref(), Some("b/src/new.rs"));
+        assert_eq!(
+            rename_header_text(&files[0]).as_deref(),
+            Some("Renamed from src/old.rs · 92% similar")
+        );
+    }
+
+    #[test]
+    fn diff_rename_header_omits_missing_similarity() {
+        // Rename detection rides on git defaults; a patch may carry the
+        // rename pair without a similarity estimate.
+        let text = "diff --git a/x.txt b/y.txt\n\
+                    rename from x.txt\n\
+                    rename to y.txt\n";
+        let files = scan_files(text);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].renamed);
+        assert_eq!(files[0].similarity, None);
+        assert_eq!(
+            rename_header_text(&files[0]).as_deref(),
+            Some("Renamed from x.txt")
+        );
+    }
+
+    #[test]
+    fn diff_pure_rename_renders_header_without_hunks() {
+        let text = "diff --git a/old.rs b/new.rs\n\
+                    similarity index 100%\n\
+                    rename from old.rs\n\
+                    rename to new.rs\n";
+        let model = build_model(parse(text), scan_files(text));
+        assert!(model.pure_rename());
+        assert_eq!(pane_kind(&scan_files(text)), PaneKind::Text);
+        assert_eq!(model.hunk_count(), 0);
+        // The header is the sole leading display row; raw paging counts it.
+        assert_eq!(model.raw_count, 5);
+        let DisplayRow::Full(row) = &model.display[0] else {
+            panic!("rename header must be a full-width row");
+        };
+        assert_eq!(row.kind, RowKind::RenameHeader);
+        assert_eq!(row.text, "Renamed from old.rs · 100% similar");
+    }
+
+    #[test]
+    fn diff_binary_section_detected_single_and_mixed() {
+        let binary = "diff --git a/logo.png b/logo.png\n\
+                      index 1111111..2222222 100644\n\
+                      Binary files a/logo.png and b/logo.png differ\n";
+        // A .png section is an image pair by sniff, not a bare binary pane.
+        assert_eq!(pane_kind(&scan_files(binary)), PaneKind::Image);
+
+        let bin_txt = "diff --git a/data.bin b/data.bin\n\
+                       index 1111111..2222222 100644\n\
+                       Binary files a/data.bin and b/data.bin differ\n";
+        assert_eq!(pane_kind(&scan_files(bin_txt)), PaneKind::Binary);
+
+        // A binary section among text sections stays inline: the full-pane
+        // replacement is only for the single-file case (ADR-0015).
+        let mixed = format!("{bin_txt}diff --git a/x.rs b/x.rs\n@@ -1 +1 @@\n-a\n+b\n");
+        let files = scan_files(&mixed);
+        assert_eq!(files.len(), 2);
+        assert!(files[0].binary);
+        assert!(!files[1].binary);
+        assert_eq!(pane_kind(&files), PaneKind::Text);
+    }
+
+    #[test]
+    fn diff_rename_header_keeps_hunk_navigation_aligned() {
+        let model = build_model(
+            parse(RENAME_WITH_SIMILARITY),
+            scan_files(RENAME_WITH_SIMILARITY),
+        );
+        assert_eq!(model.hunk_count(), 1);
+        // The header occupies raw ordinal 0 and display row 0; the hunk
+        // header follows it in both index spaces.
+        assert_eq!(model.raw_to_display[0], 0);
+        assert_eq!(model.hunk_first_display[0], 7);
+        assert_eq!(model.first_row_for_hunk(0, true), Some(7));
+        assert_eq!(model.first_row_for_hunk(0, false), Some(7));
+
+        // Every raw ordinal lands in the display model exactly once — the
+        // invariant unified-mode paging relies on (ADR-0014).
+        let mut ords = Vec::with_capacity(model.raw_count);
+        for disp in &model.display {
+            match disp {
+                DisplayRow::Full(row) => ords.push(row.ord),
+                DisplayRow::Pair(del, add) => {
+                    for row in del.iter().chain(add.iter()) {
+                        ords.push(row.ord);
+                    }
+                }
+            }
+        }
+        ords.sort_unstable();
+        assert_eq!(ords, (0..model.raw_count).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn diff_sections_split_per_file_with_mode_flags() {
+        // Lines before the first `diff --git` (e.g. `git log -p` commit
+        // headers) belong to no section.
+        let text = "commit header noise\n\
+                    diff --git a/added.bin b/added.bin\n\
+                    new file mode 100644\n\
+                    diff --git a/gone.txt b/gone.txt\n\
+                    deleted file mode 100644\n";
+        let files = scan_files(text);
+        assert_eq!(files.len(), 2);
+        assert!(files[0].new_file && !files[0].deleted_file);
+        assert!(files[1].deleted_file && !files[1].renamed);
+        assert_eq!(files[1].old_path.as_deref(), Some("a/gone.txt"));
+    }
+
+    #[test]
+    fn diff_git_paths_parse_quoted_and_plain() {
+        assert_eq!(
+            split_git_paths("a/src/lib.rs b/src/lib.rs"),
+            (
+                Some("a/src/lib.rs".to_owned()),
+                Some("b/src/lib.rs".to_owned())
+            )
+        );
+        assert_eq!(
+            split_git_paths("\"a/we ird\" \"b/ot her\""),
+            (Some("a/we ird".to_owned()), Some("b/ot her".to_owned()))
+        );
+        assert_eq!(split_git_paths("nothing"), (None, None));
+    }
+
+    #[test]
+    fn diff_pane_kind_sniffs_image_extensions() {
+        let meta = |old: &str, new: &str| FileMeta {
+            old_path: Some(old.to_owned()),
+            new_path: Some(new.to_owned()),
+            ..FileMeta::default()
+        };
+        // Case-insensitive sniff on both sides.
+        assert_eq!(pane_kind(&[meta("a/x.PNG", "b/x.png")]), PaneKind::Image);
+        // SVG never decodes: a binary-flagged SVG change stays binary…
+        let mut svg_bin = meta("a/logo.svg", "b/logo.svg");
+        svg_bin.binary = true;
+        assert_eq!(pane_kind(&[svg_bin]), PaneKind::Binary);
+        // …and a textual SVG diff keeps its text rows.
+        assert_eq!(
+            pane_kind(&[meta("a/logo.svg", "b/logo.svg")]),
+            PaneKind::Text
+        );
+        // A non-image text change stays text.
+        assert_eq!(pane_kind(&[meta("a/x.rs", "b/x.rs")]), PaneKind::Text);
+        // No section metadata at all → text rows.
+        assert_eq!(pane_kind(&[]), PaneKind::Text);
+    }
+
+    #[test]
+    fn diff_byte_side_specs_mirror_diff_invocation() {
+        let plain = FileMeta::default();
+        let added = FileMeta {
+            new_file: true,
+            ..FileMeta::default()
+        };
+        let deleted = FileMeta {
+            deleted_file: true,
+            ..FileMeta::default()
+        };
+
+        // Repo chip (HEAD↔worktree): `git diff HEAD`.
+        assert_eq!(
+            byte_side_specs(&Some("HEAD".to_owned()), &None, false, &plain),
+            (SideSpec::Rev("HEAD".to_owned()), SideSpec::Worktree)
+        );
+        // Staged chip (HEAD↔index): `git diff --cached`; index via stage-0.
+        assert_eq!(
+            byte_side_specs(&None, &None, true, &plain),
+            (
+                SideSpec::Rev("HEAD".to_owned()),
+                SideSpec::Rev(":0".to_owned())
+            )
+        );
+        // Local chip (index↔worktree): plain `git diff`.
+        assert_eq!(
+            byte_side_specs(&None, &None, false, &plain),
+            (SideSpec::Rev(":0".to_owned()), SideSpec::Worktree)
+        );
+        // Explicit commit-to-commit targets pass their revs through.
+        assert_eq!(
+            byte_side_specs(
+                &Some("abc123".to_owned()),
+                &Some("def456".to_owned()),
+                false,
+                &plain
+            ),
+            (
+                SideSpec::Rev("abc123".to_owned()),
+                SideSpec::Rev("def456".to_owned())
+            )
+        );
+        // New files have no old side; deleted files no new side.
+        assert_eq!(
+            byte_side_specs(&None, &None, false, &added).0,
+            SideSpec::Missing
+        );
+        assert_eq!(
+            byte_side_specs(&Some("HEAD".to_owned()), &None, false, &deleted).1,
+            SideSpec::Missing
+        );
+    }
+
+    #[test]
+    fn diff_human_size_formats_units() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(999), "999 B");
+        assert_eq!(human_size(1000), "1.0 KB");
+        assert_eq!(human_size(1500), "1.5 KB");
+        // Rounding promotes instead of printing "1000.0 KB".
+        assert_eq!(human_size(999_999), "1.0 MB");
+        assert_eq!(human_size(900_000), "900 KB");
+        assert_eq!(human_size(1_200_000), "1.2 MB");
+        assert_eq!(human_size(12_000_000), "12 MB");
+    }
+
+    #[test]
+    fn diff_image_caption_formats_dimensions() {
+        let side = PaneSide {
+            byte_len: 5,
+            image: Some(DecodedImage {
+                width: 1920,
+                height: 1080,
+                rgba: Vec::new(),
+            }),
+            texture: None,
+        };
+        assert_eq!(image_caption(&side), "1920×1080 · 5 B");
+    }
+
+    #[test]
+    fn diff_decode_image_rejects_garbage_and_over_cap() {
+        assert!(decode_image(b"not an image").is_none());
+        let over_cap = vec![0u8; IMAGE_CAP_BYTES as usize + 1];
+        assert!(decode_image(&over_cap).is_none());
+    }
+
+    #[test]
+    fn diff_fetch_side_reads_rev_blob_and_worktree_file() {
+        let png = {
+            let img = image::DynamicImage::new_rgb8(2, 3);
+            let mut buf = std::io::Cursor::new(Vec::new());
+            img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
+            buf.into_inner()
+        };
+        let exec = crate::engine::fake::FakeExecutor::new();
+        exec.files_bytes
+            .lock()
+            .unwrap()
+            .insert(std::path::PathBuf::from("art.png"), png.clone());
+
+        // Rev side through the engine seam (`<rev>:<path>`).
+        let blob = fetch_side(
+            &exec,
+            std::path::Path::new("/irrelevant"),
+            &SideSpec::Rev("HEAD".to_owned()),
+            "art.png",
+            true,
+        )
+        .expect("rev side readable");
+        assert_eq!(blob.byte_len, png.len() as u64);
+        let decoded = blob.decoded.expect("png decodes");
+        assert_eq!((decoded.width, decoded.height), (2, 3));
+
+        // Worktree side reads the file when decoding…
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("art.png"), &png).unwrap();
+        let blob = fetch_side(&exec, dir.path(), &SideSpec::Worktree, "art.png", true)
+            .expect("worktree side readable");
+        assert_eq!(blob.decoded.as_ref().map(|d| d.width), Some(2));
+
+        // …and uses fs metadata only when lengths suffice (binary caption).
+        let blob = fetch_side(&exec, dir.path(), &SideSpec::Worktree, "art.png", false)
+            .expect("worktree side measurable");
+        assert_eq!(blob.byte_len, png.len() as u64);
+        assert!(blob.decoded.is_none());
+
+        // A missing side (new/deleted file) yields nothing.
+        assert!(fetch_side(&exec, dir.path(), &SideSpec::Missing, "art.png", true).is_none());
+    }
+
+    #[test]
+    fn diff_pane_cache_evicts_oldest_beyond_cap() {
+        let mut cache = PaneCache::default();
+        for i in 0..6 {
+            cache.store(format!("k{i}"), PaneEntry::default());
+        }
+        assert_eq!(cache.len(), PANE_CACHE_CAP);
+        assert!(cache.get("k0").is_none());
+        assert!(cache.get("k1").is_none());
+        for i in 2..6 {
+            assert!(cache.get(&format!("k{i}")).is_some());
+        }
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+    }
 }

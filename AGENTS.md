@@ -15,13 +15,20 @@ TurboGit is a Rust workspace-free binary/library crate built with `eframe`/`egui
 
 ## Build, Test, and Development Commands
 
-- `cargo check` — fast type/borrow checking.
+### Quality Gates (must pass before any commit or PR)
+
+- `cargo fmt -- --check` — verify formatting without modifying files.
+- `cargo check --all-targets` — type/borrow checking across all targets.
+- `cargo clippy --all-targets -- -D warnings` — lint with warnings as errors.
+- `cargo test --all-targets` — run all unit and integration tests.
+
+All four gates must pass; a failure in any one blocks the change.
+
+### Other Commands
+
 - `cargo build` — compile the application.
 - `cargo run` — launch the desktop app locally.
-- `cargo test` — run all unit and integration tests.
 - `cargo test --test phase2` — run one phase suite.
-- `cargo fmt` — format all Rust code.
-- `cargo clippy --all-targets -- -D warnings` — lint with warnings as errors.
 - `cargo test --features gix-reader` — exercise tests with the optional Gix read path enabled.
 
 ## Coding Style & Naming Conventions

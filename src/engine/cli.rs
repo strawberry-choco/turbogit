@@ -36,6 +36,26 @@ impl CliExecutor {
         }
         Ok((stdout, stderr, 0))
     }
+
+    /// [`Self::run`] variant capturing **raw stdout bytes** — binary-safe, no
+    /// UTF-8 conversion is applied to the payload (R8 image/binary diffs).
+    /// stderr is still decoded lossily for error reporting; error mapping is
+    /// identical to [`Self::run`].
+    fn run_bytes(&self, root: &Path, args: &[&str]) -> TgResult<Vec<u8>> {
+        let bin = crate::model::git_binary(&self.settings);
+        let output = Command::new(&bin)
+            .args(args)
+            .current_dir(root)
+            .env("GIT_EDITOR", "true")
+            .output()?;
+        if !output.status.success() {
+            return Err(TgError::Cli {
+                code: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+        Ok(output.stdout)
+    }
 }
 
 impl GitExecutor for CliExecutor {
@@ -77,6 +97,42 @@ impl GitExecutor for CliExecutor {
                     chunks: vec![],
                     staged,
                     unstaged,
+                    orig_path: None,
+                });
+            } else if let Some(rest) = line.strip_prefix("2 ") {
+                // Rename/copy entry. Paths never contain tabs, so the LAST
+                // tab always separates `<path>` from `<origPath>`; the score
+                // column before `<path>` is space-separated on current git
+                // (older drafts documented a tab there — both accepted).
+                // 2 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <X><score> <path>\t<origPath>
+                let tabs: Vec<&str> = rest.splitn(3, '\t').collect();
+                let (head, path, orig) = match tabs.as_slice() {
+                    [head, path, orig] => (*head, path.trim(), orig.trim()),
+                    [head, orig] => (
+                        *head,
+                        tail_from_field(head, 8).unwrap_or("").trim(),
+                        orig.trim(),
+                    ),
+                    _ => continue,
+                };
+                if path.is_empty() {
+                    continue;
+                }
+                let xy = head.split_whitespace().next().unwrap_or("");
+                let status = map_xy(xy);
+                let staged = !xy.starts_with('.');
+                let unstaged = xy.chars().nth(1).is_some_and(|y| y != '.');
+                changes.push(Change {
+                    path: PathBuf::from(path),
+                    status,
+                    chunks: vec![],
+                    staged,
+                    unstaged,
+                    orig_path: if orig.is_empty() {
+                        None
+                    } else {
+                        Some(PathBuf::from(orig))
+                    },
                 });
             } else if let Some(rest) = line.strip_prefix("? ") {
                 changes.push(Change {
@@ -85,6 +141,7 @@ impl GitExecutor for CliExecutor {
                     chunks: vec![],
                     staged: false,
                     unstaged: false,
+                    orig_path: None,
                 });
             } else if let Some(rest) = line.strip_prefix("! ") {
                 changes.push(Change {
@@ -93,6 +150,7 @@ impl GitExecutor for CliExecutor {
                     chunks: vec![],
                     staged: false,
                     unstaged: false,
+                    orig_path: None,
                 });
             } else if let Some(rest) = line.strip_prefix("u ") {
                 // u <XY> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <hU> <hB> <path>
@@ -110,10 +168,11 @@ impl GitExecutor for CliExecutor {
                     chunks: vec![],
                     staged: false,
                     unstaged: false,
+                    orig_path: None,
                 });
                 conflicted.push(p);
             }
-            // Other porcelain lines ("2" rename summary, etc.) are ignored.
+            // Other porcelain lines (extension headers, etc.) are ignored.
         }
 
         Ok(RootStatus {
@@ -229,7 +288,9 @@ impl GitExecutor for CliExecutor {
     }
 
     fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
-        // --root covers parentless commits; -r recurses into trees.
+        // --root covers parentless commits; -r recurses into trees; -M turns
+        // on rename detection at git's own default similarity so renames
+        // surface as `R<score>\told\tnew` (plumbing defaults it off).
         let (out, _, _) = self.run(
             root,
             &[
@@ -238,6 +299,7 @@ impl GitExecutor for CliExecutor {
                 "--name-status",
                 "-r",
                 "--root",
+                "-M",
                 commit,
             ],
         )?;
@@ -1000,8 +1062,16 @@ impl GitExecutor for CliExecutor {
     fn show_file(&self, root: &Path, rev: &str, path: &Path) -> TgResult<String> {
         let spec = format!("{}:{}", rev, path.to_string_lossy());
         let args = ["show", &spec];
-        let (out, _, _) = self.run(root, &args)?;
-        Ok(out)
+        let bytes = self.run_bytes(root, &args)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn show_file_bytes(&self, root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
+        // Same spec convention as `show_file` (`<rev>:<path>`); `run_bytes`
+        // keeps the blob bytes intact for binary content.
+        let spec = format!("{}:{}", rev, path.to_string_lossy());
+        let args = ["show", &spec];
+        self.run_bytes(root, &args)
     }
 
     // ------------------------------------------------------ revert / undo ----
@@ -1031,6 +1101,28 @@ impl GitExecutor for CliExecutor {
 /// The Nth whitespace-separated field of `s` (0-based).
 fn nth_field(s: &str, n: usize) -> &str {
     s.split_whitespace().nth(n).unwrap_or("")
+}
+
+/// Substring of `s` starting at the Nth whitespace-separated token (0-based).
+///
+/// Unlike [`nth_field`] this keeps the remainder of the line, so a final
+/// column that may contain spaces (rename/copy paths) survives intact.
+/// Returns `None` when `s` has fewer than `n + 1` tokens.
+fn tail_from_field(s: &str, n: usize) -> Option<&str> {
+    let mut count = 0;
+    let mut in_token = false;
+    for (i, c) in s.char_indices() {
+        if c.is_whitespace() {
+            in_token = false;
+        } else if !in_token {
+            in_token = true;
+            if count == n {
+                return Some(&s[i..]);
+            }
+            count += 1;
+        }
+    }
+    None
 }
 
 /// Map a porcelain v2 XY status pair to a [`ChangeStatus`].
@@ -1074,7 +1166,8 @@ fn parse_ref_name(refname: &str) -> Option<CommitRef> {
 }
 /// Parse one `git diff-tree --name-status` line into a [`Change`].
 ///
-/// Shapes: `X\tpath` and rename/copy `X<score>\told\tnew` (the new path wins).
+/// Shapes: `X\tpath` and rename/copy `X<score>\told\tnew` (the new path wins;
+/// the old path is carried as [`Change::orig_path`]).
 fn parse_name_status_line(line: &str) -> Option<Change> {
     let mut parts = line.splitn(3, '\t');
     let code = parts.next()?.trim();
@@ -1086,9 +1179,13 @@ fn parse_name_status_line(line: &str) -> Option<Change> {
         // Typechange and anything unexpected read as Modified.
         _ => ChangeStatus::Modified,
     };
-    let path = match status {
-        ChangeStatus::Renamed | ChangeStatus::Copied => parts.nth(1)?.to_string(),
-        _ => parts.next()?.to_string(),
+    let (path, orig_path) = match status {
+        ChangeStatus::Renamed | ChangeStatus::Copied => {
+            let old = parts.next()?;
+            let new = parts.next()?;
+            (new.to_string(), Some(PathBuf::from(old)))
+        }
+        _ => (parts.next()?.to_string(), None),
     };
     if path.is_empty() {
         return None;
@@ -1099,6 +1196,7 @@ fn parse_name_status_line(line: &str) -> Option<Change> {
         chunks: vec![],
         staged: false,
         unstaged: false,
+        orig_path,
     })
 }
 

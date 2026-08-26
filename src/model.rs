@@ -201,6 +201,11 @@ pub struct Change {
     /// staged file (`MM`) from a fully staged one (`M.`) — spec R2 story 9.
     #[serde(default)]
     pub unstaged: bool,
+    /// Previous path for renames/copies (`R`/`C` status) — the "renamed from"
+    /// side of git's own detection driving R8 rename headers. `None` for every
+    /// other status.
+    #[serde(default)]
+    pub orig_path: Option<PathBuf>,
 }
 
 /// A named, user-organized bucket of local changes (IntelliJ changelist model).

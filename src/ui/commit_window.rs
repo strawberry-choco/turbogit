@@ -478,8 +478,10 @@ fn partially_staged_dot(ui: &mut Ui) {
 /// path cannot be staged or committed until resolved, so there is nothing
 /// to include; clicking it opens the diff preview. Partially staged files
 /// (staged AND unstaged, spec R2 story 12) carry the coarse warning dot.
-/// Interactions are pushed onto `actions` and applied by the caller after
-/// rendering (plan §1.4 defer pattern).
+/// Renames/copies (spec R8) carry a muted arrow plus the old path — an
+/// annotation paired with the diff viewer's rename header, never stageable
+/// text. Interactions are pushed onto `actions` and applied by the caller
+/// after rendering (plan §1.4 defer pattern).
 fn change_row(
     ui: &mut Ui,
     state: &AppState,
@@ -514,6 +516,12 @@ fn change_row(
         icons::icon(ui, glyph, 14.0, tint);
         if c.staged && c.unstaged {
             partially_staged_dot(ui);
+        }
+        if let Some(orig) = &c.orig_path {
+            let orig_text = orig.display().to_string();
+            icons::icon(ui, Icon::ARROW_RIGHT, 12.0, Palette::INK_3);
+            ui.colored_label(Palette::INK_3, orig_text.clone())
+                .on_hover_text(format!("Renamed from {orig_text}"));
         }
         let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
         if ui.selectable_label(previewing, path_text).clicked() {
