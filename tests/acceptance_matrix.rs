@@ -86,11 +86,10 @@ fn seeded_repo() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Seed a repo with a real two-hunk merge conflict (mirrors redesign_merge).
+/// Seed a repo with a real two-hunk merge conflict (mirrors `merge_editor`).
 fn conflicted_repo() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("temp dir");
     let repo = tmp.path().join("conflict");
-    std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "test@example.com"]);
     git(&repo, &["config", "user.name", "Test"]);

@@ -211,10 +211,9 @@ fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
 }
 
 /// Open the Push dialog directly (the Ctrl+Shift+K shortcut is covered by
-/// tests/redesign_harness.rs).
+/// `shell_frame.rs`).
 fn open_push_dialog(h: &mut Harness<'_, AppState>) {
     h.state_mut().ui.dialog = Some(Dialog::Push);
-    h.run();
     h.run();
 }
 

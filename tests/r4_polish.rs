@@ -96,11 +96,10 @@ fn assert_visible(harness: &Harness<'_, AppState>, label: &str, vp: Rect, what: 
 
 /// Step frames until painted output AND async engine activity stabilize.
 /// Budgeted by wall-clock time so a contended `git` subprocess cannot starve
-/// the seeded fixtures (mirrors `redesign_diff::settle`).
+/// the seeded fixtures (mirrors `diff_viewer::settle`).
 ///
 /// `diff_loading` gates too: the diff preview computes on a background thread
 /// without raising `busy`, and its loading chrome ("Computing diff…") is
-/// static text — without this gate the settle can exit while the toolbar's
 /// hunk-nav buttons are still disabled (zero parsed hunks), which silently
 /// breaks focus-dependent assertions (flaky on slow CI runners).
 fn settle_long(harness: &mut Harness<'_, AppState>) {

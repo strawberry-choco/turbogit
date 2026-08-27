@@ -1,11 +1,10 @@
 //! Issue #10 — Welcome screen core: action cards, global recents, launch flow.
 //!
 //! Headless egui_kittest harness driving [`turbogit::ui::render`] end-to-end
-//! (same pattern as `redesign_harness.rs`, with locally-defined helpers so
+//! (same pattern as `shell_frame.rs`, with locally-defined helpers so
 //! this file is self-contained). Asserts only on public surfaces:
 //!
 //! - **Painted output** — text galleys from the frame's shapes.
-//! - **State transitions** — public `AppState` fields after the frames.
 //!
 //! The global recents store (ADR-0005) and the directory-picker seam are
 //! injected per test: a temp config dir stands in for the OS config dir and

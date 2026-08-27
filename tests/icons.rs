@@ -1,7 +1,6 @@
 //! Issue #7 — Seam: the public `ui::icons` API asserted through painted
 //! shapes from a headless egui context (no GPU / window / display server).
-//! Mirrors the painted-output style of `redesign_harness.rs` at module scope.
-
+//! Mirrors the painted-output style of `shell_frame.rs` at module scope.
 use std::sync::Mutex;
 
 use egui::epaint::ColorMode;
