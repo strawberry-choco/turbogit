@@ -1,10 +1,9 @@
 //! Reusable headless-shell harness helpers (issue #9).
 //!
-//! Shared by `redesign_harness.rs` and later redesign test files so each
+//! Shared by `shell_frame.rs` and the other issue-named test files so each
 //! ticket can drive the full [`turbogit::ui::render`] shell without copying
 //! setup code. The harness runs over synthetic raw input (egui_kittest, no
 //! GPU / window / display server) and asserts only on public surfaces:
-//!
 //! - **Painted output** — the frame's shapes from `FullOutput`, i.e. exactly
 //!   what a software painter would fill (text galleys carry their strings;
 //!   filled rects carry their geometry + token color).

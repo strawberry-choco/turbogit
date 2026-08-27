@@ -204,7 +204,7 @@ type ClickFlag = Rc<Cell<bool>>;
 
 /// A harness rendering a panel composed purely of shared widgets.
 ///
-/// Setup mirrors production (`app.rs` / `redesign_harness.rs`): dark-only
+/// Setup mirrors production (`app.rs` / `shell_frame.rs`): dark-only
 /// tokens every frame plus embedded JetBrains Mono installed once.
 fn widgets_harness(
     ghost_clicked: ClickFlag,
