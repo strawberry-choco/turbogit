@@ -2,7 +2,7 @@
 
 > **Purpose.** This document is the single source of truth for building a clone of IntelliJ IDEA's Git integration, with first-class support for managing **multiple Git repositories within a single parent project** (multi-root / sub-repositories). It is structured to be consumed directly by a code-generation step: every feature is listed, every user flow is spelled out entry-point → steps → outcome → edge cases, and the data model + architecture sections define the seams between modules.
 >
-> **Scope.** Desktop-class Git client UX modeled on IntelliJ IDEA 2026.x. Built as a set of cooperating modules over a real Git engine (system `git` CLI primary, `gix` for hot reads), not a toy.
+> **Scope.** Desktop-class Git client UX modeled on IntelliJ IDEA 2026.x. Built as a set of cooperating modules over a real Git engine (in-process libgit2 via `git2` as the primary backend behind the `GitExecutor` seam, with the system `git` CLI retained for sync/credential operations and fallback cases), not a toy.
 >
 > **Status:** v0.1 — initial research-driven draft.
 
@@ -53,7 +53,7 @@
 - Plugin-friendly architecture so hosting integrations (GitHub/GitLab) are add-ons.
 
 **Non-goals (v1).**
-- Replacing the Git engine internals — we wrap the system `git` CLI (with optional `gix` for reads).
+- Replacing the Git engine internals — we build on in-process libgit2 (`git2`) behind the `GitExecutor` seam, delegating to the system `git` CLI where libgit2 falls short.
 - A full issue-tracker UI (we integrate, we don't replace).
 - Mercurial / Perforce / SVN support (directory-mapping model is designed to allow it later, but v1 is Git-only).
 
@@ -92,7 +92,7 @@
 ```mermaid
 flowchart LR
   subgraph Engine["Git Engine Layer"]
-    GE["Git Executor<br/>(git CLI + gix reads)"]
+    GE["Git Executor<br/>(libgit2 via git2 + CLI fallback)"]
     IDX["Log Indexer<br/>(fast history search)"]
   end
 
@@ -853,7 +853,7 @@ Phased so each milestone is independently usable.
 
 | Phase | Scope | Exit criteria |
 |---|---|---|
-| **0. Engine & Core** | Git Executor (git CLI / gix reads), VCS Manager, single Root model, directory mappings, status. | A project shows real Git status for one root. |
+| **0. Engine & Core** | Git Executor (libgit2 via `git2`, CLI fallback), VCS Manager, single Root model, directory mappings, status. | A project shows real Git status for one root. |
 | **1. Single-root daily flow** | Commit tool window (changelists, partial commit, amend), Branch widget + popup (create/checkout/delete/compare), Fetch/Pull/Push, Diff viewer, File history + blame. | A solo dev can do a full day's work on one repo. |
 | **2. Integrate & resolve** | Merge (options), Rebase (options), Interactive rebase, Cherry-pick (+partial), 3-way Conflict Resolver, Revert/Undo, Stash. | Team flows + conflict resolution work on one root. |
 | **3. Multi-root ⭐** | Multi-root registration + auto-detect, per-root status, unified Log (root stripes/filter), batch Commit/Update/Push, synchronous + per-repo branch control, divergence warning + rollback, submodule + worktree roots, Shelve. | A multi-repo project is managed as one workspace. |
@@ -871,14 +871,16 @@ Stack chosen for code generation. Resolves Open Questions #1 and #2.
 - **Layout / "tool windows":** egui has no native IDE tool-window concept. Emulate it with [`egui_dock`](https://docs.rs/egui_dock) for docking panels (Commit window, Git Log, Shelves/Stash) plus collapsible tabs; use `SidePanel` / `TopBottomPanel` for the status-bar **VCS branch widget**; use `Popup` / `Window` for the **Branches popup**, Push/Merge/Rebase/Conflicts dialogs, and Interactive Rebase.
 - **Lists / tables:** [`egui_extras::Table`](https://docs.rs/egui_extras) (virtualized) for the Log Commit pane, Changed-Files pane, Commit Details, Push dialog, and per-root status groups. Essential for large histories.
 - **Async model (critical):** egui renders on the main thread; **git must never block it.** Wrap each unit of work (status scan, fetch, push, rebase, conflict resolution) so it runs on worker threads (`std::thread` or `tokio`) and returns results/status over a channel (`crossbeam-channel` or `std::sync::mpsc`). In `update()` the app drains the receiver and calls `ctx.request_repaint()` to refresh. Long ops stream progress so the UI stays responsive.
-- **Git engine — CLI-first with optional `gix` reader** (decided 2026-07-31; supersedes the earlier `git2` plan):
-  - **Primary executor:** the system `git` binary, wrapped behind a typed `GitExecutor` trait (impl over `std::process::Command`). Covers *all* mutating/porcelain ops (commit, merge, rebase, interactive rebase, push `--force-with-lease`, fetch, pull, stash, worktree, submodule, conflict resolution). Maximum fidelity — we invoke the exact same git the user already trusts.
-  - **Hot read paths (optional):** [`gix`](https://docs.rs/gix) (gitoxide) for in-process, dependency-light reads where a subprocess would be too slow at scale — large-repo status scans, log graph (`Revwalk`-style), blame, diff plumbing. Behind the same `GitExecutor` trait so the engine can fall back to CLI uniformly. `gix` is pure Rust, no C toolchain, no system-git dependency for reads.
-  - **Why not `git2`/libgit2:** libgit2 needs a C toolchain to build and under-implements interactive rebase, `--force-with-lease`, worktrees, and submodules — precisely the multi-root workflows this tool targets. CLI-first + `gix` reads avoids that hole.
-  - **Config:** read `core.autocrlf`, commit template, `user.name`/`user.email` from the system git config via the CLI module; detect the git executable path (and, post-v1, WSL git) for spawning.
+- **Git engine — in-process libgit2 primary, CLI retained for sync/fallback** (revised 2026-08-26; supersedes the 2026-07-31 CLI-first + `gix` plan):
+  - **Primary executor:** [`git2`](https://docs.rs/git2) (libgit2 bindings) behind the typed `GitExecutor` seam (`src/engine/mod.rs`). Covers local mutations and reads — commit, branch create/delete/rename/checkout, tag create/list, stash push/pop/drop/apply, stage/unstage via index writes, forward hunk-level index apply, status/log/diff plumbing.
+  - **CLI delegation stays where libgit2 falls short:** fetch/pull/push and other sync operations (credential-helper interop), reverse patch apply (libgit2 exposes no reverse flag in `git_apply_flags_t`), intent-to-add entries, and diff fallback cases — rename detection (metadata authoritative), stat/multi-path diffs, and non-UTF-8 content. These are functional requirements, not dead code.
+  - **Why not `gix`/gitoxide:** evaluated as the in-process read-path accelerator and abandoned (Aug 2026) — gitoxide lacks index staging, stash, branch rename, checkout/reset orchestration, and network push, so it could never replace the mutation layer this tool needs; carrying a second engine for marginal read gains wasn't worth it. The gix scaffolding was removed.
+  - **Diff/merge:** [`similar`](https://docs.rs/similar) powers the in-process unified diff producer and structured 3-way merge for conflict resolution; verbatim CLI diff text remains the fallback producer for the cases above.
+  - **Fuzzy matching:** [`nucleo-matcher`](https://docs.rs/nucleo-matcher) powers command-palette fuzzy search (score-ranked with default-order tie-break).
+  - **Config:** read `core.autocrlf`, commit template, `user.name`/`user.email` from the system git config via the CLI module; detect the git executable path (and, post-v1, WSL git) for spawning delegated operations.
 - **Multi-root is the default unit.** Every domain type carries its owning `Root` (path-based id, see §8). `MultiRootManager` owns `Vec<RootHandle>` and fans out single-root ops; the `synchronous_branches` flag governs batch branch operations.
 - **Persistence:** a `.turbogit/` dir (the analog of IntelliJ's `.idea/` + `vcs.xml`) stores directory mappings + per-project settings; git's own `.git/` is the source of truth for repo data. Settings serialized with `serde` (`RON` or `toml`).
-- **Errors:** typed `TgError` enum wrapping CLI exit/parse errors + `gix::Error` + `std::io::Error`; surfaced via `egui::Window` / toast.
+- **Errors:** typed `TgError` enum wrapping CLI exit/parse errors + libgit2 (`git2::Error`) + `std::io::Error`; surfaced via `egui::Window` / toast.
 - **Testing:** domain layer (`engine`/`core`) unit-tested against temp git repos (`tempfile`); UI exercised headless where feasible.
 
 ### Rust-typed data model sketch (concrete for code-gen)
@@ -959,7 +961,7 @@ pub struct Worktree { pub path: PathBuf, pub branch: String, pub root: RootId }
 
 ## 11. Open Questions
 
-1. ~~**Engine choice**~~ → resolved (§10): **CLI-git first + optional `gix` reader** (decided 2026-07-31). `git2`/libgit2 rejected as primary (C toolchain + weak interactive-rebase/force-push/worktree/submodule support).
+1. ~~**Engine choice**~~ → resolved (§10), revised 2026-08-26: **in-process libgit2 (`git2`) as the primary backend behind the `GitExecutor` seam**, with the git CLI retained for sync/credential operations, reverse patch apply, intent-to-add, and diff fallback cases (renames / stat / multi-path / non-UTF-8). The earlier CLI-first + `gix` plan was superseded; `gix` was dropped for capability gaps (index staging, stash, branch rename, checkout/reset orchestration, network push).
 2. ~~**UI framework**~~ → resolved (§10): Rust + egui (`eframe`), `egui_dock` for tool windows.
 3. ~~**Ignore-file strategy**~~ → resolved: **pure `.gitignore` mirroring.** turbogit only reads/writes standard `.gitignore` files; no separate IDE-layer ignore list. (Decision: 2026-07-31.)
 4. **WSL / SSH credential handling:** → resolved: **Basic.** Support SSH/HTTPS remote URLs and rely on the system `git` credential helpers as-is. No automatic WSL detection in v1; defer SSH-agent UI/passthrough to Phase 3. (Decision: 2026-07-31.)
