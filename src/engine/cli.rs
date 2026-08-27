@@ -524,12 +524,19 @@ impl GitExecutor for CliExecutor {
         let mut result = Vec::new();
         for line in out.lines() {
             let line = line.trim();
-            if line.is_empty() || line.len() < 2 {
+            if line.is_empty() {
                 continue;
             }
-            // Leading status char + space, then path (optionally " (commit)").
-            let rest = &line[1..];
-            let path = rest.split_whitespace().next().unwrap_or("");
+            // `git submodule status` format: "<status> <sha> <path> [(<sha-or-ref>)]"
+            // status = ' ' for clean, '+' ahead, '-' behind; then a 40-hex SHA,
+            // then the path; an optional parenthetical ref (`(heads/main)` / `(<sha>)`)
+            // follows the path when HEAD is non-trivial. Take the first non-paren
+            // token after the SHA (status char is a space, consumed by trim).
+            let path = line
+                .split_whitespace()
+                .skip(1)
+                .find(|t| !t.starts_with('('))
+                .unwrap_or("");
             if !path.is_empty() {
                 result.push(PathBuf::from(path));
             }
@@ -999,7 +1006,10 @@ impl GitExecutor for CliExecutor {
     }
 
     fn tag_checkout(&self, root: &Path, name: &str) -> TgResult<()> {
-        let args = ["switch", name];
+        // `git switch <tag>` on modern git requires `--detach` (tags are not
+        // branch names). The libgit2 impl always does a detached checkout of
+        // the peeled commit, so pass `--detach` here for parity.
+        let args = ["switch", "--detach", name];
         self.run(root, &args)?;
         Ok(())
     }
