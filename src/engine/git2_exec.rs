@@ -186,7 +186,23 @@ impl GitExecutor for Git2Executor {
 
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>> {
         let repo = self.open(root)?;
-        let head = repo.head().map_err(err)?;
+        let head = match repo.head() {
+            Ok(head) => head,
+            Err(e) if e.code() == ErrorCode::UnbornBranch => {
+                // CLI parity: `symbolic-ref --short HEAD` succeeds on an
+                // unborn HEAD — the branch name exists before any commit
+                // does. `Repository::head` resolves the ref and fails
+                // instead, so read the symbolic target directly. This keeps
+                // `is_repo` true for freshly initialized repositories.
+                let head = repo.find_reference("HEAD").map_err(err)?;
+                return Ok(head
+                    .symbolic_target()
+                    .map_err(err)?
+                    .and_then(|t| t.strip_prefix("refs/heads/"))
+                    .map(|s| s.to_string()));
+            }
+            Err(e) => return Err(err(e)),
+        };
         // CLI parity: `symbolic-ref --short HEAD` returns None when HEAD is
         // detached. libgit2 reports detached HEAD as `is_branch() == false`;
         // a named branch returns its shorthand.

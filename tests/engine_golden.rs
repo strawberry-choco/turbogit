@@ -558,3 +558,36 @@ fn engine_golden_ahead_behind_counts_on_clone() {
         (1, 1)
     );
 }
+
+// --------------------------------------------- libgit2 backend parity (L2) --
+
+/// The libgit2 backend must reproduce the CLI's `current_branch` value on a
+/// fresh repository with an unborn HEAD: `git symbolic-ref --short HEAD`
+/// succeeds there (the branch name exists before any commit does), so
+/// `is_repo` — defined as `current_branch().is_ok()` — must treat a freshly
+/// initialized repository as a repository. Otherwise root discovery misses
+/// it and opening a fresh repo never enters the shell (issue #10 flow).
+#[test]
+fn git2_backend_current_branch_matches_cli_on_unborn_head() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("fresh");
+    std::fs::create_dir_all(&repo).expect("repo dir");
+    run_git(&repo, &["init", "-q", "-b", "main"]);
+
+    let cli = engine();
+    let git2 = turbogit::engine::git2_exec::Git2Executor::new(CliExecutor {
+        settings: VcsSettings::default(),
+    });
+
+    let expected = cli.current_branch(&repo).expect("CLI on unborn HEAD");
+    assert_eq!(expected.as_deref(), Some("main"));
+    assert_eq!(
+        git2.current_branch(&repo).expect("git2 on unborn HEAD"),
+        expected,
+        "libgit2 backend must match the CLI on an unborn HEAD"
+    );
+    assert!(
+        git2.is_repo(&repo),
+        "a fresh repo must be detected as a repo"
+    );
+}
