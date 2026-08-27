@@ -78,7 +78,8 @@ pub fn load_shelves(project_dir: &Path) -> Vec<Shelf> {
 /// Serialize `shelves` to `shelf.ron` under `.turbogit/`.
 pub fn save_shelves(project_dir: &Path, shelves: &[Shelf]) -> TgResult<()> {
     fs::create_dir_all(project_dir.join(".turbogit"))?;
-    let text = ron::ser::to_string_pretty(shelves, ron::ser::PrettyConfig::new())?;
+    let text = ron::ser::to_string_pretty(shelves, ron::ser::PrettyConfig::new())
+        .map_err(|e| crate::error::TgError::Serde(e.to_string()))?;
     fs::write(shelf_path(project_dir), text)?;
     Ok(())
 }

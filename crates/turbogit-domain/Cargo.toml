@@ -6,7 +6,6 @@ publish = false
 
 [dependencies]
 chrono = { workspace = true }
-ron = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

@@ -20,9 +20,11 @@ pub enum TgError {
     #[error("parse error: {0}")]
     Parse(String),
 
-    /// RON (de)serialization failure (`.turbogit/` state / shelves).
+    /// RON (de)serialization failure (`.turbogit/` state / shelves). Carries
+    /// the serializer's message as a plain `String` so the domain layer never
+    /// depends on a concrete serializer.
     #[error("serialization error: {0}")]
-    Serde(#[from] ron::Error),
+    Serde(String),
 
     /// A git operation was attempted on a path that is not a git repository.
     #[error("not a git repository: {0}")]
@@ -35,3 +37,17 @@ pub enum TgError {
 
 /// Convenience alias used everywhere.
 pub type TgResult<T> = Result<T, TgError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The user-visible message for a serialization failure keeps the exact
+    /// `serialization error: <detail>` shape after the variant stops holding
+    /// a `ron::Error` and carries a plain `String` instead.
+    #[test]
+    fn serde_variant_displays_unchanged_message() {
+        let err = TgError::Serde("expected `(`".to_string());
+        assert_eq!(err.to_string(), "serialization error: expected `(`");
+    }
+}
