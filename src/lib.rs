@@ -4,8 +4,8 @@
 pub mod app;
 pub mod core;
 pub mod engine;
-pub mod error;
-pub mod model;
+pub use turbogit_domain::error;
+pub use turbogit_domain::model;
 pub mod persistence;
 pub mod recents;
 pub mod root_caches;

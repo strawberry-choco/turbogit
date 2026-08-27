@@ -3683,6 +3683,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "toml",
+ "turbogit-domain",
 ]
 
 [[package]]
@@ -3692,6 +3693,12 @@ version = "0.1.0"
 [[package]]
 name = "turbogit-domain"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ron",
+ "serde",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "turbogit-engine"
