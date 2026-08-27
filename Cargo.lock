@@ -3479,6 +3479,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-support"
+version = "0.1.0"
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3680,6 +3684,30 @@ dependencies = [
  "thiserror 2.0.20",
  "toml",
 ]
+
+[[package]]
+name = "turbogit-app"
+version = "0.1.0"
+
+[[package]]
+name = "turbogit-domain"
+version = "0.1.0"
+
+[[package]]
+name = "turbogit-engine"
+version = "0.1.0"
+
+[[package]]
+name = "turbogit-engine-api"
+version = "0.1.0"
+
+[[package]]
+name = "turbogit-services"
+version = "0.1.0"
+
+[[package]]
+name = "turbogit-ui"
+version = "0.1.0"
 
 [[package]]
 name = "type-map"
