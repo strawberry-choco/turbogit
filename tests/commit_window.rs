@@ -12,8 +12,7 @@
 //!
 //! Painted-text assertions come from `tests/common`; harness helpers beyond
 //! those remain local to this file (per issue spec: do not edit
-//! `tests/redesign_harness.rs`).
-
+//! `tests/shell_frame.rs`).
 mod common;
 
 use common::{assert_not_painted, assert_painted};

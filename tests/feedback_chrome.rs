@@ -1,10 +1,9 @@
 //! Issue #22 — Feedback chrome: toasts, confirm prompts, VCS popup, palette.
 //!
-//! Headless egui_kittest harness (same pattern as `redesign_harness.rs`)
+//! Headless egui_kittest harness (same pattern as `shell_frame.rs`)
 //! driving [`turbogit::ui::render`] over a **real temp git repository**.
 //! Asserts only on public surfaces: painted shapes (text galleys, filled
 //! rects, stroked paths) and public `AppState` transitions.
-//!
 //! Covered (spec §7.1/§10, R4.x, ADR-0011):
 //! - each toast kind paints its semantic STATE_* token as accent bar + icon
 //! - Dismiss clears the toast

@@ -1,10 +1,9 @@
 //! Issue #14 — Branches popup: groups, row actions, keyboard flow.
 //!
-//! Headless egui_kittest harness (same pattern as `redesign_harness.rs`)
+//! Headless egui_kittest harness (same pattern as `shell_frame.rs`)
 //! driving [`turbogit::ui::render`] over a **real temp git repository**.
 //! Asserts only on public surfaces: painted text/geometry and public
 //! `AppState` transitions.
-//!
 //! Covered (spec §8.5, ADR-0012):
 //! - RECENT / LOCAL / REMOTE / TAGS groups render with correct members
 //! - current branch pinned top of LOCAL, check-marked and emphasized

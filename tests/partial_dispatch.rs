@@ -3,8 +3,7 @@
 //! Drives the real `turbogit::ui::render()` through `egui_kittest` over a
 //! temporary repository with a [`common::RecordingExecutor`] injected at the
 //! executor boundary (after synchronous registration, per the
-//! `redesign_push.rs` pattern), asserting **what the engine was asked to do**
-//! — never internal patch-string shapes or widget internals.
+//! `push_dialog.rs` pattern), asserting **what the engine was asked to do**
 //!
 //! Covers the spec's harness layer: gutter stage/unstage actions, palette
 //! `s`/`u` verbs, commit-with-partial-selection semantics, conflicted-file
@@ -209,7 +208,7 @@ fn gutter_unstage_button_dispatches_reverse_patch_application() {
 // ------------------------------------------------------- palette s/u verbs --
 
 /// Open the palette filtered to `query` and click `label` (the
-/// redesign_feedback.rs pattern: reachable through search + click).
+/// `feedback_chrome.rs` pattern: reachable through search + click).
 fn run_palette_entry(h: &mut Harness<'_, AppState>, query: &str, label: &str) {
     {
         let st = h.state_mut();
@@ -323,7 +322,7 @@ fn palette_unstage_verb_dispatches_reverse_apply_for_current_hunk() {
 // ------------------------------------------ commit-with-partial-selection --
 
 /// The primary Commit action button lives on the same row as
-/// "Commit and Push..." — disambiguate geometrically (redesign_commit.rs).
+/// "Commit and Push..." — disambiguate geometrically (`commit_window.rs`).
 fn commit_action_button<'h>(h: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> {
     let row_y = h.get_by_label("Commit and Push...").rect().center().y;
     let mut on_row: Vec<_> = h
