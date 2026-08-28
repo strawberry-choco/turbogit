@@ -61,6 +61,7 @@ similar = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 turbogit-domain = { workspace = true }
+turbogit-engine-api = { workspace = true }
 
 [dev-dependencies]
 crossbeam-channel = { workspace = true }
