@@ -14,15 +14,15 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::core::partial::{self, HunkSelection, Selection};
-use crate::model::ChangeStatus;
 use crate::root_caches::Affected;
 use crate::state::{AppState, DiffComparison};
+use turbogit_domain::model::ChangeStatus;
+use turbogit_services::partial::{self, HunkSelection, Selection};
 
 // --- diff-cache addressing ---------------------------------------------------
 
 /// Build a cache key that uniquely identifies this diff request.
-pub(crate) fn diff_key(
+pub fn diff_key(
     root: &std::path::Path,
     left: &Option<String>,
     right: &Option<String>,
@@ -37,7 +37,7 @@ pub(crate) fn diff_key(
 /// apply to working-tree comparisons (left/right both unset, spec §8.4);
 /// explicit commit-to-commit targets pass through untouched. Shared by the
 /// viewer and [`dispatch`] so both address the same cache entry.
-pub(crate) fn comparison_triple(
+pub fn comparison_triple(
     left: &Option<String>,
     right: &Option<String>,
     comparison: DiffComparison,
@@ -266,7 +266,7 @@ fn next_preview_candidate(state: &AppState, just_finished: &Path) -> Option<Path
 /// sub-hunk line selections refer to content no longer shown. The current
 /// hunk itself is the viewer's own fresh-load reset (`ensure_diff`), which
 /// calls this on the same path.
-pub(crate) fn on_diff_changed(state: &mut AppState, path: Option<&Path>) {
+pub fn on_diff_changed(state: &mut AppState, path: Option<&Path>) {
     if let Some(p) = path {
         state.ui.line_selections.remove(p);
     }
@@ -275,7 +275,7 @@ pub(crate) fn on_diff_changed(state: &mut AppState, path: Option<&Path>) {
 /// Toggle one changed line's membership in the accumulated sub-hunk
 /// selection (story 3). Empty sets are pruned so a fully deselected hunk
 /// falls back to whole-hunk semantics.
-pub(crate) fn toggle_line_selection(
+pub fn toggle_line_selection(
     state: &mut AppState,
     path: &Option<std::path::PathBuf>,
     hunk: usize,

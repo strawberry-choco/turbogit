@@ -227,8 +227,8 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use turbogit_domain::model::ChangeStatus;
+    use turbogit_engine::fake::{Call, FakeExecutor};
     use turbogit_engine_api::ApplyDirection;
-    use turbogit_engine_api::fake::{Call, FakeExecutor};
 
     /// Two-hunk diff fixture: the `alpha` edit and the `omega` edit are far
     /// enough apart that git reports them as independent hunks.

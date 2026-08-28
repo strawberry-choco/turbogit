@@ -1,26 +1,25 @@
 //! Granular op interface tests (spec R2 stories 3/8/9) — direct, headless.
 //!
-//! Exercises [`turbogit::core::granular::dispatch`] and — through its
+//! Exercises [`turbogit_app::granular::dispatch`] and — through its
 //! production trigger, the `OpCompleted` → refresh → settle path in
-//! [`turbogit::state::AppState::drain_events`] — the completion settlement
+//! [`turbogit_app::state::AppState::drain_events`] — the completion settlement
 //! over a real temporary repository ([`AppState::for_roots`], sync_refresh
 //! mode). No UI rendering: callers pass pure intent exactly as the diff
 //! viewer's gutter controls and the palette verbs do, and assertions observe
-//! **what reached the engine** (via [`common::RecordingExecutor`]) and the
+//! **what reached the engine** (via [`test_support::RecordingExecutor`]) and the
 //! resulting repository state via real `git` commands.
 
-mod common;
-
-use common::{RecordedCall, RecordingExecutor};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use test_support::{RecordedCall, RecordingExecutor};
 
-use turbogit::core::granular::{self, HunkTarget};
-use turbogit::engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
-use turbogit::model::VcsSettings;
-use turbogit::state::{AppState, DiffComparison};
+use turbogit_app::granular::{self, HunkTarget};
+use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_domain::model::VcsSettings;
+use turbogit_engine::cli::CliExecutor;
+use turbogit_engine_api::{ApplyDirection, GitExecutor};
 
 // ---------------------------------------------------------------- helpers --
 

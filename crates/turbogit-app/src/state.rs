@@ -3,17 +3,18 @@
 //! channel, and all UI-only ephemeral state. The UI reads from here and never
 //! calls git directly; long ops are dispatched to worker threads via
 //! [`AppState::run_git`].
-
-use crate::core::changes;
-use crate::core::granular;
-use crate::engine::{AppEvent, GitExecutor};
-use crate::error::TgResult;
-use crate::model::*;
+use crate::events::AppEvent;
+use crate::granular;
 use crate::root_caches::{Affected, RootCaches};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use turbogit_domain::error::TgResult;
+use turbogit_domain::model::*;
+use turbogit_engine::build_executor;
+use turbogit_engine_api::GitExecutor;
+use turbogit_services::changes;
 
 /// One root's outgoing commits for the push dialog tree (issue #20).
 #[derive(Clone)]
@@ -68,7 +69,7 @@ pub struct DialogState {
     pub stash_msg: String,
     pub stash_keep: bool,
     // Interactive rebase plan (built on open)
-    pub rebase_plan: Option<Vec<crate::model::RebasePlanEntry>>,
+    pub rebase_plan: Option<Vec<turbogit_domain::model::RebasePlanEntry>>,
     pub rebase_base: Option<String>,
 }
 
@@ -398,7 +399,7 @@ impl AppState {
     pub fn launch_in(project_dir: Option<PathBuf>, recents_config_dir: Option<PathBuf>) -> Self {
         let (tx, rx) = unbounded();
         let settings = VcsSettings::default();
-        let executor = crate::engine::build_executor(&settings);
+        let executor = build_executor(&settings);
         let mut state = Self {
             project_dir: project_dir.clone().unwrap_or_default(),
             executor,
@@ -455,14 +456,14 @@ impl AppState {
     /// deterministic [`AppState`] over explicit repository roots.
     ///
     /// Roots are registered synchronously through the same registration path
-    /// production uses ([`crate::core::multi_root::register_all`]); no background
+    /// production uses ([`turbogit_services::multi_root::register_all`]); no background
     /// threads are spawned, and completed operations refresh root status
     /// synchronously instead of rescanning on workers. Panics if any root cannot
     /// be snapshotted — a broken test fixture should fail at construction.
     pub fn for_roots(project_dir: &Path, roots: &[PathBuf]) -> Self {
         let (tx, rx) = unbounded();
         let settings = VcsSettings::default();
-        let executor = crate::engine::build_executor(&settings);
+        let executor = build_executor(&settings);
         let mut state = Self {
             project_dir: project_dir.to_path_buf(),
             executor,
@@ -481,8 +482,11 @@ impl AppState {
             dir_picker: None,
             sync_refresh: true,
         };
-        let results =
-            crate::core::multi_root::register_all(state.executor.as_ref(), &mut state.multi, roots);
+        let results = turbogit_services::multi_root::register_all(
+            state.executor.as_ref(),
+            &mut state.multi,
+            roots,
+        );
         for r in results {
             if let Err(e) = r {
                 panic!("for_roots: failed to snapshot root: {e}");
@@ -528,10 +532,15 @@ impl AppState {
     /// Re-discover roots under `project_dir`, register any new ones, and
     /// dispatch a fresh asynchronous status scan for every registered root.
     pub fn rescan(&mut self) {
-        let paths =
-            crate::core::multi_root::discover_roots(self.executor.as_ref(), &self.project_dir);
-        let results =
-            crate::core::multi_root::register_all(self.executor.as_ref(), &mut self.multi, &paths);
+        let paths = turbogit_services::multi_root::discover_roots(
+            self.executor.as_ref(),
+            &self.project_dir,
+        );
+        let results = turbogit_services::multi_root::register_all(
+            self.executor.as_ref(),
+            &mut self.multi,
+            &paths,
+        );
         for r in &results {
             if let Err(e) = r {
                 self.last_error = Some(e.to_string());
@@ -586,7 +595,7 @@ impl AppState {
     /// DISCOVERY here (clone/init/open have their own paths) — and refetch
     /// the selected root's log iff it is in scope.
     ///
-    /// Snapshot refresh goes through [`crate::core::multi_root::register_all`],
+    /// Snapshot refresh goes through [`turbogit_services::multi_root::register_all`],
     /// which replaces the registered snapshot per id (branches / HEAD /
     /// status) without scanning for new roots — what kept branch indicators
     /// fresh after checkouts pre-refactor, now scoped to the affected roots.
@@ -624,8 +633,11 @@ impl AppState {
                 .map(|r| r.id.0.clone())
                 .collect(),
         };
-        let results =
-            crate::core::multi_root::register_all(self.executor.as_ref(), &mut self.multi, &paths);
+        let results = turbogit_services::multi_root::register_all(
+            self.executor.as_ref(),
+            &mut self.multi,
+            &paths,
+        );
         for r in &results {
             if let Err(e) = r {
                 self.last_error = Some(e.to_string());

@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use turbogit::engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
-use turbogit::model::VcsSettings;
-use turbogit::state::AppState;
+use turbogit_app::state::AppState;
+use turbogit_domain::model::VcsSettings;
+use turbogit_engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
 
 // ---------------------------------------------------------------- helpers --
 

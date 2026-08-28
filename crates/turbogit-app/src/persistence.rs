@@ -4,10 +4,10 @@
 //! analog of IntelliJ's `.idea/`). This layer NEVER touches `.git/`. State is
 //! serialized as RON via `serde`.
 
-use crate::error::{TgError, TgResult};
-use crate::model::*;
 use std::fs;
 use std::path::{Path, PathBuf};
+use turbogit_domain::error::{TgError, TgResult};
+use turbogit_domain::model::*;
 
 /// Returns the path to the project's `.turbogit/` metadata directory.
 pub fn turbogit_dir(project_dir: &Path) -> PathBuf {

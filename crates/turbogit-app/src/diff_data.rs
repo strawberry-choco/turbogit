@@ -13,7 +13,7 @@
 //!   spec R7): the direction and timing window the pure decision in
 //!   [`crate::ui::hunk_nav`] consumes.
 
-use crate::engine::{DecodedImage, FetchedBlob};
+use crate::events::{DecodedImage, FetchedBlob};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
