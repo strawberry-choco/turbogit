@@ -156,7 +156,7 @@ pub fn parse_conflict_markers(content: &str) -> (Vec<(String, String, bool)>, us
 #[cfg(test)]
 mod tests {
     use super::*;
-    use turbogit_engine_api::fake::FakeExecutor;
+    use turbogit_engine::fake::FakeExecutor;
 
     #[test]
     fn write_resolution_writes_file_then_stages_the_path() {

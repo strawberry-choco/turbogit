@@ -156,7 +156,7 @@ pub fn discard_changes(vcs: &dyn GitExecutor, root: &Path, changes: &[Change]) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use turbogit_engine_api::fake::{Call, FakeExecutor};
+    use turbogit_engine::fake::{Call, FakeExecutor};
 
     fn change(path: &str, staged: bool) -> Change {
         Change {

@@ -3,10 +3,6 @@
 //! Every pure service moved to the `turbogit-services` crate (DDD split
 //! issue 07); this module keeps re-export shims so every existing
 //! `turbogit::core::X` path keeps resolving without modification.
-//! The stateful granular staging protocol is the one exception and stays
-//! here until a later ticket moves it to the application crate.
-
-pub mod granular;
 
 // Re-export every pure service so existing paths keep resolving.
 pub use turbogit_services::{

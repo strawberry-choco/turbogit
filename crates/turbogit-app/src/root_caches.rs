@@ -10,10 +10,10 @@
 //!
 //! The module depends on the [`GitExecutor`] trait only; no UI types.
 
-use crate::engine::GitExecutor;
-use crate::model::{Change, Commit, CommitId, CommitRef, LogOpts, RootId};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use turbogit_domain::model::{Change, Commit, CommitId, CommitRef, LogOpts, RootId};
+use turbogit_engine_api::GitExecutor;
 
 /// Which roots an operation's results affect — declared at every
 /// [`AppState::run_git`](crate::state::AppState::run_git) call site and used

@@ -169,7 +169,7 @@ pub fn update_all(
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use turbogit_engine_api::fake::{Call, FakeExecutor};
+    use turbogit_engine::fake::{Call, FakeExecutor};
 
     fn settings_with(patterns: &[&str]) -> VcsSettings {
         VcsSettings {

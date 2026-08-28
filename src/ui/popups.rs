@@ -4,7 +4,7 @@
 //! opens the command palette: a fuzzy-searchable list of every action, the
 //! IntelliJ "Find Action" hallmark.
 
-use crate::core::granular;
+use crate::granular;
 use crate::root_caches::Affected;
 use crate::state::{AppState, Dialog, Tab, Toast};
 use egui::Ui;

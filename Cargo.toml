@@ -63,6 +63,7 @@ toml = { workspace = true }
 turbogit-domain = { workspace = true }
 turbogit-engine = { workspace = true }
 turbogit-engine-api = { workspace = true }
+turbogit-app = { workspace = true }
 turbogit-services = { workspace = true }
 
 [dev-dependencies]

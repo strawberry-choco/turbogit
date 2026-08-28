@@ -8,9 +8,9 @@
 //! never persisted (a stored snapshot would go stale the moment the user
 //! switches branches outside TurboGit).
 
-use crate::error::TgResult;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use turbogit_domain::error::TgResult;
 
 /// Maximum number of recent projects kept in the store.
 pub const MAX_RECENTS: usize = 10;
@@ -57,8 +57,9 @@ pub fn save(config_dir: &Path, recents: &Recents) -> TgResult<()> {
     let file = recents_file(config_dir);
     std::fs::create_dir_all(file.parent().unwrap_or_else(|| Path::new(".")))?;
     let pretty = ron::ser::PrettyConfig::new();
-    let text = ron::ser::to_string_pretty(recents, pretty)
-        .map_err(|e| crate::error::TgError::Parse(format!("failed to serialize recents: {e}")))?;
+    let text = ron::ser::to_string_pretty(recents, pretty).map_err(|e| {
+        turbogit_domain::error::TgError::Parse(format!("failed to serialize recents: {e}"))
+    })?;
     std::fs::write(file, text)?;
     Ok(())
 }
