@@ -1,0 +1,784 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sublime Merge | Git client from the makers of Sublime Text</title>
+<meta name="description" content="Discover a powerful Git GUI Client for Mac, Windows and Linux, from the makers of Sublime Text. Line-by-line Staging. Commit Editing. Unmatched Performance.">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="https://www.sublimemerge.com/">
+<meta name="twitter:creator" content="@SublimeHQ">
+<meta name="twitter:title" content="Sublime Merge - Git client from the makers of Sublime Text">
+<meta name="twitter:description" content="Blaze through your commits with Sublime Merge - available on Mac, Windows and Linux">
+<meta name="twitter:image" content="https://www.sublimemerge.com/images/og.png">
+
+<meta property="og:type" content="website" />
+<meta property="og:image" content="https://www.sublimemerge.com/images/og.png" />
+<meta property="og:title" content="Sublime Merge - Git client from the makers of Sublime Text" />
+<meta property="og:description" content="Blaze through your commits with Sublime Merge - available on Mac, Windows and Linux" />
+<meta property="og:url" content="https://www.sublimemerge.com/" />
+
+<style type="text/css">
+    #screencast-title-bar
+    {
+        width: 1200px;
+        margin: 0 auto;
+        display: block;
+        height: 28px;
+        background-color: rgba(32, 32, 32, 0.8);
+    }
+
+    @media only screen and (max-width: 1240px)
+    {
+        #screencast-title-bar
+        {
+            width: 100%;
+            height: auto;
+            aspect-ratio: 1200/28;
+            box-sizing: border-box;
+        }
+    }
+</style>
+
+<script type="application/ld+json">
+{
+  "@context" : "http://schema.org",
+  "@type" : "SoftwareApplication",
+  "name" : "Sublime Merge",
+  "image" : "https://www.sublimehq.com/images/sublime_merge.png",
+  "url" : "https://www.sublimemerge.com/",
+  "publisher" : {
+    "@type" : "Organization",
+    "name" : "Sublime HQ Pty Ltd"
+  },
+  "applicationCategory" : "DeveloperApplication",
+  "description" : "Git Client",
+  "downloadUrl" : "https://www.sublimemerge.com/download",
+  "operatingSystem" : "Mac, Windows, and Linux",
+  "screenshot" : "https://www.sublimemerge.com/images/Stage%20Lines.png",
+  "offers" : {
+    "@type" : "Offer",
+    "price" : "99",
+    "priceCurrency": "USD",
+    "url": "https://www.sublimehq.com/store/merge"
+  },
+  "sameAs":[
+    "https://en.wikipedia.org/wiki/Sublime_Text#Sublime_Merge",
+    "https://twitter.com/sublimehq",
+    "https://www.sublimetext.com/blog"
+  ]
+}
+</script>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=480, user-scalable=yes">
+    <link rel="stylesheet" type="text/css" href="/merge_v2.css?v=d00dd3f9f11deb6954c3686ab9825d6c">
+    <link rel="icon" href="/favicon.ico">
+    <link rel="icon" size="64x64" href="/favicon.ico">
+    <script type="text/javascript">
+    var plat = 'windows'
+    if (/Mac OS X/.test(navigator.userAgent))
+        plat = 'osx'
+    else if (/Linux|FreeBSD/.test(navigator.userAgent))
+        plat = 'linux'
+    var arch = /WOW64|Win64|x86_64/.test(navigator.userAgent) ? '64' : '32'
+    document.documentElement.className += ' plat_' + plat + ' arch_' + arch
+    function byid(x)
+    {
+        return document.getElementById(x)
+    }
+    var scale = 1
+    function res()
+    {
+        scale = window.devicePixelRatio >= 1.3 ? 2 : 1
+        return scale == 2 ? '@2x' : ''
+    }
+    </script>
+    <!--[if lt IE 9]>
+    <script>
+        var els = ['header', 'nav', 'section', 'main', 'article', 'aside', 'footer']
+        for (var i = 0; i < els.length; ++i)
+            document.createElement(els[i]);
+    </script>
+    <style>
+        header, nav, section, main, article, aside, footer {
+            display: block;
+        }
+    </style>
+    <![endif]-->
+</head>
+<body id="homepage">
+    <header>
+        <section>
+            <a id="logo" href="/">
+                <img src="/images/logo.svg" alt="Sublime Merge" style="min-height: 28px;">
+            </a>
+            <nav>
+                <a href="/download">Download</a>
+                <a href="https://www.sublimehq.com/store/merge">Buy</a>
+                <a href="/support">Support</a>
+                <span class="vr"></span>
+                <a href="https://www.sublimetext.com/blog/">News</a>
+                <a href="https://forum.sublimetext.com">Forum</a>
+            </nav>
+        </section>
+    </header>
+
+<script>
+var theme = 'dark'
+var width = 1200
+var height = 576
+
+// Use a separate scale for the screencasts that factors in the
+// window width, mostly to prevent excess bandwidth on mobile
+var sc_scale = 1
+function sc_res()
+{
+    sc_scale = window.devicePixelRatio >= 1.3 && document.body.clientWidth > 1024 ? 2 : 1
+    return sc_scale == 2 ? '@2x' : ''
+}
+</script>
+
+<div id="masthead">
+    <section>
+        <div class="tagline"><h1><span>Git Client, done Sublime</span></h1></div>
+        <div class="tagline minor"><span><i>Line-by-line Staging. Commit Editing. Unmatched Performance.</i></span></div>
+    </section>
+
+    <section>
+        <div class="download">
+            <div class="button">
+
+                <span class="win"><a href="/download_thanks?target=win-x64">Download for Windows</a></span>
+                <span class="linux"><a href="/docs/linux_repositories">Install for Linux</a></span>
+                <span class="mac"><a href="/download_thanks?target=mac">Download for Mac</a></span>
+            </div>
+            <a href="/download" class="other_platforms">Mac, Windows, and Linux</a>
+        </div>
+    </section>
+    <section class="screencast">
+        <div class="theme-selector">
+            <a id="theme-selector-dark" href="javascript:switch_theme('dark')">Dark</a>
+            <a id="theme-selector-light" href="javascript:switch_theme('light')">Light</a>
+        </div>
+        <script>
+            function update_theme_selector()
+            {
+                byid('theme-selector-light').className = theme == 'light' ? 'current' : ''
+                byid('theme-selector-dark').className = theme == 'dark' ? 'current' : ''
+            }
+            if (window.location.hash == '#light')
+                theme = 'light'
+            update_theme_selector()
+        </script>
+        <div class="wrap">
+            <!-- Transparent gif to fill space without broken image icon -->
+            <img id="screencast-title-bar" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="Sublime Merge Title Bar" width="1200" height="28">
+            <script>
+                function show_title_bar()
+                {
+                    var bar = byid('screencast-title-bar')
+                    bar.src = '/images/' + plat + '_title_bar' +
+                        (plat == 'osx' && theme == 'dark' ? '_dark' : '') + sc_res() + '.png?v2'
+                    bar.onload = function()
+                    {
+                        bar.style.backgroundColor = 'transparent'
+                    }
+                }
+                show_title_bar()
+            </script>
+            <div id="anim_shell">
+                <div id="anim_container">
+                    <canvas id="target" style="width: 1200px; height: 576px"></canvas>
+                    <div id="fallback" style="width: 1200px; height: 576px"></div>
+                </div>
+            </div>
+            <div id="title-overlay" class="show"><div></div></div>
+        </div>
+    </section>
+</div>
+<main>
+    <section class="screencast-meta">
+        <div id="indicators">
+            <a href="javascript:jump_to(0)" id="indicator1" aria-label="Commit Faster">
+                <span class="jump"></span>
+            </a>
+            <a href="javascript:jump_to(1)" id="indicator2" aria-label="Review Better">
+                <span class="jump"></span>
+            </a>
+            <a href="javascript:jump_to(2)" id="indicator3" aria-label="Search">
+                <span class="jump"></span>
+            </a>
+            <a href="javascript:jump_to(3)" id="indicator4" aria-label="Resolve Conflicts">
+                <span class="jump"></span>
+            </a>
+        </div>
+        <div class="buttons">
+            <a href="javascript:play()" class="button" id="button-play" title="Play">
+                <svg width="12" height="12" viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg">
+                    <title>Play</title>
+                    <path d="M3 0v14l11-7z"></path>
+                    <path d="M0 0h14v14H0z" fill="none"></path>
+                </svg>
+            </a>
+            <a href="javascript:pause()" class="button" id="button-pause" title="Pause">
+                <svg width="12" height="12" viewBox="0 0 14 14" xmlns="http://www.w3.org/2000/svg">
+                    <title>Pause</title>
+                    <path d="M1 14h4V0H1v14zm8-14v14h4V0h-4z"></path>
+                    <path d="M0 0h14v14H0z" fill="none"></path>
+                </svg>
+            </a>
+        </div>
+        <div class="captions">
+            <div id="caption1">
+                <b>Commit Faster</b>
+
+                Stage Files, Hunks and Lines with no waiting - Sublime Merge is really, really fast.
+            </div>
+
+            <div id="caption2" style="display: none">
+                <b>Review Better</b>
+
+                Sublime Merge gives you to tools to breeze through code reviews:
+
+                Side by Side Diffs, Syntax Highlighting, Character Diffs. You can drag the top or bottom of a hunk to interactively show more context lines.
+            </div>
+
+            <div id="caption3" style="display: none">
+                <b>Search</b>
+
+                Instant search over your whole repository, as you type. Search by commit message, author, path and contents.
+            </div>
+
+            <div id="caption4" style="display: none">
+                <b>Resolve Conflicts</b>
+
+                Built-in merge tool allows for quick, painless resolution of merge conflicts
+            </div>
+        </div>
+    </section>
+    <script>
+        var captions =
+        [
+            byid("caption1"),
+            byid("caption2"),
+            byid("caption3"),
+            byid("caption4"),
+        ]
+        var indicators =
+        [
+            byid("indicator1"),
+            byid("indicator2"),
+            byid("indicator3"),
+            byid("indicator4"),
+        ]
+        var images = []
+
+        var target = byid('target')
+        var use_canvas = target && target.getContext
+        if (!use_canvas)
+        {
+            byid('target').style.display = 'none'
+            target = byid('fallback')
+            target.style.display = 'block'
+        }
+
+        function load_animation()
+        {
+            var script = byid('anim_script')
+            if (script)
+                script.parentNode.removeChild(script)
+            script = document.createElement('script')
+            script.setAttribute('src', 'screencasts/' + plat + '_' + theme + sc_res() + '.js?v2')
+            document.body.appendChild(script)
+
+            if (use_canvas)
+            {
+                target.width = sc_scale * width
+                target.height = sc_scale * height
+            }
+        }
+
+        load_animation()
+
+        if (window.matchMedia)
+        {
+            window.matchMedia('screen and (-webkit-min-device-pixel-ratio: 1.3) and (min-width: 1025px), ' +
+                'only screen and (-o-min-device-pixel-ratio: 13/10) and (min-width: 1025px), ' +
+                'only screen and (min-resolution: 120dpi) and (min-width: 1025px)').addListener(function(e)
+            {
+                show_title_bar()
+                load_animation()
+            })
+        }
+
+        function handle_resize(e)
+        {
+            target.style.height = Math.floor(target.clientWidth / width * height) + 'px'
+        }
+
+        handle_resize()
+
+        if (window.addEventListener)
+            window.addEventListener('resize', handle_resize, false)
+        else if (window.attachEvent)
+            window.attachEvent('onresize', handle_resize)
+
+        var cur_screencast = 0
+        var auto_cycle = true
+
+        function auto_next()
+        {
+            cur_screencast = (cur_screencast + 1) % captions.length
+            transition()
+        }
+
+        function auto_prev()
+        {
+            --cur_screencast;
+            if (cur_screencast < 0) cur_screencast = captions.length - 1
+            transition()
+        }
+
+        function jump_to(num)
+        {
+            while (num < 0)
+                num = captions.length + num
+            cur_screencast = num % captions.length
+            transition()
+        }
+
+        function switch_theme(t)
+        {
+            theme = t
+            if (window && window.history)
+                window.history.replaceState({}, '', t == 'light' ? '/#' + t : '/')
+            update_theme_selector()
+            show_title_bar()
+            load_animation()
+        }
+
+        var continuation = null
+        var start_time = null
+        var remaining_time = 0
+        var timer = null
+
+        function set_timeout(f, timeout)
+        {
+            start_time = new Date().getTime()
+            remaining_time = timeout
+            continuation = f
+            timer = window.setTimeout(f, timeout)
+        }
+
+        // Only run a callback once an animation frame is available, allowing
+        // the animation to be paused when in the background, etc
+        function sync_frame(f)
+        {
+            if (!window.requestAnimationFrame)
+                f()
+            else
+                window.requestAnimationFrame(f)
+        }
+
+        // Run a timeout synced to the animation frame
+        function sync_timeout(f, timeout)
+        {
+            set_timeout(function() { sync_frame(f) }, timeout)
+        }
+
+        function pause_timeout()
+        {
+            var elapsed = (new Date().getTime()) - start_time
+            remaining_time = Math.max(remaining_time - elapsed, 0)
+            window.clearTimeout(timer)
+        }
+
+        function continue_timeout()
+        {
+            start_time = new Date().getTime()
+            timer = window.setTimeout(continuation, remaining_time)
+        }
+
+        function show_play_button()
+        {
+            byid('button-pause').style.display = 'none'
+            byid('button-play').style.display = 'inline-block'
+        }
+
+        function show_pause_button()
+        {
+            byid('button-play').style.display = 'none'
+            byid('button-pause').style.display = 'inline-block'
+        }
+
+        function play()
+        {
+            show_pause_button()
+            continue_timeout()
+        }
+
+        function pause()
+        {
+            pause_timeout()
+            show_play_button()
+        }
+
+        var delay_scale = 0.7
+
+        var overlay = byid('title-overlay')
+
+        function display_error()
+        {
+            window.clearTimeout(timer)
+            continuation = null
+            if (use_canvas)
+            {
+                var ctx = target.getContext('2d')
+                ctx.clearRect(0, 0, target.width, target.height)
+            }
+            else
+            {
+                target.innerHTML = ''
+            }
+            overlay.getElementsByTagName('div')[0].innerHTML = '<i>Error loading screencast</i>';
+            overlay.className = 'show'
+        }
+
+        function update_meta()
+        {
+            for (var i = 0; i < captions.length; ++i)
+            {
+                captions[i].style.display = (i == cur_screencast) ? "block" : "none"
+                indicators[i].className = (i == cur_screencast) ? "active" : ""
+            }
+
+            var b_tags = captions[cur_screencast].getElementsByTagName('B')
+            if (b_tags.length > 0)
+            {
+                overlay.getElementsByTagName('div')[0].innerHTML = b_tags[0].innerHTML;
+                overlay.className = 'show'
+            }
+        }
+
+        function hide_overlay()
+        {
+            overlay.className = ''
+        }
+
+        function transition()
+        {
+            if (timer) window.clearTimeout(timer)
+
+            sync_frame(function() {
+                var img_url = animation_urls[cur_screencast]
+                var timeline = animation_timelines[cur_screencast]
+                var img = prep_animation(img_url, timeline,
+                    animation_urls[(cur_screencast + 1) % captions.length])
+
+                sync_timeout(function()
+                {
+                    hide_overlay()
+                    animate(img, timeline, target, 0)
+                }, 2400)
+            })
+        }
+
+        function draw_canvas(img, element, frame, blits)
+        {
+            var ctx = element.getContext('2d')
+
+            for (j = 0; j < blits.length; ++j)
+            {
+                var blit = blits[j]
+                var sx = blit[0]
+                var sy = blit[1]
+                var w = blit[2]
+                var h = blit[3]
+                var dx = blit[4]
+                var dy = blit[5]
+                ctx.drawImage(img, sx, sy, w, h, dx, dy, w, h)
+            }
+        }
+
+        function draw_fallback(img, element, frame, blits)
+        {
+            if (frame == 0)
+            {
+                while (element.hasChildNodes())
+                    element.removeChild(element.lastChild)
+            }
+
+            for (j = 0; j < blits.length; ++j)
+            {
+                var blit = blits[j]
+                var sx = blit[0] / sc_scale
+                var sy = blit[1] / sc_scale
+                var w = blit[2] / sc_scale
+                var h = blit[3] / sc_scale
+                var dx = blit[4] / sc_scale
+                var dy = blit[5] / sc_scale
+
+                var d = document.createElement('div')
+                d.style.position = 'absolute'
+                d.style.left = dx + "px"
+                d.style.top = dy + "px"
+                d.style.width = w + "px"
+                d.style.height = h + "px"
+                d.style.backgroundImage = "url('" + img.src + "')"
+                d.style.backgroundPosition = "-" + sx + "px -" + sy + "px"
+                d.style.backgroundSize = width + "px auto"
+
+                element.appendChild(d)
+            }
+        }
+
+        function draw(img, element, frame, blits)
+        {
+            if (use_canvas)
+                draw_canvas(img, element, frame, blits)
+            else
+                draw_fallback(img, element, frame, blits)
+        }
+
+        function animate(img, timeline, element, start_frame)
+        {
+            var i = start_frame;
+
+            var f = function()
+            {
+                var frame = i++ % timeline.length
+                var delay = timeline[frame].delay * delay_scale
+                var blits = timeline[frame].blit
+
+                draw(img, element, frame, blits)
+
+                var callback = f
+                if (i == timeline.length * 2 && auto_cycle)
+                    callback = auto_next
+                sync_timeout(callback, delay)
+            }
+
+            if (timer) window.clearTimeout(timer)
+            sync_frame(f)
+        }
+
+        function prep_animation(img_url, timeline, preload_url)
+        {
+            var ready = function()
+            {
+                sync_frame(function() {
+                    update_meta()
+                    draw(images[img_url], target, 0, timeline[0].blit)
+                })
+                if (!(preload_url in images))
+                {
+                    images[preload_url] = new Image()
+                    images[preload_url].src = preload_url
+                }
+            }
+
+            if (img_url in images)
+            {
+                ready()
+            }
+            else
+            {
+                images[img_url] = new Image()
+                images[img_url].onload = ready
+                images[img_url].onerror = function()
+                {
+                    delete images[img_url]
+                    display_error()
+                }
+                images[img_url].src = img_url
+            }
+            return images[img_url]
+        }
+    </script>
+    <section class="swimlane">
+        <section>
+            <div class="section group">
+                <h2 class="centered">Why choose <span class="product_highlight">Sublime Merge</span> as your Git Client?</h2>
+            </div>
+            <div class="section group">
+                <div class="col span_6_of_6 text">
+                    <h2>A faster way to work</h2>
+                    <p>With a zippy cross-platform GUI toolkit, an unmatched syntax highlighting engine, and a custom high-performance Git reading library, Sublime Merge sets the bar for performance.</p>
+                </div>
+            </div>
+            <div class="section group">
+                <div class="col span_3_of_6 image">
+                    <picture>
+                        <source srcset="/images/webp/stage_lines.webp 1x, /images/webp/stage_lines@2x.webp 2x" type="image/webp">
+                        <source srcset="/images/stage_lines.png 1x, /images/stage_lines@2x.png 2x" type="image/jpeg">
+                        <img src="/images/stage_lines.png" width="480" height="250" class="screenshot" alt="Sublime Merge Line By Line Staging">
+                    </picture>
+                </div>
+                <div class="col span_3_of_6 text">
+                    <h2>Precise and Flexible</h2>
+                    <p>Commit exactly what you want with line-by-line and hunk staging. Select one or more lines to split hunks into multiple changes.</p>
+                </div>
+            </div>
+            <div class="section group">
+                <div class="col span_3_of_6 text">
+                    <h2>Sublime Highlighting</h2>
+                    <p>With the power of Sublime Text syntax highlighting, you can understand exactly what's been changed in a commit. With over 40 supported languages out of the box, and automatic loading of installed third-party syntaxes, we've got you covered.</p>
+                </div>
+                <div class="col span_3_of_6 image">
+                    <picture>
+                        <source srcset="/images/webp/Highlighting.webp 1x, /images/webp/Highlighting@2x.webp 2x" type="image/webp">
+                        <source srcset="/images/Highlighting.png 1x, /images/Highlighting@2x.png 2x" type="image/jpeg">
+                        <img src="/images/Highlighting.png" width="480" height="250" class="screenshot" alt="Sublime Merge Syntax Highlighting">
+                    </picture>
+                </div>
+            </div>
+            <div class="section group">
+                <div class="col span_6_of_6 text">
+                    <h2>Real Git</h2>
+                    <p>When you're using Sublime Merge, you're using Git. View the exact Git commands you're using, and seamlessly transition between the command line and Sublime Merge.</p>
+                </div>
+            </div>
+            <div class="section group">
+                <div class="col span_3_of_6 image">
+                    <picture>
+                        <source srcset="/images/webp/Search.webp 1x, /images/webp/Search@2x.webp 2x" type="image/webp">
+                        <source srcset="/images/Search.png 1x, /images/Search@2x.png 2x" type="image/jpeg">
+                        <img src="/images/Search.png" width="480" height="250" class="screenshot" alt="Sublime Merge Search">
+                    </picture>
+                </div>
+                <div class="col span_3_of_6 text">
+                    <h2>Powerful Search</h2>
+                    <p>Looking for a commit? Use find-as-you-type search to find the exact commit you're looking for.</p>
+                </div>
+            </div>
+            <div class="section group">
+                <div class="col span_3_of_6 text">
+                    <h2>Your Git Client</h2>
+                    <p>Make it yours with an adaptable layout and powerful theming system.</p>
+                </div>
+                <div class="col span_3_of_6 image">
+                    <picture>
+                        <source srcset="/images/webp/Theme.webp 1x, /images/webp/Theme@2x.webp 2x" type="image/webp">
+                        <source srcset="/images/Theme.png 1x, /images/Theme@2x.png 2x" type="image/jpeg">
+                        <img src="/images/Theme.png" width="480" height="250" class="screenshot" alt="Sublime Merge Custom Themes">
+                    </picture>
+                </div>
+            </div>
+            <div class="section group features">
+                <h3 class="centered">Even More</h3>
+                <div class="feature">
+                    <div class="badge">
+                        <img src="/icons/icon_command_palette.svg" alt="Command Palette Icon" width="50px" height="34px">
+                        Command Palette
+                    </div>
+                </div>
+                <div class="feature">
+                    <div class="badge">
+                        <img src="/icons/icon_edit.svg" alt="Editing Icon" width="50px" height="34px">
+                        Commit Editing
+                    </div>
+                </div>
+                <div class="feature">
+                    <div class="badge">
+                        <img src="/icons/icon_history.svg" alt="History Icon" width="50px" height="34px">
+                        Blame and File History
+                    </div>
+                </div>
+                <div class="feature">
+                    <div class="badge">
+                        <img src="/icons/icon_submodules.svg" alt="Submodule Icon" width="50px" height="34px">
+                        Submodule Management
+                    </div>
+                </div>
+                <div class="feature">
+                    <div class="badge">
+                        <img src="/icons/icon_command_line.svg" alt="Terminal Icon" width="50px" height="34px">
+                        Command Line Integration
+                    </div>
+                </div>
+                <div class="feature">
+                    <div class="badge">
+                        <img src="/icons/icon_git_flow.svg" alt="Git Flow Icon" width="50px" height="34px">
+                        Git Flow Integration
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section>
+    <div class="section group"><h2 class="centered inverted">Meet the Sublime Family</h2></div>
+
+    <div class="section group">
+        <div class="col span_3_of_6 text">
+            <div class="product_card">
+                <div class="product_card_header">
+                    <img src="https://www.sublimehq.com/images/sublime_merge_stripe.svg" class="product_card_icon" alt="Sublime Merge Icon">
+                    <h3>Sublime Merge</h3>
+                </div>
+                <div class="product_card_body">
+                    <p>A cross-platform Git client, done the Sublime Text way</p>
+                </div>
+                <div class="product_card_buttons">
+                    <div class="download">
+                        <div class="button">
+                            <span class="win"><a href="https://www.sublimemerge.com/download">Download</a></span>
+                            <span class="linux"><a href="https://www.sublimemerge.com/download">Download</a></span>
+                            <span class="mac"><a href="https://www.sublimemerge.com/download">Download</a></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+       </div>
+       <div class="col span_3_of_6 text">
+            <div class="product_card">
+                <div class="product_card_header">
+                    <img src="https://www.sublimehq.com/images/sublime_text_stripe.svg" class="product_card_icon" alt="Sublime Text Icon">
+                    <h3>Sublime Text</h3>
+                </div>
+                <div class="product_card_body">
+                    <p>The sophisticated text editor for code, markup and prose</p>
+                </div>
+                <div class="product_card_buttons">
+                    <div class="download">
+                        <div class="button">
+                            <a href="https://www.sublimetext.com/">Find out more</a>
+                        </div>
+                    </div>
+                    <div class="download">
+                        <div class="button">
+                            <span class="win"><a href="https://www.sublimetext.com/download">Download</a></span>
+                            <span class="linux"><a href="https://www.sublimetext.com/download">Download</a></span>
+                            <span class="mac"><a href="https://www.sublimetext.com/download">Download</a></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+       </div>
+   </div>
+</section>
+    </section>
+</main>
+<footer>
+    <section>
+            <div class="footer_start">
+                <p>© <a href="https://www.sublimehq.com">Sublime HQ Pty Ltd</a></p>
+                <p>Woollahra, Sydney.</p>
+            </div>
+            <div class="footer_end">
+                <p>
+                    <div class="twitter_follow">
+                        <a target="_blank" rel="noopener noreferrer" href="https://twitter.com/sublimehq?ref_src=twsrc%5Etfw">Follow @sublimehq</a>
+                    </div>
+                </p>
+            </div>
+    </section>
+</footer>
+<!--[if lt IE 9]>
+<script>
+    var logo_img = byid('logo').getElementsByTagName('IMG')[0]
+    logo_img.src = logo_img.src.replace('.svg', '.png')
+</script>
+<![endif]-->
+</body>
+</html>

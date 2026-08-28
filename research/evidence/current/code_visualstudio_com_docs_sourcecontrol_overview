@@ -1,0 +1,1564 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8" />
+	<meta name="awa-expId" content="cv-downloadv2:1227264;" />
+	<meta name="awa-env" content="prod" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta name="google-site-verification" content="hNs7DXrTySP_X-0P_AC0WulAXvUwgSXEmgfcO2r79dw" />
+
+	<!-- Twitter and Facebook OpenGraph Metadata-->
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:site" content="@code" />
+
+	<meta name="description" content="Learn how to use VS Code's integrated Git source control features like staging, committing, branching, merge conflict resolution, and GitHub integration." />
+<meta name="keywords" content="" />
+<meta name="ms.prod" content="vs-code" />
+<meta name="ms.TOCTitle" content="" />
+<meta name="ms.ContentId" content="7E22CCC0-2AB8-4729-A4C9-BE2B16853820" />
+<meta name="ms.date" content="8/19/2026" />
+<meta name="ms.topic" content="conceptual" />
+<!-- Twitter and Facebook OpenGraph Metadata-->
+<meta name="twitter:card" content="summary_large_image" />
+<meta property="og:url" content="https://code.visualstudio.com/docs/sourcecontrol/overview" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="Source control in VS Code" />
+<meta property="og:description" content="Learn how to use VS Code's integrated Git source control features like staging, committing, branching, merge conflict resolution, and GitHub integration." />
+
+<meta property="og:image" content="https://code.visualstudio.com/opengraphimg/generated/docs/sourcecontrol/overview.webp" />
+
+
+
+	<link rel="shortcut icon" href="/assets/favicon.ico" sizes="128x128" />
+	<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+
+	<title>Source control in VS Code</title>
+
+	<link rel="stylesheet" href="/dist/style.css">
+
+	<script src="https://consentdeliveryfd.azurefd.net/mscc/lib/v2/wcp-consent.js"></script>
+	<script type="text/javascript" src="https://js.monitor.azure.com/scripts/c/ms.analytics-web-4.min.js"></script>
+	
+	<script type="text/javascript">
+	// Leave as var; siteConsent is initialized and referenced elsewhere.
+	var siteConsent = null;
+	
+	const GPC_DataSharingOptIn = false;
+	WcpConsent.onInitCallback(function () {
+		window.appInsights = new oneDS.ApplicationInsights();
+		window.appInsights.initialize({
+			instrumentationKey: "1a3eb3104447440391ad5f2a6ee06a0a-62879566-bc58-4741-9650-302bf2af703f-7103",
+			propertyConfiguration: {
+				userConsented: false,
+				gpcDataSharingOptIn: false,
+				callback: {
+					// Stable closure: the SDK calls this per-event, so it picks up the
+					// real consent state once WcpConsent.init() resolves (siteConsent
+					// is still null when this callback is registered).
+					userConsentDetails: function () {
+						return siteConsent ? siteConsent.getConsent() : undefined;
+					}
+				},
+			},
+			cookieCfg: {
+				ignoreCookies: ["MSCC"]
+			},
+			webAnalyticsConfiguration:{ // Web Analytics Plugin configuration
+				urlCollectQuery: true,
+				urlCollectHash: true,
+				autoCapture: {
+					scroll: true,
+					pageView: true,
+					onLoad: true,
+					onUnload: true,
+					click: true,
+					resize: true,
+					jsError: true
+				}
+			}
+		}, []);
+	
+		window.appInsights.getPropertyManager().getPropertiesContext().web.gpcDataSharingOptIn = GPC_DataSharingOptIn;
+	});
+	</script>
+	<link rel="alternate" type="application/atom+xml" title="RSS Feed for code.visualstudio.com" href="/feed.xml" />
+</head>
+
+<body >
+	<!-- Setting theme here to avoid FOUC -->
+	<script>
+		function setTheme(themeName) {
+			if (themeName === 'dark') {
+				document.documentElement.removeAttribute('data-theme'); // dark is default, so no data-theme attribute needed
+			}
+
+			if (themeName === 'light') {
+				document.documentElement.setAttribute('data-theme', themeName);
+			}
+			return;
+		}
+
+		// Determine initial theme: user preference or system preference
+		let theme = localStorage.getItem('theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+		setTheme(theme); // Apply the initial theme
+
+		// Listen for changes in the system theme preference
+		window.matchMedia('(prefers-color-scheme: dark)').addListener(e => {
+			if (!localStorage.getItem('theme')) { // Only if no user preference is saved
+				setTheme(e.matches ? 'dark' : 'light');
+			}
+		});
+	</script>
+
+	<div id="main">
+		<div class="navbar-fixed-container">
+			<div class="navbar navbar-inverse navbar-fixed-top ">
+				<div id='cookie-banner'></div>		<nav role="navigation" aria-label="Top Level">
+					<div class="container">
+						<div class="nav navbar-header">
+							<a class="navbar-brand" href="/"><span>Visual Studio Code</span></a>
+						</div>
+						<div class="navbar-collapse collapse">
+							<ul class="nav navbar-nav navbar-left" data-m='{"cN":"top-navbar","aN":"navigation"}'>
+								<li class="nav-dropdown">
+									<a id="nav-features" href="#" class="nav-dropdown-toggle" role="button" aria-haspopup="true" aria-expanded="false" data-m='{"cN":"Features","aN":"navigation","cT":"toggle"}'>
+										Features <span class="nav-dropdown-caret" aria-hidden="true"></span>
+									</a>
+									<ul class="nav-dropdown-menu" role="menu">
+										<li role="none"><a role="menuitem" href="/features/agents" data-m='{"cN":"Agents","aN":"navigation - Features"}'>Agents</a></li>
+										<li role="none"><a role="menuitem" href="/features/customizations" data-m='{"cN":"Agent Customization","aN":"navigation - Features"}'>Agent Customization</a></li>
+										<li role="none"><a role="menuitem" href="/features/models" data-m='{"cN":"Models &amp; Agent Harnesses","aN":"navigation - Features"}'>Models &amp; Agent Harnesses</a></li>
+										<li role="none"><a role="menuitem" href="/features/enterprise" data-m='{"cN":"Enterprise","aN":"navigation - Features"}'>Enterprise</a></li>
+										<li role="none"><a role="menuitem" href="/features/extensibility" data-m='{"cN":"Extensibility","aN":"navigation - Features"}'>Extensibility</a></li>
+									</ul>
+								</li>
+								<li class="nav-dropdown active">
+									<a id="nav-docs" href="#" class="nav-dropdown-toggle" role="button" aria-haspopup="true" aria-expanded="false" data-m='{"cN":"Docs","aN":"navigation","cT":"toggle"}'>
+										Docs <span class="nav-dropdown-caret" aria-hidden="true"></span>
+									</a>
+									<ul class="nav-dropdown-menu" role="menu">
+										<li role="none"><a role="menuitem" href="/docs" data-m='{"cN":"Documentation","aN":"navigation - Docs"}'>Documentation</a></li>
+										<li role="none"><a role="menuitem" href="/api" data-m='{"cN":"API","aN":"navigation - Docs"}'>API</a></li>
+										<li role="none"><a role="menuitem" id="nav-faqs" href="/docs/supporting/faq" data-m='{"cN":"FAQ","aN":"navigation - Docs"}'>FAQ</a></li>
+									</ul>
+								</li>
+								<li ><a id="nav-updates" href="/updates" data-m='{"cN":"Release Notes"}'>Release Notes</a>
+								</li>
+								<li ><a id="nav-blogs" href="/blogs" data-m='{"cN":"Blog"}'>Blog</a></li>
+								<li ><a id="nav-learn" href="/learn" data-m='{"cN":"Learn"}'>Learn</a></li>
+								<li><a id="nav-events" href="https://aka.ms/vscode/live" target="_blank" rel="noopener" data-m='{"cN":"Events"}'>Events<span class="codicon codicon-link-external nav-external-icon" aria-hidden="true"></span></a></li>
+								<li class="nav-dropdown">
+									<a id="nav-resources" href="#" class="nav-dropdown-toggle" role="button" aria-haspopup="true" aria-expanded="false" data-m='{"cN":"Resources","aN":"navigation","cT":"toggle"}'>
+										Resources <span class="nav-dropdown-caret" aria-hidden="true"></span>
+									</a>
+									<ul class="nav-dropdown-menu" role="menu">
+										<li role="none"><a role="menuitem" href="https://marketplace.visualstudio.com/VSCode" target="_blank" rel="noopener"
+												id="nav-extensions" data-m='{"cN":"Extensions","aN":"navigation - Resources"}'>Extensions<span class="codicon codicon-link-external nav-external-icon" aria-hidden="true"></span></a></li>
+										<li role="none"><a role="menuitem" id="nav-mcp" href="/mcp" target="_blank" rel="noopener" data-m='{"cN":"MCP","aN":"navigation - Resources"}'>MCP<span class="codicon codicon-link-external nav-external-icon" aria-hidden="true"></span></a></li>
+									</ul>
+								</li>
+							</ul>
+							<ul class="nav navbar-nav navbar-right" role="presentation">
+								<li>
+									<a class="link-button" href="/download" id="nav-download">
+										<span>Download</span>
+									</a>
+								</li>
+							</ul>
+						</div>
+						<div class="navbar-actions">
+							<div class="search" role="presentation">
+								<div class="nav-search search-control" role="button" tabindex="0" aria-label="Open search dialog">
+									<div class="input-group" role="presentation">
+										<span class="input-group-btn">
+											<span class="btn search-icon-container" aria-hidden="true">
+												<img class="search-icon-dark" src="/assets/icons/search-dark.svg" alt="" />
+												<img class="search-icon-light" src="/assets/icons/search.svg" alt="" />
+											</span>
+										</span>
+										<span class="search-box form-control" aria-hidden="true" role="presentation"></span>
+										<span class="search-shortcut-placeholder">Search</span>
+										<span class="search-shortcut-overlay"></span>
+									</div>
+								</div>					</div>
+							<button type="button" class="theme-switch" id="theme-toggle">
+								<img class="theme-icon-light" src="/assets/icons/theme-light.svg" alt="Switch to the dark theme" />
+								<img class="theme-icon-dark" src="/assets/icons/theme-dark.svg" alt="Switch to the light theme" />
+							</button>
+							<a class="link-button navbar-actions-download" href="/Download">
+								<span>Download</span>
+							</a>
+						</div>
+						<button type="button" class="navbar-toggle" data-toggle="collapse" data-target=".navbar-collapse"
+							aria-label="Expand and Collapse Menu">
+							<span class="icon-bar"></span>
+							<span class="icon-bar"></span>
+							<span class="icon-bar"></span>
+						</button>
+					</div>
+				</nav>
+			</div>
+		</div>		<div data-announcement-version="2026-06-01-vscode-live-build" class="updates-banner ">
+			<div class="container">
+				<p class="message"><a href="https://aka.ms/VSCode/Livestage?source=vsc-website-banner" target="_blank" rel="noopener">📼 Rewatch VS Code Live at MS Build 2026</a></p>
+			</div>
+			<div tabindex="0" role="button" title="Dismiss this update" class="dismiss-btn" id="banner-dismiss-btn"><span class="sr-only">Dismiss this update</span><span aria-hidden="true" class="glyph-icon"></span></div>
+		</div>
+		<script>
+			// Hide the banner synchronously (before first paint) if this version was
+			// already dismissed, to avoid a flicker/layout shift once the main bundle loads.
+			(function () {
+				try {
+					var banner = document.currentScript.previousElementSibling;
+					if (banner && localStorage.getItem('dismissedAnnouncementVersion') === banner.getAttribute('data-announcement-version')) {
+						banner.classList.add('js-hidden');
+					}
+				} catch (e) { /* ignore */ }
+			})();
+		</script>
+		<!-- This div wraps around the entire site -->
+		<!-- The body itself should already have a main tag -->
+		<main id="main-content">
+			<script>
+    function closeReportIssue() {
+        var element = document.getElementById('surveypopup');
+        element.parentElement.removeChild(element);
+    }
+
+    function reportIssue(tutorial, page) {
+        var div = document.createElement('div');
+        div.innerHTML = '<div id="surveypopup" class="overlay visible"><div class="surveypopup"><div id="surveytitle">Tell us more<a href="javascript:void(0)" onclick="closeReportIssue()">X</a></div><div id="surveydiv"><iframe frameBorder="0" scrolling="0" src="https://www.research.net/r/PWZWZ52?tutorial=' + tutorial + '&step=' + page + '"></iframe></div></div></div>';
+        document.body.appendChild(div.children[0]);
+    }
+</script>
+
+<div class="body-content docs docs-github-layout">
+    <div class="docs-layout-wrapper">
+        <!-- Left sidebar - Table of Contents -->
+        <aside class="docs-left-sidebar">
+            <nav id="docs-navbar" aria-label="Topics" class="docs-nav visible-md visible-lg" data-m='{"cN":"docs-left-nav","aN":"navigation"}'>
+              <h4>Documentation</h4>
+              <ul class="nav" id="main-nav">
+              <li >
+                <a href="/docs" data-m='{"cN":"Overview"}' >Overview</a>
+              </li>
+              
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#getstarted-articles" data-parent="#main-nav" data-toggle="collapse" data-m='{"cN":"Get Started","cT":"toggle"}'>Get Started</a>
+              <ul id="getstarted-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/getstarted/overview" data-m='{"cN":"Overview","aN":"Get Started"}' >Overview</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/quickstart" data-m='{"cN":"Agents Quickstart","aN":"Get Started"}' >Agents Quickstart</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/editing/getting-started" data-m='{"cN":"Editor Tutorial","aN":"Get Started"}' >Editor Tutorial</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/getstarted/introvideos" data-m='{"cN":"Intro Videos","aN":"Get Started"}' >Intro Videos</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agentic-articles" data-parent="#main-nav" data-toggle="collapse" data-m='{"cN":"Agents","cT":"toggle"}'>Agents</a>
+              <ul id="agentic-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/overview" data-m='{"cN":"Overview","aN":"Agents"}' >Overview</a>
+                    </li>
+                      
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agents-articles" data-toggle="collapse" data-m='{"cN":"Get started","aN":"Agents","cT":"toggle"}'>Get started</a>
+              <ul id="agents-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/quickstart" data-m='{"cN":"Agents Quickstart","aN":"Agents - Get started"}' >Agents Quickstart</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/agents-tutorial" data-m='{"cN":"Agents Tutorial","aN":"Agents - Get started"}' >Agents Tutorial</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/best-practices" data-m='{"cN":"Best Practices","aN":"Agents - Get started"}' >Best Practices</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agents-concepts-articles" data-toggle="collapse" data-m='{"cN":"Concepts","aN":"Agents","cT":"toggle"}'>Concepts</a>
+              <ul id="agents-concepts-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/concepts/agents" data-m='{"cN":"Agents","aN":"Agents - Concepts"}' >Agents</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/concepts/agent-harnesses" data-m='{"cN":"Agent Harnesses","aN":"Agents - Concepts"}' >Agent Harnesses</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/concepts/language-models" data-m='{"cN":"Language Models","aN":"Agents - Concepts"}' >Language Models</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/concepts/context" data-m='{"cN":"Context","aN":"Agents - Concepts"}' >Context</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/concepts/tools" data-m='{"cN":"Tools","aN":"Agents - Concepts"}' >Tools</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/concepts/sessions" data-m='{"cN":"Sessions &amp; Handoff","aN":"Agents - Concepts"}' >Sessions & Handoff</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/concepts/agent-host" data-m='{"cN":"Agent Host Architecture","aN":"Agents - Concepts"}' >Agent Host Architecture</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/concepts/customization" data-m='{"cN":"Customization","aN":"Agents - Concepts"}' >Customization</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/reference/workspace-context" data-m='{"cN":"Workspace Context","aN":"Agents - Concepts"}' >Workspace Context</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/concepts/trust-and-safety" data-m='{"cN":"Trust &amp; Safety","aN":"Agents - Concepts"}' >Trust & Safety</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agents-run-articles" data-toggle="collapse" data-m='{"cN":"Run agents","aN":"Agents","cT":"toggle"}'>Run agents</a>
+              <ul id="agents-run-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/run/agents-window" data-m='{"cN":"Agents Window","aN":"Agents - Run agents"}' >Agents Window</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/chat-view" data-m='{"cN":"Chat View","aN":"Agents - Run agents"}' >Chat View</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/agent-harnesses" data-m='{"cN":"Choose an Agent Harness","aN":"Agents - Run agents"}' >Choose an Agent Harness</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/tools" data-m='{"cN":"Use Tools","aN":"Agents - Run agents"}' >Use Tools</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/browser-tools" data-m='{"cN":"Browser Tools","aN":"Agents - Run agents"}' >Browser Tools</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/approvals" data-m='{"cN":"Approvals &amp; Permissions","aN":"Agents - Run agents"}' >Approvals & Permissions</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/review-code-edits" data-m='{"cN":"Review &amp; Revert Changes","aN":"Agents - Run agents"}' >Review & Revert Changes</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/artifacts" data-m='{"cN":"Artifacts","aN":"Agents - Run agents"}' >Artifacts</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/remote-agent-sessions" data-m='{"cN":"Remote Agent Sessions","aN":"Agents - Run agents"}' >Remote Agent Sessions</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/planning" data-m='{"cN":"Plan Work","aN":"Agents - Run agents"}' >Plan Work</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/memory" data-m='{"cN":"Memory","aN":"Agents - Run agents"}' >Memory</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/subagents" data-m='{"cN":"Subagents","aN":"Agents - Run agents"}' >Subagents</a>
+                    </li>
+                      
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agents-run-sessions-articles" data-toggle="collapse" data-m='{"cN":"Sessions","aN":"Agents - Run agents","cT":"toggle"}'>Sessions</a>
+              <ul id="agents-run-sessions-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/run/sessions/manage-sessions" data-m='{"cN":"Manage Sessions","aN":"Agents - Run agents - Sessions"}' >Manage Sessions</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/run/sessions/session-history" data-m='{"cN":"Session History","aN":"Agents - Run agents - Sessions"}' >Session History</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+                    <li >
+                      <a href="/docs/agents/run/security" data-m='{"cN":"AI Security","aN":"Agents - Run agents"}' >AI Security</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agent-customization-articles" data-toggle="collapse" data-m='{"cN":"Customize agents","aN":"Agents","cT":"toggle"}'>Customize agents</a>
+              <ul id="agent-customization-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agent-customization/overview" data-m='{"cN":"Create and Manage","aN":"Agents - Customize agents"}' >Create and Manage</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/custom-instructions" data-m='{"cN":"Instructions","aN":"Agents - Customize agents"}' >Instructions</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/agent-skills" data-m='{"cN":"Agent Skills","aN":"Agents - Customize agents"}' >Agent Skills</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/custom-agents" data-m='{"cN":"Custom Agents","aN":"Agents - Customize agents"}' >Custom Agents</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/language-models" data-m='{"cN":"Language Models","aN":"Agents - Customize agents"}' >Language Models</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/mcp-servers" data-m='{"cN":"MCP","aN":"Agents - Customize agents"}' >MCP</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/hooks" data-m='{"cN":"Hooks","aN":"Agents - Customize agents"}' >Hooks</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/agent-plugins" data-m='{"cN":"Plugins","aN":"Agents - Customize agents"}' >Plugins</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/tools" data-m='{"cN":"Tools","aN":"Agents - Customize agents"}' >Tools</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agent-customization/prompt-files" data-m='{"cN":"Prompt Files","aN":"Agents - Customize agents"}' >Prompt Files</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#chat-articles" data-toggle="collapse" data-m='{"cN":"Use chat","aN":"Agents","cT":"toggle"}'>Use chat</a>
+              <ul id="chat-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/chat/chat-overview" data-m='{"cN":"Chat Basics","aN":"Agents - Use chat"}' >Chat Basics</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/chat/inline-chat" data-m='{"cN":"Inline &amp; Quick Chat","aN":"Agents - Use chat"}' >Inline & Quick Chat</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/chat/copilot-chat-context" data-m='{"cN":"Add Prompt Context","aN":"Agents - Use chat"}' >Add Prompt Context</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agents-guides-articles" data-toggle="collapse" data-m='{"cN":"Tutorials &amp; guides","aN":"Agents","cT":"toggle"}'>Tutorials & guides</a>
+              <ul id="agents-guides-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/guides/customize-copilot-guide" data-m='{"cN":"Customize AI","aN":"Agents - Tutorials &amp; guides"}' >Customize AI</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/context-engineering-guide" data-m='{"cN":"Context Engineering","aN":"Agents - Tutorials &amp; guides"}' >Context Engineering</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/test-driven-development-guide" data-m='{"cN":"Test-Driven Development","aN":"Agents - Tutorials &amp; guides"}' >Test-Driven Development</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/test-with-copilot" data-m='{"cN":"Test with AI","aN":"Agents - Tutorials &amp; guides"}' >Test with AI</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/browser-agent-testing-guide" data-m='{"cN":"Test Web Apps with Browser Tools","aN":"Agents - Tutorials &amp; guides"}' >Test Web Apps with Browser Tools</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/debug-with-copilot" data-m='{"cN":"Debug with AI","aN":"Agents - Tutorials &amp; guides"}' >Debug with AI</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/notebooks-with-ai" data-m='{"cN":"Edit Notebooks with AI","aN":"Agents - Tutorials &amp; guides"}' >Edit Notebooks with AI</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/optimize-usage" data-m='{"cN":"Optimize AI Credit Usage","aN":"Agents - Tutorials &amp; guides"}' >Optimize AI Credit Usage</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/mcp-developer-guide" data-m='{"cN":"MCP Dev Guide","aN":"Agents - Tutorials &amp; guides"}' >MCP Dev Guide</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/prompt-examples" data-m='{"cN":"Prompt Examples","aN":"Agents - Tutorials &amp; guides"}' >Prompt Examples</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agents-reference-articles" data-toggle="collapse" data-m='{"cN":"Reference","aN":"Agents","cT":"toggle"}'>Reference</a>
+              <ul id="agents-reference-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/reference/ai-features-cheat-sheet" data-m='{"cN":"Cheat Sheet","aN":"Agents - Reference"}' >Cheat Sheet</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/reference/ai-settings" data-m='{"cN":"Settings Reference","aN":"Agents - Reference"}' >Settings Reference</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/reference/mcp-configuration" data-m='{"cN":"MCP Configuration","aN":"Agents - Reference"}' >MCP Configuration</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/reference/hooks-reference" data-m='{"cN":"Hooks Reference","aN":"Agents - Reference"}' >Hooks Reference</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/monitoring-agents" data-m='{"cN":"OpenTelemetry Monitoring","aN":"Agents - Reference"}' >OpenTelemetry Monitoring</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#agents-agent-troubleshooting-articles" data-toggle="collapse" data-m='{"cN":"Troubleshooting","aN":"Agents","cT":"toggle"}'>Troubleshooting</a>
+              <ul id="agents-agent-troubleshooting-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/agent-troubleshooting/troubleshooting" data-m='{"cN":"Troubleshooting","aN":"Agents - Troubleshooting"}' >Troubleshooting</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/agent-troubleshooting/chat-debug-view" data-m='{"cN":"Debug Chat Interactions","aN":"Agents - Troubleshooting"}' >Debug Chat Interactions</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/agent-troubleshooting/cache-explorer" data-m='{"cN":"Diagnose Prompt Caching","aN":"Agents - Troubleshooting"}' >Diagnose Prompt Caching</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/agent-troubleshooting/faq" data-m='{"cN":"FAQ","aN":"Agents - Troubleshooting"}' >FAQ</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+              </ul>
+            </li>
+                
+                    <li >
+                      <a class="area" href="/docs/core-editor/overview" data-m='{"cN":"Editor"}' >Editor</a>
+                    </li>
+                  
+            <li class="panel active expanded">
+              <a class="area" role="button" href="#sourcecontrol-articles" data-parent="#main-nav" data-toggle="collapse" data-m='{"cN":"Source Control","cT":"toggle"}'>Source Control</a>
+              <ul id="sourcecontrol-articles" class="collapse in">
+            
+                    <li class="active">
+                      <a href="/docs/sourcecontrol/overview" data-m='{"cN":"Overview","aN":"Source Control"}' aria-label="Current Page: Overview">Overview</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/quickstart" data-m='{"cN":"Quickstart","aN":"Source Control"}' >Quickstart</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/repos-remotes" data-m='{"cN":"Repositories &amp; Remotes","aN":"Source Control"}' >Repositories & Remotes</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/staging-commits" data-m='{"cN":"Staging &amp; Committing","aN":"Source Control"}' >Staging & Committing</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/history" data-m='{"cN":"Source Control History","aN":"Source Control"}' >Source Control History</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/branches-worktrees" data-m='{"cN":"Branches &amp; Worktrees","aN":"Source Control"}' >Branches & Worktrees</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/merge-conflicts" data-m='{"cN":"Merge Conflicts","aN":"Source Control"}' >Merge Conflicts</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/github" data-m='{"cN":"Collaborate on GitHub","aN":"Source Control"}' >Collaborate on GitHub</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/troubleshooting" data-m='{"cN":"Troubleshooting","aN":"Source Control"}' >Troubleshooting</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/sourcecontrol/faq" data-m='{"cN":"FAQ","aN":"Source Control"}' >FAQ</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#terminal-articles" data-parent="#main-nav" data-toggle="collapse" data-m='{"cN":"Terminal","cT":"toggle"}'>Terminal</a>
+              <ul id="terminal-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/terminal/getting-started" data-m='{"cN":"Get Started","aN":"Terminal"}' >Get Started</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/terminal/basics" data-m='{"cN":"Terminal Basics","aN":"Terminal"}' >Terminal Basics</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/terminal/profiles" data-m='{"cN":"Terminal Profiles","aN":"Terminal"}' >Terminal Profiles</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/terminal/shell-integration" data-m='{"cN":"Shell Integration","aN":"Terminal"}' >Shell Integration</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/terminal/appearance" data-m='{"cN":"Appearance","aN":"Terminal"}' >Appearance</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/terminal/advanced" data-m='{"cN":"Advanced","aN":"Terminal"}' >Advanced</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#debugtest-articles" data-parent="#main-nav" data-toggle="collapse" data-m='{"cN":"Debugging &amp; Testing","cT":"toggle"}'>Debugging & Testing</a>
+              <ul id="debugtest-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/debugtest/debugging" data-m='{"cN":"Debugging","aN":"Debugging &amp; Testing"}' >Debugging</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/debugtest/debugging-configuration" data-m='{"cN":"Debug Configuration","aN":"Debugging &amp; Testing"}' >Debug Configuration</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/debugtest/tasks" data-m='{"cN":"Tasks","aN":"Debugging &amp; Testing"}' >Tasks</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/debugtest/testing" data-m='{"cN":"Testing","aN":"Debugging &amp; Testing"}' >Testing</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/debugtest/integrated-browser" data-m='{"cN":"Integrated Browser","aN":"Debugging &amp; Testing"}' >Integrated Browser</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/debugtest/port-forwarding" data-m='{"cN":"Port Forwarding","aN":"Debugging &amp; Testing"}' >Port Forwarding</a>
+                    </li>
+                      
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#debugging-guides-articles" data-toggle="collapse" data-m='{"cN":"Guides &amp; Tutorials","aN":"Debugging &amp; Testing","cT":"toggle"}'>Guides & Tutorials</a>
+              <ul id="debugging-guides-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/agents/guides/test-driven-development-guide" data-m='{"cN":"Test-Driven Development","aN":"Debugging &amp; Testing - Guides &amp; Tutorials"}' >Test-Driven Development</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/agents/guides/browser-agent-testing-guide" data-m='{"cN":"Test Web Apps with Browser Tools","aN":"Debugging &amp; Testing - Guides &amp; Tutorials"}' >Test Web Apps with Browser Tools</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                    
+              </ul>
+            </li>
+                
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#enterprise-articles" data-parent="#main-nav" data-toggle="collapse" data-m='{"cN":"Enterprise","cT":"toggle"}'>Enterprise</a>
+              <ul id="enterprise-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/enterprise/overview" data-m='{"cN":"Overview","aN":"Enterprise"}' >Overview</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/enterprise/policies" data-m='{"cN":"Enterprise Policies","aN":"Enterprise"}' >Enterprise Policies</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/enterprise/ai-settings" data-m='{"cN":"AI Settings","aN":"Enterprise"}' >AI Settings</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/enterprise/extensions" data-m='{"cN":"Extensions","aN":"Enterprise"}' >Extensions</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/enterprise/telemetry" data-m='{"cN":"Telemetry","aN":"Enterprise"}' >Telemetry</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/enterprise/updates" data-m='{"cN":"Updates","aN":"Enterprise"}' >Updates</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#remote-articles" data-parent="#main-nav" data-toggle="collapse" data-m='{"cN":"Remote","cT":"toggle"}'>Remote</a>
+              <ul id="remote-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/remote/remote-overview" data-m='{"cN":"Overview","aN":"Remote"}' >Overview</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/vscode-web" data-m='{"cN":"VS Code for the Web","aN":"Remote"}' >VS Code for the Web</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/ssh" data-m='{"cN":"SSH","aN":"Remote"}' >SSH</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/ssh-tutorial" data-m='{"cN":"SSH Tutorial","aN":"Remote"}' >SSH Tutorial</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/tunnels" data-m='{"cN":"Tunnels","aN":"Remote"}' >Tunnels</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/dev-containers" data-m='{"cN":"Dev Containers","aN":"Remote"}' >Dev Containers</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/wsl" data-m='{"cN":"WSL","aN":"Remote"}' >WSL</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/wsl-tutorial" data-m='{"cN":"WSL Tutorial","aN":"Remote"}' >WSL Tutorial</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/codespaces" data-m='{"cN":"GitHub Codespaces","aN":"Remote"}' >GitHub Codespaces</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/vscode-server" data-m='{"cN":"VS Code Server","aN":"Remote"}' >VS Code Server</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/linux" data-m='{"cN":"Linux Prerequisites","aN":"Remote"}' >Linux Prerequisites</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/troubleshooting" data-m='{"cN":"Tips and Tricks","aN":"Remote"}' >Tips and Tricks</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/remote/faq" data-m='{"cN":"FAQ","aN":"Remote"}' >FAQ</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#setup-articles" data-parent="#main-nav" data-toggle="collapse" data-m='{"cN":"Advanced Setup","cT":"toggle"}'>Advanced Setup</a>
+              <ul id="setup-articles" class="collapse ">
+            
+                    <li >
+                      <a href="/docs/setup/copilot" data-m='{"cN":"GitHub Copilot Setup","aN":"Advanced Setup"}' >GitHub Copilot Setup</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/setup/linux" data-m='{"cN":"Linux","aN":"Advanced Setup"}' >Linux</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/setup/mac" data-m='{"cN":"macOS","aN":"Advanced Setup"}' >macOS</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/setup/windows" data-m='{"cN":"Windows","aN":"Advanced Setup"}' >Windows</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/setup/raspberry-pi" data-m='{"cN":"Raspberry Pi","aN":"Advanced Setup"}' >Raspberry Pi</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/setup/network" data-m='{"cN":"Network","aN":"Advanced Setup"}' >Network</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/setup/portable" data-m='{"cN":"Portable Mode","aN":"Advanced Setup"}' >Portable Mode</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/setup/additional-components" data-m='{"cN":"Additional Components","aN":"Advanced Setup"}' >Additional Components</a>
+                    </li>
+                      
+                    <li >
+                      <a href="/docs/setup/uninstall" data-m='{"cN":"Uninstall","aN":"Advanced Setup"}' >Uninstall</a>
+                    </li>
+                      
+              </ul>
+            </li>
+                
+                    <li >
+                      <a class="area" href="/docs/languages/overview" data-m='{"cN":"Languages &amp; Runtimes"}' >Languages & Runtimes</a>
+                    </li>
+                  
+                    <li >
+                      <a class="area" href="/docs/extension-docs/overview" data-m='{"cN":"Extension Docs"}' >Extension Docs</a>
+                    </li>
+                  
+              </ul>
+            </nav>
+            
+            <nav id="small-nav" aria-label="Topics" class="docs-nav hidden-md hidden-lg">
+              <label class="faux-h4" for="small-nav-dropdown">Topics</label>
+              <select id="small-nav-dropdown" aria-label="topics">
+                <option value="/docs" >Overview</option>
+            
+              <optgroup label="Get Started">
+            
+                    <option value="/docs/getstarted/overview" >Overview</option>
+                    
+                    <option value="/docs/agents/quickstart" >Agents Quickstart</option>
+                    
+                    <option value="/docs/editing/getting-started" >Editor Tutorial</option>
+                    
+                    <option value="/docs/getstarted/introvideos" >Intro Videos</option>
+                    
+              </optgroup>
+              
+              <optgroup label="Agents">
+            
+                    <option value="/docs/agents/overview" >Overview</option>
+                    
+                    <option disabled>Get started</option>
+            
+                    <option value="/docs/agents/quickstart" >    Agents Quickstart</option>
+                    
+                    <option value="/docs/agents/agents-tutorial" >    Agents Tutorial</option>
+                    
+                    <option value="/docs/agents/best-practices" >    Best Practices</option>
+                    
+                    <option disabled>Concepts</option>
+            
+                    <option value="/docs/agents/concepts/agents" >    Agents</option>
+                    
+                    <option value="/docs/agents/concepts/agent-harnesses" >    Agent Harnesses</option>
+                    
+                    <option value="/docs/agents/concepts/language-models" >    Language Models</option>
+                    
+                    <option value="/docs/agents/concepts/context" >    Context</option>
+                    
+                    <option value="/docs/agents/concepts/tools" >    Tools</option>
+                    
+                    <option value="/docs/agents/concepts/sessions" >    Sessions & Handoff</option>
+                    
+                    <option value="/docs/agents/concepts/agent-host" >    Agent Host Architecture</option>
+                    
+                    <option value="/docs/agents/concepts/customization" >    Customization</option>
+                    
+                    <option value="/docs/agents/reference/workspace-context" >    Workspace Context</option>
+                    
+                    <option value="/docs/agents/concepts/trust-and-safety" >    Trust & Safety</option>
+                    
+                    <option disabled>Run agents</option>
+            
+                    <option value="/docs/agents/run/agents-window" >    Agents Window</option>
+                    
+                    <option value="/docs/agents/run/chat-view" >    Chat View</option>
+                    
+                    <option value="/docs/agents/run/agent-harnesses" >    Choose an Agent Harness</option>
+                    
+                    <option value="/docs/agents/run/tools" >    Use Tools</option>
+                    
+                    <option value="/docs/agents/run/browser-tools" >    Browser Tools</option>
+                    
+                    <option value="/docs/agents/run/approvals" >    Approvals & Permissions</option>
+                    
+                    <option value="/docs/agents/run/review-code-edits" >    Review & Revert Changes</option>
+                    
+                    <option value="/docs/agents/run/artifacts" >    Artifacts</option>
+                    
+                    <option value="/docs/agents/run/remote-agent-sessions" >    Remote Agent Sessions</option>
+                    
+                    <option value="/docs/agents/run/planning" >    Plan Work</option>
+                    
+                    <option value="/docs/agents/run/memory" >    Memory</option>
+                    
+                    <option value="/docs/agents/run/subagents" >    Subagents</option>
+                    
+                    <option disabled>    Sessions</option>
+            
+                    <option value="/docs/agents/run/sessions/manage-sessions" >        Manage Sessions</option>
+                    
+                    <option value="/docs/agents/run/sessions/session-history" >        Session History</option>
+                    
+                    <option value="/docs/agents/run/security" >    AI Security</option>
+                    
+                    <option disabled>Customize agents</option>
+            
+                    <option value="/docs/agent-customization/overview" >    Create and Manage</option>
+                    
+                    <option value="/docs/agent-customization/custom-instructions" >    Instructions</option>
+                    
+                    <option value="/docs/agent-customization/agent-skills" >    Agent Skills</option>
+                    
+                    <option value="/docs/agent-customization/custom-agents" >    Custom Agents</option>
+                    
+                    <option value="/docs/agent-customization/language-models" >    Language Models</option>
+                    
+                    <option value="/docs/agent-customization/mcp-servers" >    MCP</option>
+                    
+                    <option value="/docs/agent-customization/hooks" >    Hooks</option>
+                    
+                    <option value="/docs/agent-customization/agent-plugins" >    Plugins</option>
+                    
+                    <option value="/docs/agent-customization/tools" >    Tools</option>
+                    
+                    <option value="/docs/agent-customization/prompt-files" >    Prompt Files</option>
+                    
+                    <option disabled>Use chat</option>
+            
+                    <option value="/docs/chat/chat-overview" >    Chat Basics</option>
+                    
+                    <option value="/docs/chat/inline-chat" >    Inline & Quick Chat</option>
+                    
+                    <option value="/docs/chat/copilot-chat-context" >    Add Prompt Context</option>
+                    
+                    <option disabled>Tutorials & guides</option>
+            
+                    <option value="/docs/agents/guides/customize-copilot-guide" >    Customize AI</option>
+                    
+                    <option value="/docs/agents/guides/context-engineering-guide" >    Context Engineering</option>
+                    
+                    <option value="/docs/agents/guides/test-driven-development-guide" >    Test-Driven Development</option>
+                    
+                    <option value="/docs/agents/guides/test-with-copilot" >    Test with AI</option>
+                    
+                    <option value="/docs/agents/guides/browser-agent-testing-guide" >    Test Web Apps with Browser Tools</option>
+                    
+                    <option value="/docs/agents/guides/debug-with-copilot" >    Debug with AI</option>
+                    
+                    <option value="/docs/agents/guides/notebooks-with-ai" >    Edit Notebooks with AI</option>
+                    
+                    <option value="/docs/agents/guides/optimize-usage" >    Optimize AI Credit Usage</option>
+                    
+                    <option value="/docs/agents/guides/mcp-developer-guide" >    MCP Dev Guide</option>
+                    
+                    <option value="/docs/agents/guides/prompt-examples" >    Prompt Examples</option>
+                    
+                    <option disabled>Reference</option>
+            
+                    <option value="/docs/agents/reference/ai-features-cheat-sheet" >    Cheat Sheet</option>
+                    
+                    <option value="/docs/agents/reference/ai-settings" >    Settings Reference</option>
+                    
+                    <option value="/docs/agents/reference/mcp-configuration" >    MCP Configuration</option>
+                    
+                    <option value="/docs/agents/reference/hooks-reference" >    Hooks Reference</option>
+                    
+                    <option value="/docs/agents/guides/monitoring-agents" >    OpenTelemetry Monitoring</option>
+                    
+                    <option disabled>Troubleshooting</option>
+            
+                    <option value="/docs/agents/agent-troubleshooting/troubleshooting" >    Troubleshooting</option>
+                    
+                    <option value="/docs/agents/agent-troubleshooting/chat-debug-view" >    Debug Chat Interactions</option>
+                    
+                    <option value="/docs/agents/agent-troubleshooting/cache-explorer" >    Diagnose Prompt Caching</option>
+                    
+                    <option value="/docs/agents/agent-troubleshooting/faq" >    FAQ</option>
+                    
+              </optgroup>
+              
+                    <option value="/docs/core-editor/overview" >Editor</option>
+                  
+              <optgroup label="Source Control">
+            
+                    <option value="/docs/sourcecontrol/overview" selected>Overview</option>
+                    
+                    <option value="/docs/sourcecontrol/quickstart" >Quickstart</option>
+                    
+                    <option value="/docs/sourcecontrol/repos-remotes" >Repositories & Remotes</option>
+                    
+                    <option value="/docs/sourcecontrol/staging-commits" >Staging & Committing</option>
+                    
+                    <option value="/docs/sourcecontrol/history" >Source Control History</option>
+                    
+                    <option value="/docs/sourcecontrol/branches-worktrees" >Branches & Worktrees</option>
+                    
+                    <option value="/docs/sourcecontrol/merge-conflicts" >Merge Conflicts</option>
+                    
+                    <option value="/docs/sourcecontrol/github" >Collaborate on GitHub</option>
+                    
+                    <option value="/docs/sourcecontrol/troubleshooting" >Troubleshooting</option>
+                    
+                    <option value="/docs/sourcecontrol/faq" >FAQ</option>
+                    
+              </optgroup>
+              
+              <optgroup label="Terminal">
+            
+                    <option value="/docs/terminal/getting-started" >Get Started</option>
+                    
+                    <option value="/docs/terminal/basics" >Terminal Basics</option>
+                    
+                    <option value="/docs/terminal/profiles" >Terminal Profiles</option>
+                    
+                    <option value="/docs/terminal/shell-integration" >Shell Integration</option>
+                    
+                    <option value="/docs/terminal/appearance" >Appearance</option>
+                    
+                    <option value="/docs/terminal/advanced" >Advanced</option>
+                    
+              </optgroup>
+              
+              <optgroup label="Debugging & Testing">
+            
+                    <option value="/docs/debugtest/debugging" >Debugging</option>
+                    
+                    <option value="/docs/debugtest/debugging-configuration" >Debug Configuration</option>
+                    
+                    <option value="/docs/debugtest/tasks" >Tasks</option>
+                    
+                    <option value="/docs/debugtest/testing" >Testing</option>
+                    
+                    <option value="/docs/debugtest/integrated-browser" >Integrated Browser</option>
+                    
+                    <option value="/docs/debugtest/port-forwarding" >Port Forwarding</option>
+                    
+                    <option disabled>Guides & Tutorials</option>
+            
+                    <option value="/docs/agents/guides/test-driven-development-guide" >    Test-Driven Development</option>
+                    
+                    <option value="/docs/agents/guides/browser-agent-testing-guide" >    Test Web Apps with Browser Tools</option>
+                    
+              </optgroup>
+              
+              <optgroup label="Enterprise">
+            
+                    <option value="/docs/enterprise/overview" >Overview</option>
+                    
+                    <option value="/docs/enterprise/policies" >Enterprise Policies</option>
+                    
+                    <option value="/docs/enterprise/ai-settings" >AI Settings</option>
+                    
+                    <option value="/docs/enterprise/extensions" >Extensions</option>
+                    
+                    <option value="/docs/enterprise/telemetry" >Telemetry</option>
+                    
+                    <option value="/docs/enterprise/updates" >Updates</option>
+                    
+              </optgroup>
+              
+              <optgroup label="Remote">
+            
+                    <option value="/docs/remote/remote-overview" >Overview</option>
+                    
+                    <option value="/docs/remote/vscode-web" >VS Code for the Web</option>
+                    
+                    <option value="/docs/remote/ssh" >SSH</option>
+                    
+                    <option value="/docs/remote/ssh-tutorial" >SSH Tutorial</option>
+                    
+                    <option value="/docs/remote/tunnels" >Tunnels</option>
+                    
+                    <option value="/docs/remote/dev-containers" >Dev Containers</option>
+                    
+                    <option value="/docs/remote/wsl" >WSL</option>
+                    
+                    <option value="/docs/remote/wsl-tutorial" >WSL Tutorial</option>
+                    
+                    <option value="/docs/remote/codespaces" >GitHub Codespaces</option>
+                    
+                    <option value="/docs/remote/vscode-server" >VS Code Server</option>
+                    
+                    <option value="/docs/remote/linux" >Linux Prerequisites</option>
+                    
+                    <option value="/docs/remote/troubleshooting" >Tips and Tricks</option>
+                    
+                    <option value="/docs/remote/faq" >FAQ</option>
+                    
+              </optgroup>
+              
+              <optgroup label="Advanced Setup">
+            
+                    <option value="/docs/setup/copilot" >GitHub Copilot Setup</option>
+                    
+                    <option value="/docs/setup/linux" >Linux</option>
+                    
+                    <option value="/docs/setup/mac" >macOS</option>
+                    
+                    <option value="/docs/setup/windows" >Windows</option>
+                    
+                    <option value="/docs/setup/raspberry-pi" >Raspberry Pi</option>
+                    
+                    <option value="/docs/setup/network" >Network</option>
+                    
+                    <option value="/docs/setup/portable" >Portable Mode</option>
+                    
+                    <option value="/docs/setup/additional-components" >Additional Components</option>
+                    
+                    <option value="/docs/setup/uninstall" >Uninstall</option>
+                    
+              </optgroup>
+              
+                    <option value="/docs/languages/overview" >Languages & Runtimes</option>
+                  
+                    <option value="/docs/extension-docs/overview" >Extension Docs</option>
+                  
+              </select>
+            </nav>        </aside>
+        
+        <!-- Content wrapper contains main content + right sidebar -->
+        <div class="docs-content-wrapper">
+            <!-- Right sidebar - On This Page -->
+            <aside class="docs-right-sidebar hidden-xs">
+                <div class="docs-markdown-actions">
+                    <div class="docs-markdown-dropdown" data-raw-url="/raw/docs/sourcecontrol/overview.md">
+                        <button type="button" class="docs-markdown-btn-main" data-action="copy-markdown" aria-label="Copy as Markdown">
+                            <span class="codicon codicon-copy" aria-hidden="true"></span>
+                            <span>Copy as Markdown</span>
+                        </button>
+                        <button type="button" class="docs-markdown-btn-trigger" aria-haspopup="true" aria-expanded="false" aria-label="More Markdown options">
+                            <span class="codicon codicon-chevron-down docs-markdown-chevron" aria-hidden="true"></span>
+                        </button>
+                        <ul class="docs-markdown-menu" role="menu" aria-label="Markdown options">
+                            <li role="menuitem" tabindex="0" data-action="copy-markdown">
+                                <span class="codicon codicon-copy" aria-hidden="true"></span>
+                                <span>Copy as Markdown</span>
+                            </li>
+                            <li role="menuitem" tabindex="0" data-action="view-markdown">
+                                <span class="codicon codicon-file" aria-hidden="true"></span>
+                                <span>View as Markdown</span>
+                                <span class="codicon codicon-link-external" aria-hidden="true"></span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+                <nav id="docs-subnavbar" aria-label="On Page">
+                    
+                    <h4><span class="sr-only">On this page there are 7 sections</span><span
+                            aria-hidden="true">On this page</span></h4>
+                    <ul class="nav">
+                        
+                        <li><a href="#_prerequisites">Prerequisites</a></li>
+                        
+                        <li><a href="#_get-started-with-a-repository">Get started with a repository</a></li>
+                        
+                        <li><a href="#_source-control-interface">Source control interface</a></li>
+                        
+                        <li><a href="#_common-workflows">Common workflows</a></li>
+                        
+                        <li><a href="#_working-with-github-pull-requests-and-issues">Working with GitHub pull requests and issues</a></li>
+                        
+                        <li><a href="#_other-source-control-providers">Other source control providers</a></li>
+                        
+                        <li><a href="#_next-steps">Next steps</a></li>
+                        
+                    </ul>
+                    
+                </nav>
+                
+            </aside>
+            
+            <!-- Main article content -->
+            <main class="docs-main-content body">
+                <h1>Source control in VS Code</h1>
+<p>Visual Studio Code has integrated source control management (SCM) that lets you work with Git and other version control systems directly in your editor. Git support is built-in, and you can install extensions for other SCM providers from the <a href="https://marketplace.visualstudio.com/search?target=VSCode&amp;category=SCM%20Providers&amp;sortBy=Installs" class="external-link" target="_blank">Visual Studio Marketplace</a>.</p>
+<p>The integrated source control interface provides access to Git functionality through a graphical interface instead of terminal commands. You can perform Git operations like staging changes, committing files, creating branches, and resolving merge conflicts without switching to the command line.</p>
+<p>Changes you make in the VS Code interface are synced with your command-line Git operations, so you can use both the UI and terminal as needed. The source control interface works alongside the command line rather than replacing it.</p>
+<iframe width="560" height="315" src="https://www.youtube-nocookie.com/embed/i_23KUAEtUM" title="Video showing how to use Git with Visual Studio Code." frameborder="0" allowfullscreen></iframe>
+<h2 id="_prerequisites" data-needslink="_prerequisites">Prerequisites</h2>
+<p>To use Git features in VS Code, you need:</p>
+<ul>
+<li>
+<p>VS Code uses your machine's Git installation. <a href="https://git-scm.com/download" class="external-link" target="_blank">Install Git version 2.0.0 or later</a> on your machine.</p>
+</li>
+<li>
+<p>When you commit changes, Git uses your configured username and email. You can set these values with:</p>
+<pre class="shiki" data-lang="bash" shiki-themes dark-plus light-plus" style="--shiki-dark:#D4D4D4;--shiki-light:#000000;--shiki-dark-bg:#1E1E1E;--shiki-light-bg:#FFFFFF" tabindex="0"><code><span class="line"><span style="--shiki-dark:#DCDCAA;--shiki-light:#795E26">git</span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515"> config</span><span style="--shiki-dark:#569CD6;--shiki-light:#0000FF"> --global</span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515"> user.name</span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515"> "Your Name"</span></span>
+<span class="line"><span style="--shiki-dark:#DCDCAA;--shiki-light:#795E26">git</span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515"> config</span><span style="--shiki-dark:#569CD6;--shiki-light:#0000FF"> --global</span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515"> user.email</span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515"> "your.email@example.com"</span></span>
+<span class="line"></span></code></pre>
+</li>
+</ul>
+<div class="markdown-alert tip" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M8 1.5c-2.363 0-4 1.69-4 3.75 0 .984.424 1.625.984 2.304l.214.253c.223.264.47.556.673.848.284.411.537.896.621 1.49a.75.75 0 0 1-1.484.211c-.04-.282-.163-.547-.37-.847a8.456 8.456 0 0 0-.542-.68c-.084-.1-.173-.205-.268-.32C3.201 7.75 2.5 6.766 2.5 5.25 2.5 2.31 4.863 0 8 0s5.5 2.31 5.5 5.25c0 1.516-.701 2.5-1.328 3.259-.095.115-.184.22-.268.319-.207.245-.383.453-.541.681-.208.3-.33.565-.37.847a.751.751 0 0 1-1.485-.212c.084-.593.337-1.078.621-1.489.203-.292.45-.584.673-.848.075-.088.147-.173.213-.253.561-.679.985-1.32.985-2.304 0-2.06-1.637-3.75-4-3.75ZM5.75 12h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5ZM6 15.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z">
+          </path>
+        </svg>
+        Tip
+      </span><p>If you're new to Git, the <a href="https://git-scm.com/doc" class="external-link" target="_blank">git-scm</a> website is a good place to start, with a popular online <a href="https://git-scm.com/book" class="external-link" target="_blank">book</a>, Getting Started <a href="https://git-scm.com/video/what-is-git" class="external-link" target="_blank">videos</a> and <a href="https://github.github.com/training-kit/downloads/github-git-cheat-sheet.pdf" class="external-link" target="_blank">cheat sheets</a>.</p>
+</div><h2 id="_get-started-with-a-repository" data-needslink="_get-started-with-a-repository">Get started with a repository</h2>
+<p>VS Code automatically detects when you open a folder that's a Git repository and activates all source control features. To get started with a new or existing repository, you have several options:</p>
+<ul>
+<li>
+<p><strong>Initialize a new repository</strong>: Create a new Git repository for your current folder.</p>
+</li>
+<li>
+<p><strong>Clone a repository</strong>: Clone an existing repository from GitHub or another Git host.</p>
+</li>
+<li>
+<p><strong>Open a remote repository</strong>: Work with a repository without cloning it to your local machine with the <a href="https://marketplace.visualstudio.com/items?itemName=github.remotehub" class="external-link" target="_blank">GitHub Repositories</a> extension.</p>
+</li>
+</ul>
+<div class="markdown-alert tip" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M8 1.5c-2.363 0-4 1.69-4 3.75 0 .984.424 1.625.984 2.304l.214.253c.223.264.47.556.673.848.284.411.537.896.621 1.49a.75.75 0 0 1-1.484.211c-.04-.282-.163-.547-.37-.847a8.456 8.456 0 0 0-.542-.68c-.084-.1-.173-.205-.268-.32C3.201 7.75 2.5 6.766 2.5 5.25 2.5 2.31 4.863 0 8 0s5.5 2.31 5.5 5.25c0 1.516-.701 2.5-1.328 3.259-.095.115-.184.22-.268.319-.207.245-.383.453-.541.681-.208.3-.33.565-.37.847a.751.751 0 0 1-1.485-.212c.084-.593.337-1.078.621-1.489.203-.292.45-.584.673-.848.075-.088.147-.173.213-.253.561-.679.985-1.32.985-2.304 0-2.06-1.637-3.75-4-3.75ZM5.75 12h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5ZM6 15.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z">
+          </path>
+        </svg>
+        Tip
+      </span><p>You can publish a local repository directly to GitHub with the <strong>Publish to GitHub</strong> command, which creates a new repository and pushes your commits in one step.</p>
+</div><p>Learn more about <a href="/docs/sourcecontrol/repos-remotes#_clone-repositories">cloning and publishing repositories</a>.</p>
+<h2 id="_source-control-interface" data-needslink="_source-control-interface">Source control interface</h2>
+<p>VS Code provides Git functionality through several key interface elements. This UI integration enables you to perform Git operations without knowing terminal commands:</p>
+<ul>
+<li>
+<p><strong>Source Control view</strong>: central hub for common Git operations like staging, committing, and managing changes</p>
+<p><img src="/assets/docs/sourcecontrol/overview/overview.png" alt="Screenshot of the Source Control view showing staged changes, and the diff editor showing side-by-side changes." loading="lazy"></p>
+</li>
+<li>
+<p><strong>Source Control Graph</strong>: graphical representation of your commit history and branch relationships</p>
+<p><img src="/assets/docs/sourcecontrol/overview/source-control-graph.png" alt="Screenshot of the Source control graph showing commit history." loading="lazy"></p>
+</li>
+<li>
+<p><strong>Diff editor</strong>: side-by-side file comparisons for effective change review</p>
+<p><img src="/assets/docs/sourcecontrol/overview/diff.png" alt="Screenshot of the diff editor showing changes between file versions." loading="lazy"></p>
+</li>
+<li>
+<p><strong>Additional UI elements</strong>: in-context Git information like editor gutter indicators or Git blame annotations</p>
+<p><img src="/assets/docs/sourcecontrol/overview/git-blame-status-bar.png" alt="Screenshot of editor gutter indicators showing line changes and a hover showing Git blame information." loading="lazy"></p>
+</li>
+</ul>
+<h2 id="_common-workflows" data-needslink="_common-workflows">Common workflows</h2>
+<h3 id="_review-changes-before-committing" data-needslink="_review-changes-before-committing">Review changes before committing</h3>
+<p>Before committing changes, select a file in the Source Control view to review it in the diff editor. The diff editor shows the original file and your changes side by side, so you can verify exactly what the commit will contain.</p>
+<p>If you have a GitHub Copilot subscription, you can also select <strong>Code Review</strong> in the Source Control view to get review comments and suggestions in the editor. AI review complements, rather than replaces, reviewing the diff yourself.</p>
+<p><img src="/assets/docs/sourcecontrol/overview/copilot-code-review-results.png" alt="Screenshot of the code review results, showing as editor overlay comments." loading="lazy"></p>
+<h3 id="_stage-and-commit-changes" data-needslink="_stage-and-commit-changes">Stage and commit changes</h3>
+<p>Review your changes in the Source Control view, then stage files by selecting the <strong>+</strong> icon next to each file or stage all changes at once. For more fine-grained control, stage specific lines or selections from a file's diff view.</p>
+<p><img src="/assets/docs/sourcecontrol/overview/stage-changes.png" alt="Screenshot of staging changes in the Source Control view." loading="lazy"></p>
+<p>Type your commit message in the input box or select the sparkle icon (<i class="codicon codicon-sparkle"></i>) in the commit message input box to use AI to generate a commit message based on your staged changes.</p>
+<p><img src="/assets/docs/sourcecontrol/overview/copilot-generate-commit-message.png" alt="Screenshot of generating a commit message with Copilot." loading="lazy"></p>
+<p>Learn more about <a href="/docs/sourcecontrol/staging-commits">staging changes and writing commits</a>.</p>
+<h3 id="_sync-with-remotes" data-needslink="_sync-with-remotes">Sync with remotes</h3>
+<p>When your branch is connected to a remote branch, VS Code shows sync status in the Status Bar and shows incoming and outgoing commits in the Source Control view. You can quickly sync or perform individual fetch, pull, and push operations.</p>
+<p><img src="/assets/docs/sourcecontrol/overview/incoming-outgoing-changes.png" alt="Screenshot of the Source Control view showing the sync button indicating outgoing and incoming changes." loading="lazy"></p>
+<p>Learn more about <a href="/docs/sourcecontrol/repos-remotes">working with repositories and remotes</a>.</p>
+<h3 id="_resolve-merge-conflicts" data-needslink="_resolve-merge-conflicts">Resolve merge conflicts</h3>
+<p>When you encounter merge conflicts, VS Code highlights the conflicting files in the Source Control view. Open a file with conflicts to see inline conflict markers. You have several options to resolve the conflicts:</p>
+<ul>
+<li>Use inline editor actions to choose how to resolve the conflicts directly in the editor</li>
+<li>Use the 3-way merge editor for a side-by-side view of changes and merge result</li>
+<li>Use AI assistance to help resolve merge conflicts</li>
+</ul>
+<p><img src="/assets/docs/sourcecontrol/overview/merge-editor-overview.png" alt="Screenshot of the 3-way merge editor." loading="lazy"></p>
+<p>Learn more about <a href="/docs/sourcecontrol/merge-conflicts">resolving merge conflicts</a>.</p>
+<h3 id="_work-with-branches-worktrees-and-stashes" data-needslink="_work-with-branches-worktrees-and-stashes">Work with branches, worktrees, and stashes</h3>
+<p>VS Code supports multiple workflows for managing parallel development work.</p>
+<ul>
+<li>
+<p>Quickly switch between <strong>branches</strong> within a single workspace to work on different features or fixes.</p>
+<p><img src="/assets/docs/sourcecontrol/overview/gitbranches.png" alt="Screenshot of the branch Quick Pick showing options to switch to a branch or create a new branch." loading="lazy"></p>
+</li>
+<li>
+<p>Use Git <strong>worktrees</strong> to create separate working directories for different branches to work with multiple branches simultaneously.</p>
+</li>
+<li>
+<p>Use Git <strong>stashes</strong> to temporarily save uncommitted changes when you need to switch contexts quickly.</p>
+</li>
+</ul>
+<p>Learn more about <a href="/docs/sourcecontrol/branches-worktrees">working with branches and worktrees</a>.</p>
+<h3 id="_view-commit-history" data-needslink="_view-commit-history">View commit history</h3>
+<p>It can be helpful to review the commit history to understand how your code has changed over time.</p>
+<ul>
+<li>
+<p>The <strong>Source Control Graph</strong> provides a visual representation of your branch structure and commit history, highlighting incoming and outgoing commits.</p>
+<p><img src="/assets/docs/sourcecontrol/overview/source-control-graph.png" alt="Screenshot of the Source Control Graph showing commit history and branch structure." loading="lazy"></p>
+</li>
+<li>
+<p>The <strong>Timeline view</strong> in the Explorer view shows the commit history for a specific file, allowing you to see how it has evolved. You can filter the timeline to show only Git commits or to also include local file changes.</p>
+<p><img src="/assets/docs/sourcecontrol/overview/timeline-view.png" alt="Screenshot of the timeline view showing file commit history." loading="lazy"></p>
+</li>
+</ul>
+<p>Learn more about <a href="/docs/sourcecontrol/history">viewing source control history</a>.</p>
+<h2 id="_working-with-github-pull-requests-and-issues" data-needslink="_working-with-github-pull-requests-and-issues">Working with GitHub pull requests and issues</h2>
+<p>VS Code integrates with GitHub to provide pull request and issue management directly in your editor. Install the <a href="https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github" class="external-link" target="_blank">GitHub Pull Requests and Issues</a> extension to:</p>
+<ul>
+<li>Create, review, and merge pull requests</li>
+<li>View and manage issues</li>
+<li>Comment on and approve PRs without leaving VS Code</li>
+<li>Check out PR branches and review changes locally</li>
+</ul>
+<p>Learn more about <a href="/docs/sourcecontrol/github">working with GitHub in VS Code</a>.</p>
+<h2 id="_other-source-control-providers" data-needslink="_other-source-control-providers">Other source control providers</h2>
+<p>VS Code supports multiple source control providers. While Git support is built-in, you can <a href="https://marketplace.visualstudio.com/search?target=VSCode&amp;category=SCM%20Providers&amp;sortBy=Installs" class="external-link" target="_blank">install extensions</a> for other version control systems like Azure DevOps, Subversion, or Mercurial.</p>
+<p>Browse available SCM provider extensions in the Extensions view (<span class="dynamic-keybinding" data-commandId="workbench.view.extensions" data-osx="⇧⌘X" data-win="Ctrl+Shift+X" data-linux="Ctrl+Shift+X"><span class="keybinding">⇧⌘X</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+X</span>)</span>) by searching for <code>@category:&quot;scm providers&quot;</code>.</p>
+<div class="marketplace-extensions-scm-curated"></div>
+<h2 id="_next-steps" data-needslink="_next-steps">Next steps</h2>
+<ul>
+<li>
+<p><a href="/docs/sourcecontrol/quickstart">Source Control Quickstart</a> - Quickly get started with Git source control in VS Code</p>
+</li>
+<li>
+<p><a href="/docs/introvideos/versioncontrol">Intro Video - Git Version Control</a> - An introductory video providing an overview of VS Code Git support</p>
+</li>
+<li>
+<p><a href="/docs/sourcecontrol/branches-worktrees">Branches and Worktrees</a> - Learn about branch management, Git worktrees, and stash operations</p>
+</li>
+<li>
+<p><a href="/docs/sourcecontrol/repos-remotes">Repositories and Remotes</a> - Learn about cloning, publishing, and syncing with remote repositories</p>
+</li>
+<li>
+<p><a href="/docs/sourcecontrol/history">Source Control History</a> - Inspect commits, file history, and Git blame information</p>
+</li>
+<li>
+<p><a href="/docs/sourcecontrol/github">Working with GitHub</a> - Learn how to work with pull requests and issues in VS Code</p>
+</li>
+<li>
+<p><a href="/docs/sourcecontrol/troubleshooting">Troubleshooting</a> - Diagnose and resolve Git issues with output logs and trace logging</p>
+</li>
+<li>
+<p><a href="/docs/agents/overview">Copilot in VS Code</a> - Discover more AI-powered features beyond Git workflows</p>
+</li>
+</ul>
+
+                <div class="feedback" data-edit-url="https://vscode.dev/github/microsoft/vscode-docs/blob/main/docs/sourcecontrol/overview.md"></div>
+                
+                <div class="body-footer">8/19/2026</div>
+                
+            </main>
+        </div>
+        
+        <!-- Mobile connect widget -->
+        <div class="docs-mobile-widgets visible-xs">
+            <div class="connect-widget"></div>
+        </div>
+    </div>
+</div>
+		</main>
+	</div>
+
+	<div id="search-popup-overlay" class="search-popup-overlay" role="dialog" aria-modal="true" aria-label="Search">
+		<div class="search-popup-container">
+			<div class="search-popup-header">
+				<form class="search-popup-form">
+					<div class="input-group">
+						<input type="text" name="q" class="search-box form-control" placeholder="Search the website"
+							aria-label="Search text" role="combobox" aria-expanded="false"
+							aria-autocomplete="list" aria-controls="search-results-listbox"
+							aria-activedescendant="" />
+						<span class="input-group-btn">
+							<button tabindex="0" class="btn" type="submit" aria-label="Search">
+								<img class="search-icon-dark" src="/assets/icons/search-dark.svg" alt="Search" />
+								<img class="search-icon-light" src="/assets/icons/search.svg" alt="Search" />
+							</button>
+						</span>
+					</div>
+				</form>
+				<button class="search-popup-close" type="button" aria-label="Close search"><i class="codicon codicon-close" aria-hidden="true"></i></button>
+			</div>
+			<div class="search-popup-results">
+				<ul class="search-popup-results-list" id="search-results-listbox" role="listbox" aria-label="Search results"></ul>
+			</div>
+			<div class="sr-only" role="status" aria-live="polite" aria-atomic="true" id="search-popup-status"></div>
+		</div>
+	</div>
+
+
+	<footer role="contentinfo" class="container">
+		<div class="footer-container">
+			<div class="footer-row">
+				<div class="footer-social">
+					<ul class="links">
+						<li>
+							<a href="https://github.com/microsoft/vscode"><img src="/assets/icons/github-icon.svg" alt="VS Code on Github"></a>
+						</li>
+						<li>
+							<a href="https://go.microsoft.com/fwlink/?LinkID=533687"><img src="/assets/icons/x-icon.svg" class="x-icon" alt="Follow us on X"></a>
+						</li>
+						<li>
+							<a href="https://www.linkedin.com/showcase/vs-code"><img src="/assets/icons/linkedin-icon.svg" alt="VS Code on LinkedIn"></a>
+						</li>
+						<li>
+							<a href="https://bsky.app/profile/vscode.dev"><img src="/assets/icons/bluesky-icon.svg" alt="VS Code on Bluesky"></a>
+						</li>
+						<li>
+							<a href="https://www.reddit.com/r/vscode/"><img src="/assets/icons/reddit-icon.svg" alt="Join the VS Code community on Reddit"></a>
+						</li>
+						<li>
+							<a href="https://www.vscodepodcast.com"><img src="/assets/icons/podcast-icon.svg" alt="The VS Code Insiders Podcast"></a>
+						</li>
+						<li>
+							<a href="https://www.tiktok.com/@vscode"><img src="/assets/icons/tiktok-icon.svg" alt="VS Code on TikTok"></a>
+						</li>
+						<li>
+							<a href="https://www.youtube.com/@code"><img src="/assets/icons/youtube-icon.svg" alt="VS Code on YouTube"></a>
+						</li>
+						<script>
+							function manageConsent() {
+								if (siteConsent && siteConsent.isConsentRequired) {
+									siteConsent.manageConsent();
+								}
+							}
+						</script>
+					</ul>
+					<a id="footer-microsoft-link" class="microsoft-logo" href="https://www.microsoft.com">
+						<img src="/assets/icons/microsoft.svg" alt="Microsoft homepage" />
+					</a>
+				</div>
+			</div>
+			<div class="footer-row">
+				<ul class="links">
+					<li><a id="footer-support-link" href="https://support.serviceshub.microsoft.com/supportforbusiness/create?sapId=d66407ed-3967-b000-4cfb-2c318cad363d"
+						target="_blank" rel="noopener" title="Get support for VS Code"
+						aria-label="Get support for VS Code (opens in new tab)">Support</a></li>
+					<li><a id="footer-privacy-link" href="https://go.microsoft.com/fwlink/?LinkId=521839"
+						target="_blank" rel="noopener" title="View the Microsoft privacy statement"
+						aria-label="Microsoft privacy statement (opens in new tab)">Privacy</a></li>
+					<li style="display: none;"><a id="footer-cookie-link" style="cursor: pointer;" onclick="manageConsent()"
+						target="_blank" rel="noopener">Manage Cookies</a></li>
+					<li><a id="footer-terms-link" href="https://www.microsoft.com/legal/terms-of-use"
+						target="_blank" rel="noopener" title="View the Microsoft Terms of Use"
+						aria-label="Microsoft Terms of Use (opens in new tab)">Terms of Use</a></li>
+					<li><a id="footer-license-link" href="/License"
+						target="_blank" rel="noopener" title="View the Visual Studio Code license"
+						aria-label="Visual Studio Code license (opens in new tab)">License</a></li>
+				</ul>
+			</div>
+			<div class="footer-row">
+				<ul class="links">
+					<li>
+						<svg class="privacy-choices" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 14" xml:space="preserve" height="16" width="43">
+							<title>Your Privacy Choices Opt-Out Icon</title>
+							<path d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z" style="fill-rule:evenodd;clip-rule:evenodd;fill:#fff"></path>
+							<path d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z" style="fill-rule:evenodd;clip-rule:evenodd;fill:#06f"></path>
+							<path d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8-.2.2-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0-.2-.2-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z" style="fill:#fff"></path>
+							<path d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8.2-.2.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z" style="fill:#06f"></path>
+						</svg>
+						<a id="footer-privacy-choices-link" href="https://aka.ms/YourCaliforniaPrivacyChoices"
+						target="_blank" rel="noopener" title="View Your Privacy Choices"
+						aria-label="Your Privacy Choices (opens in new tab)">Your Privacy Choices</a></li>
+					<li><a id="footer-consumer-health-privacy-link" href="https://go.microsoft.com/fwlink/?linkid=2259814"
+						target="_blank" rel="noopener" title="View the Microsoft Consumer Health Privacy policy"
+						aria-label="Microsoft Consumer Health Privacy policy (opens in new tab)">Consumer Health Privacy</a></li>
+				</ul>
+			</div>
+		</div>
+	</footer>
+	<script type="module">
+		document.addEventListener('DOMContentLoaded', () => {
+			const copilotDeepLinks = document.querySelectorAll('.copilot-deep-link');
+			if (copilotDeepLinks.length === 0) {
+				return;
+			}
+			if (window.innerWidth < 992) {
+				for (const link of copilotDeepLinks) {
+					link.href = 'https://aka.ms/vscode-activatecopilotfree';
+				}
+			}
+		});
+	</script>
+
+	<script src="/dist/index.js"></script>
+
+	
+
+	<script type="application/ld+json">
+		{
+			"@context" : "http://schema.org",
+			"@type" : "SoftwareApplication",
+			"name" : "Visual Studio Code",
+			"softwareVersion": "1.134",
+			"offers": {
+				"@type": "Offer",
+				"price": "0",
+				"priceCurrency": "USD"
+			},
+			"applicationCategory": "DeveloperApplication",
+			"applicationSubCategory": "AI Code Editor",
+			"description": "Visual Studio Code is a free, open source AI code editor for agent-first development. Build with AI agents, manage multi-agent workflows, and code across any environment.",
+			"alternateName": "VS Code",
+			"datePublished": "2021-11-03",
+			"operatingSystem": "Mac, Linux, Windows",
+			"logo": "https://code.visualstudio.com/assets/apple-touch-icon.png",
+			"screenshot": "https://code.visualstudio.com/assets/images/product-screenshot.png",
+			"releaseNotes": "https://code.visualstudio.com/updates",
+			"downloadUrl": "https://code.visualstudio.com/download",
+			"license": "https://code.visualstudio.com/license",
+			"softwareRequirements": "https://code.visualstudio.com/docs/supporting/requirements",
+			"url" : "https://code.visualstudio.com",
+			"author": {
+				"@type": "Organization",
+				"name": "Microsoft"
+			},
+			"publisher": {
+				"@type": "Organization",
+				"name": "Microsoft"
+			},
+			"maintainer": {
+				"@type": "Organization",
+				"name": "Microsoft"
+			},
+			"potentialAction": {
+				"@type": "SearchAction",
+				"target": "https://code.visualstudio.com/Search?q={search_term_string}",
+				"query-input": "required name=search_term_string"
+			},
+			"sameAs" : [
+				"https://en.wikipedia.org/wiki/Visual_Studio_Code",
+				"https://twitter.com/code",
+				"https://www.youtube.com/code",
+				"https://www.tiktok.com/@vscode",
+				"https://github.com/microsoft/vscode"
+			]
+		}
+	</script>
+</body>
+
+</html>

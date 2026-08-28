@@ -54,3 +54,5 @@ logs/
 # Added by cargo
 
 /target
+
+%TEMP%/
