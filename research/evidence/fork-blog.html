@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="en">
+  <head>
+	<meta name="generator" content="Hugo 0.110.0">
+    <meta charset="utf-8">
+<meta http-equiv="x-ua-compatible" content="ie=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+<meta property="og:title" content="Fork - a fast and friendly git client for Mac and Windows" />
+<meta property="og:description" content="" />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://fork.dev/blog/" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="Fork - a fast and friendly git client for Mac and Windows"/>
+<meta name="twitter:description" content=""/>
+
+<meta name="twitter:image" content="http://fork.dev/images/twitter.jpg">
+
+    <link rel="canonical" href="https://fork.dev/blog/">
+
+    <title>
+      
+        Fork - a fast and friendly git client for Mac and Windows
+      
+    </title>
+
+    
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css" integrity="sha384-WskhaSGFgHYWDcbwN70/dfYBj47jz9qbsMId/iRN3ewGhXQFZCSftd1LZCfmhktB" crossorigin="anonymous">
+
+    
+
+    
+  </head>
+  <body>
+    
+      <style>
+    kbd {
+        padding: 0.1em 0.6em;
+        border: 1px solid #ccc;
+        font-size: 11px;
+        font-family: Arial,Helvetica,sans-serif;
+        background-color: #f7f7f7;
+        color: #333;
+        -moz-box-shadow: 0 1px 0px rgba(0, 0, 0, 0.2),0 0 0 2px #ffffff inset;
+        -webkit-box-shadow: 0 1px 0px rgba(0, 0, 0, 0.2),0 0 0 2px #ffffff inset;
+        box-shadow: 0 1px 0px rgba(0, 0, 0, 0.2),0 0 0 2px #ffffff inset;
+        -moz-border-radius: 3px;
+        -webkit-border-radius: 3px;
+        border-radius: 3px;
+        display: inline-block;
+        margin: 0 0.1em;
+        text-shadow: 0 1px 0 #fff;
+        line-height: 1.4;
+        white-space: nowrap;
+    }
+    
+    a.logo{
+        width: 24px;
+        height: 24px;
+        margin-left: 14px;
+        margin-top: 2px;
+        opacity: 0.8;
+    }
+    a.logo:hover{
+        opacity: 1;
+    }
+
+    .nav-link.tw{
+        width: 24px;
+        height: 24px;
+    }
+   
+    .nav-link{
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        color: #239DE2;
+        font-size: 14px;
+    }
+    .nav-link.outline {
+        background: none;
+        padding: 3px 6px;
+        margin-left: 20px;
+        border: 1px solid transparent;
+    }
+    .nav-link.outline.selected {
+        border: 1px solid #239DE2;
+        border-radius: 4px;
+    }
+    .nav-link.outline:hover, .nav-link.outline:focus, .nav-link.outline:active, .nav-link.outline.active, .open > .dropdown-toggle.btn-primary {
+        color: #239DE2;
+        border: 1px solid #239DE2;
+        border-radius: 4px;
+    }
+    .nav-link.outline:active, .nav-link.outline.active {
+        border-color: #239DE2;
+        color: white;
+        background: #239DE2;
+    }
+
+    span.brand{
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        font-weight: 400;
+        font-size: 22px;
+        color: #4B4B4B;
+        margin-left: 12px;
+    }
+    span.brand.secondary{
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        font-weight: 400;
+        font-size: 16px;
+        color: #6D757C;
+        margin-left: 0px;
+    }
+
+    div.nomargin{
+        margin: 0px;
+        padding: 0px;
+    }
+
+    .customshadow {
+      box-shadow: 0 10px 10px 0 rgba(0, 0, 0, 0.02), 0 10px 10px 0 rgba(0, 0, 0, 0.02);
+      margin-bottom: 50px; 
+    }
+
+    img.post-header{
+        margin-left: 12px;
+        margin-bottom: 2px;
+    }
+
+    span.author{
+        margin-left: 6px;
+        font-size: 15px;
+    }
+
+    a.badge.tags{
+        font-weight: 400;
+        font-size: 15px;
+        color: #239DE2;
+        padding-left: 0;
+    }
+
+    div.header-details{
+        margin-top: 12px;
+        margin-bottom: 12px;
+    }
+
+    a.recent{
+        color: #239DE2;
+    }
+
+    
+    h5{
+        margin-top: 30px;
+    }
+
+    h6{
+        margin-top: 30px;
+    }
+
+    .btn.blue{
+        margin-left: 0px;
+        margin-top: 10px;
+        margin-bottom: 0px;
+    }
+    .btn.outline.blue {
+        background: rgba(27, 163, 239, 1);
+        padding: 10px 22px 8px 22px;
+    }
+    .btn-primary.outline.blue {
+        border: 1px solid rgba(255, 255, 255, 1);
+        color: white;
+        font-weight: 300;
+        font-size: 18px;
+    }
+    .btn-primary.outline.blue:hover, .btn-primary.outline.blue:focus, .btn-primary.outline.blue:active, .btn-primary.outline.blue.active, .open > .dropdown-toggle.btn-primary {
+        color: white;
+        font-size: 18px;
+        font-weight: 300;
+        border: 1px solid rgba(27, 163, 239, 1);
+    }
+    .btn-primary.outline.blue:active, .btn-primary.outline.blue.active {
+        border-color: white;
+        color: white;
+        font-size: 18px;
+        font-weight: 300;
+        background: rgba(27, 163, 239, 1);
+        border: 1px solid rgba(27, 163, 239, 1);
+    }
+
+    .blog-post img.screenshot {
+      margin-top:20px;
+      margin-bottom:20px;
+      box-shadow: 5px 4px 15px 0 rgba(0, 0, 0, 0.2), 5px 4px 15px 0 rgba(0, 0, 0, 0.2);
+    }
+
+         
+    .blog-header, .blog-post, .blog-pagination {
+      margin-bottom: 2rem;
+    }
+
+     
+    .blog-post img {
+      max-width: 100%;
+    }
+</style>
+
+<header>
+    <nav class="navbar navbar-expand-md customshadow">
+      <div class="navbar-collapse">
+
+        <ul class="navbar-nav mr-auto justify-content-start">
+          <li class="nav-item">
+           <a class="logo" href="https://fork.dev/">
+               <img src="https://fork.dev/images/logo.png" alt="Logo" style="height: 33px;">
+           </a>
+          </li>
+          <li class="nav-item">
+             <a href="https://fork.dev/">
+                <div>
+                    <span class="brand">Fork<span>
+                    <span class="brand secondary">- a git client for Mac and Windows</span>
+                <div>
+             </a>
+          </li>
+        </ul>
+
+        <ul class="navbar-nav justify-content-end">
+          <li class="nav-item">
+           <a class="nav-link outline" href="https://fork.dev/">Home</a>
+          </li>
+          <li class="nav-item">
+             <a class="nav-link outline" href="https://fork.dev/releasenotes">Release Notes</a>
+          </li>
+          <li class="nav-item">
+             <a class="nav-link outline selected" href="https://fork.dev/blog">Blog</a>
+          </li>
+          <li class="nav-item">
+             <a class="nav-link outline" href="https://fork.dev/about">About Us</a>
+          </li>
+          <a class="logo" href="https://twitter.com/git_fork">
+              <img height="24"; width="24"; src="https://fork.dev/images/twIcon.png"  alt="Twitter"/>
+          </a>
+        </ul>
+      </div>
+    </nav>
+</header>
+
+    
+
+    
+    <div class="container">
+      <div class="row">
+        <div class="col-12 col-lg-1 blog-main">
+        </div>
+        <div class="col-12 col-lg-7 blog-main">
+
+          
+
+
+
+
+    
+        
+
+<article class="blog-post">
+    <header>
+        <h2 class="blog-post-title">
+            <a class="text-dark" href="/blog/posts/collapsible-graph/">Collapsible git graph</a>
+        </h2>
+	    
+
+
+
+
+
+<div class="blog-post-header text-secondary header-details">
+    
+        Aug 3, 2020
+    
+
+    
+	    
+
+	    
+			<img class="post-header" src="https://avatars2.githubusercontent.com/u/10220441?s=60&amp;v=4" alt="Dmitry Serov" width="18" height="18" class="avatar">
+	    
+
+		<span class="author" rel="author">Dmitry Serov</span>
+
+	    
+    
+
+	
+		<img class="post-header" src="https://fork.dev/blog/tag.png" alt="tag" width="18" height="18" class="avatar">
+	    
+	    
+	        <a class="badge tags" href="/tags/mac">mac</a>
+	    
+	        <a class="badge tags" href="/tags/windows">windows</a>
+	    
+    
+</div>
+
+    </header>
+    <p>Recent Fork updates have added the ability to expand and collapse merge commits in the commit graph by clicking on their tips or using <kbd>←</kbd>/<kbd>→</kbd> keyboard shortcuts.</p>
+<p>This allows you to hide unnecessary commits, make sense of a messy contribution graph, and to only concentrate on the changes made in a certain branch.</p>
+<img class="screenshot" src="/blog/posts/collapsible-graph/overview.gif" width="500px" />
+<p>Consider a real-life example: the Swift language source repository. It is one of the largest GitHub repositories to date, with more than 100,000 commits and 32000 closed pull requests.</p>
+<p>Could you tell which commits make up pull request <b>#20782</b> from this screenshot?</p>
+<img class="screenshot" src="/blog/posts/collapsible-graph/swift-show-all.png" width="654px" />
+<p>With Fork, you can collapse all merge commits and only display those you need right now. Collapse all branches using the context menu of the graph and expand the ones you&rsquo;d like to keep.</p>
+<img class="screenshot" src="/blog/posts/collapsible-graph/swift-expand.gif" width="600px" />
+<p>Here&rsquo;s how it looks when applied to the Swift repo. We can clearly see when the work on feature <b>#20782</b> had begun, which commits it contained, and when it was merged into the main branch. It&rsquo;s also easy to pick out what other pull requests were merged while the feature was still in progress.</p>
+<img class="screenshot" src="/blog/posts/collapsible-graph/swift-collapsed.png" width="550px" />
+<p>
+	<h6>Download Fork right now and share your feedback with us!</h6>
+	<a class="btn btn-primary outline blue" href="https://fork.dev/update/files/Fork.dmg">Download Fork for Mac</a>
+	<a class="btn btn-primary outline blue" href="https://fork.dev/update/win/ForkInstaller.exe">Download Fork for Windows</a>
+</p>
+
+
+	
+    	<div class="text-secondary">Share this:</div>
+	    <a class="twitter-share-button" href="https://twitter.com/intent/tweet?text=Collapsible%20git%20graph&url=https%3a%2f%2ffork.dev%2fblog%2fposts%2fcollapsible-graph%2f">Tweet</a>
+		<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+	
+
+</article>
+    
+
+
+
+    
+        
+
+<article class="blog-post">
+    <header>
+        <h2 class="blog-post-title">
+            <a class="text-dark" href="/blog/posts/forkwin-1.48/">Fork for Windows 1.48</a>
+        </h2>
+	    
+
+
+
+
+
+<div class="blog-post-header text-secondary header-details">
+    
+        May 5, 2020
+    
+
+    
+	    
+
+	    
+			<img class="post-header" src="https://avatars2.githubusercontent.com/u/10220441?s=60&amp;v=4" alt="Dmitry Serov" width="18" height="18" class="avatar">
+	    
+
+		<span class="author" rel="author">Dmitry Serov</span>
+
+	    
+    
+
+	
+		<img class="post-header" src="https://fork.dev/blog/tag.png" alt="tag" width="18" height="18" class="avatar">
+	    
+	    
+	        <a class="badge tags" href="/tags/release-notes">release notes</a>
+	    
+	        <a class="badge tags" href="/tags/windows">windows</a>
+	    
+    
+</div>
+
+    </header>
+    <p>There&rsquo;s been quite a few new features and improvements in Fork for Windows since our last blog post. Today, we&rsquo;ll take a quick look at the most important changes that recently made it to the Windows version of Fork.</p>
+<h5 id="partial-stash-available-in-file-context-menu">Partial stash (available in file context menu)</h5>
+<p>When there&rsquo;s fairly large WIP going on in your working directory, you might want to stash it to work on something else if needed. Until now, you had to stash all changed files – but now the option to stash individual files is available in file context menu.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/partial-stash.gif" width="600px" />
+<h5 id="merge-and-rebase-branches-using-drag--drop-on-sidebar">Merge and rebase branches using drag &amp; drop on sidebar</h5>
+<p>Fork now allows for a more intuitive way to merge and rebase branches – drag &amp; drop. Use the mouse to drag a branch on the sidebar into another branch, and choose whether to merge or rebase from the resulting popover.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/drag-and-drop-merge.gif" width="350px" />
+<h5 id="ability-to-create-pull-requests-for-github-bitbucket-gitlab-azure-devops">Ability to create pull requests for GitHub, Bitbucket, GitLab, Azure DevOps</h5>
+<p>Create a pull request on GitHub, Bitbucket, GitLab or Azure Devops through the branch context menu.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/pull-request.jpg" width="400px" />
+<h5 id="add-ability-to-lockunlock-lfs-files">Add ability to lock/unlock LFS files</h5>
+<p>Git LFS locking is a feature that lets developers lock files on the server, preventing their concurrent modification by multiple users of the same repository. With Fork, you can now lock and unlock files from LFS menu in file context menu, avoiding potential binary merge conflicts in LFS files.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/lfs-lock.jpg" width="400px" />
+<h5 id="show-output-of-git-commands-in-activity-manager">Show output of git commands in activity manager</h5>
+<p>Sometimes it might be useful to see exactly which git commands Fork invokes and what output they produce, especially if you observe some erratic or inconsistent behaviour within your repository. For your convenience, the output of git commands is now displayed in Fork&rsquo;s activity manager, with essential output in bold.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/git-output.gif" width="600px" />
+<h5 id="show-different-branch-icons-according-to-upstream-status">Show different branch icons according to upstream status</h5>
+<p>We added little icons to indicate the upstream status of local branches. There are different icons for branches that are</p>
+<ul>
+<li>local only,</li>
+<li>pushed upstream,</li>
+<li>pushed upstream but their remote branch has been removed.</li>
+</ul>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/branch-status.jpg" width="250px" />
+<h5 id="add-test-connection-button-to-clone-and-edit-remote-dialogs">Add &lsquo;Test connection&rsquo; button to clone and edit remote dialogs</h5>
+<p>How many times have you added a git remote, only to find out afterwards that it won&rsquo;t connect? There&rsquo;s no need to do that anymore – you can test your connection in the Add New Remote dialog.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/test-connection.gif" width="500px" />
+<h5 id="ability-to-push-multiple-branches-at-once">Ability to Push multiple branches at once</h5>
+<p>Fork now allows to push multiple branches in one go. Select the required branches in the sidebar and push away.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/push-multiple-branches.jpg" width="400px" />
+<h5 id="bisect">Bisect</h5>
+<p>There are times when debugging just won&rsquo;t cut it – you have to know when and how the bug emerged. One of the ways to do this is binary search through the commit history with git bisect, which is now available in Fork. In the menubar, choose Repository → Bisect to enter bisect mode. Checkout any commit and mark it as good or bad – Fork will remember your choice and visualize your progress in the timeline.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.48/bisect.gif" width="600px" />
+<p>
+	<h6>Download Fork right now and share your feedback with us!</h6>
+	<a class="btn btn-primary outline blue" href="https://fork.dev/update/win/ForkInstaller.exe">Download Fork for Windows</a>
+</p>
+
+
+	
+    	<div class="text-secondary">Share this:</div>
+	    <a class="twitter-share-button" href="https://twitter.com/intent/tweet?text=Fork%201.48&url=https%3a%2f%2ffork.dev%2fblog%2fposts%2fforkwin-1.48%2f">Tweet</a>
+		<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+	
+
+</article>
+    
+
+
+
+    
+        
+
+<article class="blog-post">
+    <header>
+        <h2 class="blog-post-title">
+            <a class="text-dark" href="/blog/posts/quick-launch/">Quick Launch view</a>
+        </h2>
+	    
+
+
+
+
+
+<div class="blog-post-header text-secondary header-details">
+    
+        Oct 23, 2019
+    
+
+    
+	    
+
+	    
+			<img class="post-header" src="https://avatars2.githubusercontent.com/u/10220441?s=60&amp;v=4" alt="Dmitry Serov" width="18" height="18" class="avatar">
+	    
+
+		<span class="author" rel="author">Dmitry Serov</span>
+
+	    
+    
+
+	
+		<img class="post-header" src="https://fork.dev/blog/tag.png" alt="tag" width="18" height="18" class="avatar">
+	    
+	    
+	        <a class="badge tags" href="/tags/mac">mac</a>
+	    
+	        <a class="badge tags" href="/tags/windows">windows</a>
+	    
+    
+</div>
+
+    </header>
+    <p>One of the more recent introductions to Fork was Quick Launch view with a command palette (<kbd>Ctrl</kbd>+<kbd>P</kbd>, <kbd>⌘</kbd>+<kbd>P</kbd>), which allows to perform frequent actions quicker. This is an extremely powerful feature and we&rsquo;d like to show a few examples of its usage in this blog post.</p>
+<h5 id="checkout-branch">Checkout branch</h5>
+<p>The process of checking out a certain branch by name can be streamlined by using the Checkout Branch command of Quick Launch. With only a few keystrokes to invoke the command and to specify the required branch (thanks to smart completion), checking out branches via Quick Launch is much more convenient than browsing through a lengthy branch list in the GUI.</p>
+<img class="screenshot" src="/blog/posts/quick-launch/quick-launch-checkout.gif" width="500px" />
+<h5 id="show-file-history">Show file history</h5>
+<p>File History is a Quick Launch command to display the familiar report of changes in a file supplied as the command argument. You don&rsquo;t have to look for the file in the commit file tree anymore – as long as you know the filename (or enough of it to trigger fuzzy search).</p>
+<img class="screenshot" src="/blog/posts/quick-launch/quick-launch-file-history.gif" width="600px"/>
+<h5 id="quick-launch-and-custom-commands">Quick Launch and Custom Commands</h5>
+<p>In addition to using the preinstalled commands, you can extend Quick Launch view with your own ones. You can find the Quick Launch custom command builder in Preferences.</p>
+<p>For instance, here&rsquo;s a custom branch command for Gerrit push:</p>
+<img src="/blog/posts/quick-launch/gerrit-custom-command.png"/>
+<p>We can run it as follows:</p>
+<img class="screenshot" src="/blog/posts/quick-launch/gerrit.gif" width="500px" />
+<p>
+	<h6>Download Fork right now and share your feedback with us!</h6>
+	<a class="btn btn-primary outline blue" href="https://fork.dev/update/files/Fork.dmg">Download Fork for Mac</a>
+	<a class="btn btn-primary outline blue" href="https://fork.dev/update/win/ForkInstaller.exe">Download Fork for Windows</a>
+</p>
+
+
+	
+    	<div class="text-secondary">Share this:</div>
+	    <a class="twitter-share-button" href="https://twitter.com/intent/tweet?text=Quick%20Launch%20view%20in%20Fork&url=https%3a%2f%2ffork.dev%2fblog%2fposts%2fquick-launch%2f">Tweet</a>
+		<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+	
+
+</article>
+    
+
+
+
+    
+        
+
+<article class="blog-post">
+    <header>
+        <h2 class="blog-post-title">
+            <a class="text-dark" href="/blog/posts/forkwin-1.38/">Fork for Windows 1.38</a>
+        </h2>
+	    
+
+
+
+
+
+<div class="blog-post-header text-secondary header-details">
+    
+        Aug 27, 2019
+    
+
+    
+	    
+
+	    
+			<img class="post-header" src="https://avatars2.githubusercontent.com/u/10220441?s=60&amp;v=4" alt="Dmitry Serov" width="18" height="18" class="avatar">
+	    
+
+		<span class="author" rel="author">Dmitry Serov</span>
+
+	    
+    
+
+	
+		<img class="post-header" src="https://fork.dev/blog/tag.png" alt="tag" width="18" height="18" class="avatar">
+	    
+	    
+	        <a class="badge tags" href="/tags/release-notes">release notes</a>
+	    
+	        <a class="badge tags" href="/tags/windows">windows</a>
+	    
+    
+</div>
+
+    </header>
+    <p>We&rsquo;re back with a fresh release of Fork for Windows. This post, like the one before it, will highlight the features and fixes found not only in this release, but also in several previous versions.</p>
+<p>Without further ado, let&rsquo;s review what the latest releases of Fork for Windows have to offer.</p>
+<h5 id="side-by-side-diff">Side-by-side diff!</h5>
+<p>We&rsquo;re bringing you more ways to compare your commits efficiently with side-by-side diffs. Click the latest addition in the list of diff viewing options to present a side-by-side view often found in external merge tools:</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.38/side-by-side.jpg" width="600px" />
+<p>Or, press <kbd>spacebar</kbd> to get a quick look at the side-by-side diff:</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.38/side-by-side-popup.gif" width="500px" />
+<h5 id="ability-to-highlight-bugtracker-links-jira-redmine-etc">Ability to highlight bugtracker links (Jira, Redmine, etc)!</h5>
+<p>Many of our commits include a reference to the issue tracker that we’re using. Similar to its macOS counterpart, Fork for Windows can now transform this reference into a highlighted link that leads you directly to the ticket in question.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.38/issue-tracker.jpg" width="600px" />
+<h5 id="swipe-and-onion-skin-mode-for-images">Swipe and onion skin mode for images</h5>
+<p>You can visually compare images using 3 different modes: side-by-side, swipe, and onion skin.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.38/swipe-image-diff.gif" width="400px" />
+<h5 id="filter-for-branches-and-changed-files">Filter for branches and changed files</h5>
+<p>Sometimes there&rsquo;s just too many branches on the sidebar. Fork for Windows comes to rescue with a filter to search for branches by name:</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.38/sidebar-filter.jpg" width="227px" />
+<p>You can filter files in file lists, too:</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.38/file-filter.jpg" width="255px" />
+<h5 id="draw-branch-labels-using-their-graph-colors">Draw branch labels using their graph colors</h5>
+<p>In this release of Fork for Windows, branch labels in commit list are drawn using the colors of their respective branch graphs, making navigation easier.</p>
+<img class="screenshot" src="/blog/posts/forkwin-1.38/colored-branch-labels.jpg"/>
+<h5 id="quick-actions-for-interactive-rebase">Quick actions for Interactive Rebase</h5>
+<p>Firing up the whole interactive rebase workflow, might be a bit of an overkill if all you’re trying to do is a simple squash. As in Fork for Mac, there is now an easier way to start with interactive rebase in Fork for Windows: Quick Actions.</p>
+<p>You can select a Quick Action for interactive rebase in the branch&rsquo;s context menu.</p>
+<img src="/blog/posts/forkwin-1.38/ir-quick-actions.jpg" width="500px" />
+<h5 id="show-avatars-in-commit-list">Show avatars in commit list</h5>
+<p>As another way to streamline commit navigation, Fork for Windows will now show avatars from <a href="https://gravatar.com/">Gravatar</a> for commit authors.</p>
+<img src="/blog/posts/forkwin-1.38/revision-list-avatars.jpg" width="500px" />
+<h5 id="add-inline-search-to-diff-view-use-ctrlf">Add inline search to diff view (use Ctrl+F)</h5>
+<p>It might not be easy to find that exact change you&rsquo;re looking for in a large diff. You can now press <kbd>Ctrl</kbd>+<kbd>F</kbd> to search for the text in question straight from the diff view.</p>
+<img src="/blog/posts/forkwin-1.38/inline-search.jpg" width="470px" />
+<h5 id="other-changes">Other changes</h5>
+<ul>
+<li>Merge button is now disabled for modified-removed confilcts (<a href="https://github.com/ForkIssues/TrackerWin/issues/174">#174</a>)</li>
+<li>Japanese characters are now rendered correctly on avatars (<a href="https://github.com/ForkIssues/TrackerWin/issues/176">#176</a>)</li>
+<li>Interactive rebase branch names now uses correct format (<a href="https://github.com/ForkIssues/TrackerWin/issues/178">#178</a>)</li>
+<li>Ctrl+Alt+O shortcut doesn&rsquo;t cause conflicts anymore (<a href="https://github.com/ForkIssues/TrackerWin/issues/23">#23</a>)</li>
+<li>Don&rsquo;t open all folder in the branches view (<a href="https://github.com/ForkIssues/TrackerWin/issues/32">#32</a>)</li>
+<li>Fixed diff highlighting for \n (<a href="https://github.com/ForkIssues/TrackerWin/issues/94">#94</a>)</li>
+<li>Tags are now visible in Repository Manager (<a href="https://github.com/ForkIssues/TrackerWin/issues/168">#168</a>)</li>
+<li>External diffs now show correct line endings (<a href="https://github.com/ForkIssues/TrackerWin/issues/215">#215</a>)</li>
+<li>Fixed a crash when dragging Repository tab to another Fork instance (<a href="https://github.com/ForkIssues/TrackerWin/issues/4">#4</a>)</li>
+<li>Fixed New Branch button display for submodules (<a href="https://github.com/ForkIssues/TrackerWin/issues/225">#225</a>)</li>
+<li>Fixed a crash when File History window is closed (<a href="https://github.com/ForkIssues/TrackerWin/issues/229">#229</a>)</li>
+<li>URL font is updated for Dark mode (<a href="https://github.com/ForkIssues/TrackerWin/issues/243">#243</a>)</li>
+<li>Blame window is no longer modal (<a href="https://github.com/ForkIssues/TrackerWin/issues/248">#248</a>)</li>
+<li>Added support for AraxisMerge (<a href="https://github.com/ForkIssues/TrackerWin/issues/74">#74</a>)</li>
+<li>Add support for opening Fork CLI from current directory (<a href="https://github.com/ForkIssues/TrackerWin/issues/78">#78</a>)</li>
+<li>IR reword editor does not clear all edits on losing focus (<a href="https://github.com/ForkIssues/TrackerWin/issues/93">#93</a>)</li>
+<li>Propose to checkout the local branch and faast-forward it to remote branch (<a href="https://github.com/ForkIssues/TrackerWin/issues/224">#224</a>)</li>
+<li>Add confirmation dialog when hitting Esc on Interactive Rebase (<a href="https://github.com/ForkIssues/TrackerWin/issues/255">#255</a>)</li>
+<li>Correctly handle files named HEAD (<a href="https://github.com/ForkIssues/TrackerWin/issues/284">#284</a>)</li>
+<li>Add branch custom actions (<a href="https://github.com/ForkIssues/TrackerWin/issues/301">#301</a>)</li>
+<li>Automatically resize commit columns when opening a repo (<a href="https://github.com/ForkIssues/TrackerWin/issues/277">#277</a>)</li>
+<li>Fixed a crash in the beta window (<a href="https://github.com/ForkIssues/TrackerWin/issues/302">#302</a>)</li>
+<li>Add inline highlighting for side-by-side diffs (<a href="https://github.com/ForkIssues/TrackerWin/issues/303">#303</a>)</li>
+<li>Display cloning progress (<a href="https://github.com/ForkIssues/TrackerWin/issues/324">#324</a>)</li>
+<li>Fixed Fetch shortcut issues (<a href="https://github.com/ForkIssues/TrackerWin/issues/340">#340</a>)</li>
+<li>Fixed a crash when selecting text with bug tracking reference (<a href="https://github.com/ForkIssues/TrackerWin/issues/342">#342</a>)</li>
+</ul>
+<p>
+<h6>Download Fork right now and share your feedback with us!</h6>
+<a class="btn btn-primary outline blue" href="https://fork.dev/update/win/ForkInstaller.exe">Download Fork for Windows</a>
+</p>
+
+	
+    	<div class="text-secondary">Share this:</div>
+	    <a class="twitter-share-button" href="https://twitter.com/intent/tweet?text=Fork%20for%20Windows%201.38&url=https%3a%2f%2ffork.dev%2fblog%2fposts%2fforkwin-1.38%2f">Tweet</a>
+		<script async src="https://platform.twitter.com/widgets.js" charset="utf-8"></script>
+	
+
+</article>
+    
+
+
+
+
+
+<nav class="blog-pagination">
+    <ul class="pagination justify-content-center">
+        
+        <li class="page-item">
+            <a class="page-link" href="/blog/" aria-label="First"><span aria-hidden="true">&laquo;&laquo;</span></a>
+        </li>
+        
+        <li class="page-item disabled">
+            <a class="page-link" href="" aria-label="Previous"><span aria-hidden="true">&laquo;</span></a>
+        </li>
+        
+        
+            
+            
+            
+            
+                
+                
+            
+            
+                <li class="page-item active">
+                    <a class="page-link" href="/blog/">1</a>
+                </li>
+            
+        
+            
+            
+            
+            
+                
+                
+            
+            
+                <li class="page-item ">
+                    <a class="page-link" href="/blog/page/2/">2</a>
+                </li>
+            
+        
+            
+            
+            
+            
+                
+                
+            
+            
+                <li class="page-item ">
+                    <a class="page-link" href="/blog/page/3/">3</a>
+                </li>
+            
+        
+            
+            
+            
+            
+                
+                
+            
+            
+                <li class="page-item ">
+                    <a class="page-link" href="/blog/page/4/">4</a>
+                </li>
+            
+        
+        <li class="page-item ">
+            <a class="page-link" href="/blog/page/2/" aria-label="Next"><span aria-hidden="true">&raquo;</span></a>
+        </li>
+        
+            <li class="page-item">
+                <a class="page-link" href="/blog/page/4/" aria-label="Last"><span aria-hidden="true">&raquo;&raquo;</span></a>
+            </li>
+        
+    </ul>
+</nav>
+
+
+
+
+        </div>
+
+        <aside class="col-12 col-lg-3 ml-auto blog-sidebar">
+    
+        
+
+
+<section>
+    <h4>Recent Posts</h4>
+    <ol class="list-unstyled">
+        
+        <li>
+            <a class="recent" href="/blog/posts/">Posts</a>
+        </li>
+        
+    </ol>
+</section>
+
+    
+    
+        <section>
+    
+        
+    
+        
+        <h4>Tags</h4>
+        <p>
+            
+            <a class="badge tags" href="/tags/mac">mac</a>
+            
+            <a class="badge tags" href="/tags/release-notes">release-notes</a>
+            
+            <a class="badge tags" href="/tags/windows">windows</a>
+            
+        </p>
+        
+    
+</section>
+    
+</aside>
+
+      </div>
+    </div>
+    
+
+    
+      <style>
+	div.footer {
+	  	background-color: #415B74;
+	  	padding: 15px;
+	  	padding-bottom: 18px;
+	  	margin: 0px;
+	  	margin-top: -20px;
+	}
+	a.footer{
+		color: white;
+		text-decoration: none;
+		margin-left: 10px;
+	}
+	a.footer:hover{
+		color: white;
+		text-decoration: underline;
+		margin-left: 10px;
+	}
+	p.footer.white{
+		font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+		color: white;
+		font-weight: 200;
+		font-size: 13px;
+		margin: 0px
+	}
+
+</style>
+
+<footer class="blog-footer w-100" >
+
+    <div class="container-fluid footer">
+
+	 	<div class="row">
+  			<div class="col-12 text-center" style="margin-top:-35px;">
+  				<img src="https://fork.dev/images/logo.png" width="40" height="40" class="img-responsive" alt="logo">
+  			</div>
+		</div>
+
+		<div class="container-fluid row">
+  			<div class="col-md-6 col-xs-6">
+	  			<div class="text-center">
+	  				<p class="footer white">
+  						<a class="footer" href="https://fork.dev/">Home</a>
+  						<a class="footer" href="https://fork.dev/releasenotes">Release Notes</a>
+  						<a class="footer" href="https://fork.dev/blog">Blog</a>
+  						<a class="footer" href="https://fork.dev/about">About Us</a>
+						<a class="footer" href="https://twitter.com/git_fork">Twitter</a>
+  						<a class="footer" href="https://fork.dev/license">License</a>
+	  				</p>
+  				</div>
+  			</div>
+  			<div class="col-md-3 col-xs-3">
+	  			<div class="text-center">
+	  				<p class="footer white text-center">support@fork.dev</p>
+  				</div>
+  			</div>
+  			
+  			<div class="col-md-3 col-xs-3">
+	  			<div class="text-center">
+	  				<p class="footer white">Copyright © 2025 Danil Pristupov</p>
+  				</div>
+  			</div>
+		</div>
+
+	</div>
+</footer>
+
+
+    
+
+    
+    
+    <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js" integrity="sha384-smHYKdLADwkXOn1EmN1qk/HfnUcbVRZyYmZ4qpPea6sjB/pTJ0euyQp0Mk8ck+5T" crossorigin="anonymous"></script>
+
+    
+    
+  </body>
+</html>
+

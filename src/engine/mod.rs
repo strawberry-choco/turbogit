@@ -1,26 +1,22 @@
 //! Git engine layer.
 //!
-//! The `GitExecutor` trait is the **only** thing that talks to git. The plain
-//! [`cli::CliExecutor`] shells out to the system `git` binary; the
-//! [`git2_exec::Git2Executor`] alternative runs supported operations
-//! in-process via libgit2 and falls back to the CLI for the rest. All
-//! mutating ops always go through the CLI.
-//!
-//! See `product-spec.md` §10 and `execution-plan.md` §3.
-
-pub mod cli;
-#[cfg(test)]
-pub mod fake;
-pub mod git2_exec;
+//! The port lives in `turbogit-engine-api` and the adapters plus the
+//! backend-selection factory live in `turbogit-engine` (DDD split issue 06).
+//! This module keeps re-export shims so every existing `engine::X` path
+//! resolves untouched; the event types below move to the app crate in a
+//! later ticket.
 
 use crate::error::TgResult;
 use crate::model::*;
 use crate::root_caches::Affected;
 
-// The engine port lives in its own crate (DDD split issue 05); re-exported
-// here so every existing `engine::GitExecutor` / `engine::ApplyDirection`
-// path keeps resolving.
+pub use turbogit_engine::{build_executor, cli, git2_exec};
 pub use turbogit_engine_api::{ApplyDirection, GitExecutor};
+
+// The fake executor ships behind the engine crate's `test-util` feature,
+// which the root crate activates only through its dev-dependencies.
+#[cfg(test)]
+pub use turbogit_engine::fake;
 
 /// A decoded image ready for GPU upload on the UI thread (spec R8):
 /// dimensions plus straight (unmultiplied-alpha) RGBA8 pixels, row-major.
@@ -96,19 +92,4 @@ pub enum AppEvent {
         ahead: usize,
         behind: usize,
     },
-}
-
-/// Construct the engine for `settings` behind the seam (ADR-0001): selects
-/// the libgit2-backed executor when `settings.backend` asks for it,
-/// otherwise the plain CLI executor (library-migration plan Phase L2).
-/// Callers rebuild this whenever settings change (e.g. the settings modal's
-/// Apply), exactly like they rebuilt a bare [`cli::CliExecutor`] before.
-pub fn build_executor(settings: &VcsSettings) -> std::sync::Arc<dyn GitExecutor> {
-    let cli = cli::CliExecutor {
-        settings: settings.clone(),
-    };
-    match settings.backend {
-        GitBackend::Libgit2 => std::sync::Arc::new(git2_exec::Git2Executor::new(cli)),
-        GitBackend::Cli => std::sync::Arc::new(cli),
-    }
 }

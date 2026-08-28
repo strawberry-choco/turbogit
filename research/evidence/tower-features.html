@@ -1,0 +1,1586 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+      <title>Git Made Easy | Tower Git Client</title>
+  
+  <script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  "url": "https://www.git-tower.com/features/easy",
+  "headline": "Git Made Easy with Tower's Intuitive GUI",
+  "description": "Git can be complex, but it doesn't have to be hard. With Tower's intuitive workflow, you can perform advanced Git operations like drag-and-drop and undo any mistake with a single click.",
+  "mainEntity": {
+    "@type": "SoftwareApplication",
+    "name": "Tower",
+    "url": "https://www.git-tower.com",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": ["macOS", "Windows"],
+    "softwareVersion": "16.0",
+    "downloadUrl": "https://www.git-tower.com/download",
+    "offers": {
+      "@type": "Offer",
+      "price": "69",
+      "priceCurrency": "USD",
+      "priceValidUntil": "2026-12-31",
+      "url": "https://www.git-tower.com/pricing"
+    },
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "ratingValue": "4.7",
+      "ratingCount": "186"
+    }
+  },
+  "keywords": "easy git, git gui, git for beginners, simple git client, visual git"
+}</script>
+  <script nowprocket>
+    window.UC_UI_DOMAINS = {
+        crossDomainConsentSharingIFrame: 'https://www.git-tower.com/cross-domain-bridge.html'
+    };
+</script>
+
+<link rel="preconnect" href="//app.usercentrics.eu">
+<link rel="preconnect" href="//api.usercentrics.eu">
+<link rel="preload" href="//web.cmp.usercentrics.eu/ui/loader.js" as="script">
+
+<script id="usercentrics-cmp" src="https://web.cmp.usercentrics.eu/ui/loader.js" data-settings-id="dODJ_7-PG" async></script>
+
+<!-- WORKAROUND TO BYPASS THE MAIN LOGIC WHEN THE EMBEDDED COLOR TEXT IS INHERITED DIRECTLY FROM CMP -->
+
+<script>
+(function() {
+  function injectStyles(shadow) {
+    if (!shadow.querySelector('#uc-white-override')) {
+      const style = document.createElement('style');
+      style.id = 'uc-white-override';
+      style.textContent = `
+        .embedding-list-item-header-title,
+        .list-header-title,
+        .uc-details-title.details-title,
+        .uc-details-tag.details-tag-item,
+        .details-link {
+          color: #fff !important;
+          -webkit-text-fill-color: #fff !important;
+        }
+        .uc-details-title.details-title {
+          opacity: 1 !important;
+        }
+        .embedding-list-item-header-expander {
+          background-color: #fff !important;
+        }
+        .embedding-list-item-header-expander svg,
+        .embedding-list-item-header-expander svg * {
+          fill: #fff !important;
+          stroke: #fff !important;
+        }
+        .uc-details-tag.details-tag-item {
+          border-color: #fff !important;
+          background-color: transparent !important;
+        }
+        .uc-details-tag.details-tag-item:hover,
+        .uc-details-tag.details-tag-item:focus,
+        .uc-details-tag.details-tag-item:active {
+          color: #fff !important;
+          border-color: #fff !important;
+          outline-color: #fff !important;
+        }
+        .uc-details-tag.details-tag-item svg,
+        .uc-details-tag.details-tag-item svg *,
+        .uc-details-tag.details-tag-item::before,
+        .uc-details-tag.details-tag-item::after {
+          fill: #fff !important;
+          stroke: #fff !important;
+          border-color: #fff !important;
+        }
+      `;
+      shadow.appendChild(style);
+    }
+  }
+  function applyOverride() {
+    const host = document.querySelector('.uc-embed');
+    if (!host || !host.shadowRoot) return;
+    injectStyles(host.shadowRoot);
+    new MutationObserver(() => injectStyles(host.shadowRoot))
+      .observe(host.shadowRoot, { childList: true, subtree: true });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyOverride);
+  } else {
+    applyOverride();
+  }
+  new MutationObserver(() => applyOverride())
+    .observe(document.documentElement, { childList: true, subtree: true });
+})();
+</script>
+  <script type="text/javascript">
+  // create dataLayer
+  window.dataLayer = window.dataLayer || [];
+  function gtag() {
+    dataLayer.push(arguments);
+  }
+
+  // set 'denied' as default for both ad and analytics storage, as well as ad_user_data and ad_personalization
+  gtag('consent', 'default', {
+    ad_user_data: 'denied',
+    ad_personalization: 'denied',
+    ad_storage: 'denied',
+    analytics_storage: 'denied',
+    wait_for_update: 2000 // milliseconds to wait for update
+  });
+
+  // Enable ads data redaction by default [optional]
+  gtag('set', 'ads_data_redaction', true);
+</script>  <script type="text/javascript">
+window.uetq = window.uetq || [];
+window.uetq.push('consent', 'default', {
+    'ad_storage': 'denied'
+    });
+
+window.addEventListener("MadsEvent", function (e) {    
+    if( e.detail && e.detail.event == "consent_status") {
+        if(e.detail['Microsoft Advertising'] === true) {
+          window.uetq = window.uetq || [];
+          window.uetq.push('consent', 'update', {
+              'ad_storage': 'granted'
+              });
+        }
+        else {
+          window.uetq = window.uetq || [];
+          window.uetq.push('consent', 'update', {
+              'ad_storage': 'denied'
+              });
+        }
+    }
+});
+</script>
+  <!-- Google Tag Manager -->
+  <script type="text/javascript">
+    (function(w, d, s, l, i) {
+      w[l] = w[l] || [];
+      w[l].push({
+        'gtm.start': new Date().getTime(),
+        event: 'gtm.js'
+      });
+      var f = d.getElementsByTagName(s)[0],
+          j = d.createElement(s),
+          dl = l != 'dataLayer' ? '&l=' + l : '';
+      j.async = true;
+      j.src =
+        'https://www.googletagmanager.com/gtm.js?id=' + i + dl;
+      f.parentNode.insertBefore(j, f);
+    })(window, document, 'script', 'dataLayer', 'GTM-WHXSHB');
+  </script>
+
+  <!-- Preconnect to external font origins -->
+  <link rel="preconnect" href="https://rsms.me">
+
+  <!-- Inter font - non-blocking -->
+  <link rel="preload" href="https://rsms.me/inter/inter.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://rsms.me/inter/inter.css"></noscript>
+
+  <script>
+    (function (window, document) {
+      function getPersistedPlatform() {
+        var match = document.cookie.match(/(?:^|; )platform_choice=(mac|windows)(?:;|$)/);
+        return match ? match[1] : null;
+      }
+
+      function detectPlatform() {
+        var platform = navigator.platform || '';
+
+        if (/(Mac|iPhone|iPod|iPad)/i.test(platform)) {
+          return 'mac';
+        }
+
+        if (/(Win)/i.test(platform)) {
+          return 'windows';
+        }
+
+        return 'mac';
+      }
+
+      window.FN = window.FN || {};
+      window.FN.preferredOS = getPersistedPlatform() || detectPlatform();
+    })(window, document);
+  </script>
+
+  <!-- CSS Stylesheets - Critical Path -->
+  <style>html{font-family:sans-serif;-ms-text-size-adjust:100%;-webkit-text-size-adjust:100%}body{margin:0}article,aside,details,figcaption,figure,footer,header,hgroup,main,nav,section,summary{display:block}audio,canvas,progress,video{display:inline-block;vertical-align:baseline}audio:not([controls]){display:none;height:0}[hidden],template{display:none}a{background:transparent}a:active,a:hover{outline:0}abbr[title]{border-bottom:1px dotted}b,strong{font-weight:bold}dfn{font-style:italic}h1{font-size:2em;margin:.67em 0}mark{background:#ff0;color:#000}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sup{top:-0.5em}sub{bottom:-0.25em}img{border:0}svg:not(:root){overflow:hidden}figure{margin:1em 40px}hr{box-sizing:content-box;height:0}pre{overflow:auto}code,kbd,pre,samp{font-family:monospace,monospace;font-size:1em}button,input,optgroup,select,textarea{color:inherit;font:inherit;margin:0}button{overflow:visible}button,select{text-transform:none}button,html input[type=button],input[type=reset],input[type=submit]{-webkit-appearance:button;cursor:pointer}button[disabled],html input[disabled]{cursor:default}button::-moz-focus-inner,input::-moz-focus-inner{border:0;padding:0}input{line-height:normal}input[type=checkbox],input[type=radio]{box-sizing:border-box;padding:0}input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{height:auto}input[type=search]{-webkit-appearance:textfield;box-sizing:content-box}input[type=search]::-webkit-search-cancel-button,input[type=search]::-webkit-search-decoration{-webkit-appearance:none}fieldset{border:1px solid silver;margin:0 2px;padding:.35em .625em .75em}legend{border:0;padding:0}textarea{overflow:auto}optgroup{font-weight:bold}table{border-collapse:collapse;border-spacing:0}td,th{padding:0}html{font-size:16px;line-height:1.875rem}body{color:#fff;font-family:var(--base-font-family);font-size:1.25rem}h1,h2,h3,h4,h5,h6{font-family:var(--base-font-family);font-size:1.25em;line-height:1.3;margin:0 0 .75rem;color:#00caf4}h1{font-size:3rem}h2{font-size:2.25rem}h3.subline{font-size:1.5rem;font-weight:400;color:#fff}h5{font-size:1.25rem;font-weight:600;margin:0}h6{font-size:1.125rem;font-weight:500;margin:0}p{margin:0 0 .75rem}p.subheader{text-align:center;font-size:1.5rem;line-height:2.25rem;max-width:750px;margin-left:auto;margin-right:auto}a{color:#ffc600;-webkit-text-decoration-skip:ink;text-decoration-skip-ink:auto}a:hover{color:shade(#FFC600, 25%)}a:focus-visible{outline:2px solid #ffc600;outline-offset:3px}hr{border-bottom:1px solid #d1deea;border-left:0;border-right:0;border-top:0;margin:1.5rem 0}.font--white{color:#fff}.font--blue-02{color:#00caf4}.font--highlight{display:inline;border-bottom:2px solid #00caf4}.text--centered{text-align:center}.text--maxwidth{max-width:650px;margin:0px auto}.feature-status{display:inline-block;border-radius:3px;font-size:.875rem;padding:2px 10px;margin-right:.75rem}.feature-status:last-child{margin-right:0}.feature-status--ready{background:green;color:#fff}.feature-status--coming{background:#666;color:#fff}.feature-status--beta{background-color:#ffc600;color:#000}.link-blue{color:#fff;text-decoration:none;border-bottom:2px solid #00caf4}.link-blue:hover{color:#00caf4;border-bottom:2px solid #00caf4}ul,ol{list-style-type:none;margin:0;padding:0}dl{margin:0}dt{font-weight:600;margin:0}dd{margin:0}figure{margin:0}img,picture{margin:0;max-width:100%;height:auto}.video-container{position:relative;padding-bottom:56.25%;padding-top:30px;height:0;overflow:hidden;margin-top:2rem}.video-container iframe,.video-container object,.video-container embed{position:absolute;top:0;left:0;width:100%;height:100%}.button,[type=button],[type=reset],[type=submit],button{-webkit-appearance:none;-moz-appearance:none;appearance:none;background-color:#ffc600;border:3px solid #ffc600;border-radius:6px;color:#3b2300;cursor:pointer;display:inline-block;font-family:var(--base-font-family);font-size:20px;font-weight:600;line-height:2.25rem;padding:0 2rem;text-align:center;text-decoration:none;-webkit-user-select:none;-moz-user-select:none;-ms-user-select:none;user-select:none;vertical-align:middle;white-space:nowrap}.button:hover,[type=button]:hover,[type=reset]:hover,[type=submit]:hover,button:hover{background-color:#ffd94e;cursor:pointer}.button:focus-visible,[type=button]:focus-visible,[type=reset]:focus-visible,[type=submit]:focus-visible,button:focus-visible{outline:2px solid #ffc600;outline-offset:3px}.button:disabled,[type=button]:disabled,[type=reset]:disabled,[type=submit]:disabled,button:disabled{cursor:not-allowed;opacity:.5}.button--outlined:hover{background-color:#ffd94e;border-color:#ffd94e}.button--secondary{background-color:#53daff;border-color:#53daff;color:var(--background-primary)}.button--secondary:hover{background-color:#9ce7ff;border-color:#9ce7ff}.button--twitter{padding-left:58px;background-color:#53daff;background-image:url("/assets/img/icons/twitter-icon.svg");background-repeat:no-repeat;background-size:26px;background-position:12px center}.button__wrap{text-align:center}@media(min-width: 47.5em){.button__wrap{display:inline-block}}.button__wrap .button{display:inline-block;min-width:270px;margin-top:20px}.button__wrap .note{display:inline-block;margin-top:4px;font-size:1rem;color:#fff;text-decoration:none}.button__wrap .note:hover{color:#ffc600}.button__wrap .note a{color:#fff}.button__wrap .note a:hover{color:#ffc600}html{box-sizing:border-box}.sr-only{border:0;clip:rect(0, 0, 0, 0);clip-path:inset(50%);height:1px;margin:-1px;overflow:hidden;padding:0;position:absolute;white-space:nowrap;width:1px}*,*::before,*::after{box-sizing:inherit}html,body{height:100%;background:var(--background-primary)}body{margin:0}.theme--10{color:white;background-color:var(--background-secondary)}.theme--09{color:white;background-color:var(--background-primary)}.theme--08{color:white;background-color:var(--background-secondary-alt)}.theme--06{color:white;background-color:var(--background-tertiary-alt)}.theme--05{color:white;background-color:var(--background-tertiary)}.theme--08-10{color:white;background:linear-gradient(to bottom, var(--background-secondary-alt) 0%, var(--background-secondary-alt) 92%, var(--background-secondary) 92%, var(--background-secondary) 100%)}.theme--08-09{color:white;background:linear-gradient(to bottom, var(--background-secondary-alt) 0%, var(--background-secondary-alt) 92%, var(--background-primary) 92%, var(--background-primary) 100%)}.theme--10-08{color:white;background:linear-gradient(to bottom, var(--background-secondary) 0%, var(--background-secondary) 92%, var(--background-secondary-alt) 92%, var(--background-secondary-alt) 100%)}.theme--09-08{color:white;background:linear-gradient(to bottom, var(--background-primary) 0%, var(--background-primary) 92%, var(--background-secondary-alt) 92%, var(--background-secondary-alt) 100%)}.theme--08-05{color:white;background:linear-gradient(to bottom, var(--background-secondary-alt) 0%, var(--background-secondary-alt) 92%, var(--background-tertiary) 92%, var(--background-tertiary) 100%)}.theme--08-06{color:white;background:linear-gradient(to bottom, var(--background-secondary-alt) 0%, var(--background-secondary-alt) 92%, var(--background-tertiary-alt) 92%, var(--background-tertiary-alt) 100%)}.theme--06-08{color:white;background:linear-gradient(to bottom, var(--background-tertiary-alt) 0%, var(--background-tertiary-alt) 92%, var(--background-secondary-alt) 92%, var(--background-secondary-alt) 100%)}.theme--06-09{color:white;background:linear-gradient(to bottom, var(--background-tertiary-alt) 0%, var(--background-tertiary-alt) 92%, var(--background-primary) 92%, var(--background-primary) 100%)}.theme--06-10{color:white;background:linear-gradient(to bottom, var(--background-tertiary-alt) 0%, var(--background-tertiary-alt) 92%, var(--background-secondary) 92%, var(--background-secondary) 100%)}.theme--05-08{color:white;background:linear-gradient(to bottom, var(--background-tertiary) 0%, var(--background-tertiary) 92%, var(--background-secondary-alt) 92%, var(--background-secondary-alt) 100%)}.theme--05-06{color:white;background:linear-gradient(to bottom, var(--background-tertiary) 0%, var(--background-tertiary) 92%, var(--background-tertiary-alt) 92%, var(--background-tertiary-alt) 100%)}.visible-on--mobile,.visible-on--desktop,.visible-on--mac,.visible-on--windows{display:none}@media(min-width: 0.0625em){main{padding-top:60px}}@media(min-width: 47.5em){main{padding-top:80px}}.outer-container{width:100%;position:relative}.outer-container--padding{padding-top:100px;padding-bottom:95px}.inner-container--extrawidth,.inner-container--maxwidth{margin:0px auto}@media(min-width: 0.0625em){.inner-container--extrawidth,.inner-container--maxwidth{padding:0px 20px}}@media(min-width: 68.75em){.inner-container--extrawidth,.inner-container--maxwidth{padding:0px 50px}}.inner-container--maxwidth{max-width:1100px}.inner-container--extrawidth{max-width:1300px}.inner-container--fullwidth{width:100%}.outer-container{visibility:hidden}nav.outer-container,header.outer-container{visibility:visible}header{padding-top:65px}@media(min-width: 47.5em){header{padding-top:112px}}header .inner-container{display:flex;padding-bottom:62px}header .inner-container:after{clear:both;content:"";display:block}@media(min-width: 27.5em){header .header__claim{flex:1 0 400px}}@media(min-width: 47.5em){header .header__claim{margin-right:50px}}header .header__claim .button__wrap{margin-top:50px}header .header__claim .note a{font-size:1rem;color:#fff;text-decoration:none}header .header__claim .note a:hover{color:#ffc600}header .header__visual{flex:0 1 440px;text-align:center}@media(min-width: 0.0625em){header .header__visual{display:none}}@media(min-width: 47.5em){header .header__visual{display:block}}header .header__visual img,header .header__visual svg{width:100%;max-height:400px;height:400px}body{background:#081b2e}.skip-to-main{position:absolute;top:-100%;left:1rem;z-index:9999;background:#fff;color:#000;font-size:14px;font-weight:600;padding:8px 16px;border-radius:4px;text-decoration:none}.skip-to-main:focus-visible{top:1rem}.nav-top-common{align-items:center;background:linear-gradient(#09233C, #193652);border-radius:26px;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05),0 10px 20px rgba(0,0,0,.4);display:flex;flex-direction:row;height:52px;left:50%;margin:40px 0 40px -440px;outline:1px solid rgba(0,0,0,.8);padding:0;position:fixed;top:0;width:880px;z-index:201}.nav-top-common li::before{display:none}.nav-top-common li{display:block;margin:0}.nav-top-common a{text-decoration:none}.nav-top-logo{left:50%;margin:1px 0 0 -64px;position:absolute}.nav-top-logo a{background:url("/assets/img/illustrations/tower-header-logo-royal.svg");display:block;height:34px;overflow:hidden;text-indent:9999px;width:127px}.nav-top-show{-webkit-appearance:none;-moz-appearance:none;appearance:none;background:none;border:none;cursor:pointer;display:none;padding:0;-webkit-tap-highlight-color:transparent}.nav-top-show:hover{background-color:transparent}.nav-top-primary{display:contents}.nav-top-primary>li{position:relative}.nav-top-primary>li:first-child{margin-left:12px}.nav-top-primary>li>a{border-radius:15px;color:#d8f7ff;display:block;font-weight:500;font-size:14px;line-height:30px;padding:0 15px}.nav-top-primary>li.nav-top-primary-active>a{background:rgba(90,122,153,.33);color:#fff}.nav-top-secondary{display:none}.nav-top-primary-spacer{flex-grow:1}.nav-top-common .nav-top-download{margin:0 10px 0 15px}.nav-top-download a{background:linear-gradient(#29D1FF, #00ACDB);border-radius:16px;box-shadow:0 1px 4px #081b2e,inset 0 0 0 1px rgba(255,255,255,.25),inset 0 1px rgba(255,255,255,.2);color:#fff;display:block;font-size:14px;font-weight:600;line-height:32px;padding:0 16px;text-shadow:0 1px 1px rgba(7,27,46,.5)}@media(max-width: 900px){.nav-top-common{border-radius:0;box-shadow:inset 0 -1px 0 rgba(255,255,255,.05),0 10px 20px rgba(0,0,0,.4);display:block;height:auto;margin:0;left:0;width:100%;height:52px;overflow:hidden}.nav-top-logo{top:9px}.nav-top-show{background:url("/assets/img/illustrations/nav-burger-royal.svg") no-repeat center;display:block;height:52px;left:0;position:absolute;overflow:hidden;text-indent:9999px;top:0;width:64px}.nav-top-primary{display:none}}.announcement-bar{position:relative;overflow:hidden;margin-top:52px;width:100%;min-height:70px}.announcement-bar .inner-container{min-height:70px;display:flex;align-items:center;justify-content:center;transition:transform .5s ease-out;transition-delay:.1s}.announcement-bar .inner-container.hidden{transform:translateY(-100%)}.announcement-bar .inner-container.visible{transform:translateY(0)}.hero{background:#081b2e;overflow:hidden;padding:0}.hero-wrapper{padding:80px 0 0}.hero-title{background:linear-gradient(#EFF5FA, #AAC8E5);-webkit-background-clip:text;background-clip:text;font-size:52px;line-height:64px;margin:0 auto 16px;max-width:720px;padding:6px 0;text-align:center;text-shadow:0 4px 8px rgba(0,33,85,.2);-webkit-text-fill-color:transparent}.hero-tagline{color:rgba(255,255,255,.72);font-size:20px;line-height:28px;text-align:center;margin:0 auto 24px;max-width:540px;text-shadow:0 2px 4px rgba(0,0,0,.1)}.hero-title span,.hero-tagline span{white-space:nowrap}.hero-links{margin:0 0 44px;text-align:center}.hero-download{margin-bottom:8px}.hero-download .button{background:linear-gradient(#FFCE22, #F2BC00);border:0;border-radius:6px;box-shadow:0 0 0 .5px rgba(59,35,0,.2),0 2px 4px rgba(59,35,0,.2),inset 0 .5px 0 rgba(255,244,153,.3);font-size:1.25rem;line-height:24px;padding:9px 25px 9px 57px}.hero-switch-platform{font-size:12px;line-height:20px;text-shadow:0 2px 4px rgba(0,0,0,.1)}.hero-switch-platform .os-switch{border-radius:6px;color:#53daff;padding:6px 12px;text-decoration:none}.hero-screenshot{margin:0 auto 0;width:1000px}.hero-screenshot img{border-radius:10px;display:block;width:100%;height:auto;box-shadow:0 36px 100px rgba(0,0,0,.4),0 0 3px rgba(0,0,0,.55)}.hero-screenshot .visible-on--windows img{border-radius:5px;box-shadow:0 10px 20px rgba(0,0,0,.15),0 0 0 1px rgba(0,0,0,.08)}
+/*# sourceMappingURL=critical.min.css.map */
+</style>
+    <!-- CSS Stylesheets - Non-Critical -->
+  <link rel="preload" href="https://www.git-tower.com/assets/css/default.min.1787161424.css" as="style" onload="this.onload=null;this.rel='stylesheet'"><noscript><link rel="stylesheet" href="https://www.git-tower.com/assets/css/default.min.1787161424.css"></noscript><script>/*! loadCSS. [c]2017 Filament Group, Inc. MIT License */
+/* This file is meant as a standalone workflow for
+- testing support for link[rel=preload]
+- enabling async CSS loading in browsers that do not support rel=preload
+- applying rel preload css once loaded, whether supported or not.
+*/
+(function( w ){
+	"use strict";
+	// rel=preload support test
+	if( !w.loadCSS ){
+		w.loadCSS = function(){};
+	}
+	// define on the loadCSS obj
+	var rp = loadCSS.relpreload = {};
+	// rel=preload feature support test
+	// runs once and returns a function for compat purposes
+	rp.support = (function(){
+		var ret;
+		try {
+			ret = w.document.createElement( "link" ).relList.supports( "preload" );
+		} catch (e) {
+			ret = false;
+		}
+		return function(){
+			return ret;
+		};
+	})();
+
+	// if preload isn't supported, get an asynchronous load by using a non-matching media attribute
+	// then change that media back to its intended value on load
+	rp.bindMediaToggle = function( link ){
+		// remember existing media attr for ultimate state, or default to 'all'
+		var finalMedia = link.media || "all";
+
+		function enableStylesheet(){
+			link.media = finalMedia;
+		}
+
+		// bind load handlers to enable media
+		if( link.addEventListener ){
+			link.addEventListener( "load", enableStylesheet );
+		} else if( link.attachEvent ){
+			link.attachEvent( "onload", enableStylesheet );
+		}
+
+		// Set rel and non-applicable media type to start an async request
+		// note: timeout allows this to happen async to let rendering continue in IE
+		setTimeout(function(){
+			link.rel = "stylesheet";
+			link.media = "only x";
+		});
+		// also enable media after 3 seconds,
+		// which will catch very old browsers (android 2.x, old firefox) that don't support onload on link
+		setTimeout( enableStylesheet, 3000 );
+	};
+
+	// loop through link elements in DOM
+	rp.poly = function(){
+		// double check this to prevent external calls from running
+		if( rp.support() ){
+			return;
+		}
+		var links = w.document.getElementsByTagName( "link" );
+		for( var i = 0; i < links.length; i++ ){
+			var link = links[ i ];
+			// qualify links to those with rel=preload and as=style attrs
+			if( link.rel === "preload" && link.getAttribute( "as" ) === "style" && !link.getAttribute( "data-loadcss" ) ){
+				// prevent rerunning on link
+				link.setAttribute( "data-loadcss", true );
+				// bind listeners to toggle media back
+				rp.bindMediaToggle( link );
+			}
+		}
+	};
+
+	// if unsupported, run the polyfill
+	if( !rp.support() ){
+		// run once at least
+		rp.poly();
+
+		// rerun poly on an interval until onload
+		var run = w.setInterval( rp.poly, 500 );
+		if( w.addEventListener ){
+			w.addEventListener( "load", function(){
+				rp.poly();
+				w.clearInterval( run );
+			} );
+		} else if( w.attachEvent ){
+			w.attachEvent( "onload", function(){
+				rp.poly();
+				w.clearInterval( run );
+			} );
+		}
+	}
+
+
+	// commonjs
+	if( typeof exports !== "undefined" ){
+		exports.loadCSS = loadCSS;
+	}
+	else {
+		w.loadCSS = loadCSS;
+	}
+}( typeof global !== "undefined" ? global : this ) );
+</script>
+
+  <!-- Search Engines + Open Graph -->
+  <link rel="canonical" href="https://www.git-tower.com/features/easy">
+  <meta name="description" content="Tower helps you master version control with Git." />
+<meta name="keywords" content="git, mac, client, gui, git client, git app, git gui, vcs, version control, windows" />
+
+<meta property="og:title" content="Tower Git Client - Git Made Easy" />
+<meta property="og:image" content="https://www.git-tower.com/assets/img/tower-git-client_sharing-image.1787161387.png" />
+<meta property="og:description" content="Tower helps you master version control with Git." />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:site" content="@fournova" />
+<meta name="twitter:title" content="Tower Git Client - Git Made Easy" />
+<meta name="twitter:description" content="Tower helps you master version control with Git." />
+<meta name="twitter:image:src" content="https://www.git-tower.com/assets/img/tower-git-client_sharing-image.1787161387.png" />
+
+  
+  
+  <!-- Favicon / Touch Icons / Android Icons -->
+  <link rel="icon" href="https://www.git-tower.com/assets/img/favicons/favicon-adaptive.1787161387.svg">
+
+<link rel="icon" sizes="16x16" type="image/png" href="https://www.git-tower.com/assets/img/favicons/favicon@16w.1787161387.png">
+<link rel="icon" sizes="32x32" type="image/png" href="https://www.git-tower.com/assets/img/favicons/favicon@32w.1787161387.png">
+
+<link rel="apple-touch-icon" href="https://www.git-tower.com/assets/img/favicons/apple-touch-icon.1787161387.png">
+<link rel="apple-touch-icon" sizes="76x76" href="https://www.git-tower.com/assets/img/favicons/apple-touch-icon@76w.1787161387.png">
+<link rel="apple-touch-icon" sizes="120x120" href="https://www.git-tower.com/assets/img/favicons/apple-touch-icon@120w.1787161387.png">
+<link rel="apple-touch-icon" sizes="152x152" href="https://www.git-tower.com/assets/img/favicons/apple-touch-icon@152w.1787161387.png">
+<link rel="apple-touch-icon" sizes="180x180" href="https://www.git-tower.com/assets/img/favicons/apple-touch-icon@180w.1787161387.png">
+<link rel="apple-touch-icon" sizes="192x192" href="https://www.git-tower.com/assets/img/favicons/apple-touch-icon@192w.1787161387.png">
+
+  <!-- JavaScript -->
+  <script defer src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+  <script>
+    if (typeof FN == 'undefined') { FN = {}; }
+    FN.siteURLs = {"tower":"https:\/\/www.git-tower.com","blog":"https:\/\/www.git-tower.com\/blog","help":"https:\/\/www.git-tower.com\/help","learn":"https:\/\/www.git-tower.com\/learn","account":"https:\/\/account.git-tower.com"};
+  </script>
+  <script defer src="https://www.git-tower.com/assets/js/default.min.1787161388.js"></script>
+
+</head>
+
+<body class="body--default color-scheme-royal" id="page--features__easy">
+  <script>
+    (function (window, document) {
+      var currentOS = (window.FN && window.FN.preferredOS) ? window.FN.preferredOS : 'mac';
+      document.body.classList.add('current-os-' + currentOS);
+    })(window, document);
+  </script>
+  <!-- Google Tag Manager (noscript) -->
+  <noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-WHXSHB"
+  height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+  <!-- End Google Tag Manager (noscript) -->
+
+  <a class="skip-to-main" href="#main-content">Skip to main content</a>
+<!-- Testimonial Data - BEGIN --><script type="text/javascript">if(typeof FN == 'undefined') FN = {};FN.testimonialData = [{"id":"ed-blankenship","tags":"enterprise","name":"Ed Blankenship","company":"formerly at Microsoft","link":"https:\/\/twitter.com\/edblankenship","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/ed-blankenship","text":"We're so glad that Tower has brought their awesome Git client from Mac to Windows. It's for any serious developer using Windows or Mac."},{"id":"collin-allen","tags":"","name":"Collin Allen","company":"Software Engineer","link":"https:\/\/twitter.com\/command_tab","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/collin-allen","text":"I can't even tell you how much I love Tower. It's easily my favorite development tool, and I depend on it every single day."},{"id":"andreas-hoyland","tags":"enterprise","name":"Andreas H\u00f8yland","company":"Designer at Favo AS","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/andreas-hoyland","text":"Tower has given me and my team git-super-powers that would not be accessible to us without it."},{"id":"ben-domanico","tags":"designer","name":"Ben Domanico","company":"Director of Design at Patreon","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/ben-domanico","text":"As a designer, contributing to code is fundamental to building beautiful products. Tower takes the pain of working with Git out of the equation."},{"id":"koen-bok","tags":"designer","name":"Koen Bok","company":"CEO at Framer","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/koen-bok","text":"Tower is a pleasure to use while it retains the full power of Git. I enjoy using it every day for both design and code work."},{"id":"lukas-spiess","tags":"","name":"Lukas Spie\u00df","company":"Engineer at Microsoft","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/lukas-spiess","text":"Tower is by far my favorite Git client and an essential tool in my everyday work."},{"id":"esteban-torres","tags":"","name":"Esteban Torres","company":"Engineer at SoundCloud","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/esteban-torres","text":"The new Tower adds a lot of great features that help me go on with my day faster; like the ability to create pull-requests directly from the tool."},{"id":"frances-coronel","tags":"","name":"Frances Coronel","company":"Software Engineering Mentor at Thinkful","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/frances-coronel","text":"What took me minutes in the command line now takes seconds with Tower and that's why I'm never looking back."},{"id":"jeremy-petter","tags":"","name":"Jeremy Petter","company":"iOS Engineer at MetaLab","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/jeremy-petter","text":"Tower\u2019s interactive rebase UI hides a ton of power in literal plain sight. Now, anybody can be a high-level imperative Git wizard without breaking a sweat."},{"id":"daniel-schutzsmith","tags":"","name":"Daniel Schutzsmith","company":"Amnesty International","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/daniel-schutzsmith","text":"You should use Tower. It changed the game for me and made Git much more visual for me to understand."},{"id":"jesse-bilsten","tags":"","name":"Jesse Bilsten","company":"Principal Designer at GoDaddy","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/jesse-bilsten","text":"I utilize Git in both design and development environments - and Tower is the only tool that empowers me in both."},{"id":"jesse-bilsten_rebase","tags":"","name":"Jesse Bilsten","company":"Principal Designer at GoDaddy","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/jesse-bilsten","text":"Visualizing interactive rebase in Tower is a game changer."},{"id":"matt-jones","tags":"enterprise","name":"Matt Jones","company":"Contributor at Sensu-Plugins","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/matt-jones","text":"Tower makes it trivial to use different operating systems, thus increasing productivity and cohesion across multiple teams."},{"id":"sebastian-kreutzberger","tags":"","name":"Sebastian Kreutzberger","company":"CEO at SwiftyBeaver","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/sebastian-kreutzberger","text":"The new Tower is great! Github pull requests have never been easier \ud83d\ude80"},{"id":"chris-coyier_1","tags":"","name":"Chris Coyier","company":"Co-Founder at CodePen","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/chris-coyier","text":"Tower is the perfect level of abstraction away from command-line Git usage. A simple and powerful UI, but without hiding what makes Git powerful."},{"id":"chris-coyier_2","tags":"","name":"Chris Coyier","company":"Co-Founder at CodePen","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/chris-coyier","text":"Some things are meant to have a UI, and Git is one of them if you ask me. Tower is the perfect level of abstraction away from command-line Git usage."},{"id":"felix-krause_1","tags":"","name":"Felix Krause","company":"Founder at fastlane","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/felix-krause","text":"Tower is a solid Git client, a beautiful, native app that does exactly what it should."},{"id":"felix-krause_2","tags":"","name":"Felix Krause","company":"Founder at fastlane","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/felix-krause","text":"Tower is a solid desktop app that makes working with Git so much easier. I especially love how easy it is to stage only selected areas of my code."},{"id":"jake-mauer","tags":"","name":"Jake Mauer","company":"Director of Design at Allovue","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/jake-mauer","text":"I often have to search by hash and quick actions make it so much easier, it\u2019s a game changer!"},{"id":"cansin-yildiz","tags":"","name":"Cansin Yildiz","company":"Software Architect at Udemy","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/cansin-yildiz","text":"The new Tower stays responsive even when I have thousands of files changed like a crazy person would have."},{"id":"hector-simpson","tags":"","name":"Hector Simpson","company":"UI\/UX Designer at Heroku","link":"","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/hector-simpson","text":"Tower is a vital tool in my workflow. It makes the more advanced things in Git intuitive and completely effortless."},{"id":"michael-trojanek","tags":"","name":"Michael Trojanek","company":"","link":"https:\/\/twitter.com\/relativkreativ\/status\/1334641557295820800?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/michael-trojanek","text":"Dear @gittower, your undo feature just saved me two days of work on two accidentally deleted branches. I love you dearly."},{"id":"phil-shrimpton","tags":"","name":"Phil Shrimpton","company":"","link":"https:\/\/twitter.com\/pshrimpton\/status\/1390691935015292932?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/phil-shrimpton","text":"@gittower \u2019s COMMAND-Z Undo has literally just saved my whole weekend at 4:30pm on Friday afternoon after a stupid mistake by me."},{"id":"fred-porciuncula","tags":"","name":"Fred Porci\u00fancula","company":"","link":"https:\/\/twitter.com\/tfcporciuncula\/status\/1361607101156630530?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/fred-porciuncula","text":"Who would've thought that one day I would be able to undo a merge by pressing cmd+z. Thanks @gittower"},{"id":"victor-boutte","tags":"","name":"Victor Boutt\u00e9","company":"","link":"https:\/\/twitter.com\/monsieurBoutte\/status\/1316556975971471361?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/victor-boutte","text":"@gittower allows you to undo with cmd z. Which has saved me the headache more than once"},{"id":"greg-blass","tags":"","name":"Greg Blass","company":"","link":"https:\/\/twitter.com\/greg_blass\/status\/1298700679272333313?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/greg-blass","text":"@gittower just allowed me to undo a merge by pressing command-z. Literally just prevented a heart attack. Probably the most useful development tool out of anything I use."},{"id":"joachim-fornallaz","tags":"","name":"Joachim Fornallaz","company":"","link":"https:\/\/twitter.com\/fjoachim\/status\/1259943751419457536?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/joachim-fornallaz","text":"So glad @gittower has extensive undo support! I hit \u201cDiscard Chunk\u201d by accident and was able to restore my work."},{"id":"cameron-cooke","tags":"","name":"Cameron Cooke","company":"","link":"https:\/\/twitter.com\/camsoft2000\/status\/1233069796973010946?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/cameron-cooke","text":"While I\u2019m pretty competent with git cli I do use tower for comitting and merging etc.  Used the undo feature today to roll back a local comit and it worked seamlessly.  Super impressive. Beats messing around with reflog."},{"id":"ken-worley","tags":"","name":"Ken Worley","company":"","link":"https:\/\/twitter.com\/kengworley\/status\/1366595548439072770?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/ken-worley","text":"Love the simple Undo in Tower"},{"id":"stan-daniels","tags":"","name":"Stan Daniels","company":"","link":"https:\/\/twitter.com\/standaniels\/status\/1366369262013722624?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/stan-daniels","text":"Undo\/CMD+Z! Definitely!"},{"id":"will-browar","tags":"","name":"Will Browar","company":"","link":"https:\/\/twitter.com\/wbrowar\/status\/1362390044745596931?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/will-browar","text":"@gittower\u2019s undo is an incredible feature."},{"id":"collin-donnell","tags":"","name":"Collin Donnell","company":"","link":"https:\/\/twitter.com\/collindonnell\/status\/1232766969310408704?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/collin-donnell","text":"Undo support in @gittower is no joke. I can really see this one feature changing how often I use git from the command line."},{"id":"jamie-lawrence","tags":"","name":"Jamie Lawrence","company":"","link":"https:\/\/twitter.com\/ideasasylum\/status\/1232648717024419841?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/jamie-lawrence","text":"It doesn\u2019t damage my ego at all to admit that I use a UI for git instead of filling my limited memory buffer with arcane knowledge. I love what @gittower are doing here with Cmd-z to undo git actions"},{"id":"stuffmc","tags":"","name":"Manuel Molina","company":"","link":"https:\/\/twitter.com\/StuFFmc\/status\/1075308434126450688","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/stuffmc","text":"Being able to drag and drop commits in @gittower and that it does an interactive rebase in the background is absolutely FABULOUS! Not sure why people like to type weird commands in a terminal."},{"id":"sdrzn","tags":"","name":"sr","company":"","link":"https:\/\/twitter.com\/sdrzn\/status\/1032385325803261952","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/sdrzn","text":"Just used @gittower's new Reflog feature to restore a commit I accidentally deleted. Having done this before using command line, using Tower has simplified the process ten fold - just drag and drop."},{"id":"bengotow","tags":"","name":"Ben Gotow","company":"","link":"https:\/\/twitter.com\/bengotow\/status\/1299346596329598976","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/bengotow","text":"I use @gittower and it\u2019s so nice - I think my 2 faves are: drag and drop commits to cherry pick between branches, and rapidly selecting lines within files to commit so I can break a single pile of changes into several well described commits fast!"},{"id":"nscabezon","tags":"","name":"Iv\u00e1n Cabezon","company":"","link":"https:\/\/twitter.com\/NSCabezon\/status\/1299229801794985985","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/nscabezon","text":"To me having a GUI is much quicker, in @gittower you can use a 3 key shortcut instead of typing a full sentence or even drag and drop if you don\u2019t know the command yet \ud83d\ude42, the diff is perfect and the image diff is \ud83d\udc96. You should give it a try! And the undo option is also \ud83d\ude0d"},{"id":"tibimac","tags":"","name":"Thibault","company":"","link":"https:\/\/twitter.com\/Tibimac\/status\/1219299605785063431","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/tibimac","text":"The ability to drag and drop commits in Tower (@gitTower) to re-order commits is so powerful ! I would like to see a guy with his Terminal doing that in less time than Tower \ud83d\ude09 haha"},{"id":"shane_armitage","tags":"","name":"Shane Armitage","company":"","link":"https:\/\/twitter.com\/shane_armitage\/status\/1058050738859892736","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/shane-armitage","text":"I don't typically drag and drop branches in @gittower  but was pleasantly surprised to learn the alt key switches between MERGE and REBASE."},{"id":"peterfriese","tags":"","name":"Peter Friese","company":"","link":"https:\/\/twitter.com\/peterfriese\/status\/1480559489392816128","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/peterfriese","text":"I am a big fan of @gittower. I *love* how it allows you to use drag and drop to merge branches - so intuitive!"},{"id":"rsl","tags":"","name":"Russell Norris","company":"","link":"https:\/\/twitter.com\/rsl\/status\/993606507542564865","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/rsl","text":"ooh i just used @gittower beta to drag-drop squash commits! so nice!"},{"id":"ortwingentz","tags":"","name":"Ortwin Gentz","company":"","link":"https:\/\/twitter.com\/ortwingentz\/status\/1035281002934030336","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/ortwingentz","text":"My favorite feature is rebase via drag and drop. #gittower"},{"id":"evankstone","tags":"","name":"@evankstone","company":"","link":"https:\/\/twitter.com\/evankstone\/status\/1235993334209843200","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/evankstone","text":"Tower is awesome. I use it for 100% of my Git work now (I used to do a mix of CLI\/GUI). But since they introduced interactive rebasing, I cut the cord. So even though SourceTree is free, I found its workflow to be a bit confusing, so you owe it to yourself to try Tower."},{"id":"raftalks","tags":"","name":"@raftalks","company":"","link":"https:\/\/twitter.com\/raftalks\/status\/1232216434136109056","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/raftalks","text":"Today I have tried checking out SourceTree, but felt that @gittower was so much better in many ways! Thank you @gittower for the awesome features."},{"id":"charfish","tags":"","name":"@char_fish","company":"","link":"https:\/\/twitter.com\/char_fish\/status\/1087392834972340224","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/charfish","text":"Changing from @sourcetree to @gittower was something I was really hesitant about. But after using Tower for a while, it\u2019s now obvious how far behind Sourcetree is. Sourcetree doesn\u2019t feel like a polished, well designed app at all. SOOO glad I switched to Tower."},{"id":"mcarriere","tags":"","name":"@mcarriere","company":"","link":"https:\/\/twitter.com\/mcarriere\/status\/1060893227019091968","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/mcarriere","text":"We dealt with our sourcetree issues by switching the entire team to Tower. Pretty great so far."},{"id":"xavier-xia","tags":"","name":"@6r33z3","company":"","link":"https:\/\/twitter.com\/6r33z3\/status\/989549821609566208","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/xavier-xia","text":"After several month suffering from Sourcetree (It's like iTunes on Windows before 2010), today finally switched to Tower and everything is seamless & smooth. Branch merging probably the best on market."},{"id":"violetmaymay","tags":"","name":"@VioletMayMay","company":"","link":"https:\/\/twitter.com\/VioletMayMay\/status\/975121855236399104","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/violetmaymay","text":"So far Tower is nice, but most importantly: so so so much faster on the big necro repo \ud83d\ude35 In particular we\u2019ve had problems with LFS in sourcetree that so far haven\u2019t been an issue as well\u263a\ufe0f"},{"id":"gidgerby","tags":"","name":"@Gidgerby","company":"","link":"https:\/\/twitter.com\/Gidgerby\/status\/958862156648321025","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/gidgerby","text":"I decided to give Git Tower a shot, and so far, so good - the UI hangs that plagued my latter-day SourceTree experience haven\u2019t shown up."},{"id":"redth","tags":"","name":"@Redth","company":"","link":"https:\/\/twitter.com\/redth\/status\/902853257172799488?s=20","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/redth","text":"Tower is an easy switch if you're used to sourcetree. Faster, better."},{"id":"lumaxis","tags":"","name":"@Lumaxis","company":"","link":"https:\/\/twitter.com\/Lumaxis\/status\/874632000048689152","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/lumaxis","text":"Every time I tried using Sourcetree I found it doesn't come even close to @gittower. Never regretted buying Tower!"},{"id":"florianmielke","tags":"","name":"@FlorianMielke","company":"","link":"https:\/\/twitter.com\/FlorianMielke\/status\/1423943568662663168","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/florianmielke","text":"I use @gittower for years. Best Git-App on the planet. PERIOD! \ud83d\udc4a"},{"id":"collin-allen2","tags":"","name":"@command_tab","company":"","link":"https:\/\/twitter.com\/command_tab\/status\/1496675103039389697","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/collin-allen","text":"I love that @gittower is one of those well-designed Mac apps that just gets better and better. I use it heavily all day long, and it\u2019s great \u2014 feels native, behaves predictably, and gets the job done with ease."},{"id":"nickjfarrant","tags":"","name":"@nickjfarrant","company":"","link":"https:\/\/twitter.com\/nickjfarrant\/status\/1448923399540125696","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/nickjfarrant","text":"Confession: I exclusively use a Git GUI. I don\u2019t like command line, I don\u2019t need to feel like more of a developer by using terminal so I don\u2019t. @gittower is my GUI of choice \ud83d\udc4c\ud83c\udffb"},{"id":"cameron-cooke2","tags":"","name":"@camsoft2000","company":"","link":"https:\/\/twitter.com\/camsoft2000\/status\/1438402074648236032","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/cameron-cooke","text":"Can highly recommend @gittower it\u2019s amazing. Well worth the money. The ability to just drag commits to re-order, select a bunch and squash and edit commits makes rebasing so trivial which leads to better quality commits. I\u2019m pretty competent with Git CLI but prefer Tower by miles"},{"id":"dan_spratling","tags":"","name":"@dan_spratling","company":"","link":"https:\/\/twitter.com\/dan_spratling\/status\/1404842566600871936","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/dan_spratling","text":"I exclusively use @gittower and it's amazing. I've been using it for 4 years now and it does everything I need and more."},{"id":"jamesmills","tags":"","name":"@jamesmills","company":"","link":"https:\/\/twitter.com\/jamesmills\/status\/1405349777143967746","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/jamesmills","text":"I use @gittower and I love it."},{"id":"greg_blass2","tags":"","name":"@greg_blass","company":"","link":"https:\/\/twitter.com\/greg_blass\/status\/1524502521389146112","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/greg_blass","text":"Can't recommend @gittower enough. It is the most powerful development tool I use, hands down. I have literally the opposite feeling when using it - that I won't mess anything up."},{"id":"markedmondson","tags":"","name":"@markedmondson","company":"","link":"https:\/\/twitter.com\/markedmondson\/status\/1506995964145704960","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/markedmondson","text":"@gittower just gets better and better - the quantity of really valuable updates is really impressive."},{"id":"timuism","tags":"","name":"@timuism","company":"","link":"https:\/\/twitter.com\/timuism\/status\/1495026081744797703","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/timuism","text":"Started using @gittower a few years ago and love it"},{"id":"kokeroulis","tags":"","name":"@kokeroulis","company":"","link":"https:\/\/twitter.com\/kokeroulis\/status\/1491844601346469895","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/kokeroulis","text":"@gittower easiest implementation of git rebase onto that I have seen..."},{"id":"fabianfett","tags":"","name":"@fabianfett","company":"","link":"https:\/\/twitter.com\/fabianfett\/status\/1486326070500638722","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/fabianfett","text":"I\u2019m a big fan of @gittower . Highly recommend."},{"id":"thejeffbyrnes","tags":"","name":"@thejeffbyrnes","company":"","link":"https:\/\/twitter.com\/thejeffbyrnes\/status\/1464248631792386066","image":"https:\/\/www.git-tower.com\/assets\/img\/testimonials\/thejeffbyrnes","text":"I\u2019ve used @gittower for many many years, and continue to feel it\u2019s the best GUI for Git. Multiple windows or tabs, lots of other good stuff."}]</script><!-- Testimonial Data - END -->
+  <nav class="nav-top-common" aria-label="Main navigation">
+  <div class="nav-top-logo">
+    <a href="https://www.git-tower.com">Tower</a>
+  </div>
+
+  <button class="nav-top-show" aria-expanded="false" aria-controls="nav-top-primary" aria-label="Open navigation menu">Navigation</button>
+
+  <ul class="nav-top-primary" id="nav-top-primary">
+    <li class="nav-top-primary-active">
+      <a href="https://www.git-tower.com/features/easy">Features</a>
+      <ul id="nav-top-features" class="nav-top-secondary">
+        <li>
+          <a id="nav-top-undo" href="https://www.git-tower.com/features/undo">
+            <span class="nav-top-secondary-title">Undo Anything</span>
+            <span class="nav-top-secondary-subline">Just press Cmd+Z</span>
+          </a>
+        </li>
+        <li>
+          <a id="nav-top-dragndrop" href="https://www.git-tower.com/features/drag-and-drop">
+            <span class="nav-top-secondary-title">Drag and Drop</span>
+            <span class="nav-top-secondary-subline">Make the complex effortless</span>
+          </a>
+        </li>
+        <li>
+          <a id="nav-top-integrations" href="https://www.git-tower.com/features/integrations">
+            <span class="nav-top-secondary-title">Integrations</span>
+            <span class="nav-top-secondary-subline">Use your favorite tools</span>
+          </a>
+        </li>
+        <li>
+          <a id="nav-top-tower-workflows" href="https://www.git-tower.com/features/workflows">
+            <span class="nav-top-secondary-title">
+              Tower Workflows
+            </span>
+            <span class="nav-top-secondary-subline">Branching Configurations</span>
+          </a>
+        </li>
+        <li class="nav-top-secondary-seperator" aria-hidden="true"></li>
+        <li>
+          <a href="https://www.git-tower.com/features/all-features">All Features</a>
+        </li>
+        <li>
+          <a href="https://www.git-tower.com/release-notes">Release Notes</a>
+        </li>
+        <li>
+          <a href="https://www.git-tower.com/beta">Join Beta Channel</a>
+        </li>
+      </ul>
+    </li>
+    <li>
+      <a href="https://www.git-tower.com/pro">Tower Pro</a>
+      <ul class="nav-top-secondary">
+        <li>
+          <a id="nav-top-stacked-branches" href="https://www.git-tower.com/pro/stacked-branches">
+            <span class="nav-top-secondary-title">
+              Stacked Branches
+              <span class="nav-top-secondary-pro-label" role="img" aria-label="Pro"></span>
+            </span>
+            <span class="nav-top-secondary-subline">Supercharged workflows</span>
+          </a>
+        </li>
+        <li>
+          <a id="nav-top-custom-workflows" href="https://www.git-tower.com/pro/advanced-custom-workflows">
+            <span class="nav-top-secondary-title">
+              Custom Workflows
+              <span class="nav-top-secondary-pro-label" role="img" aria-label="Pro"></span>
+            </span>
+            <span class="nav-top-secondary-subline">Start and finish instantly</span>
+          </a>
+        </li>
+        <li>
+          <a id="nav-top-graphite" href="https://www.git-tower.com/pro/graphite-workflow">
+            <span class="nav-top-secondary-title">
+              Graphite Support
+              <span class="nav-top-secondary-pro-label" role="img" aria-label="Pro"></span>
+            </span>
+            <span class="nav-top-secondary-subline">Code review at scale</span>
+          </a>
+        </li>
+        <li>
+          <a id="nav-top-branch-management" href="https://www.git-tower.com/pro/automatic-branch-management">
+            <span class="nav-top-secondary-title">
+              Branch Cleanup
+              <span class="nav-top-secondary-pro-label" role="img" aria-label="Pro"></span>
+            </span>
+            <span class="nav-top-secondary-subline">Cut through the branch noise</span>
+          </a>
+        </li>
+        <li>
+          <a id="nav-top-self-hosted" href="https://www.git-tower.com/pro/enterprise-services">
+            <span class="nav-top-secondary-title">
+              Self-Hosted Repos
+              <span class="nav-top-secondary-pro-label" role="img" aria-label="Pro"></span>
+            </span>
+            <span class="nav-top-secondary-subline">Connect your own server</span>
+          </a>
+        </li>
+        <li>
+          <a id="nav-top-merge-detection" href="https://www.git-tower.com/pro/pr-merged-detection">
+            <span class="nav-top-secondary-title">
+              Merge Detection
+              <span class="nav-top-secondary-pro-label" role="img" aria-label="Pro"></span>
+            </span>
+            <span class="nav-top-secondary-subline">Catch merges Git can't see</span>
+          </a>
+        </li>
+      </ul>
+    </li>
+    <li>
+      <a href="https://www.git-tower.com/pricing">Pricing</a>
+    </li>
+    <li class="nav-top-primary-spacer"></li>
+    <li>
+      <a href="https://www.git-tower.com/support/help-center">Support</a>
+      <ul class="nav-top-secondary">
+        <li class="nav-top-tertiary-parent">
+          <a href="https://www.git-tower.com/learn" aria-haspopup="true">Learn Git</a>
+          <ul class="nav-top-tertiary">
+            <li>
+              <a id="nav-top-videos" href="https://www.git-tower.com/learn/git/videos">
+                <span class="nav-top-secondary-title">Video Course</span>
+                <span class="nav-top-secondary-subline">24 episodes</span>
+              </a>
+            </li>
+            <li>
+              <a id="nav-top-book" href="https://www.git-tower.com/learn/git/ebook">
+                <span class="nav-top-secondary-title">Online Book</span>
+                <span class="nav-top-secondary-subline">From novice to master</span>
+              </a>
+            </li>
+            <li class="nav-top-secondary-seperator" aria-hidden="true"></li>
+            <li>
+              <a id="nav-top-cheatsheets" href="https://www.git-tower.com/learn/cheat-sheets">
+                <span class="nav-top-secondary-title">Cheat Sheets</span>
+                <span class="nav-top-secondary-subline">For quick lookup</span>
+              </a>
+            </li>
+            <li>
+              <a id="nav-top-webinar" href="https://www.git-tower.com/learn/git/webinar">
+                <span class="nav-top-secondary-title">Webinar</span>
+                <span class="nav-top-secondary-subline">Learn from a Git professional</span>
+              </a>
+            </li>
+            <li class="nav-top-secondary-seperator" aria-hidden="true"></li>
+            <li>
+              <a id="nav-top-firstaid" href="https://www.git-tower.com/learn/git/first-aid-kit">
+                <span class="nav-top-secondary-title">First Aid Kit</span>
+                <span class="nav-top-secondary-subline">Recover from mistakes</span>
+              </a>
+            </li>
+            <li>
+              <a id="nav-top-advanced" href="https://www.git-tower.com/learn/git/advanced-git-kit">
+                <span class="nav-top-secondary-title">Advanced Git Kit</span>
+                <span class="nav-top-secondary-subline">Dive deeper</span>
+              </a>
+            </li>
+          </ul>
+        </li>
+        <li class="nav-top-secondary-seperator" aria-hidden="true"></li>
+        <li>
+          <a href="https://www.git-tower.com/help/home">Documentation</a>
+        </li>
+        <li>
+          <a href="https://www.git-tower.com/support/contact">Contact Us</a>
+        </li>
+        <li class="nav-top-secondary-seperator" aria-hidden="true"></li>
+        <li>
+          <a href="https://account.git-tower.com" target="_blank">Account Login</a>
+        </li>
+      </ul>
+    </li>
+    <li>
+      <a href="https://www.git-tower.com/blog">Blog</a>
+    </li>
+    <li class="nav-top-download">
+      <span class="visible-on--mac">
+        <a href="https://www.git-tower.com/download/mac" class="button--start-trial analytics--click">Download</a>
+      </span>
+      <span class="visible-on--windows">
+        <a href="https://www.git-tower.com/download/windows" class="button--start-trial analytics--click" data-architecture-adaptive-link="true" data-default-href="https://www.git-tower.com/download/windows" data-arm-href="https://www.git-tower.com/download/windows?arch=arm64">Download</a>
+      </span>
+    </li>
+  </ul>
+</nav>
+
+<main id="main-content" tabindex="-1">
+          
+<header class="outer-container theme--09">
+  <div class="inner-container inner-container--maxwidth">
+    <div class="header__claim">
+      <h1 class="headline">Git Made Easy</h1>      <h3 class="subline">Git can get quite complex, but that doesn't mean it has to be hard. With Tower's intuitive workflow, you can perform many advanced Git operations with just a couple of mouse clicks — and if you mess things up, you can undo and try again!</h3>      <div class="button__wrap">
+  <span class="visible-on--mac">
+    <a class="button button--outlined button--start-trial button--start-trial--header analytics--click" href="https://www.git-tower.com/download/mac">
+      Get Started - It's Free    </a>
+    <br />
+    <span class="note"><div class="os-selection os-selection--single"><a class="visible-on--mac os-switch os-switch--windows selectable" href="javascript:void(0);"><span class="os-switch__prefix">Also available for </span><span class="os-switch__os-string">Windows</span></a><a class="visible-on--windows os-switch os-switch--mac selectable" href="javascript:void(0);"><span class="os-switch__prefix">Also available for </span><span class="os-switch__os-string">macOS</span></a></div></span>
+  </span>
+  <span class="visible-on--windows">
+        <div class="button--split-dropdown" data-architecture-adaptive="true" data-arm-url="https://www.git-tower.com/download/windows?arch=arm64">
+      <a class="button button--outlined button--start-trial button--start-trial--header button__main analytics--click" href="https://www.git-tower.com/download/windows" data-default-href="https://www.git-tower.com/download/windows">
+        <span class="button-text" data-default-text="Get Started - It's Free (x64)">Get Started - It's Free (x64)</span>
+      </a>
+      <button class="button__dropdown-trigger" aria-expanded="false" aria-haspopup="true" aria-label="More download options">
+      </button>
+      <div class="download-dropdown" role="menu">
+        <a href="https://www.git-tower.com/download/windows?arch=arm64" class="download-dropdown__item analytics--click" role="menuitem" data-track="alternative">
+          <span class="dropdown-item-text" data-default-text="Get Started - It's Free (ARM)">Get Started - It's Free (ARM)</span>
+        </a>
+      </div>
+    </div>
+    <br />
+        <span class="note"><div class="os-selection os-selection--single"><a class="visible-on--mac os-switch os-switch--windows selectable" href="javascript:void(0);"><span class="os-switch__prefix">Also available for </span><span class="os-switch__os-string">Windows</span></a><a class="visible-on--windows os-switch os-switch--mac selectable" href="javascript:void(0);"><span class="os-switch__prefix">Also available for </span><span class="os-switch__os-string">macOS</span></a></div></span>
+  </span>
+</div>
+                                  </div>
+          <div class="header__visual">
+        <picture> <source media="(min-width: 900px)" srcset="https://www.git-tower.com/assets/img/illustrations/tower-icon-with-graph.1787161387.svg"> <source media="(min-width: 1px)" srcset="https://www.git-tower.com/assets/img/illustrations/tower-icon.1787161387.svg"> <img src="https://www.git-tower.com/assets/img/illustrations/tower-icon.1787161387.svg" alt="Tower Git Client icon"></picture>      </div>
+      </div>
+</header>
+
+  <section class="outer-container theme--06-08 text-with-media" id="content_text-with-media_ease-of-use">
+  <!-- START: Only placeholder content, real content is injected via JavaScript -->
+    <div class="inner-container inner-container--fullwidth">
+    <div class="text-with-media__text">
+      <div class="text__container"><div class="text__content">
+  <h2>Ease of Use</h2>
+  <p>No need to remember complex commands (and their parameters). Tower makes many advanced actions as easy as drag and drop.</p>
+  <p><a class="link-blue" href="https://www.git-tower.com/features/drag-and-drop/">More about Drag and Drop</a></p>
+</div>
+<div class="testimonial-placeholder" data-id="chris-coyier_2"></div></div>
+    </div>
+  </div>
+  <!-- END -->
+  <script type="text/javascript">
+    if(typeof FN == 'undefined') FN = {};
+    if(typeof FN.contentTextWithMediaItems == 'undefined') FN.contentTextWithMediaItems = [];
+    FN.contentTextWithMediaItems.push({"snippet":"content-blocks\/text-with-media","id":"content_text-with-media_ease-of-use","theme":"06-08","autorotate":true,"navigation":false,"content_mac":{"text":"<div class=\"text__content\">\n  <h2>Ease of Use<\/h2>\n  <p>No need to remember complex commands (and their parameters). Tower makes many advanced actions as easy as drag and drop.<\/p>\n  <p><a class=\"link-blue\" href=\"https:\/\/www.git-tower.com\/features\/drag-and-drop\/\">More about Drag and Drop<\/a><\/p>\n<\/div>\n<div class=\"testimonial-placeholder\" data-id=\"chris-coyier_2\"><\/div>","media":{"items":[{"sources":[{"media":"l","type":"video","src":"<base\/>assets\/product-media\/mac\/easy-create-branch\/easy-create-branch_mac_cropped@1500w.mp4","fallback":["<base\/>assets\/product-media\/mac\/easy-create-branch\/easy-create-branch_mac_cropped@1500w.jpg"]},{"media":"m","type":"video","src":"<base\/>assets\/product-media\/mac\/easy-create-branch\/easy-create-branch_mac_fullwindow@2000w.mp4","fallback":["<base\/>assets\/product-media\/mac\/easy-create-branch\/easy-create-branch_mac_fullwindow@1000w.mp4","<base\/>assets\/product-media\/mac\/easy-create-branch\/easy-create-branch_mac_fullwindow@2000w.jpg"]},{"media":"xs","type":"video","src":"<base\/>assets\/product-media\/mac\/easy-create-branch\/easy-create-branch_mac_mobile@1176w.mp4","fallback":["<base\/>assets\/product-media\/mac\/easy-create-branch\/easy-create-branch_mac_mobile@1176w.jpg"]}]}]}},"content_windows":{"text":"<div class=\"text__content\">\n  <h2>Ease of Use<\/h2>\n  <p>No need to remember complex commands (and their parameters). Tower makes many advanced actions as easy as drag and drop.<\/p>\n  <p><a class=\"link-blue\" href=\"https:\/\/www.git-tower.com\/features\/drag-and-drop\/\">More about Drag and Drop<\/a><\/p>\n<\/div>\n<div class=\"testimonial-placeholder\" data-id=\"chris-coyier_2\"><\/div>","media":{"items":[{"sources":[{"media":"l","type":"video","src":"<base\/>assets\/product-media\/windows\/easy-create-branch\/easy-create-branch_windows_cropped@1500w.mp4","fallback":["<base\/>assets\/product-media\/windows\/easy-create-branch\/easy-create-branch-cropped_windows@1500w.png"]},{"media":"m","type":"video","src":"<base\/>assets\/product-media\/windows\/easy-create-branch\/easy-create-branch_windows_fullwindow@2000w.mp4","fallback":["<base\/>assets\/product-media\/windows\/easy-create-branch\/easy-create-branch_windows_fullwindow@1000w.mp4","<base\/>assets\/product-media\/windows\/easy-create-branch\/easy-create-branch_windows_fullwindow@2000w.png"]},{"media":"xs","type":"video","src":"<base\/>assets\/product-media\/windows\/easy-create-branch\/easy-create-branch_windows_mobile@1070w.mp4","fallback":["<base\/>assets\/product-media\/windows\/easy-create-branch\/easy-create-branch_windows_mobile@1070w.png"]}]}]}}});
+  </script>
+</section>
+<section class="outer-container theme--08-05 text-with-media" id="content_text-with-media_undo">
+  <!-- START: Only placeholder content, real content is injected via JavaScript -->
+    <div class="inner-container inner-container--fullwidth">
+    <div class="text-with-media__text">
+      <div class="text__container"><div class="text__content">
+  <h2>Undo Anything in Git</h2>
+  <p><ul><li>Undo local changes</li><li>Restore old revisions</li><li>Revert commits</li><li>Recover deleted commits</li><li>Undo branch deletions</li></ul></p>
+  <p><a class="link-blue" href="https://www.git-tower.com/features/undo/">More about Undo</a></p>
+</div>
+<div class="testimonial-placeholder" data-id="daniel-schutzsmith"></div></div>
+    </div>
+  </div>
+  <!-- END -->
+  <script type="text/javascript">
+    if(typeof FN == 'undefined') FN = {};
+    if(typeof FN.contentTextWithMediaItems == 'undefined') FN.contentTextWithMediaItems = [];
+    FN.contentTextWithMediaItems.push({"snippet":"content-blocks\/text-with-media","id":"content_text-with-media_undo","theme":"08-05","autorotate":true,"navigation":false,"content_mac":{"media":{"items":[{"sources":[{"media":"l","type":"video","src":"<base\/>assets\/product-media\/mac\/undo-things\/undo-things_mac_cropped_dark@1500w.mp4","fallback":["<base\/>assets\/product-media\/mac\/undo-things\/undo-things_mac_cropped_dark@1500w.jpg"]},{"media":"m","type":"video","src":"<base\/>assets\/product-media\/mac\/undo-things\/undo-things_mac_fullwindow_dark@2000w.mp4","fallback":["<base\/>assets\/product-media\/mac\/undo-things\/undo-things_mac_fullwindow_dark@1000w.mp4","<base\/>assets\/product-media\/mac\/undo-things\/undo-things_mac_fullwindow_dark@2000w.jpg"]},{"media":"xs","type":"video","src":"<base\/>assets\/product-media\/mac\/undo-things\/undo-things_mac_mobile_dark@1012w.mp4","fallback":["<base\/>assets\/product-media\/mac\/undo-things\/undo-things_mac_mobile_dark@1012w.jpg"]}]}]},"text":"<div class=\"text__content\">\n  <h2>Undo Anything in Git<\/h2>\n  <p><ul><li>Undo local changes<\/li><li>Restore old revisions<\/li><li>Revert commits<\/li><li>Recover deleted commits<\/li><li>Undo branch deletions<\/li><\/ul><\/p>\n  <p><a class=\"link-blue\" href=\"https:\/\/www.git-tower.com\/features\/undo\/\">More about Undo<\/a><\/p>\n<\/div>\n<div class=\"testimonial-placeholder\" data-id=\"daniel-schutzsmith\"><\/div>"},"content_windows":{"media":{"items":[{"sources":[{"media":"l","type":"video","src":"<base\/>assets\/product-media\/windows\/undo-commit\/undo-commit_windows_cropped_dark@1500w.mp4","fallback":["<base\/>assets\/product-media\/windows\/undo-commit\/undo-commit_windows_cropped_dark@1500w.jpg"]},{"media":"m","type":"video","src":"<base\/>assets\/product-media\/windows\/undo-commit\/undo-commit_windows_fullwindow_dark@2000w.mp4","fallback":["<base\/>assets\/product-media\/windows\/undo-commit\/undo-commit_windows_fullwindow_dark@1000w.mp4","<base\/>assets\/product-media\/windows\/undo-commit\/undo-commit_windows_fullwindow_dark@2000w.jpg"]},{"media":"xs","type":"video","src":"<base\/>assets\/product-media\/windows\/undo-commit\/undo-commit_windows_mobile_dark@850w.mp4","fallback":["<base\/>assets\/product-media\/windows\/undo-commit\/undo-commit_windows_mobile_dark@850w.jpg"]}]}]},"text":"<div class=\"text__content\">\n  <h2>Undo Anything in Git<\/h2>\n  <p>\n    <ul>\n        <li>Revert commits<\/li>\n        <li>Restore old revisions<\/li>\n        <li>Recover deleted commits<\/li>\n        <li>Undo local changes<\/li>\n        <li>Undo branch deletions<\/li>\n    <\/ul>\n  <\/p>\n  <p><a class=\"link-blue\" href=\"https:\/\/www.git-tower.com\/features\/undo\/\">More about Undo<\/a><\/p>\n<\/div>\n<div class=\"testimonial-placeholder\" data-id=\"daniel-schutzsmith\"><\/div>"}});
+  </script>
+</section>
+<!-- Start of Text-With-Content -->
+<section class="outer-container outer-container--padding text-with-content text-with-content--vertical theme--05" id="easy_clear-visualization">
+
+    <!-- START: Only placeholder content, real content is injected via JavaScript -->
+        <div class="inner-container inner-container--maxwidth">
+      <div class="text-with-content__text">
+                <h2 class="font--white">Clear Visualization, Better Understanding</h2>
+            
+                <p>Tower’s clear visual interface can be incredibly helpful - and make complex scenarios a lot easier to understand.</p>
+              </div>
+    </div>
+    <!-- END -->
+    <script type="text/javascript">
+      if(typeof FN == 'undefined') FN = {};
+      if(typeof FN.contentTextWithContentItems == 'undefined') FN.contentTextWithContentItems = [];
+      FN.contentTextWithContentItems.push({"snippet":"content-blocks\/text-with-content","theme":"05","id":"easy_clear-visualization","layout":"vertical","content_mac":{"text":{"headline":"Clear Visualization, Better Understanding","subline":"Tower\u2019s clear visual interface can be incredibly helpful - and make complex scenarios a lot easier to understand."},"content":[{"media":"l","type":"picture","srcset":"<base\/>assets\/product-media\/mac\/clear-visualization\/clear-visualization_mac_fullwindow@2000w.png 2000w, <base\/>assets\/product-media\/mac\/clear-visualization\/clear-visualization_mac_fullwindow@1000w.png 1000w","src":"<base\/>assets\/product-media\/mac\/clear-visualization\/clear-visualization_mac_fullwindow@1000w.png","class":"shadow"},{"media":"m","type":"picture","srcset":"<base\/>assets\/product-media\/mac\/clear-visualization\/clear-visualization_mac_fullwindow@2000w.png 2000w, <base\/>assets\/product-media\/mac\/clear-visualization\/clear-visualization_mac_fullwindow@1000w.png 1000w","src":"<base\/>assets\/product-media\/mac\/clear-visualization\/clear-visualization_mac_fullwindow@1000w.png","class":"shadow"},{"media":"xs","type":"picture","srcset":"<base\/>assets\/product-media\/mac\/clear-visualization\/clear-visualization_mac_mobile@1000w.png","src":"<base\/>assets\/product-media\/mac\/clear-visualization\/clear-visualization_mac_mobile@1000w.png","class":"shadow"}]},"content_windows":{"text":{"headline":"Clear Visualization, Better Understanding","subline":"Tower\u2019s clear visual interface can be incredibly helpful - and make complex scenarios a lot easier to understand."},"content":[{"media":"l","type":"picture","srcset":"<base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_fullwindow@2000w.png 2000w, <base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_fullwindow@1000w.png 1000w","src":"<base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_fullwindow@1000w.png","class":"shadow"},{"media":"m","type":"picture","srcset":"<base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_fullwindow@2000w.png 2000w, <base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_fullwindow@1000w.png 1000w","src":"<base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_fullwindow@1000w.png","class":"shadow"},{"media":"xs","type":"picture","srcset":"<base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_mobile@1000w.png 1000w, <base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_mobile@500w.png 500w","src":"<base\/>assets\/product-media\/windows\/clear-visualization\/clear-visualization_windows_mobile@500w.png","class":"shadow"}]}});
+    </script>
+
+  </div>
+</section>
+<!-- End of Text-With-Content -->
+<section class="outer-container theme--08-06 text-with-media" id="content_text-with-media_confidence">
+  <!-- START: Only placeholder content, real content is injected via JavaScript -->
+    <div class="inner-container inner-container--fullwidth">
+    <div class="text-with-media__text">
+      <div class="text__container"><div class="text__content">
+  <h2>Use Git with Confidence</h2>
+  <ul>
+    <li>Solve <span class="font--highlight">merge conflicts</span> in an easy, visual way</li>
+    <li>Instantly see which commits haven't been synced with the remote</li>
+    <li>Stop wrestling with SSH keys, usernames, passwords, and authentication tokens</li>
+  </ul>
+</div>
+<div class="testimonial-placeholder" data-id="felix-krause_1"></div></div>
+    </div>
+  </div>
+  <!-- END -->
+  <script type="text/javascript">
+    if(typeof FN == 'undefined') FN = {};
+    if(typeof FN.contentTextWithMediaItems == 'undefined') FN.contentTextWithMediaItems = [];
+    FN.contentTextWithMediaItems.push({"snippet":"content-blocks\/text-with-media","id":"content_text-with-media_confidence","theme":"08-06","autorotate":true,"navigation":false,"content_mac":{"text":"<div class=\"text__content\">\n  <h2>Use Git with Confidence<\/h2>\n  <ul>\n    <li>Solve <span class=\"font--highlight\">merge conflicts<\/span> in an easy, visual way<\/li>\n    <li>Instantly see which commits haven't been synced with the remote<\/li>\n    <li>Stop wrestling with SSH keys, usernames, passwords, and authentication tokens<\/li>\n  <\/ul>\n<\/div>\n<div class=\"testimonial-placeholder\" data-id=\"felix-krause_1\"><\/div>","media":{"items":[{"sources":[{"media":"l","type":"video","src":"<base\/>assets\/product-media\/mac\/conflict-wizard\/conflict-wizard_mac_cropped_dark@1500w.mp4","fallback":["<base\/>assets\/product-media\/mac\/conflict-wizard\/conflict-wizard_mac_cropped_dark@1500w.jpg"]},{"media":"m","type":"video","src":"<base\/>assets\/product-media\/mac\/conflict-wizard\/conflict-wizard_mac_fullwindow_dark@2000w.mp4","fallback":["<base\/>assets\/product-media\/mac\/conflict-wizard\/conflict-wizard_mac_fullwindow_dark@1000w.mp4","<base\/>assets\/product-media\/mac\/conflict-wizard\/conflict-wizard_mac_fullwindow_dark@2000w.jpg"]},{"media":"xs","type":"video","src":"<base\/>assets\/product-media\/mac\/conflict-wizard\/conflict-wizard_mac_mobile_dark@1000w.mp4","fallback":["<base\/>assets\/product-media\/mac\/conflict-wizard\/conflict-wizard_mac_mobile_dark@1000w.jpg"]}]}]}},"content_windows":{"text":"<div class=\"text__content\">\n  <h2>Use Git with Confidence<\/h2>\n  <ul>\n    <li>Solve <span class=\"font--highlight\">merge conflicts<\/span> in an easy, visual way<\/li>\n    <li>Instantly see which commits haven't been synced with the remote<\/li>\n    <li>Stop wrestling with SSH keys, usernames, passwords, and authentication tokens<\/li>\n  <\/ul>\n<\/div>\n<div class=\"testimonial-placeholder\" data-id=\"felix-krause_1\"><\/div>","media":{"items":[{"sources":[{"media":"l","type":"video","src":"<base\/>assets\/product-media\/windows\/conflict-wizard\/conflict-wizard_windows_cropped_dark@1500w.mp4","fallback":["<base\/>assets\/product-media\/windows\/conflict-wizard\/conflict-wizard_windows_cropped_dark@1500w.jpg"]},{"media":"m","type":"video","src":"<base\/>assets\/product-media\/windows\/conflict-wizard\/conflict-wizard_windows_fullwindow_dark@2000w.mp4","fallback":["<base\/>assets\/product-media\/windows\/conflict-wizard\/conflict-wizard_windows_fullwindow_dark@1000w.mp4","<base\/>assets\/product-media\/windows\/conflict-wizard\/conflict-wizard_windows_fullwindow_dark@2000w.jpg"]},{"media":"xs","type":"video","src":"<base\/>assets\/product-media\/windows\/conflict-wizard\/conflict-wizard_windows_mobile_dark@850w.mp4","fallback":["<base\/>assets\/product-media\/windows\/conflict-wizard\/conflict-wizard_windows_mobile_dark@850w.jpg"]}]}]}}});
+  </script>
+</section>
+<!-- Start of Learn / Docs / Support -->
+<section class="outer-container outer-container--padding learn-docs-support theme--06">
+  <div class="inner-container inner-container--maxwidth">
+    
+    <h2 class="font--white text--centered">Learning Material + Documentation + Customer Support</h2>
+    <p class="subline font--blue-02 text--centered">Help is always right at hand.</p>
+    <div class="item-container">
+      <div class="item item--learn">
+        <div class="item__image"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 135 135">
+  <style>
+    .st5{fill:none;stroke:#fff;stroke-width:3;stroke-miterlimit:10}
+  </style>
+  <path d="M14.8 104.2v-90h105.5v90" fill="none" stroke="#00caf4" stroke-width="2.99" stroke-miterlimit="10"/>
+  <path d="M41.7 116.2H25.8c-6.1 0-11-4.9-11-11s4.9-11 11-11h94.5v22H60" fill="none" stroke="#00caf4" stroke-width="3" stroke-miterlimit="10"/>
+  <path d="M60.6 105.1v18.6l-9.1-5.4-9.9 5v-18.6" fill="none" stroke="#ffc600" stroke-width="3.01" stroke-miterlimit="10"/>
+  <path d="M119 104.2H28.5" fill="none" stroke="#00caf4" stroke-width="3" stroke-linecap="round" stroke-miterlimit="10"/>
+  <path d="M23.1 14.3v80.3" fill="none" stroke="#00caf4" stroke-width="2" stroke-linecap="round" stroke-miterlimit="10"/>
+  <circle class="st5" cx="83.4" cy="44" r="4"/>
+  <circle class="st5" cx="69.8" cy="31.7" r="4"/>
+  <circle class="st5" cx="69.8" cy="76.7" r="4"/>
+  <path class="st5" d="M69.8 72.3c0-2.6 1-5 2.8-6.8l8.1-8.1c1.8-1.8 2.8-4.3 2.8-6.8v-2.2"/>
+  <path d="M69.8 35.2v37" fill="none" stroke="#fff" stroke-width="3.01" stroke-miterlimit="10"/>
+  <path class="st5" d="M58.9 45.2v4.3c0 4.1 2.3 7.9 5.9 9.8 3.1 1.5 4.9 4.4 4.9 7.8v6.3"/>
+  <circle class="st5" cx="58.9" cy="42.3" r="4"/>
+</svg></div>
+        <p class="item__text">A step-by-step guide for beginners helps you <a class="link-blue" href="https://www.git-tower.com/learn">learn Git</a> with Tower.</p>
+      </div>
+      <div class="item item--docs">
+        <div class="item__image"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 135 135">
+  <style>  .st1,.st4,.st5,.st6{fill:none;stroke:#00caf4;stroke-width:2;stroke-miterlimit:10}.st4,.st5,.st6{stroke:#fffef9;stroke-width:1.95}.st5,.st6{stroke-width:2;stroke-linecap:round}.st6{stroke-width:1.97}
+  </style>
+  <path d="M7.8 19H2.5v101h58.7v2h12.6v-2h58.7V19h-5.6" fill="none" stroke="#00caf4" stroke-width="2.98" stroke-miterlimit="10"/>
+  <path class="st1" d="M73 116.1v5.8m-11-5.8v5.8"/>
+  <path d="M126 13.5v98H90.8c-6.9 0-13.7 1.2-20.1 3.7l-3.3 1.3-3.3-1.1c-6.4-2.5-13.2-3.7-20.1-3.7H9v-98h35.2c6.9 0 13.7 1.2 20.1 3.7l3.3 1.2 3.3-1.2c6.4-2.5 13.2-3.7 20.1-3.7l35-.2m2-2H90.8c-7.1 0-14.1 1.3-20.8 3.8l-2.6 1-2.6-.8c-6.6-2.6-13.6-3.9-20.7-3.9H7v102h37.2c6.6 0 13.2 1.2 19.3 3.6h.1l3.3 1.1.7.2.7-.3 3.3-1.3c6.2-2.4 12.7-3.6 19.3-3.5H128V11.5z" fill="#00caf4"/>
+  <path class="st1" d="M67.6 16.5v100"/>
+  <path d="M84 32.5h30v11H84v-11z" fill="none" stroke="#ffc600" stroke-width="1.95" stroke-miterlimit="10"/>
+  <path class="st4" d="M84 70.5h30v11H84v-11z"/>
+  <path class="st5" d="M114 49.5H84m30 47H84"/>
+  <path class="st6" d="M107 56.5H84m23 33H84"/>
+  <path d="M111 63.5H84" fill="none" stroke="#fffef9" stroke-width="2.01" stroke-linecap="round" stroke-miterlimit="10"/>
+  <path class="st4" d="M52 49.5H22v-11h30v11z"/>
+  <path d="M22 70.5h11.9v11H22v-11zm18.1 0H52v11H40.1v-11z" fill="none" stroke="#ffc600" stroke-width="2.07" stroke-miterlimit="10"/>
+  <path class="st6" d="M22 32.5h25"/>
+  <path class="st5" d="M52 56.5H22m30 32H22"/>
+  <path d="M42 63.5H22" fill="none" stroke="#fffef9" stroke-width="1.99" stroke-linecap="round" stroke-miterlimit="10"/>
+</svg></div>
+        <p class="item__text">An in-depth help book goes way beyond ordinary "documentation".</p>
+      </div>
+      <div class="item item--support">
+        <div class="item__image"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 135 135">
+  <style>
+    .st4{fill:none;stroke-miterlimit:10;stroke-width:2;stroke-linecap:round;stroke:#fffef9}
+  </style>
+  <path d="M17.8 41L5 48.9v72.9h124.7V48.9l-11.6-7.2M89.3 23.8L72 13.1c-2.7-1.7-6.2-1.7-8.9 0L45.5 24" fill="none" stroke-miterlimit="10" stroke="#00caf4" stroke-width="2.983"/>
+  <path d="M18 57.9V24.1h100v33.1" fill="none" stroke="#fffef9" stroke-width="3" stroke-miterlimit="10"/>
+  <circle cx="37.5" cy="42.3" r="6.5" fill="none" stroke="#ffc600" stroke-width="1.96" stroke-miterlimit="10"/>
+  <path class="st4" d="M55.3 38.3h48.2"/>
+  <path d="M55 47.8h25" fill="none" stroke="#fffef9" stroke-width="1.98" stroke-linecap="round" stroke-miterlimit="10"/>
+  <path d="M86 47.8h18" fill="none" stroke="#fffef9" stroke-width="1.99" stroke-linecap="round" stroke-miterlimit="10"/>
+  <path class="st4" d="M55 55.8h11.7m5.5 0H98"/>
+  <path d="M55 64.8h23" fill="none" stroke="#fffef9" stroke-width="2.01" stroke-linecap="round" stroke-miterlimit="10"/>
+  <path d="M64.2 85L4.7 121.7m125.3 0L71.2 85.3" stroke="#00caf4" stroke-width="2" fill="none" stroke-miterlimit="10"/>
+  <path d="M129.7 49.8L67.4 86.2 5 49.8" fill="none" stroke="#00caf4" stroke-width="2.983" stroke-miterlimit="10"/>
+</svg></div>
+        <p class="item__text">Our friendly support staff is always ready to help.</p>
+      </div>
+    </div>
+    
+  </div>
+</section>
+<!-- End of Learn / Docs / Support -->
+<!-- Start of Customers -->
+<section class="outer-container customers theme--05">
+  <div class="inner-container inner-container--maxwidth">
+
+    <h2 class="font--white text--centered">Tower is the tool of choice<br>for over 100,000 users worldwide</h2>
+    <div class="customers__logos">
+      <svg class="customer-logo" id="customer-icon--amazon" width="83" height="25" viewBox="0 0 83 25">
+  <g id="Page-1" fill="none" fill-rule="evenodd">
+    <g id="Customer-Logos" transform="translate(-237 -88)">
+      <g id="Group-16" transform="translate(237 75)">
+        <g id="Page-1" transform="translate(.76 13)">
+          <path d="M56.492 10.793c-1.456-.819-3.153-1.06-4.757-1.021l4.32-6.168c.401-.556.627-.905.629-1.173V.836a.465.465 0 0 0-.482-.47h-8.34a.46.46 0 0 0-.472.471v1.862a.464.464 0 0 0 .483.468l4.357.001-5.005 7.18c-.305.462-.31.979-.31 1.28v1.888c0 .273.303.586.593.43 2.84-1.507 6.246-1.36 8.813-.015.314.165.614-.153.614-.426v-1.986c-.025-.268-.114-.542-.443-.726zm-9.327 5.435c-.42.295-.348.7.118.645 1.535-.184 4.953-.595 5.562.186.61.781-.677 3.995-1.253 5.431-.173.433.2.61.593.28 2.556-2.137 3.217-6.616 2.693-7.264-.52-.64-4.986-1.193-7.713.722zM81.322 1.661C80.612.537 79.498.126 78.362.126c-1.753 0-2.748.85-3.458 2.631h-.048V.764A.483.483 0 0 0 74.405.4h-2.354a.48.48 0 0 0-.488.426l.005 13.027c0 .25.2.453.455.47h2.528c.27 0 .49-.21.494-.47V6.84c0-.877.048-1.672.403-2.466.284-.63.853-1.042 1.469-1.042 1.753 0 1.587 2.083 1.587 3.508v7.071a.481.481 0 0 0 .452.411h2.543c.252 0 .458-.179.487-.41V5.716c0-1.262 0-3.014-.664-4.056zM50.171 18.209c-5.341 2.264-11.144 3.36-16.424 3.36-7.827 0-15.404-2.147-21.532-5.712-.536-.313-.934.239-.487.64 5.679 5.129 13.183 8.21 21.518 8.21 5.947 0 12.854-1.87 17.617-5.386.789-.581.113-1.453-.692-1.112zm13.694-6.299c-1.99 0-1.967-3.397-1.967-4.988 0-1.589.118-4.138 1.99-4.138.805 0 1.373.356 1.658 1.261.33 1.041.378 2.357.378 3.454 0 1.67-.093 4.411-2.06 4.411zm0-11.784c-3.672 0-5.71 3.151-5.71 7.208 0 4.028 2.014 7.263 5.71 7.263 3.552 0 5.801-3.153 5.801-7.126 0-4.111-2.035-7.345-5.801-7.345zM14.428 14.322h2.538a.48.48 0 0 0 .49-.469V6.95c0-1.507-.071-3.59 1.753-3.59 1.8 0 1.564 2.137 1.564 3.59l.002 6.903c0 .25.2.453.455.47h2.535c.27 0 .489-.21.489-.47V6.95c0-.74-.023-1.836.237-2.495.261-.657.9-1.067 1.517-1.067.733 0 1.301.246 1.491 1.123.118.52.07 1.891.07 2.44l.002 6.902c0 .25.2.453.455.47h2.535c.27 0 .489-.21.489-.47l.002-8.219c0-1.397.166-2.987-.639-4.083-.71-.987-1.872-1.425-2.938-1.425-1.492 0-2.889.767-3.505 2.412C23.26.893 22.264.126 20.678.126c-1.564 0-2.724.767-3.34 2.412h-.048V.837A.478.478 0 0 0 16.83.4h-2.364a.478.478 0 0 0-.49.47l-.002 13.023a.48.48 0 0 0 .454.43zm-6.95-6.22c0 .99.023 1.813-.476 2.692-.403.714-1.044 1.154-1.756 1.154-.973 0-1.543-.743-1.543-1.84 0-2.162 1.938-2.555 3.775-2.555v.55zm4.518 3.833c-.464-.64-.959-1.162-.959-2.351V5.63c0-1.675.12-3.213-1.115-4.367C8.949.33 7.334 0 6.1 0 3.686 0 .99.901.425 3.885c-.059.317.172.484.379.53l2.46.267c.23-.012.396-.238.44-.467.212-1.027 1.072-1.523 2.04-1.523.522 0 1.116.191 1.424.66.357.52.31 1.234.31 1.84v.328c-1.473.166-3.395.274-4.772.88C1.116 7.086 0 8.487 0 10.547c0 2.637 1.661 3.955 3.799 3.955 1.802 0 2.79-.426 4.182-1.845.46.667.612.991 1.455 1.692.188.1.432.09.6-.06l.006.006c.507-.45 1.427-1.25 1.945-1.685.208-.17.17-.444.009-.675zM40.74 8.103c0 .988.024 1.812-.474 2.691-.404.714-1.044 1.154-1.756 1.154-.974 0-1.545-.743-1.545-1.84 0-2.162 1.939-2.555 3.775-2.555v.55zm0-2.583c-1.471.166-3.394.274-4.77.88-1.59.686-2.706 2.087-2.706 4.147 0 2.637 1.661 3.955 3.797 3.955 1.804 0 2.791-.426 4.184-1.845.46.667.612.991 1.454 1.692.19.1.432.09.6-.06l.005.006c.507-.45 1.428-1.25 1.947-1.685.206-.17.17-.444.009-.675-.465-.64-.959-1.162-.959-2.351V5.63c0-1.675.12-3.213-1.116-4.367C42.214.33 40.6 0 39.364 0c-2.415 0-5.108.901-5.674 3.885-.06.317.171.484.379.53l2.46.267c.229-.012.396-.238.44-.467.212-1.027 1.072-1.523 2.039-1.523.523 0 1.116.191 1.425.66.355.52.308 1.234.308 1.84v.328z" id="Fill-1" fill="#57B9E9" />
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>
+      <svg class="customer-logo" id="customer-icon--ebay" width="82" height="33" viewBox="0 0 81.96 32.86">
+    <path d="M70.6 21.92l-7-14h-4.8l9.51 18-3.67 6.93h4.64L82 8h-4.38zM50.26 24s-4.14 0-4.38-3.3c-.26-3.53 6.37-3.32 6.37-3.32h4.68s.76 6.72-6.67 6.62zm-12.65-6.92s.11 6.68-6.4 6.76-6.4-6.9-6.4-6.9-.24-6.72 6.39-6.89 6.41 7.03 6.41 7.03zm-33.3-1.87S4.6 10 10.5 10s5.87 5.23 5.87 5.23zm56.75-.62c-.11-2.06.08-7-8.81-7.39 0 0-8.53-.78-9.41 5.57h4.36s.34-2.91 4.8-2.83c4.19.08 4.95 2.14 4.93 4.66h-4.79c-2.1 0-9.32.24-10.34 4.5A12.67 12.67 0 0 0 42 17c.12-6.24-4.66-9.73-9.81-9.75s-7.37 3.05-7.37 3.05V0h-4.16l.05 16.45c-.15-3-1.51-9.19-10.11-9.19C.35 7.25 0 15.23 0 17.3c0 0-.5 9.33 10.35 9.33 9.31 0 9.77-5.85 9.77-5.85h-4.28S15 24 10.36 23.92C4.4 23.81 4.17 18 4.17 18h16.52v-.37 4.12s0 2.54-.18 4.21h4l.17-2.44s1.87 3.08 7.34 3.08c4.75 0 8.62-2.54 9.64-7.3v.14c-.84 5.47 4 7.18 7.87 7.16s6-1.17 7.62-3.22l.19 2.62h3.8s-.09-1.42-.08-4.24.09-5.4 0-7.17z" fill="#57b9e9" data-name="Page-1"/>
+</svg>
+      <svg class="customer-logo" id="customer-icon--google" width="96" height="30" viewBox="0 0 96 30">
+  <path d="M65.78 20.19c-2.29 0-4-2-4-4.58s1.74-4.58 4-4.58 4 2 4 4.61-1.73 4.55-4 4.55zm3.81-10.44h-.11a5.26 5.26 0 0 0-4-1.7 7.35 7.35 0 0 0-7.06 7.56 7.36 7.36 0 0 0 7.06 7.56 5.19 5.19 0 0 0 4-1.71h.11v1.05c0 2.89-1.54 4.44-4 4.44a4.19 4.19 0 0 1-3.81-2.7l-2.89 1.2a7.2 7.2 0 0 0 6.7 4.46c3.89 0 7.18-2.29 7.18-7.87V8.44h-3.18zM49.32 20.19a4.37 4.37 0 0 1-4.27-4.58 4.28 4.28 0 1 1 8.54 0 4.37 4.37 0 0 1-4.27 4.58zm0-12.14a7.45 7.45 0 0 0-7.58 7.56 7.59 7.59 0 0 0 15.17 0 7.45 7.45 0 0 0-7.59-7.56zm26 15.12h3.27V.31h-3.25zm13.14-12.28a3 3 0 0 1 2.86 1.67l-6.83 2.82c0-3.18 2.25-4.49 3.97-4.49zm.23 9.3A3.85 3.85 0 0 1 85 17.9l10.11-4.17-.33-.86c-.63-1.69-2.55-4.82-6.47-4.82a7.18 7.18 0 0 0-7.13 7.56 7.38 7.38 0 0 0 7.49 7.56A7.53 7.53 0 0 0 95 19.83l-2.58-1.72a4.31 4.31 0 0 1-3.73 2.08zm-56.28 0a4.37 4.37 0 0 1-4.27-4.58 4.28 4.28 0 1 1 8.53 0 4.36 4.36 0 0 1-4.26 4.58zm0-12.14a7.45 7.45 0 0 0-7.59 7.56 7.59 7.59 0 0 0 15.17 0 7.45 7.45 0 0 0-7.58-7.56zM11.9 10.66v3.2h7.65a6.76 6.76 0 0 1-1.74 4 7.83 7.83 0 0 1-5.91 2.34 8.4 8.4 0 0 1-8.39-8.51 8.4 8.4 0 0 1 8.39-8.48 8.19 8.19 0 0 1 5.77 2.29l2.25-2.25A11.08 11.08 0 0 0 11.9 0 11.88 11.88 0 0 0 0 11.71a11.88 11.88 0 0 0 11.9 11.71 10.7 10.7 0 0 0 8.17-3.28 10.59 10.59 0 0 0 2.77-7.48 10 10 0 0 0-.17-2z" fill="#57b9e9"/>
+</svg>      <svg class="customer-logo" id="customer-icon--apple" width="37" height="45" viewBox="0 0 36.62 44.92">
+  <defs>
+    <mask id="a" x="0" y="0" width="36.62" height="44.92" maskUnits="userSpaceOnUse">
+      <path fill="#fff" d="M0 0h36.62v44.92H0V0z"/>
+    </mask>
+  </defs>
+  <g mask="url(#a)" data-name="Page-1">
+    <path d="M30.57 23.81a9.77 9.77 0 0 1 4.86-8.52 10 10 0 0 0-8.8-4.49c-3.67 0-6.49 2.09-8 2.09-1.76 0-4.4-2-7.81-2C5.58 10.93 0 15.61 0 24.55s6.59 20.37 11.81 20.37c1.82 0 4.62-1.83 7.44-1.83s4.8 1.76 7.43 1.76c5.71 0 9.94-11.9 9.94-11.9a10 10 0 0 1-6-9.14M24.94 7.18A9.59 9.59 0 0 0 27.26 0a9.61 9.61 0 0 0-7 3.91c-2.63 3.46-2 6.42-2 6.42s3.56.61 6.69-3.15" fill="#57b9e9"/>
+  </g>
+</svg>      <svg class="customer-logo" id="customer-icon--ibm" width="75" height="30" viewBox="0 0 75 30">
+  <defs>
+    <style>
+      .cls-2{fill:#57b9e9}
+    </style>
+  </defs>
+  <g id="Page-1-2" data-name="Page-1">
+    <path id="Fill-1" class="cls-2" d="M14.49 23.82H.07v2.12h14.42v-2.12"/>
+    <g class="cls-3">
+      <path id="Fill-3" class="cls-2" d="M4.1 14.04h6.2v-2.12H4.1v2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-5" class="cls-2" d="M.07 2.13h14.44V0H.07v2.13z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-6" class="cls-2" d="M37.15 2.13A8.27 8.27 0 0 0 32.22 0H16.38v2.13h20.77"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-7" class="cls-2" d="M4.11 22.02h6.19v-2.11H4.11v2.11z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-8" class="cls-2" d="M.07 6.12h14.44V4H.07v2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-9" class="cls-2" d="M16.38 6.12h23A5.59 5.59 0 0 0 38.77 4H16.38z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-10" class="cls-2" d="M10.3 15.91H4.11V18h6.19z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-11" class="cls-2" d="M4.1 10.13h6.2V8.01H4.1v2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-12" class="cls-2" d="M.07 27.81v2.13H14.5v-2.11H.07"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-13" class="cls-2" d="M45.39 10.13h10.98L55.62 8H45.39v2.13z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-14" class="cls-2" d="M38.44 18a10.28 10.28 0 0 0-1.9-2.12h-16V18h17.9"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-15" class="cls-2" d="M39.55 8H33v2.13h6.29A6.74 6.74 0 0 0 39.55 8"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-16" class="cls-2" d="M70.15 8H59.82l-.76 2.13 11.09-.01V8z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-17" class="cls-2" d="M41.32 6.13h13.63L54.2 4H41.32v2.13z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-18" class="cls-2" d="M20.55 22h6.29v-2.11h-6.29z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-19" class="cls-2" d="M20.56 10.13h6.19V8h-6.19v2.13z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-20" class="cls-2" d="M20.55 14h16a8 8 0 0 0 1.76-2.12H20.56V14"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-22" class="cls-2" d="M41.32 25.94h10.16v-2.12H41.32v2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-23" class="cls-2" d="M64.08 18.03h6.06v-2.12h-6.06v2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-24" class="cls-2" d="M70.15 14v-2.08H58.43l-.7 2-.72-2H45.39V14h6.1v-1.58l.56 1.58h11.46l.56-1.62V14z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-25" class="cls-2" d="M64.08 22.02h6.06v-2.11h-6.06v2.11z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-26" class="cls-2" d="M53.46 18h8.65s.71-2.12.74-2.12H52.7l.76 2.12"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-27" class="cls-2" d="M64.08 29.94h10.15v-2.13H64.08v2.13z"/>
+    </g>
+    <g class="cls-5">
+      <path id="Fill-28" class="cls-2" d="M62.65 0l-.77 2.13h12.35V0H62.65z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-29" class="cls-2" d="M54.85 22h5.84s.75-2.13.76-2.12H54.1l.75 2.11"/>
+    </g>
+    <g class="cls-5">
+      <path id="Fill-30" class="cls-2" d="M60.47 6.12h13.76V4h-13l-.75 2.11"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-31" class="cls-2" d="M64.08 25.94h10.15v-2.12H64.08v2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-32" class="cls-2" d="M57.63 29.93h.29l.74-2.12h-1.75l.72 2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-33" class="cls-2" d="M41.32 29.94h10.16v-2.13H41.32v2.13z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-34" class="cls-2" d="M53.53 2.13L52.78 0H41.32v2.13h12.2"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-35" class="cls-2" d="M33.06 19.91V22h6.66a6.14 6.14 0 0 0-.39-2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-36" class="cls-2" d="M56.22 25.94h3.1l.72-2.12h-4.56l.74 2.12z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-37" class="cls-2" d="M16.38 25.94h22.27a4.56 4.56 0 0 0 .81-2.12H16.38z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-38" class="cls-2" d="M45.39 22.02h6.09v-2.11h-6.09v2.11z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-39" class="cls-2" d="M16.38 29.93h15.51a8 8 0 0 0 5.38-2.12H16.38z"/>
+    </g>
+    <g class="cls-3">
+      <path id="Fill-40" class="cls-2" d="M45.39 15.91V18h6.1v-2.12z"/>
+    </g>
+  </g>
+</svg>
+      <svg class="customer-logo" id="customer-icon--microsoft" width="109" height="21" viewBox="0 0 109 21">
+  <path d="M73.47 13.15c-1-.56-2.08-.83-3-1.45A1.43 1.43 0 0 1 70 10a1.76 1.76 0 0 1 1.58-.87 5.81 5.81 0 0 1 3.47 1v-3a8.66 8.66 0 0 0-4.56-.48 4.92 4.92 0 0 0-3.29 2 4.22 4.22 0 0 0-.5 3.35 3.44 3.44 0 0 0 1.24 1.88 13.41 13.41 0 0 0 2.85 1.45 4.2 4.2 0 0 1 1.44.95 1.31 1.31 0 0 1-.4 1.87 3.83 3.83 0 0 1-2.27.21 7.18 7.18 0 0 1-3-1.29v3.19a9.63 9.63 0 0 0 3.35.77 6.32 6.32 0 0 0 4.6-1.39 4 4 0 0 0 .85-4.64 4.27 4.27 0 0 0-1.89-1.8m14.35 2a4.41 4.41 0 0 1-.85 2 3 3 0 0 1-1.93 1 4.32 4.32 0 0 1-2.36-.2 3.34 3.34 0 0 1-1.74-1.82 6.57 6.57 0 0 1-.39-3 4.78 4.78 0 0 1 1-2.75A3.4 3.4 0 0 1 84 9.25a3.6 3.6 0 0 1 2.6.75 3.75 3.75 0 0 1 1.19 2.19 8.35 8.35 0 0 1 0 2.95M88 7.29a8.49 8.49 0 0 0-4.9-.67 6.85 6.85 0 0 0-3.65 1.56 6.79 6.79 0 0 0-2.17 4.24 9 9 0 0 0 .52 4.79 6.09 6.09 0 0 0 3.35 3.26 8.86 8.86 0 0 0 4.65.39 6.45 6.45 0 0 0 4.06-2.37 7.59 7.59 0 0 0 1.49-4.7 8.81 8.81 0 0 0-.51-3.3A5.91 5.91 0 0 0 88 7.29m20.63 2.27V6.88h-3.27V2.75c-1.09.33-2.17.68-3.26 1v3.14h-4.9a20.37 20.37 0 0 1 .06-2.47 2 2 0 0 1 1.1-1.54 3.2 3.2 0 0 1 2.44.22V.27a6 6 0 0 0-4.8.55 4.46 4.46 0 0 0-1.86 2.54 14.29 14.29 0 0 0-.23 3.52H91.6v2.65h2.3v11.13h3.3V9.54h4.8v7.09a4.9 4.9 0 0 0 .93 3.15 3.7 3.7 0 0 0 2.6 1.2 6.49 6.49 0 0 0 3-.47v-2.7a2.47 2.47 0 0 1-2.51.23 1.65 1.65 0 0 1-.71-1.31c-.1-.86 0-1.71-.06-2.57V9.54h3.28m-47.36 6.89A3 3 0 0 1 59.55 18a4.41 4.41 0 0 1-2.69.12 3.28 3.28 0 0 1-2.07-1.71 6.38 6.38 0 0 1-.5-3.45 4.41 4.41 0 0 1 1.27-2.88 3.82 3.82 0 0 1 4.94.08 4.52 4.52 0 0 1 1.14 2.88 7.17 7.17 0 0 1-.47 3.37m.31-9.25a8.79 8.79 0 0 0-4.73-.56 6.63 6.63 0 0 0-4.34 2.32 7.41 7.41 0 0 0-1.52 4.22 7.89 7.89 0 0 0 1.21 5.15 6.27 6.27 0 0 0 3.81 2.49 9.35 9.35 0 0 0 3.87 0 6.38 6.38 0 0 0 3.79-2.33 7.42 7.42 0 0 0 1.45-4 9.1 9.1 0 0 0-.66-4.35 5.85 5.85 0 0 0-2.88-2.92m-51 8.47c-.4-.94-.76-1.9-1.14-2.85L4.8 1.42H0v19.25h3.14V5.83c.06.09.11.19.17.29Q6.26 13.4 9.2 20.68h2.37c1.9-4.85 3.84-9.68 5.75-14.53a3.07 3.07 0 0 1 .17-.31v14.85h3.33V1.44H16.2c-1.91 4.75-3.86 9.48-5.78 14.22m13.49 5h3.28V6.87h-3.28v13.8M25.3 1a1.91 1.91 0 0 0-1.67 1.88 1.85 1.85 0 0 0 1.53 1.83 2.07 2.07 0 0 0 2.2-.92 1.89 1.89 0 0 0-.23-2.14A2 2 0 0 0 25.3 1m11.15 8.27a5.24 5.24 0 0 1 3.77 1.15V7.27a3.52 3.52 0 0 0-.94-.39 9.06 9.06 0 0 0-4.9 0 6.62 6.62 0 0 0-3.67 2.59 8.39 8.39 0 0 0-1.3 5.12 6.89 6.89 0 0 0 2 4.62A6.71 6.71 0 0 0 35.72 21a8 8 0 0 0 4.51-.93v-3a6.33 6.33 0 0 1-3 1.21 3.89 3.89 0 0 1-4.42-3.66 5.27 5.27 0 0 1 .87-3.82 3.84 3.84 0 0 1 2.74-1.52m11.19-2.19a4.2 4.2 0 0 0-1.7 2.16V6.88h-3.26v13.79h3.26v-6.6a6 6 0 0 1 .47-2.81 2.71 2.71 0 0 1 2.06-1.65 3.5 3.5 0 0 1 2.23.52v-3.3a3.71 3.71 0 0 0-3.07.26" fill="#57b9e9"/>
+</svg>      <svg class="customer-logo" id="customer-icon--facebook" width="42" height="42" viewBox="0 0 42 42">
+  <g>
+    <path d="M39 0H2.28A2.28 2.28 0 0 0 0 2.28V39a2.28 2.28 0 0 0 2.28 2.27H22v-16h-5.35V19H22v-4.55c0-5.32 3.26-8.22 8-8.22a46.29 46.29 0 0 1 4.8.24V12h-3.3c-2.58 0-3.08 1.23-3.08 3v4h6.16l-.8 6.23h-5.33v16H39A2.27 2.27 0 0 0 41.23 39V2.28A2.28 2.28 0 0 0 39 0" fill="#57b9e9"/>
+  </g>
+</svg>      <svg class="customer-logo" id="customer-icon--tripadvisor" width="66" height="43" viewBox="0 0 66 43">
+  <g>
+    <path d="M17.92 38.09a1.81 1.81 0 0 1-2.7.14 1.86 1.86 0 0 1-.53-1.34v-1.11a2.5 2.5 0 0 1 .18-.8 1.77 1.77 0 0 1 .65-.82 1.73 1.73 0 0 1 1-.34 1.67 1.67 0 0 1 1.39.67 2.79 2.79 0 0 1 .53 1.74 2.92 2.92 0 0 1-.52 1.86zm-1-5.51a2.78 2.78 0 0 0-2.4 1.2l-.05-1h-1.29v.09c0 .59.05 1.35.05 2.27v7.58h1.45v-3.6a2.33 2.33 0 0 0 .76.63A3 3 0 0 0 19 39a4.08 4.08 0 0 0 .91-2.79 3.91 3.91 0 0 0-.84-2.58A2.69 2.69 0 0 0 17 32.58zm44.63 0a2 2 0 0 0-1.22.42 2.45 2.45 0 0 0-.73.93l-.07-1.19h-1.26v.06c0 .57.06 1.31.06 2.2v4.78h1.45v-3.69a2.28 2.28 0 0 1 .5-1.57 1.59 1.59 0 0 1 1.2-.55 1.84 1.84 0 0 1 .44.05H62v-1.37h-.06zm-51 7.2H12v-7h-1.42zm44.49-1.67a1.78 1.78 0 0 1-1.44.72 1.72 1.72 0 0 1-1.4-.71 2.92 2.92 0 0 1-.57-1.85 3.05 3.05 0 0 1 .55-1.85 1.69 1.69 0 0 1 1.46-.73 1.67 1.67 0 0 1 1.44.73 3 3 0 0 1 .54 1.81 3 3 0 0 1-.55 1.91zm-1.35-5.53a3.34 3.34 0 0 0-2.48 1 3.76 3.76 0 0 0-1 2.72 3.68 3.68 0 0 0 1 2.61 3.2 3.2 0 0 0 2.42 1 3.57 3.57 0 0 0 1.75-.46 3.25 3.25 0 0 0 1.26-1.31 4.19 4.19 0 0 0 .45-2 3.69 3.69 0 0 0-.94-2.6 3.16 3.16 0 0 0-2.43-.93zm-42.38-2.74a.88.88 0 0 0-.65.25.86.86 0 0 0-.26.64.87.87 0 0 0 .9.9.88.88 0 0 0 .66-.26.92.92 0 0 0 0-1.28.88.88 0 0 0-.65-.25zm36.29 5.84a3.59 3.59 0 0 1-1.06-.53.78.78 0 0 1-.24-.58.77.77 0 0 1 .28-.62 1.25 1.25 0 0 1 .8-.25 2.91 2.91 0 0 1 1.46.41h.06l.37-1.08a3.5 3.5 0 0 0-1.8-.44 2.72 2.72 0 0 0-1.84.61 2 2 0 0 0-.7 1.51c0 .9.66 1.57 1.94 2a2.77 2.77 0 0 1 1 .5.89.89 0 0 1 .27.67.81.81 0 0 1-.33.68 1.5 1.5 0 0 1-1 .26 3.29 3.29 0 0 1-1.71-.5h-.07l-.35 1.13a4.24 4.24 0 0 0 2.06.5 3.08 3.08 0 0 0 2-.59 1.92 1.92 0 0 0 .75-1.57 1.85 1.85 0 0 0-.46-1.27 3.47 3.47 0 0 0-1.43-.84zm-5-5.84a.89.89 0 0 0-.66.25.92.92 0 0 0 0 1.28.86.86 0 0 0 .65.26.91.91 0 0 0 .66-1.54.88.88 0 0 0-.61-.25zm-.73 10h1.45v-7h-1.41zm-4.18-2.94c-.17-.5-2-4.1-2-4.1H34.2l3.53 7 3.48-7h-1.55s-1.8 3.66-1.93 4.07zm-12.87.52a1.34 1.34 0 0 1-.49 1 1.79 1.79 0 0 1-1.24.45 1.17 1.17 0 0 1-.82-.29 1.11 1.11 0 0 1-.31-.82 1.18 1.18 0 0 1 .63-1 4.6 4.6 0 0 1 2.23-.4zm1.42.7v-2.56a3.14 3.14 0 0 0-.7-2.18 2.71 2.71 0 0 0-2.09-.77 4.53 4.53 0 0 0-2.42.64l.34 1h.06a3.45 3.45 0 0 1 1.86-.52 1.37 1.37 0 0 1 1.54 1.5v.07a6.26 6.26 0 0 0-3.16.68 2.17 2.17 0 0 0-1.13 2 2 2 0 0 0 .61 1.45 2.24 2.24 0 0 0 1.63.6 2.64 2.64 0 0 0 2.15-1l.14.81h1.34v-.07a10.25 10.25 0 0 1-.13-1.68zM8.91 32.61A2 2 0 0 0 7.7 33a2.37 2.37 0 0 0-.7 1l-.07-1.19H5.6v7.04h1.51v-3.76a2.28 2.28 0 0 1 .5-1.57 1.59 1.59 0 0 1 1.2-.52 2 2 0 0 1 .45.05h.07v-1.4h-.05zm23.3 4.16a2 2 0 0 1-.54 1.44 1.72 1.72 0 0 1-1.23.53 1.62 1.62 0 0 1-1.4-.67 2.88 2.88 0 0 1-.52-1.75 2.93 2.93 0 0 1 .55-1.83 1.65 1.65 0 0 1 1.4-.68 1.69 1.69 0 0 1 1.23.51 1.84 1.84 0 0 1 .51 1.35zm1.45 1.16v-8.46h-1.45v4a2.27 2.27 0 0 0-.72-.57 2.77 2.77 0 0 0-1.28-.29A2.85 2.85 0 0 0 28 33.65a4.15 4.15 0 0 0-.9 2.76 3.85 3.85 0 0 0 .82 2.59 2.71 2.71 0 0 0 2.16 1 2.66 2.66 0 0 0 1.43-.38 2.38 2.38 0 0 0 .82-.79l.08 1h1.31v-.1c-.04-.42-.06-1.03-.06-1.8zm30.83-3.45a1 1 0 0 1 0-2 1 1 0 1 1 0 2zm0-2.26a1.25 1.25 0 1 0 1.25 1.25 1.24 1.24 0 0 0-1.25-1.25zM43 10.51A3.47 3.47 0 1 1 39.51 14 3.47 3.47 0 0 1 43 10.51zM43 19a5 5 0 1 0-5-5 5 5 0 0 0 5 5zm-21-3.3a1.69 1.69 0 1 0-1.73-1.7A1.68 1.68 0 0 0 22 15.69zm20.76 0A1.69 1.69 0 1 0 41 14a1.69 1.69 0 0 0 1.72 1.67zm-20.55-5.17A3.48 3.48 0 1 1 18.74 14a3.47 3.47 0 0 1 3.47-3.47zm0 8.48a5 5 0 1 0-5-5 5 5 0 0 0 5 4.99zM2.53 31.08l-1.42.42v1.27H0v1.13h1.11v3.63c0 1.62.66 2.44 2 2.44a3.57 3.57 0 0 0 1.21-.19l-.06-1.11h-.07a3 3 0 0 1-.75.08.8.8 0 0 1-.69-.29 1.74 1.74 0 0 1-.22-1V33.9h1.84v-1.13H2.53zm62 2.23a.66.66 0 0 1-.26 0V33h.28c.06 0 .09.07.09.17s.01.11-.1.14zm.45-.18c0-.37-.31-.4-.55-.4H64v1.38h.33v-.56h.11l.28.56H65l-.32-.61a.34.34 0 0 0 .32-.37zM22.33 5.72A8.31 8.31 0 1 1 14 14a8.32 8.32 0 0 1 8.33-8.28zm10.33-4a24.82 24.82 0 0 1 10 2 10.32 10.32 0 0 0-10 10.28A10.33 10.33 0 0 0 22.35 3.7a26.54 26.54 0 0 1 10.31-1.98zM51.3 14A8.32 8.32 0 1 1 43 5.72 8.31 8.31 0 0 1 51.3 14zM12 14a10.32 10.32 0 0 0 18.34 6.51 26 26 0 0 1 2.31 3.24s1.48-2.21 2.32-3.23A10.32 10.32 0 0 0 51.34 8a9.5 9.5 0 0 1 2.06-4.15h-6.9A24.85 24.85 0 0 0 32.66 0a26 26 0 0 0-14.17 3.85h-6.57A9.61 9.61 0 0 1 14 8a10.24 10.24 0 0 0-2 6z" fill="#57b9e9"/>
+  </g>
+</svg>      <svg class="customer-logo" id="customer-icon--newrelic" width="76" height="62"  viewBox="0 0 76 62">
+  <defs>
+    <style>
+      .cls-3{fill:#57b9e9}
+    </style>
+  </defs>
+  <g>
+    <g>
+      <path id="Fill-1" class="cls-3" d="M74.43 34.92a28.79 28.79 0 0 1-2.29 5.7 33.3 33.3 0 0 1-3.53 5.31 38.79 38.79 0 0 1-10.26 8.83 45.09 45.09 0 0 1-13.73 5.43 45 45 0 0 1-14.73.81 38.68 38.68 0 0 1-12.95-3.7 32.57 32.57 0 0 1-5.39-3.3 28.59 28.59 0 0 1-4.42-4.22A24.48 24.48 0 0 1 2.25 27a28.83 28.83 0 0 1 2.3-5.7A33 33 0 0 1 8.07 16a39.32 39.32 0 0 1 10.26-8.81A45.9 45.9 0 0 1 46.79.93a38.46 38.46 0 0 1 13 3.73A31.87 31.87 0 0 1 65.13 8a29.09 29.09 0 0 1 4.42 4.22 24.64 24.64 0 0 1 5.3 10.72v.09a24.86 24.86 0 0 1-.44 11.89m1-12.1l-.05-.22A25.1 25.1 0 0 0 70 11.85a29.32 29.32 0 0 0-4.51-4.31A33 33 0 0 0 60 4.14 39.28 39.28 0 0 0 46.85.36 46.82 46.82 0 0 0 18 6.7a39.74 39.74 0 0 0-10.41 9 33 33 0 0 0-3.58 5.4 29.32 29.32 0 0 0-2.34 5.81 25.06 25.06 0 0 0 5 23.23 29.32 29.32 0 0 0 4.51 4.31 33 33 0 0 0 5.48 3.4 39.05 39.05 0 0 0 13.14 3.78 44.2 44.2 0 0 0 4.88.27 46.42 46.42 0 0 0 10-1.11 45.7 45.7 0 0 0 13.9-5.5 39.58 39.58 0 0 0 10.41-9 33.31 33.31 0 0 0 3.59-5.4A29.27 29.27 0 0 0 75 35.08a25.26 25.26 0 0 0 .43-12.26"/>
+    </g>
+    <path id="Fill-4" class="cls-3" d="M66 41.7A26.11 26.11 0 1 1 31.8 7.48a26.12 26.12 0 0 1 36.28 24.06A25.81 25.81 0 0 1 66 41.7m-5.19-29a26.68 26.68 0 0 0-45.53 18.84 26.69 26.69 0 0 0 37.07 24.58 26.67 26.67 0 0 0 8.48-43.45"/>
+    <path id="Fill-6" class="cls-3" d="M55.58 38.13a20.07 20.07 0 1 1 1.58-7.81 20 20 0 0 1-1.58 7.81m-3.89-22.39a20.63 20.63 0 1 0-14.58 35.2 20.61 20.61 0 0 0 14.58-35.2"/>
+    <path id="Fill-8" class="cls-3" d="M32.8 36.9c0-1.13.48-1.8 1.37-1.8s1.31.67 1.31 1.8zm1.37-2.9a2.8 2.8 0 0 0-2.17.9 3.66 3.66 0 0 0-.9 2.71c0 2.22 1.29 3.63 3.34 3.63a4 4 0 0 0 2.56-.92l-.62-.92a2.7 2.7 0 0 1-1.81.69c-1.42 0-1.79-1-1.79-2V38h4.33v-.32c0-1.62-.31-2.47-1-3a2.84 2.84 0 0 0-1.94-.68z"/>
+    <path id="Fill-10" class="cls-3" d="M26.39 23.2c0-.86 0-1.88-.09-2.69.17.57.66 1.79 1.14 2.87l2 4.56h1.57v-9.75h-1.37v4.43c0 .89.09 2.28.13 2.77a18.06 18.06 0 0 0-.91-2.5l-2.18-4.74H25v9.75h1.46z"/>
+    <path id="Fill-12" class="cls-3" d="M25.51 35.91v-3.07h1c1.56 0 2.15.5 2.15 1.49a1.51 1.51 0 0 1-.48 1.17 2.44 2.44 0 0 1-1.74.41zM27.83 37a2.59 2.59 0 0 0 2.65-2.67c0-1.51-1.08-2.77-3.47-2.77h-3.24v9.7h1.74v-4.21a.92.92 0 0 1 .69.29 10.65 10.65 0 0 1 1.8 2.4l.93 1.5h2.11l-1.57-2.33A7.49 7.49 0 0 0 27.83 37z"/>
+    <path id="Fill-14" class="cls-3" d="M35.38 21.76c.79 0 1.31.67 1.31 1.79H34c0-1.12.5-1.79 1.38-1.79zm2.21 4.3a2.74 2.74 0 0 1-1.8.69c-1.42 0-1.79-1-1.79-2v-.11h4.32v-.31c0-1.62-.31-2.47-.94-3a2.91 2.91 0 0 0-2-.71 2.84 2.84 0 0 0-2.22.93 3.7 3.7 0 0 0-.9 2.72c0 2.22 1.29 3.63 3.34 3.63a4 4 0 0 0 2.61-.9z"/>
+    <path id="Fill-16" class="cls-3" d="M40.05 40c-.1-.17-.14-.33-.14-1.33v-6.31a10.39 10.39 0 0 0-.12-2l-1.47.37a13.47 13.47 0 0 1 .13 2.16v6.3c0 .63 0 2.09 1.44 2.09a2.13 2.13 0 0 0 .86-.17l-.23-1a.37.37 0 0 1-.47-.12"/>
+    <path id="Fill-18" class="cls-3" d="M47.26 40.09a1.09 1.09 0 0 1-.86-.4 2.87 2.87 0 0 1-.4-1.88 5 5 0 0 1 .27-1.93 1.1 1.1 0 0 1 1-.7 1.54 1.54 0 0 1 1.09.53l.71-1a2.31 2.31 0 0 0-1.8-.75c-1.46 0-2.87 1.21-2.87 3.72 0 2.23 1 3.56 2.77 3.56a2.63 2.63 0 0 0 2.08-.92l-.67-.91a1.82 1.82 0 0 1-1.31.68"/>
+    <path id="Fill-20" class="cls-3" d="M41.96 41.24h1.22v-7.28l-1.22.28v7z"/>
+    <path id="Fill-22" class="cls-3" d="M51.67 41a1 1 0 0 1 0-1.95 1 1 0 0 1 0 1.95m0-2.2a1.22 1.22 0 0 0-1.22 1.2 1.22 1.22 0 0 0 1.22 1.21A1.21 1.21 0 0 0 52.88 40a1.22 1.22 0 0 0-1.21-1.22"/>
+    <path id="Fill-24" class="cls-3" d="M50.73 40.47h-.07v-.28h.19a.11.11 0 0 1 .07.12.15.15 0 0 1 0 .11.26.26 0 0 1-.15 0m.18.14a.26.26 0 0 0 .23-.28.28.28 0 0 0-.3-.3h-.39v1h.21v-.43s.07.06.17.25l.1.17h.24s-.19-.33-.25-.4"/>
+    <path id="Fill-26" class="cls-3" d="M43.18 30.32A1.22 1.22 0 0 0 42 31.54a1.2 1.2 0 0 0 1.19 1.21 1.23 1.23 0 0 0 1.24-1.21 1.21 1.21 0 0 0-1.21-1.22"/>
+    <path id="Fill-28" class="cls-3" d="M47.19 27.9l2.05-7.17h-1.63l-.75 3.33c-.18.83-.35 1.92-.35 1.92s-.15-.88-.46-2l-.81-3.22h-1.6L42.71 24a19 19 0 0 0-.41 2c-.11-.63-.24-1.25-.38-1.88l-.78-3.45-1.56.21 2 7.07H43l.87-3.22a20.26 20.26 0 0 0 .47-2s.24 1.1.47 1.95l.89 3.29z"/>
+  </g>
+</svg>      <svg class="customer-logo" id="customer-icon--shopify" width="115" height="33" viewBox="0 0 115 33">
+  <g>
+    <path d="M39.76 18.1c-1-.53-1.49-1-1.49-1.59 0-.79.7-1.29 1.79-1.29a6.45 6.45 0 0 1 2.41.53l.89-2.75s-.82-.64-3.24-.64c-3.37 0-5.71 1.93-5.71 4.64 0 1.54 1.09 2.71 2.55 3.55 1.17.67 1.59 1.15 1.59 1.85s-.59 1.31-1.68 1.31a7.56 7.56 0 0 1-3.16-.84l-1 2.74a7.25 7.25 0 0 0 3.81 1c3.46 0 6-1.71 6-4.79 0-1.68-1.25-2.82-2.76-3.72zm37.11 5.59a2.44 2.44 0 0 1-1.59-.56l.64-3.6c.45-2.41 1.71-4 3-4 1.17 0 1.54 1.09 1.54 2.12.05 2.49-1.46 6.04-3.59 6.04zm3.69-11.35a5.28 5.28 0 0 0-4.08 2.29h-.06l.23-2.07h-3.41c-.17 1.4-.48 3.53-.79 5.12l-2.68 14.13h3.86l1.06-5.71h.09a4.5 4.5 0 0 0 2.26.5c4.53 0 7.5-4.64 7.5-9.34 0-2.6-1.15-4.92-3.98-4.92zm-27 0a5.22 5.22 0 0 0-4.08 2h-.06l1.5-7.74h-3.86l-3.75 19.72h3.86l1.28-6.74c.51-2.54 1.82-4.11 3-4.11.87 0 1.21.59 1.21 1.43a8.91 8.91 0 0 1-.17 1.7l-1.46 7.72h3.86l1.51-8a14.15 14.15 0 0 0 .28-2.52c.05-2.15-1.09-3.46-3.11-3.46zm-29-6.41L22 5.74l-1.87-1.87a.39.39 0 0 0-.16-.1l-1.21 28 9.55-2.08S24.87 6.34 24.84 6.18a.31.31 0 0 0-.27-.25zM101 12.62h-2.73l.14-.64c.22-1.32 1-2.5 2.29-2.5a3.92 3.92 0 0 1 1.23.2l.76-3a5.17 5.17 0 0 0-2.1-.33 5.73 5.73 0 0 0-3.77 1.28A7.32 7.32 0 0 0 94.58 12l-.11.64h-1.79l-.56 2.91h1.79l-2 10.79h3.86l2-10.79h2.65zm-37.4 11c-1.32 0-1.87-1.12-1.87-2.52 0-2.21 1.14-5.82 3.24-5.82 1.37 0 1.82 1.18 1.82 2.32-.04 2.4-1.19 6.04-3.23 6.04zm1.9-11.3c-4.64 0-7.72 4.19-7.72 8.87a5 5 0 0 0 5.31 5.39c4.56 0 7.64-4.08 7.64-8.86-.04-2.72-1.66-5.38-5.27-5.38zm44.78.31s-2.41 6.08-3.5 9.39c-.07-1.06-1-9.39-1-9.39h-4.06L104 25.2a.83.83 0 0 1-.08.65 6.6 6.6 0 0 1-2.1 2.32 8.21 8.21 0 0 1-2.18 1.09l1.06 3.27a8.74 8.74 0 0 0 3.78-2.09 26.15 26.15 0 0 0 5.06-7.67l4.73-10.12zM16 4.86v-.33a7.44 7.44 0 0 0-.36-2.48c.91.11 1.51 1.14 1.9 2.33zM14 15a5.61 5.61 0 0 0-2.36-.56c-1.9 0-2 1.19-2 1.49 0 1.65 4.29 2.28 4.29 6.13 0 3-1.92 5-4.52 5a6.27 6.27 0 0 1-4.7-1.94l.79-2.82a5.92 5.92 0 0 0 3 1.41 1.22 1.22 0 0 0 1.27-1.23c0-2.15-3.52-2.24-3.52-5.77 0-3 2.13-5.83 6.43-5.83a5.28 5.28 0 0 1 2.47.47zm-.75-13.9a.91.91 0 0 1 .52.18c-1.31.61-2.72 2.17-3.31 5.28L8 7.33C8.65 5 10.3 1.1 13.25 1.1zM14.88 5v.18l-3.17 1c.61-2.35 1.76-3.49 2.76-3.92A7.67 7.67 0 0 1 14.88 5zm4.56-1.23l-1 .29C17.92 2.44 16.92.94 15.16.94H15A2.14 2.14 0 0 0 13.36 0c-4.1 0-6 5.12-6.67 7.72l-2.86.89c-.89.28-.92.31-1 1.15C2.7 10.39.38 28.37.38 28.37l17.94 3.36 1.21-28zm65.21 22.55h3.86l2.63-13.67h-3.89zm5.4-19.52A2.2 2.2 0 0 0 87.84 9a1.78 1.78 0 0 0 1.82 2A2.19 2.19 0 0 0 92 8.73a1.84 1.84 0 0 0-1.95-1.93z" fill="#57b9e9"/>
+  </g>
+</svg>      <svg class="customer-logo" id="customer-icon--adobe" width="89" height="22" viewBox="0 0 89 22">
+  <g>
+    <path d="M60.21 18.93c-1.85 0-2.27-2.9-2.27-5.35 0-2.21.36-5.35 2.24-5.35s2.2 3.14 2.2 5.35-.38 5.35-2.17 5.35zM60.27 6c-2.7 0-5.21 2.27-5.21 7.62 0 5.05 2.12 7.56 5.06 7.56 2.23 0 5.11-1.78 5.11-7.62C65.26 8.59 63.17 6 60.27 6zm11.57 12.78c-.58 0-1.45-.36-1.91-2.15a2.73 2.73 0 0 1-.12-.9v-4.12a5.52 5.52 0 0 1 .09-1c.22-1.06 1-2.18 1.91-2.18 1.69 0 2.36 2.27 2.36 5.08 0 3.03-.64 5.27-2.33 5.27zM73 6a3.36 3.36 0 0 0-3.09 1.9h-.06V0H67v17.15c0 1.12-.06 2.78-.12 3.78h2.42l.15-1.85h.12a3.07 3.07 0 0 0 2.9 2.09c2.42 0 4.57-2.57 4.57-7.83C77 8.83 75.47 6 73 6zm-22.5 9.76a4.25 4.25 0 0 1-.09.93c-.48 1.76-1.33 2.09-2 2.09-1.51 0-2.3-2.12-2.3-5.14 0-2.72.61-5.2 2.39-5.2 1 0 1.79 1.15 1.94 2.48v.9zM53.34 0H50.5v7.65h-.06A2.72 2.72 0 0 0 47.81 6c-2.33 0-4.54 2.45-4.54 7.65 0 4.57 1.67 7.53 4.39 7.53a3.47 3.47 0 0 0 3.08-2h.09l.17 1.75h2.45c-.06-1-.12-2.66-.12-3.78zM34.83 13l1-4.87c.27-1.3.57-3.18.78-4.66h.12c.21 1.45.49 3.26.76 4.66L38.4 13zM35.1.54l-4.6 20.39h2.79l1.2-5.63h4.24l1.18 5.63h2.81L38.4.54zM88 7.16a.56.56 0 0 1 0-1.11.54.54 0 0 1 .52.56.53.53 0 0 1-.52.55zM88 6a.66.66 0 1 0 .64.65A.64.64 0 0 0 88 6zm0 .63h-.08v-.3H88c.13 0 .18.06.18.13s-.18.12-.27.12zm.16 0a.18.18 0 0 0 .14-.18.17.17 0 0 0-.07-.15.37.37 0 0 0-.22 0h-.21V7h.12v-.33H88a.13.13 0 0 1 .15.13v.19h.13a.51.51 0 0 1 0-.19c-.11-.1-.15-.16-.21-.17zm-6.8 5.5c.09-1.85.75-4 2.23-4 1.12 0 2 1.39 2 4zM83.72 6c-3.06 0-5.27 3-5.27 7.77 0 4.54 1.94 7.32 5.63 7.32a8.07 8.07 0 0 0 3.51-.7l-.43-2.05a6 6 0 0 1-2.54.54c-1.72 0-3.35-.93-3.38-4.72h6.89c0-.39.06-.84.06-1.57 0-3.67-1.42-6.59-4.47-6.59zM23 20.93V.6h-8.52zM7.78 16.84h4l1.62 4.09h3.5L11.49 8.09zM0 .6v20.33L8.5.6z" fill="#57b9e9"/>
+  </g>
+</svg>      <svg class="customer-logo" id="customer-icon--mit" width="121" height="28" viewBox="0 0 121 28">
+  <defs>
+    <style>
+      .cls-2{fill:#57b9e9}
+    </style>
+  </defs>
+  <g id="Page-1-2" data-name="Page-1">
+    <path id="Fill-1" class="cls-2" d="M26.32 5.68h5.42V.58h-5.42v5.1z"/>
+    <path id="Fill-2" class="cls-2" d="M35.15 26.08h5.38V8.65h-5.38v17.43z"/>
+    <path id="Fill-3" class="cls-2" d="M0 26.08h5.38V.58H0v25.5z"/>
+    <path id="Fill-4" class="cls-2" d="M17.57 26.08h5.39V.58h-5.39v25.5z"/>
+    <path id="Fill-5" class="cls-2" d="M8.79 18.01h5.38V.58H8.79v17.43z"/>
+    <path id="Fill-6" class="cls-2" d="M35.11 5.68h14.2V.58h-14.2v5.1z"/>
+    <g id="Group-56">
+      <path id="Fill-7" class="cls-2" d="M61.36 2.77V1.59l.27 1.1 1.11 4H64l1.16-4.13c.07-.26.08-.3.16-.65v-.22.62l-.09 4.38h1.47V.5h-2.2l-1 3.67c-.07.28-.08.33-.17.75l-.21-1L62.2.5H60v6.14h1.49z"/>
+      <path id="Fill-9" class="cls-2" d="M70 5.63a.87.87 0 0 1-.46.15.49.49 0 0 1-.54-.46c0-.35.35-.48.58-.57l.86-.29c0 .47 0 .89-.47 1.17m-1.29-1.56a1.47 1.47 0 0 0-1 1.31 1.38 1.38 0 0 0 1.49 1.38 2.15 2.15 0 0 0 1.39-.54v.42h1.31c-.1-.16-.13-.23-.13-.72V3.28c0-1.17-1.35-1.3-1.9-1.3a2.41 2.41 0 0 0-1.49.39 1.29 1.29 0 0 0-.48 1h1.34c0-.16.11-.52.71-.52s.49.34.51.55v.24a12.9 12.9 0 0 0-1.79.42"/>
+      <path id="Fill-11" class="cls-2" d="M74.56 5.73a2 2 0 0 1-1.33-.62l-.84.76a3 3 0 0 0 2.2.88c1.07 0 2.15-.52 2.15-1.59s-1.06-1.32-2-1.49c-.44-.08-.73-.13-.73-.39s.13-.34.65-.34a1.92 1.92 0 0 1 1.14.45l.82-.76a3.28 3.28 0 0 0-2-.68c-1.27 0-1.92.77-1.92 1.52a1.22 1.22 0 0 0 .34.85 1.74 1.74 0 0 0 .76.4c.2.06.41.1.61.14a2.56 2.56 0 0 1 .77.17.27.27 0 0 1 .18.26c0 .34-.49.44-.81.44"/>
+      <path id="Fill-13" class="cls-2" d="M79.09 5.73a1.93 1.93 0 0 1-1.32-.62l-.85.76a3 3 0 0 0 2.2.88c1.07 0 2.15-.52 2.15-1.59s-1.06-1.32-2-1.49c-.44-.08-.72-.13-.72-.39s.12-.34.64-.34a1.92 1.92 0 0 1 1.14.45l.83-.76a3.34 3.34 0 0 0-2-.68c-1.27 0-1.91.77-1.91 1.52a1.21 1.21 0 0 0 .33.85 1.74 1.74 0 0 0 .76.4c.2.06.41.1.61.14a2.56 2.56 0 0 1 .77.17.27.27 0 0 1 .18.26c0 .34-.49.44-.81.44"/>
+      <path id="Fill-15" class="cls-2" d="M84.13 5.63a.81.81 0 0 1-.46.15.49.49 0 0 1-.5-.46c0-.35.35-.48.57-.57l.86-.29c0 .47 0 .89-.47 1.17m-1.32-1.56a1.48 1.48 0 0 0-1 1.31 1.37 1.37 0 0 0 1.48 1.38 2.12 2.12 0 0 0 1.39-.54v.42H86c-.11-.16-.13-.23-.13-.72V3.28C85.92 2.11 84.57 2 84 2a2.36 2.36 0 0 0-1.48.39 1.26 1.26 0 0 0-.48 1h1.34c0-.16.11-.52.7-.52s.5.34.51.55v.24a13.63 13.63 0 0 0-1.79.42"/>
+      <path id="Fill-17" class="cls-2" d="M89.09 6.79a2.28 2.28 0 0 0 1.3-.41 2.58 2.58 0 0 0 .71-.81l-1-.52a.82.82 0 0 1-.2.36.9.9 0 0 1-.68.31c-.71 0-1-.75-1-1.35S88.45 3 89.17 3a.83.83 0 0 1 .5.16 1.12 1.12 0 0 1 .39.48l1-.57A2.16 2.16 0 0 0 89.11 2a2.22 2.22 0 0 0-2.28 2.43 2.2 2.2 0 0 0 2.26 2.38"/>
+      <path id="Fill-19" class="cls-2" d="M94 2a1.73 1.73 0 0 0-1.31.6V.49h-1.38v6.15h1.34V4.38a1.7 1.7 0 0 1 .18-1 .67.67 0 0 1 .54-.26.63.63 0 0 1 .63.45 2.25 2.25 0 0 1 .06.69v2.38h1.33v-3a1.56 1.56 0 0 0-.47-1.35A1.48 1.48 0 0 0 94 2"/>
+      <path id="Fill-21" class="cls-2" d="M98 6.77a1.88 1.88 0 0 0 .86-.21 1.21 1.21 0 0 0 .45-.36v.44h1.34V2.1h-1.37v2.82a.67.67 0 0 1-.3.65.93.93 0 0 1-.46.11.66.66 0 0 1-.52-.22.87.87 0 0 1-.11-.54V2.1h-1.36V5a2 2 0 0 0 .28 1.34 1.37 1.37 0 0 0 1.19.43"/>
+      <path id="Fill-23" class="cls-2" d="M103.59 3.67c-.44-.08-.72-.13-.72-.39s.12-.34.64-.34a1.92 1.92 0 0 1 1.14.45l.83-.76a3.34 3.34 0 0 0-2-.68c-1.27 0-1.92.77-1.92 1.52a1.22 1.22 0 0 0 .34.85 1.74 1.74 0 0 0 .76.4c.2.06.41.1.61.14A2.56 2.56 0 0 1 104 5a.27.27 0 0 1 .18.26c0 .34-.49.44-.81.44a1.93 1.93 0 0 1-1.32-.62l-.85.76a3 3 0 0 0 2.2.88c1.07 0 2.15-.52 2.15-1.59s-1.06-1.32-2-1.49"/>
+      <path id="Fill-25" class="cls-2" d="M107.42 3.8a1.16 1.16 0 0 1 .26-.6.94.94 0 0 1 .68-.3.91.91 0 0 1 .65.26 1.06 1.06 0 0 1 .26.64zM110 2.6a2.19 2.19 0 0 0-1.63-.6A2.27 2.27 0 0 0 106 4.45a2.17 2.17 0 0 0 2.3 2.35 2.51 2.51 0 0 0 1.71-.64 3.42 3.42 0 0 0 .55-.68l-1-.51a1.2 1.2 0 0 1-1.15.8 1 1 0 0 1-1-1.13h3.24A3.07 3.07 0 0 0 110 2.6z"/>
+      <path id="Fill-27" class="cls-2" d="M115.48.78h-1.33v1.41h-1.23V.78h-1.33v1.41h-.66V3h.66v2.2a1.78 1.78 0 0 0 .19 1 1.38 1.38 0 0 0 1.25.44 3.7 3.7 0 0 0 .71-.07v-1h-.48c-.36 0-.36-.24-.35-.52V3h1.24v2.2a1.78 1.78 0 0 0 .19 1 1.38 1.38 0 0 0 1.25.44 3.78 3.78 0 0 0 .71-.07v-1h-.48c-.36 0-.36-.24-.35-.52V3h.89v-.8h-.88z"/>
+      <g>
+        <path id="Fill-29" class="cls-2" d="M118.83 3.67c-.44-.08-.72-.13-.72-.39s.12-.34.64-.34a1.92 1.92 0 0 1 1.14.45l.83-.76a3.34 3.34 0 0 0-2-.68c-1.27 0-1.92.77-1.92 1.52a1.22 1.22 0 0 0 .34.85 1.74 1.74 0 0 0 .76.4c.2.06.41.1.61.14a2.56 2.56 0 0 1 .77.17.27.27 0 0 1 .18.26c0 .34-.49.44-.81.44a1.93 1.93 0 0 1-1.32-.62l-.85.76a3 3 0 0 0 2.2.88c1.08 0 2.15-.52 2.15-1.59s-1.06-1.32-2-1.49"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-32" class="cls-2" d="M60.01 16.31h1.53v-6.15h-1.53v6.15z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-34" class="cls-2" d="M66.79 16.31V13.2c0-.7-.12-1.11-.6-1.37a1.75 1.75 0 0 0-.81-.18 2.08 2.08 0 0 0-.82.17 1.25 1.25 0 0 0-.46.36v-.41h-1.35v4.54h1.34v-2.46c0-.56 0-1.13.71-1.13a.62.62 0 0 1 .6.35 1.88 1.88 0 0 1 .06.68v2.56z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-35" class="cls-2" d="M69.55 15.4a2 2 0 0 1-1.33-.62l-.84.76a3 3 0 0 0 2.2.88c1.07 0 2.15-.52 2.15-1.59s-1.06-1.32-2-1.49c-.44-.08-.73-.13-.73-.39s.13-.34.65-.34a1.92 1.92 0 0 1 1.14.45l.82-.76a3.28 3.28 0 0 0-2-.68c-1.27 0-1.92.77-1.92 1.52A1.22 1.22 0 0 0 68 14a1.63 1.63 0 0 0 .76.39 4.47 4.47 0 0 0 .61.14 2.9 2.9 0 0 1 .77.18.27.27 0 0 1 .18.26c0 .34-.49.44-.81.44"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-36" class="cls-2" d="M72.69 14.87a1.78 1.78 0 0 0 .19 1 1.38 1.38 0 0 0 1.25.44 3.7 3.7 0 0 0 .71-.07v-1h-.48c-.36 0-.36-.24-.35-.52v-2h.89v-.82H74v-1.45h-1.31v1.41H72v.82h.66z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-37" class="cls-2" d="M75.62 16.31h1.32v-4.55h-1.32v4.55z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-38" class="cls-2" d="M75.62 11.19h1.32v-1.03h-1.32v1.03z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-39" class="cls-2" d="M80.52 12.69v-.82h-.88v-1.42h-1.33v1.41h-.66v.82h.66v2.19a1.78 1.78 0 0 0 .19 1 1.38 1.38 0 0 0 1.25.44 3.78 3.78 0 0 0 .71-.07v-1h-.48c-.36 0-.36-.24-.35-.52v-2z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-40" class="cls-2" d="M85.28 16.31v-4.54h-1.34v2.82a.66.66 0 0 1-.31.65.91.91 0 0 1-.46.11.65.65 0 0 1-.53-.23.85.85 0 0 1-.11-.54v-2.81h-1.34v2.85a2 2 0 0 0 .27 1.38 1.42 1.42 0 0 0 1.16.48 1.85 1.85 0 0 0 .86-.21 1.17 1.17 0 0 0 .46-.36v.44z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-41" class="cls-2" d="M88.79 15.23h-.48c-.36 0-.36-.24-.35-.52v-2h.89v-.82H88v-1.44h-1.36v1.41H86v.82h.66v2.19a1.78 1.78 0 0 0 .19 1 1.4 1.4 0 0 0 1.25.44 4.73 4.73 0 0 0 .71-.07z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-42" class="cls-2" d="M90.89 12.87a.9.9 0 0 1 .67-.29.94.94 0 0 1 .66.25 1.1 1.1 0 0 1 .25.64h-1.86a1.21 1.21 0 0 1 .28-.6m2.36 3a3.73 3.73 0 0 0 .55-.68l-1-.51a1.2 1.2 0 0 1-1.15.8 1 1 0 0 1-1-1.13h3.24a3.05 3.05 0 0 0-.64-2 2.19 2.19 0 0 0-1.64-.65 2.27 2.27 0 0 0-2.33 2.5 2.17 2.17 0 0 0 2.3 2.35 2.51 2.51 0 0 0 1.71-.64"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-43" class="cls-2" d="M100.19 14.08c0 .71-.35 1.3-1.08 1.3S98 14.74 98 14a1.71 1.71 0 0 1 .22-.89.9.9 0 0 1 .8-.44 1 1 0 0 1 .78.25 1.53 1.53 0 0 1 .37 1.14m-3.5-.06a2.44 2.44 0 0 0 4.88 0 2.44 2.44 0 0 0-4.88 0"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-44" class="cls-2" d="M104.47 11.16h.33v-1a5.56 5.56 0 0 0-.8-.08 1.38 1.38 0 0 0-1.17.46 1.33 1.33 0 0 0-.19.77v.56h-.72v.82h.71v3.62H104v-3.62h.89v-.82H104c0-.61 0-.71.52-.71"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-45" class="cls-2" d="M63.05 19.92h-4.73v1.22h1.6v4.93h1.54v-4.93h1.59v-1.22z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-46" class="cls-2" d="M64.09 23.23a1.18 1.18 0 0 1 .27-.6 1 1 0 0 1 1.33 0 1 1 0 0 1 .25.64zM66.68 22a2.21 2.21 0 0 0-1.63-.65 2.27 2.27 0 0 0-2.33 2.51A2.17 2.17 0 0 0 65 26.24a2.49 2.49 0 0 0 1.72-.65 3.82 3.82 0 0 0 .55-.68l-1-.51a1.21 1.21 0 0 1-1.15.8 1 1 0 0 1-1-1.13h3.25a3 3 0 0 0-.69-2.07z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-47" class="cls-2" d="M70.86 24.84a.89.89 0 0 1-.68.32c-.71 0-1-.76-1-1.36s.24-1.38 1-1.38a.88.88 0 0 1 .5.16 1 1 0 0 1 .38.48l1-.57a2.17 2.17 0 0 0-1.94-1.08 2.22 2.22 0 0 0-2.28 2.43 2.2 2.2 0 0 0 2.25 2.38 2.26 2.26 0 0 0 1.3-.41 2.63 2.63 0 0 0 .72-.81l-1-.52a.93.93 0 0 1-.2.36"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-48" class="cls-2" d="M74.92 21.41a1.7 1.7 0 0 0-1.3.6v-2.09h-1.34v6.15h1.34v-2.26a1.79 1.79 0 0 1 .17-1 .71.71 0 0 1 .55-.26.63.63 0 0 1 .66.45 2.29 2.29 0 0 1 .06.69v2.38h1.33v-3a1.57 1.57 0 0 0-.47-1.36 1.49 1.49 0 0 0-1-.32"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-49" class="cls-2" d="M81 21.6a1.75 1.75 0 0 0-.81-.18 2.19 2.19 0 0 0-.83.16 1.3 1.3 0 0 0-.45.36v-.4h-1.36v4.53h1.34v-2.45c0-.57 0-1.13.7-1.13a.6.6 0 0 1 .6.34 1.63 1.63 0 0 1 .07.68v2.56h1.33V23c0-.7-.13-1.11-.6-1.36"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-50" class="cls-2" d="M84.92 25.14c-.75 0-1.1-.64-1.1-1.36a1.62 1.62 0 0 1 .23-.89.92.92 0 0 1 .79-.44 1 1 0 0 1 .78.25 1.53 1.53 0 0 1 .38 1.14c0 .71-.36 1.3-1.08 1.3m.17-3.75a2.27 2.27 0 0 0-2.62 2.4 2.45 2.45 0 0 0 4.89 0 2.28 2.28 0 0 0-2.27-2.4"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-51" class="cls-2" d="M88.22 26.07h1.34v-6.14h-1.34v6.14z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-52" class="cls-2" d="M92.9 25.14c-.75 0-1.1-.64-1.1-1.36a1.62 1.62 0 0 1 .23-.89.91.91 0 0 1 .79-.44 1 1 0 0 1 .78.25 1.57 1.57 0 0 1 .4 1.14c0 .71-.35 1.3-1.07 1.3m.17-3.75a2.27 2.27 0 0 0-2.62 2.4 2.44 2.44 0 0 0 4.88 0 2.27 2.27 0 0 0-2.26-2.4"/>
+      </g>
+      <g>
+        <path id="Fill-53" class="cls-2" d="M98.12 24.84c-.83 0-.86-.79-.86-1.17 0-.65.16-1.19.79-1.22a.79.79 0 0 1 .73.33 1.88 1.88 0 0 1 .17.89c.05.64-.16 1.17-.83 1.17zM99 22a1.55 1.55 0 0 0-1.22-.5 2 2 0 0 0-1.93 2.23 2.11 2.11 0 0 0 .84 1.88 1.85 1.85 0 0 0 1 .29 2 2 0 0 0 1.2-.38V26c0 .37 0 .85-.81.85a.86.86 0 0 1-.43-.09.68.68 0 0 1-.39-.65H96a1.39 1.39 0 0 0 .35 1.06 2.47 2.47 0 0 0 1.65.53 3.28 3.28 0 0 0 1.55-.35 1.5 1.5 0 0 0 .69-1.46v-4.37H99z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-54" class="cls-2" d="M103 24.78l-.75-3.25h-1.43l1.36 4.38a1.14 1.14 0 0 1 .06.33c0 .32-.34.32-.56.32h-.46v1.07h1a1.18 1.18 0 0 0 1-.37 2.25 2.25 0 0 0 .42-.83l1.6-4.9h-1.42z"/>
+      </g>
+      <g class="cls-4">
+        <path id="Fill-55" class="cls-2" d="M26.37 26.06h5.38V8.63h-5.38v17.43z"/>
+      </g>
+    </g>
+  </g>
+</svg>      <svg class="customer-logo" id="customer-icon--coinbase" width="135" height="25" viewBox="0 0 135 25" ><rect id="Artboard1" x="0" y="0" width="135" height="24.1" style="fill:none;"/><clipPath id="_clip1"><rect x="0" y="0" width="135" height="24.1"/></clipPath><g clip-path="url(#_clip1)"><g id="Layer-1" serif:id="Layer 1"><path d="M122.335,13.58c0.617,-2.331 2.37,-3.464 4.384,-3.464c2.208,0 3.897,1.263 4.287,3.464l-8.671,0Zm12.665,1.295c0,-4.791 -3.507,-8.157 -8.216,-8.157c-5.001,-0 -8.671,3.755 -8.671,8.707c-0,5.212 3.929,8.675 8.736,8.675c4.059,-0 7.242,-2.395 8.054,-5.794l-4.06,-0c-0.584,1.489 -2.013,2.331 -3.929,2.331c-2.501,-0 -4.385,-1.554 -4.807,-4.273l12.893,-0l0,-1.489Zm-79.337,-8.157c-2.533,-0 -4.19,1.035 -5.164,2.492l0,-2.169l-3.864,0l-0,16.735l3.897,0l-0,-9.096c-0,-2.557 1.623,-4.369 4.027,-4.369c2.24,-0 3.637,1.586 3.637,3.884l-0,9.581l3.897,0l-0,-9.872c-0,-4.208 -2.176,-7.186 -6.43,-7.186m17.926,13.789c-2.793,-0 -4.839,-2.169 -4.839,-5.082c0,-2.913 2.079,-5.114 4.872,-5.114c2.825,-0 4.806,2.168 4.806,5.114c-0,2.913 -2.046,5.082 -4.839,5.082m0.585,-13.789c-2.176,-0 -3.995,0.906 -5.294,2.427l0,-9.16l-3.897,-0l0,23.791l3.832,0l0,-2.201c1.299,1.586 3.15,2.525 5.359,2.525c4.676,0 8.216,-3.69 8.216,-8.675c0,-4.985 -3.605,-8.707 -8.216,-8.707m20.686,10.261c0,2.233 -1.948,3.884 -4.319,3.884c-1.461,0 -2.695,-0.615 -2.695,-1.91c-0,-1.651 1.981,-2.104 3.799,-2.298c1.754,-0.162 2.728,-0.55 3.215,-1.295l0,1.619Zm3.833,-4.208c-0,-3.626 -2.209,-6.053 -6.885,-6.053c-4.417,-0 -6.885,2.233 -7.372,5.664l3.864,0c0.195,-1.327 1.234,-2.427 3.443,-2.427c1.981,-0 2.955,0.874 2.955,1.942c0,1.392 -1.786,1.748 -3.994,1.974c-2.988,0.324 -6.69,1.36 -6.69,5.244c-0,3.01 2.241,4.953 5.813,4.953c2.793,-0 4.546,-1.166 5.423,-3.011c0.13,1.651 1.364,2.719 3.085,2.719l2.274,0l-0,-3.463l-1.916,-0l-0,-7.542Zm-57.189,-12.624c-1.429,-0 -2.501,1.036 -2.501,2.46c-0,1.424 1.072,2.46 2.501,2.46c1.428,-0 2.5,-1.036 2.5,-2.46c0,-1.424 -1.072,-2.46 -2.5,-2.46m69.659,13.66l-2.858,-0.421c-1.364,-0.194 -2.338,-0.648 -2.338,-1.716c0,-1.165 1.267,-1.748 2.988,-1.748c1.883,0 3.085,0.809 3.345,2.137l3.767,-0c-0.422,-3.367 -3.02,-5.341 -7.015,-5.341c-4.124,-0 -6.852,2.104 -6.852,5.082c-0,2.848 1.786,4.499 5.391,5.017l2.858,0.421c1.396,0.194 2.176,0.744 2.176,1.78c-0,1.327 -1.365,1.877 -3.248,1.877c-2.306,0 -3.605,-0.938 -3.8,-2.362l-3.832,-0c0.357,3.269 2.923,5.567 7.599,5.567c4.255,0 7.08,-1.942 7.08,-5.276c0,-2.978 -2.046,-4.532 -5.261,-5.017m-102.46,-3.496c2.046,-0 3.67,1.262 4.287,3.139l4.124,0c-0.746,-4.013 -4.059,-6.732 -8.378,-6.732c-4.904,-0 -8.736,3.722 -8.736,8.707c-0,4.985 3.735,8.675 8.736,8.675c4.222,0 7.599,-2.719 8.346,-6.765l-4.092,-0c-0.584,1.877 -2.208,3.172 -4.254,3.172c-2.826,-0 -4.806,-2.169 -4.806,-5.082c-0,-2.946 1.948,-5.114 4.773,-5.114m28.416,0.194l2.436,-0l-0,13.271l3.897,0l-0,-16.735l-6.333,0l0,3.464Zm-9.84,10.002c-2.793,-0 -4.839,-2.169 -4.839,-5.082c0,-2.946 2.014,-5.114 4.807,-5.114c2.825,-0 4.871,2.201 4.871,5.114c0,2.913 -2.046,5.082 -4.839,5.082m-0.032,-13.789c-4.904,-0 -8.736,3.722 -8.736,8.707c0,4.985 3.735,8.675 8.736,8.675c5.001,-0 8.801,-3.755 8.801,-8.707c-0,-4.92 -3.735,-8.675 -8.801,-8.675" style="fill:#57b9e9;"/></g></g></svg>      <svg class="customer-logo" id="customer-icon--disney" width="171" height="24" viewBox="0 0 171 24">
+  <defs>
+    <style>
+      .cls-1{fill:#fff}.cls-2{fill:#57b9e9}
+    </style>
+    <mask id="mask" x="163.33" y="9.99" width="7.06" height="10.2" maskUnits="userSpaceOnUse">
+      <g id="mask-2">
+        <path id="path-1" class="cls-1" d="M163.33 9.99h7.06v10.2h-7.06V9.99z"/>
+      </g>
+    </mask>
+    <mask id="mask-2-2" x="27.26" y=".35" width="21.01" height="18.02" maskUnits="userSpaceOnUse">
+      <g id="mask-4">
+        <path id="path-3" class="cls-1" d="M27.26.35h21.01v18.01H27.26V.35z"/>
+      </g>
+    </mask>
+  </defs>
+  <g id="Page-1">
+    <g id="Customer-Logos">
+      <g id="Group-16">
+        <g id="Page-1-2" data-name="Page-1">
+          <path id="Fill-1" class="cls-2" d="M.59 6.68L.48 9.32h.39a2.81 2.81 0 0 1 .73-1.63 2.94 2.94 0 0 1 1.68-.33h.9V15a1.84 1.84 0 0 1-.28 1.23c-.11.17-.56.28-1.18.34v.28h4.49v-.28A3 3 0 0 1 6 16.33a1.59 1.59 0 0 1-.29-1.13V7.36h.85a3 3 0 0 1 1.73.33A3.65 3.65 0 0 1 9 9.32h.34l-.06-2.64z"/>
+          <path id="Fill-3" class="cls-2" d="M16 15.32v-3.09a3.25 3.25 0 0 0-.28-1.4 1.61 1.61 0 0 0-1.62-1 2.12 2.12 0 0 0-1.4.45 3.81 3.81 0 0 0-.85.79V6.46l-.05-.06-.8.23c-.11 0-.34.11-.67.22s-.56.17-.79.23v.28a.21.21 0 0 1 .17-.06h.19c.28 0 .45.06.5.17a1 1 0 0 1 .12.62v7.23a1.79 1.79 0 0 1-.17 1 1.17 1.17 0 0 1-.79.33v.23h3.31v-.23a1.18 1.18 0 0 1-.84-.33c-.17-.12-.23-.45-.23-1v-3.7c0-.11.17-.28.57-.56a1.69 1.69 0 0 1 1.12-.4 1 1 0 0 1 .95.45 3.17 3.17 0 0 1 .22 1.18v3a1.82 1.82 0 0 1-.16 1 1.5 1.5 0 0 1-.85.33v.23h3.2v-.23a1.11 1.11 0 0 1-.73-.33 2.07 2.07 0 0 1-.17-1"/>
+          <path id="Fill-5" class="cls-2" d="M18.59 11.11a1.39 1.39 0 0 1 1.29-.73 1.28 1.28 0 0 1 1.23.68 2.35 2.35 0 0 1 .28 1.12h-3.14a2.7 2.7 0 0 1 .34-1.07M22 15.54a2.07 2.07 0 0 1-1.35.45 2.25 2.25 0 0 1-1.65-.84 4 4 0 0 1-.78-2.52H23a2.82 2.82 0 0 0-.78-2.08 2.75 2.75 0 0 0-1.85-.73A2.81 2.81 0 0 0 18 10.94a3.8 3.8 0 0 0-.9 2.58 4.09 4.09 0 0 0 .76 2.48 2.6 2.6 0 0 0 2.19 1.06 2.78 2.78 0 0 0 2.07-.84 3.72 3.72 0 0 0 1.12-1.73l-.24-.13a5.65 5.65 0 0 1-1 1.18"/>
+          <path id="Fill-7" class="cls-2" d="M121.34 15.88a4.93 4.93 0 0 1-2.18.56 3.62 3.62 0 0 1-2.75-1.23 5.13 5.13 0 0 1-1.07-3.31 5.48 5.48 0 0 1 1-3.48A3.35 3.35 0 0 1 119 7.13a3.17 3.17 0 0 1 2.58 1.18 6 6 0 0 1 .78 1.68h.34l-.11-3.47h-.34c-.06.16-.11.33-.28.39a1.15 1.15 0 0 1-.39.11 7.52 7.52 0 0 1-1-.22 5.8 5.8 0 0 0-1.68-.28 5 5 0 0 0-3.9 1.62 5.27 5.27 0 0 0-1.46 3.76 5 5 0 0 0 5.27 5.21 5 5 0 0 0 2.8-.84 4 4 0 0 0 1.29-1.12l-.28-.28a6.27 6.27 0 0 1-1.29 1"/>
+          <path id="Fill-9" class="cls-2" d="M128.46 15.88a1.38 1.38 0 0 1-1.29.78 1.85 1.85 0 0 1-1.68-1.12 5.59 5.59 0 0 1-.62-2.52 3.08 3.08 0 0 1 .73-2.36 2 2 0 0 1 1.07-.39 1.69 1.69 0 0 1 1.62 1.18 5.05 5.05 0 0 1 .62 2.41 4.17 4.17 0 0 1-.45 2m-1.62-6.06a3 3 0 0 0-2.41 1.07 3.59 3.59 0 0 0-1 2.52 3.7 3.7 0 0 0 1 2.64 3.32 3.32 0 0 0 2.41 1.06 3.12 3.12 0 0 0 2.52-1.09 3.84 3.84 0 0 0 .95-2.58 3.37 3.37 0 0 0-1-2.58 3.2 3.2 0 0 0-2.46-1"/>
+          <path id="Fill-11" class="cls-2" d="M139.79 16.38c-.12.17-.4.23-.84.28v.23h3.36v-.23a2.17 2.17 0 0 1-.84-.22 1 1 0 0 1-.23-.73v-3.14a6.35 6.35 0 0 0-.22-1.74 1.62 1.62 0 0 0-1.63-1 2.37 2.37 0 0 0-1.45.51 4.27 4.27 0 0 0-1 .84 2 2 0 0 0-.45-.79 1.5 1.5 0 0 0-1.17-.56 2.65 2.65 0 0 0-1.12.28 5.19 5.19 0 0 0-1.29 1V9.88l-.06-.06s-.28.12-.73.28a7.18 7.18 0 0 1-.95.34l-.51.17v.28c.06 0 .12-.06.17-.06h.23a.69.69 0 0 1 .5.17c.11.11.11.34.11.73v3.87c0 .45-.05.73-.28.89a2.88 2.88 0 0 1-.78.17v.23h3.42v-.23c-.45 0-.73-.05-.84-.22s-.23-.39-.23-.79v-4.09a3.1 3.1 0 0 1 .79-.67 1.74 1.74 0 0 1 .89-.23 1 1 0 0 1 1.07.73 8.25 8.25 0 0 1 .11 1.57v2.13a2.75 2.75 0 0 1-.17 1.24 1.34 1.34 0 0 1-.89.33v.23h3.42v-.23c-.45 0-.79-.11-.9-.33a1.44 1.44 0 0 1-.22-.9v-3.87a3.75 3.75 0 0 1 .67-.56 1.82 1.82 0 0 1 1-.34 1 1 0 0 1 1.06.62 2.51 2.51 0 0 1 .17 1.07v3.19a1.26 1.26 0 0 1-.22.84"/>
+          <path id="Fill-13" class="cls-2" d="M147.35 15.71a1.82 1.82 0 0 1-1.4.78 1.5 1.5 0 0 1-.89-.22 1.74 1.74 0 0 1-.62-.78v-3.76a1 1 0 0 1 .45-.67 1.75 1.75 0 0 1 2.41.33 3.07 3.07 0 0 1 .61 2.08 4.23 4.23 0 0 1-.56 2.24m-.67-5.94a2.75 2.75 0 0 0-1.4.45 7 7 0 0 0-.84.72V9.82h-.06l-1.51.51-.73.22v.28a.46.46 0 0 1 .22-.05h.12a.75.75 0 0 1 .56.16 1.9 1.9 0 0 1 .11.73v7.18a1.36 1.36 0 0 1-.17.78 1.52 1.52 0 0 1-.9.34v.22h3.7V20a2.57 2.57 0 0 1-1.06-.28c-.17-.11-.28-.39-.28-.9v-2.49a1.75 1.75 0 0 0 .9.56 1.52 1.52 0 0 0 .72.11 2.59 2.59 0 0 0 2.25-1.24 4.23 4.23 0 0 0 .89-2.69 3.58 3.58 0 0 0-.72-2.41 2.29 2.29 0 0 0-1.8-.89"/>
+          <path id="Fill-15" class="cls-2" d="M153.74 15.09a.76.76 0 0 1-.45.67 1.51 1.51 0 0 1-.95.29 1.33 1.33 0 0 1-.67-.17 1.24 1.24 0 0 1-.45-1 1.82 1.82 0 0 1 1.07-1.51 5.84 5.84 0 0 1 1.45-.62zm2.36.73c-.17.11-.28.23-.39.23a.47.47 0 0 1-.28.05.43.43 0 0 1-.4-.28 1.89 1.89 0 0 1-.05-.61v-3a3.43 3.43 0 0 0-.28-1.51 2 2 0 0 0-2-1 2.78 2.78 0 0 0-1.91.56 1.52 1.52 0 0 0-.67 1.12.51.51 0 0 0 .22.45.54.54 0 0 0 .51.22h.33c.23-.12.28-.34.28-.62v-.28a.68.68 0 0 1-.05-.28.61.61 0 0 1 .33-.56 1.8 1.8 0 0 1 .73-.17 1.15 1.15 0 0 1 1.07.45 2.49 2.49 0 0 1 .16 1.06v.68a11.75 11.75 0 0 0-2.7 1.25 2.08 2.08 0 0 0-1.12 1.79 1.6 1.6 0 0 0 .5 1.18 1.56 1.56 0 0 0 1.12.45 2.57 2.57 0 0 0 1.29-.45 4.09 4.09 0 0 0 1-.73 1.28 1.28 0 0 0 .28.79.79.79 0 0 0 .73.33 1.65 1.65 0 0 0 .84-.28 3.43 3.43 0 0 0 .51-.45z"/>
+          <path id="Fill-17" class="cls-2" d="M162.32 15.65v-3.53a2.31 2.31 0 0 0-.84-2 1.34 1.34 0 0 0-.9-.28 2.45 2.45 0 0 0-1.23.34 5.73 5.73 0 0 0-1.06.9V9.82h-.06l-.73.23c-.78.22-1.23.39-1.46.45v.28h.17a.2.2 0 0 1 .17-.06.61.61 0 0 1 .56.28 2 2 0 0 1 .11.67v3.82a1.46 1.46 0 0 1-.22.89 1.74 1.74 0 0 1-.73.28v.23h3.25v-.23a1.49 1.49 0 0 1-.79-.22 1 1 0 0 1-.22-.73v-4.15a7.54 7.54 0 0 1 .67-.62 2 2 0 0 1 .9-.28 1 1 0 0 1 .9.45 2 2 0 0 1 .22 1.07v3.19c0 .51-.05.84-.22 1a1.11 1.11 0 0 1-.73.33v.23h3.2v-.23a.87.87 0 0 1-.73-.28c-.17-.11-.23-.39-.23-.73"/>
+          <g mask="url(#mask)" id="Group-21">
+            <path id="Fill-19" class="cls-2" d="M168.32 10v.23h.28a.8.8 0 0 1 .34.11.45.45 0 0 1 .11.28.58.58 0 0 1-.06.28 1.29 1.29 0 0 1-.05.28l-1.41 3.92-1.73-3.87c-.12-.16-.12-.28-.17-.33s-.06-.17-.06-.23.11-.33.4-.39a1.36 1.36 0 0 1 .5 0V10h-3.14v.17c.28.06.45.11.56.28a2.44 2.44 0 0 1 .45.73l2.41 5.16c0 .05.06.11.06.16v.17a4.22 4.22 0 0 1-.45 1.29c-.34.67-.62 1-.9 1a1.93 1.93 0 0 1-.56-.17 3.81 3.81 0 0 0-.56-.11 1 1 0 0 0-.56.17.53.53 0 0 0-.22.5.74.74 0 0 0 .44.65 1.78 1.78 0 0 0 .78.16 1.66 1.66 0 0 0 1.4-.73 7.65 7.65 0 0 0 1.18-2.29l2.36-6.28a2.33 2.33 0 0 1 .28-.45.57.57 0 0 1 .44-.22V10z"/>
+          </g>
+          <path id="Fill-22" class="cls-2" d="M93.37 8.2c-.45.17.11 1.73.11 1.73.34 1.91 1 4.21.62 4.32a17.37 17.37 0 0 1-1.4-2.13c-.68-.84-1.4-2.24-2-2.24s-1 2.24-1.23 3.42c-.06 1.06-.51 2.58.33 3.36a.65.65 0 0 0 1-.22c.06-.34.11-2.69.11-3.14s0-1 .17-1a19 19 0 0 1 1.4 2.24c.17.28.84 1.91 2 1.85a2.21 2.21 0 0 0 1.13-1.12 8 8 0 0 0-.34-4.37c-.45-1.52-1.12-3-1.85-2.69"/>
+          <path id="Fill-24" class="cls-2" d="M52 14.14c-.62.22-1.18.73-1.85.39-.34-.17.34-2.63.73-3.92.17-.56.28-1.91-.23-2.08-.28 0-.67.45-.78.85a12.05 12.05 0 0 0-1.12 6.16 2 2 0 0 0 1.12 1.23 3 3 0 0 0 3-1.51c.17-.39.56-.95.17-1.34-.45-.23-.67.11-1 .22"/>
+          <path id="Fill-26" class="cls-2" d="M82.38 10.16a1.85 1.85 0 0 0-1.06 1.62 1.33 1.33 0 0 0 1 1 44.15 44.15 0 0 1 4.76.61c.29.17.68.4.68.79s-1.8 1.12-3.31 1.06c-.22 0-1.79.12-1.91-.67 0-.28.51-.39.73-.39.68 0 1.4.67 2.19.62s1.85-.56 1.46-.79a5.24 5.24 0 0 0-4.66-.22 1.31 1.31 0 0 0-.38 1.21 3.78 3.78 0 0 0 2.46 1.68c1.69.28 3.26.11 4.27-1.29a2.33 2.33 0 0 0 .22-1.12 1.57 1.57 0 0 0-.67-1.57c-1.46-.79-3.37-.67-5-1 0 0-.39-.06-.39-.22s0-.23 1-.34c1.24-.23 4.6-.45 4.83-.56s.5-.11.5-.62c-.17-.73-4.65-.9-6.73.17"/>
+          <path id="Fill-28" class="cls-2" d="M101.33 14.7c-1.12-.28-3 .28-3.36.28a10.06 10.06 0 0 1 .5-1.4c.9-.17 1.85-.11 2.8-.28.17-.11 0-1-.17-1.07a6.73 6.73 0 0 0-2.18.06 3.27 3.27 0 0 1 .34-1.07c1.12-.11 2.86-.05 3.25-.39.17-.11 0-.73-.23-1.06s-.56-.34-.56-.34c-1.79 0-4.93.23-5.21.51-.11.16-.11.22 0 .39.28.5.78.5 1.29.73l-.17.45a6.19 6.19 0 0 1-.39 1s-.56 0-.68.17.06.5.12 1a14.5 14.5 0 0 0-.45 1.62 1.73 1.73 0 0 0 .84 1.63c1.12.56 3.19-.28 4.48-1.35.34-.28 0-.73-.22-.84"/>
+          <path id="Fill-30" class="cls-2" d="M79.75 9.49c-.34 0-.51.5-.56.78-.12 2.13-.56 4.71.16 6.62.12.11 1.29.16 1.29-.12a42.4 42.4 0 0 0-.22-6.55c-.11-.29-.28-.73-.67-.73"/>
+          <path id="Fill-32" class="cls-2" d="M57.1 10.38l-.73-.05a1.43 1.43 0 0 1 .63-.62c.29-.05.45 0 .56.17s-.27.45-.5.5m-.17-1.45a2.93 2.93 0 0 0-2 1.34 4.87 4.87 0 0 1-2.29-.9c-.12-.16-.23-.72-.34-.72s-.62.89-.39 1.45c.39 1 1.45 1.24 2.24 1.68-.62 2.08-1.51 5.33.28 7.18a.77.77 0 0 0 1.06 0 21.82 21.82 0 0 1 .45-6.84 3.47 3.47 0 0 0 2.13-.45c.68-.45.4-1.45.23-2a1.58 1.58 0 0 0-1.35-.73"/>
+          <g mask="url(#mask-2-2)" id="Group-36">
+            <path id="Fill-34" class="cls-2" d="M45.44 13a9.21 9.21 0 0 1 .84-1.85l.28 1.85a7.89 7.89 0 0 1-1.12.06M34.17 9.37c.34-1.12.79-1.84 1-1.84.9 0 .67 2.07.51 2.57a9.33 9.33 0 0 1-1.8 3.54 10.54 10.54 0 0 1 .28-4.27m12.4-1.12c-.33 0-.62.23-.56.56a17.42 17.42 0 0 0-2.69 4.32c-.34 0-.5-.06-.79-.06a12.17 12.17 0 0 0 .62-4.93C42.86 5 41.35 1.69 38.27.35a.26.26 0 0 0-.17.33 7.44 7.44 0 0 1 2.46 3.59 10.89 10.89 0 0 1-2.29 11.33 3.54 3.54 0 0 1-3 .73c-.4-.28-1-.62-1-1.18 2.35-1.85 4-4.54 3-7.46a1.88 1.88 0 0 0-1.35-1.17 3.5 3.5 0 0 0-2.63 1.17c-2.07 1.85-1.63 5.22-1 7.57a2 2 0 0 1-1.79.23 2 2 0 0 1-1-1.13 11.32 11.32 0 0 1 .28-5.66 11 11 0 0 1 3.75-6 .34.34 0 0 0 .06-.45c-.11-.11-.5.06-.5.06A10.18 10.18 0 0 0 27.78 9c-.61 2.24-1.12 5.55 1.12 7.18a3.84 3.84 0 0 0 3.65.11 4.18 4.18 0 0 0 4.48 2 8.47 8.47 0 0 0 5.33-4.93c.16.22.33.5.56.89-.34.95-1 2.19-.11 3.09a1 1 0 0 0 .95 0l1-2.53 2.13.06a2.84 2.84 0 0 0 .62 2c.22.16.62.5.78.05a22.37 22.37 0 0 0-1.06-8c-.17-.23-.23-.68-.62-.68"/>
+          </g>
+          <path id="Fill-37" class="cls-2" d="M108.17 13.8a3.91 3.91 0 0 1-2.52 1.35c.67-1.4 2.69-4 3-3.81s.17 1.79-.5 2.46m.06-3.92a6.6 6.6 0 0 0-2.42 2c-.78 1-1.79 2.41-1.79 2.41-.73-.61 1.4-3.08 1.46-4.71a.47.47 0 0 0-.06-.45c-.17-.05-.33.17-.45.34a.62.62 0 0 0-.22.28c-1.46 1.68-2.75 3.81-1.68 6a25.82 25.82 0 0 0-1.4 5.16 2.43 2.43 0 0 0 .45 2c.28.28 1 .56 1.06.34s1.07-4.54 1.07-4.54a6 6 0 0 1 .44-1.63c1.68.34 4.66-1.79 5.27-3.69a3.58 3.58 0 0 0-.5-2.92 1.16 1.16 0 0 0-1.23-.56"/>
+          <path id="Fill-39" class="cls-2" d="M64.44 15.6c-1.62-.56-4.37-2.3-4.37-2.92s.45-.5.73-.61a16 16 0 0 1 3.81-.62zM57.77 1.69a2.12 2.12 0 0 0-1.57 1.74.82.82 0 0 0 .51.39 1.72 1.72 0 0 0 1.4-.28c-.22-.33-.73-.33-1.07-.44a17.54 17.54 0 0 1 7.46 0c3.92 1.12 7.74 2.69 10.5 6.16a4.5 4.5 0 0 1 .66 4.74c-2.08 2.75-5.78 2.8-9 2.3l-.06-4.93s1.46.05 2.08.11 3 .62 3 1c-.23.45-1.12.9-1 1a1.55 1.55 0 0 0 1 .34 2.56 2.56 0 0 0 1.28-.9 1.47 1.47 0 0 0 .04-1.36c-1.4-2-4-2-6.45-2a12.3 12.3 0 0 0-.5-3c-.11-.34-.9-.84-.95-.62a10 10 0 0 0-.4 3.64 10.44 10.44 0 0 1-1.29.4c-1.51.44-4 1.06-4 2.69a1.55 1.55 0 0 0 .51.89 13 13 0 0 0 4.65 3.53l.11.9c.17.51.51 1.12 1.24.9.61 0 .56-.73.73-1.07a16.23 16.23 0 0 0 5 .28c2.52-.45 5.21-1.51 6.22-4.14 1-2.92-1.07-5.27-2.92-7.29C70.16 2.7 64.22.35 57.77 1.69z"/>
+          <path id="Fill-41" class="cls-2" d="M78.18 6.23c-.17-.5.22-1 .56-1.28a2.57 2.57 0 0 1 1.34-.68zm5-1.79l.23.28c.17.62-.23 1-.62 1.35a4.46 4.46 0 0 1-3.25.84c.94-1.18 2.17-2.52 3.68-2.47zm1.12 1.18a1.78 1.78 0 0 0 0-1.68 1.67 1.67 0 0 0-1.12-.45c-.56-.9-1.8-.84-2.69-.67C79 3.15 77.34 4.39 77.11 6a1.76 1.76 0 0 0 .62 1.51A1 1 0 0 0 78 8.65c.62.39.5-.68 1-.45 2.26.61 4.11-.9 5.34-2.58z"/>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>      <svg class="customer-logo" id="customer-icon--uber" width="90" height="17" viewBox="0 0 90 17">
+  <g>
+    <path d="M63.93 2.64a.56.56 0 0 0 .32-.07.46.46 0 0 0 .19-.2l1-2.18Q65.5 0 65.27 0H51.54a2.59 2.59 0 0 0-1.36.27.93.93 0 0 0-.41.85v14.12a.82.82 0 0 0 .31.72 1.71 1.71 0 0 0 1 .24h12.85a.56.56 0 0 0 .32-.07.46.46 0 0 0 .19-.2l1-2.16c0-.14 0-.2-.15-.2H53.58V10.7a1.14 1.14 0 0 1 .51-1.09 3.2 3.2 0 0 1 1.75-.36h5.08a.66.66 0 0 0 .31-.06.55.55 0 0 0 .19-.19l.95-2.08c.05-.13 0-.2-.15-.2h-8.64V2.64zM38.34 13.08a3.2 3.2 0 0 1-2.17.55h-6.76v-3a1.17 1.17 0 0 1 .52-1.09 3.3 3.3 0 0 1 1.76-.35h4.48a3.2 3.2 0 0 1 2.17.55 2.06 2.06 0 0 1 .56 1.68 2 2 0 0 1-.56 1.66zM29.41 2.57h6.06a3 3 0 0 1 2 .52A1.92 1.92 0 0 1 38 4.66a1.93 1.93 0 0 1-.54 1.57 3 3 0 0 1-2 .52h-6.05zm10.34 5.09a3.41 3.41 0 0 0 1.61-1.44 4.4 4.4 0 0 0 .5-2.1A3.42 3.42 0 0 0 39.8.71 11.47 11.47 0 0 0 35.18 0h-7.75a2.65 2.65 0 0 0-1.38.27.89.89 0 0 0-.39.85v14.12A.82.82 0 0 0 26 16a1.77 1.77 0 0 0 1 .2h9.54a8.17 8.17 0 0 0 4.43-1 3.88 3.88 0 0 0 1.74-3.45A4.56 4.56 0 0 0 42 9.14a3.63 3.63 0 0 0-2.25-1.48zm44.7-.76a3.29 3.29 0 0 1-2.33.61h-6.36v-4.9h6.36a3.29 3.29 0 0 1 2.33.61A2.44 2.44 0 0 1 85 5.06a2.41 2.41 0 0 1-.55 1.84zm4.8 9l-4.09-6.21a4.88 4.88 0 0 0 2.6-1.38A4.73 4.73 0 0 0 88.83 5c0-1.92-.67-3.24-1.94-4a10.75 10.75 0 0 0-5.34-1h-7.79a2.59 2.59 0 0 0-1.36.28 1 1 0 0 0-.41.85v14.68q0 .39.45.39h3.32v-4.73a1.17 1.17 0 0 1 .52-1.09A3.3 3.3 0 0 1 78 10h3.38l3.68 5.9a.46.46 0 0 0 .19.2.56.56 0 0 0 .32.07h3.47c.11 0 .18-.05.2-.11a.2.2 0 0 0 .01-.15zM14.47.39v9.1a4 4 0 0 1-1.2 3.29 5.92 5.92 0 0 1-3.84 1 5.93 5.93 0 0 1-3.85-1 4 4 0 0 1-1.2-3.29V0H1C.66 0 .51.13.51.39v9.25Q.57 13.39 3 15a11.49 11.49 0 0 0 6.44 1.52A11.54 11.54 0 0 0 15.86 15q2.41-1.58 2.48-5.33V0h-3.41c-.31 0-.46.13-.46.39z" fill="#57b9e9"/>
+  </g>
+</svg>    </div>
+
+  </div>
+</section>
+<!-- End of Customers -->
+<!-- Start of Testimonials -->
+<section class="outer-container testimonials testimonials--content-slider" id="content_testimonial-slider"><div class="inner-container inner-container--maxwidth"><div class="content-slider" data-autorotate="5000"><div class="content-slider__item">  <div class="testimonial">    <div class="testimonial__image"><img src="https://www.git-tower.com/assets/img/testimonials/sebastian-kreutzberger@224w.1787161387.jpg" width="224" height="224" alt="Sebastian Kreutzberger"/></div>    <p class="testimonial__person"><span class="testimonial__name">Sebastian Kreutzberger</span><span class="testimonial__company">CEO at SwiftyBeaver</span></p>    <p class="testimonial__text">The new Tower is great! Github pull requests have never been easier 🚀</p>  </div></div><div class="content-slider__item">  <div class="testimonial">    <div class="testimonial__image"><img src="https://www.git-tower.com/assets/img/testimonials/collin-allen@224w.1787161387.jpg" width="224" height="224" alt="Collin Allen"/></div>    <p class="testimonial__person"><span class="testimonial__name">Collin Allen</span><span class="testimonial__company">Software Engineer</span></p>    <p class="testimonial__text">I can't even tell you how much I love Tower. It's easily my favorite development tool, and I depend on it every single day.</p>  </div></div><div class="content-slider__item">  <div class="testimonial">    <div class="testimonial__image"><img src="https://www.git-tower.com/assets/img/testimonials/jesse-bilsten@224w.1787161387.jpg" width="224" height="224" alt="Jesse Bilsten"/></div>    <p class="testimonial__person"><span class="testimonial__name">Jesse Bilsten</span><span class="testimonial__company">Principal Designer at GoDaddy</span></p>    <p class="testimonial__text">I utilize Git in both design and development environments - and Tower is the only tool that empowers me in both.</p>  </div></div></div></div></section><!-- End of Testimonials -->
+<!-- Start of Button Bar -->
+<section class="outer-container button-bar theme--10" id="content_button-bar--footer">
+  <div class="inner-container inner-container--maxwidth">
+    
+        <h2><p>All features, 30 days for free!</p></h2>
+    
+        <div class="subline"><p>Try Tower now and see why it's the tool of choice for thousands of professionals all over the world.</p></div>
+        
+    <div class="button-bar__buttons">
+      <div class="button__wrap">
+  <span class="visible-on--mac">
+    <a class="button button--outlined button--start-trial button--start-trial--footer analytics--click" href="https://www.git-tower.com/download/mac">
+      Download the Free Trial    </a>
+    <br />
+    <span class="note"><div class="os-selection os-selection--single"><a class="visible-on--mac os-switch os-switch--windows selectable" href="javascript:void(0);"><span class="os-switch__prefix">Also available for </span><span class="os-switch__os-string">Windows</span></a><a class="visible-on--windows os-switch os-switch--mac selectable" href="javascript:void(0);"><span class="os-switch__prefix">Also available for </span><span class="os-switch__os-string">macOS</span></a></div></span>
+  </span>
+  <span class="visible-on--windows">
+        <div class="button--split-dropdown" data-architecture-adaptive="true" data-arm-url="https://www.git-tower.com/download/windows?arch=arm64">
+      <a class="button button--outlined button--start-trial button--start-trial--footer button__main analytics--click" href="https://www.git-tower.com/download/windows" data-default-href="https://www.git-tower.com/download/windows">
+        <span class="button-text" data-default-text="Download the Free Trial (x64)">Download the Free Trial (x64)</span>
+      </a>
+      <button class="button__dropdown-trigger" aria-expanded="false" aria-haspopup="true" aria-label="More download options">
+      </button>
+      <div class="download-dropdown" role="menu">
+        <a href="https://www.git-tower.com/download/windows?arch=arm64" class="download-dropdown__item analytics--click" role="menuitem" data-track="alternative">
+          <span class="dropdown-item-text" data-default-text="Download the Free Trial (ARM)">Download the Free Trial (ARM)</span>
+        </a>
+      </div>
+    </div>
+    <br />
+        <span class="note"><div class="os-selection os-selection--single"><a class="visible-on--mac os-switch os-switch--windows selectable" href="javascript:void(0);"><span class="os-switch__prefix">Also available for </span><span class="os-switch__os-string">Windows</span></a><a class="visible-on--windows os-switch os-switch--mac selectable" href="javascript:void(0);"><span class="os-switch__prefix">Also available for </span><span class="os-switch__os-string">macOS</span></a></div></span>
+  </span>
+</div>
+    </div>
+    
+  </div>
+</section>
+<!-- End of Button Bar -->
+</main>
+
+
+<!-- Start of Footer -->
+<footer class="outer-container theme--10">
+  <div class="inner-container inner-container--maxwidth">
+
+          <nav class="navi-footer" aria-label="Footer">
+
+  <div class="navi-footer__col">
+    <div class="navi-footer__group">
+      <button class="footer-group__label" aria-expanded="true" aria-controls="footer-list__tower">
+        <h5>Tower Git Client</h5>
+      </button>
+      <ul id="footer-list__tower">
+        <li><a href="https://www.git-tower.com/download/mac">Download for macOS</a></li>
+        <li><a href="https://www.git-tower.com/download/windows">Download for Windows</a></li>
+        <li><a href="https://www.git-tower.com/release-notes">Releases</a></li>
+        <li><a href="https://www.git-tower.com/pricing">Pricing</a></li>
+        <li><a href="https://www.git-tower.com/beta">Beta Channel</a></li>
+      </ul>
+    </div>
+    <div class="navi-footer__group">
+      <button class="footer-group__label" aria-expanded="false" aria-controls="footer-list__usecases">
+        <h5>Use Cases</h5>
+      </button>
+      <ul id="footer-list__usecases" class="footer-group__list--collapsed">
+        <li><a href="https://www.git-tower.com/use-cases/developers">Developers</a></li>
+        <li><a href="https://www.git-tower.com/features/cli-vs-gui">CLI vs GUI</a></li>
+        <li><a href="https://www.git-tower.com/use-cases/designers">Designers</a></li>
+        <li><a href="https://www.git-tower.com/use-cases/teams">Teams</a></li>
+        <li><a href="https://www.git-tower.com/use-cases/enterprise">Enterprise</a></li>
+        <li><a href="https://www.git-tower.com/students">Students</a></li>
+        <li><a href="https://www.git-tower.com/education">Teachers & Universities</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="navi-footer__col">
+    <div class="navi-footer__group">
+      <button class="footer-group__label" aria-expanded="false" aria-controls="footer-list__features">
+        <h5>Features</h5>
+      </button>
+      <ul id="footer-list__features" class="footer-group__list--collapsed">
+        <li><a href="https://www.git-tower.com/features/undo">Undo Anything</a></li>
+        <li><a href="https://www.git-tower.com/features/drag-and-drop">Drag and Drop</a></li>
+        <li><a href="https://www.git-tower.com/features/integrations">Integrations</a></li>
+        <li><a href="https://www.git-tower.com/features/workflows">Custom Workflows</a></li>
+        <li>&nbsp;</li>
+        <li><a href="https://www.git-tower.com/pro/advanced-custom-workflows">Advanced Custom Workflows <span class="pro-badge">Pro</span></a></li>
+        <li><a href="https://www.git-tower.com/pro/graphite-workflow">Graphite Workflow <span class="pro-badge">Pro</span></a></li>
+        <li><a href="https://www.git-tower.com/pro/stacked-branches">Stacked Branches <span class="pro-badge">Pro</span></a></li>
+        <li><a href="https://www.git-tower.com/pro/automatic-branch-management">Automatic Branch Management <span class="pro-badge">Pro</span></a></li>
+        <li><a href="https://www.git-tower.com/pro/enterprise-services">Self-Hosted Repositories <span class="pro-badge">Pro</span></a></li>
+        <li><a href="https://www.git-tower.com/pro/pr-merged-detection">PR-Based Merge Detection <span class="pro-badge">Pro</span></a></li>
+        <li>&nbsp;</li>
+        <li><a href="https://www.git-tower.com/features/new-features">New Features</a></li>
+        <li><a href="https://www.git-tower.com/features/all-features">All Features</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="navi-footer__col">
+    <div class="navi-footer__group">
+      <button class="footer-group__label" aria-expanded="false" aria-controls="footer-list__free-tools">
+        <h5>Free Tools</h5>
+      </button>
+      <ul id="footer-list__free-tools" class="footer-group__list--collapsed">
+        <li><a href="https://www.git-tower.com/free-tools/code-diff">Code Diff Tool</a></li>
+        <li><a href="https://www.git-tower.com/free-tools/gitignore">.gitignore Generator</a></li>
+        <li><a href="https://www.git-tower.com/free-tools/git-config-generator">Git Config Generator</a></li>
+        <li><a href="https://www.git-tower.com/git-hooks">Git Hooks Library</a></li>
+      </ul>
+    </div>
+    <div class="navi-footer__group">
+      <button class="footer-group__label" aria-expanded="false" aria-controls="footer-list__support">
+        <h5>Support</h5>
+      </button>
+      <ul id="footer-list__support" class="footer-group__list--collapsed">
+        <li><a href="https://www.git-tower.com/support/help-center">Help Center</a></li>
+        <li><a href="https://www.git-tower.com/help/home">Documentation</a></li>
+        <li><a href="https://www.git-tower.com/learn">Learn Git</a></li>
+        <li><a href="https://www.git-tower.com/newsletter">Newsletter</a></li>
+        <li><a href="https://www.git-tower.com/support/contact">Contact Us</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="navi-footer__col">
+    <div class="navi-footer__group">
+      <button class="footer-group__label" aria-expanded="false" aria-controls="footer-list__company">
+        <h5>Company</h5>
+      </button>
+      <ul id="footer-list__company" class="footer-group__list--collapsed">
+        <li><a href="https://www.git-tower.com/about-us">About</a></li>
+        <li><a href="https://www.git-tower.com/blog" target="_blank">Blog</a></li>
+        <li><a href="https://www.git-tower.com/company/press">Press</a></li>
+        <li><a href="https://www.git-tower.com/company/jobs">Jobs</a></li>
+        <li><a href="https://stuff.git-tower.com/" target="_blank">Merch</a></li>
+      </ul>
+    </div>
+    <div class="navi-footer__group">
+      <button class="footer-group__label" aria-expanded="false" aria-controls="footer-list__legal">
+        <h5>Legal</h5>
+      </button>
+      <ul id="footer-list__legal" class="footer-group__list--collapsed">
+        <li><a href="https://www.git-tower.com/legal/eula">License Agreement</a></li>
+        <li><a href="https://www.git-tower.com/legal/privacy-policy">Privacy Policy</a></li>
+        <li><button type="button" class="footer-privacy-settings-btn" onclick="UC_UI.showSecondLayer();">Privacy Settings</button></li>
+        <li><a href="https://www.git-tower.com/legal/imprint">Imprint</a></li>
+      </ul>
+    </div>
+  </div>
+
+</nav>
+    
+    <div class="social-media-icons">
+  <ul class="social-media-icons-list">
+    <li><a href="https://www.facebook.com/gittower/" rel="noopener noreferrer" target="_blank" aria-label="Facebook" title="Facebook" class="social-media-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path fill="currentColor" d="M27 16.066c0-6.112-4.925-11.067-11-11.067S5 9.954 5 16.066c0 5.523 4.022 10.103 9.281 10.933v-7.733h-2.793v-3.2h2.793v-2.438c0-2.774 1.642-4.306 4.155-4.306 1.204 0 2.462.216 2.462.216v2.723h-1.387c-1.366 0-1.792.853-1.792 1.729v2.076h3.051l-.488 3.2h-2.563v7.733c5.259-.83 9.281-5.41 9.281-10.933"></path></svg>
+      </a></li>
+    <li><a href="https://www.x.com/gittower/" rel="noopener noreferrer" target="_blank" aria-label="X / Twitter" title="X / Twitter" class="social-media-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path fill="currentColor" d="M22.326 6H25.7l-7.37 8.424L27 25.886h-6.789l-5.317-6.952-6.084 6.952H5.434l7.883-9.01L5 6h6.961l4.806 6.354zm-1.184 17.867h1.87L10.945 7.913H8.94z"></path></svg>
+      </a></li>
+    <li><a href="https://bsky.app/profile/git-tower.com" rel="noopener noreferrer" target="_blank" aria-label="Bluesky" title="Bluesky" class="social-media-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+        <g transform="translate(4,5) scale(1,1)">
+          <path fill="currentColor" d="M12,10.8C10.913,8.686 7.954,4.747 5.202,2.805C2.566,0.944 1.561,1.266 0.902,1.565C0.139,1.908 0,3.08 0,3.768C0,4.458 0.378,9.418 0.624,10.247C1.439,12.983 4.337,13.907 7.007,13.611C7.143,13.591 7.282,13.572 7.422,13.555C7.284,13.577 7.146,13.595 7.007,13.611C3.095,14.191 -0.38,15.616 4.177,20.689C9.19,25.879 11.047,19.576 12,16.381C12.953,19.576 14.05,25.652 19.733,20.689C24,16.381 20.905,14.191 16.993,13.611C16.854,13.596 16.716,13.577 16.578,13.555C16.718,13.572 16.857,13.591 16.993,13.611C19.663,13.908 22.561,12.983 23.376,10.247C23.622,9.419 24,4.457 24,3.769C24,3.079 23.861,1.908 23.098,1.563C22.439,1.265 21.434,0.943 18.798,2.803C16.046,4.748 13.087,8.687 12,10.8Z"/>
+        </g>
+      </svg>
+    </a></li>
+    <li><a href="https://www.instagram.com/gittower/" rel="noopener noreferrer" target="_blank" aria-label="Instagram" title="Instagram" class="social-media-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path fill="currentColor" d="M16.582 5c2.461.001 2.861.016 3.954.066 1.17.054 1.97.24 2.67.511a5.4 5.4 0 0 1 1.948 1.269 5.4 5.4 0 0 1 1.269 1.947c.271.701.457 1.5.511 2.672.047 1.051.063 1.462.065 3.688v1.694c-.002 2.226-.018 2.636-.065 3.688-.054 1.171-.24 1.971-.511 2.671a5.4 5.4 0 0 1-1.269 1.948 5.4 5.4 0 0 1-1.948 1.268c-.7.272-1.5.458-2.67.512-1.053.047-1.462.063-3.689.065h-1.694c-2.226-.002-2.636-.018-3.688-.065-1.171-.054-1.97-.24-2.67-.512a5.4 5.4 0 0 1-1.949-1.268 5.4 5.4 0 0 1-1.268-1.948c-.272-.7-.458-1.5-.512-2.671-.049-1.093-.064-1.493-.066-3.953v-1.164c.002-2.461.017-2.861.066-3.953.054-1.172.24-1.971.512-2.672a5.4 5.4 0 0 1 1.268-1.947 5.4 5.4 0 0 1 1.949-1.269c.7-.271 1.499-.457 2.67-.511 1.092-.05 1.492-.065 3.953-.066zm-.01 1.982h-1.144c-2.417.001-2.793.014-3.873.064-1.072.049-1.655.227-2.042.379-.514.2-.88.438-1.265.823a3.4 3.4 0 0 0-.823 1.264c-.151.388-.33.969-.379 2.043-.049 1.08-.062 1.456-.064 3.873v1.143c.002 2.418.015 2.794.064 3.874.049 1.072.228 1.655.379 2.042.2.513.438.88.823 1.264a3.4 3.4 0 0 0 1.265.824c.387.151.97.33 2.042.379 1.04.047 1.427.061 3.613.063h1.664c2.187-.002 2.573-.016 3.613-.063 1.073-.049 1.655-.228 2.043-.379.513-.2.88-.438 1.264-.824.385-.384.623-.751.823-1.264.151-.387.33-.97.379-2.042.047-1.04.062-1.427.064-3.613v-1.665c-.002-2.185-.017-2.572-.064-3.612-.049-1.074-.228-1.655-.379-2.043-.2-.513-.438-.88-.823-1.264a3.4 3.4 0 0 0-1.264-.823c-.388-.152-.97-.33-2.043-.379-1.08-.05-1.455-.063-3.873-.064M16 10.351a5.649 5.649 0 1 1 0 11.297 5.649 5.649 0 0 1 0-11.297m0 1.982a3.666 3.666 0 1 0-.001 7.333A3.666 3.666 0 0 0 16 12.333m5.872-3.525a1.32 1.32 0 1 1 .002 2.638 1.32 1.32 0 0 1-.002-2.638"></path></svg>
+      </a></li>
+    <li><a href="https://www.linkedin.com/company/gittower/" rel="noopener noreferrer" target="_blank" aria-label="LinkedIn" title="LinkedIn" class="social-media-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path fill="currentColor" d="M23.638 23.883q-1.398-.015-2.795 0c-.214.002-.267-.075-.266-.276.006-1.726.013-3.453-.002-5.178a6 6 0 0 0-.142-1.32c-.17-.736-.666-1.103-1.423-1.112a3 3 0 0 0-.731.067c-.761.19-1.084.764-1.21 1.474a6 6 0 0 0-.085 1.04q-.014 2.517 0 5.035c.002.209-.056.271-.264.27a145 145 0 0 0-2.795 0c-.212.002-.265-.069-.265-.273q.009-5.005 0-10.008c0-.203.049-.271.263-.27q1.346.017 2.693.002c.195-.002.246.065.24.248-.01.374-.003.752-.003 1.188.513-.804 1.17-1.335 2.035-1.56a4.57 4.57 0 0 1 3.084.255c.999.449 1.467 1.313 1.707 2.329.174.742.213 1.5.21 2.26q-.005 2.786.003 5.57c0 .197-.055.26-.254.259M10.017 11.93a1.89 1.89 0 0 1-1.908-1.892 1.895 1.895 0 0 1 1.902-1.922c1.062 0 1.912.852 1.91 1.915a1.895 1.895 0 0 1-1.904 1.899m1.655 6.66v5.014c0 .271-.001.273-.275.273-.931.002-1.863-.003-2.794.003-.178.002-.251-.04-.251-.24q.01-5.033 0-10.066c0-.192.059-.242.245-.24q1.418.011 2.835-.002c.193-.002.244.06.244.246-.006 1.672-.004 3.343-.004 5.012m13.617-13.59H6.71A1.71 1.71 0 0 0 5 6.71V25.29A1.71 1.71 0 0 0 6.71 27H25.29a1.71 1.71 0 0 0 1.71-1.71V6.71a1.71 1.71 0 0 0-1.71-1.71"></path></svg>
+      </a></li>
+    <li><a href="https://www.youtube.com/@gittower" rel="noopener noreferrer" target="_blank" aria-label="YouTube" title="YouTube" class="social-media-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><path fill="currentColor" d="M13.75 19.021v-6.542l5.75 3.271zm12.791-8.601a2.76 2.76 0 0 0-1.946-1.957C22.88 8 16 8 16 8s-6.879 0-8.595.463A2.76 2.76 0 0 0 5.46 10.42C5 12.147 5 15.75 5 15.75s0 3.603.46 5.33a2.77 2.77 0 0 0 1.945 1.958C9.121 23.5 16 23.5 16 23.5s6.88 0 8.595-.462a2.77 2.77 0 0 0 1.946-1.958C27 19.353 27 15.75 27 15.75s0-3.603-.459-5.33"></path></svg>
+      </a></li>
+  </ul>
+</div>
+
+    <div class="copyright">
+      <p>© 2010-2026 <a href="https://www.git-tower.com" rel="noopener noreferrer" target="_blank">Tower</a> - Mentioned product names and logos are property of their respective owners.</p>    </div>
+
+    
+  </div>
+</footer>
+<!-- End of Footer -->
+<!-- Start modal element DOWNLOAD -->
+<div class="overlay__container overlay__container--download" role="dialog" aria-modal="true" aria-labelledby="overlay-download-title">
+	<div class="overlay__wrapper">
+	  <!-- Start Newsletter Signup -->
+		<div class="overlay__content overlay__content--1">
+		  <div class="content__header">
+        <div class="header__icon"></div>
+	      <div class="header__text">
+          <h2 id="overlay-download-title">Your trial is downloading…</h2>
+          <h4>Try Tower "Pro" for 30 days without limitations!</h4>
+        </div>
+	      <button class="overlay__button--close" aria-label="Close dialog"><span aria-hidden="true"></span><span aria-hidden="true"></span></button>
+	    </div>
+	    <div class="content__body">
+		    <h2>Updates, Courses &amp; Content via Email</h2>
+	      <div class="visible-on--mac">
+	        <form class="newsletter-form analytics--submit"  id="signup-after-download-form"  autocomplete="off">
+          <input type="hidden" name="lists[]" value="tower-newsletter" />
+  
+    <div class="newsletter-form__groups">
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_newsletter"  id="signup-tag__tower_newsletter" />Updates about <b>Tower, discounts, and giveaways</b> as well as new content from the Tower blog.</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_learngit"  id="signup-tag__tower_learngit" />Free email course "<b>Learn Git with Tower</b>" (8 emails)</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_tipstricks-mac"  id="signup-tag__tower_tipstricks-mac" />Free email course "<b>Tips &amp; Tricks for Tower</b>" (10 emails)</label>
+    </div>
+      </div>
+  
+    <div class="newsletter-form__consent">
+        <label><input type="checkbox" id="consent--legal" class="consent__item consent__text" data-required="1" />I have read and accept the <a href="https://www.git-tower.com/legal/privacy-policy" target="_blank">Privacy Policy</a>. I understand that I can unsubscribe at any time by clicking on the unsubscribe link in any email.</label>
+      </div>
+  
+  <div class="newsletter-form__signup">
+    <label for="newsletter-email-signup-after-download-form" class="sr-only">Email address</label>
+    <input type="email" name="email" id="newsletter-email-signup-after-download-form" placeholder="Your email address" aria-required="true" />
+    <input type="submit" value="Subscribe for Free" class="newsletter-form__signup-button button--outlined" />
+  </div>
+
+    <input type="hidden" name="signup[medium]" value="tower-website" />
+      <input type="hidden" name="signup[URI]" value="features/easy/download-trial" />
+      <input type="hidden" name="signup[OS]" value="" />
+    <div class="request-notice"></div>
+</form>
+	      </div>
+	      <div class="visible-on--windows">
+	        <form class="newsletter-form analytics--submit"  id="signup-after-download-form"  autocomplete="off">
+          <input type="hidden" name="lists[]" value="tower-newsletter" />
+  
+    <div class="newsletter-form__groups">
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_newsletter"  id="signup-tag__tower_newsletter" />Updates about <b>Tower, discounts, and giveaways</b> as well as new content from the Tower blog.</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_learngit"  id="signup-tag__tower_learngit" />Free email course "<b>Learn Git with Tower</b>" (8 emails)</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_tipstricks-windows"  id="signup-tag__tower_tipstricks-windows" />Free email course "<b>Tips &amp; Tricks for Tower"</b> (8 emails)</label>
+    </div>
+      </div>
+  
+    <div class="newsletter-form__consent">
+        <label><input type="checkbox" id="consent--legal" class="consent__item consent__text" data-required="1" />I have read and accept the <a href="https://www.git-tower.com/legal/privacy-policy" target="_blank">Privacy Policy</a>. I understand that I can unsubscribe at any time by clicking on the unsubscribe link in any email.</label>
+      </div>
+  
+  <div class="newsletter-form__signup">
+    <label for="newsletter-email-signup-after-download-form" class="sr-only">Email address</label>
+    <input type="email" name="email" id="newsletter-email-signup-after-download-form" placeholder="Your email address" aria-required="true" />
+    <input type="submit" value="Subscribe for Free" class="newsletter-form__signup-button button--outlined" />
+  </div>
+
+    <input type="hidden" name="signup[medium]" value="tower-website" />
+      <input type="hidden" name="signup[URI]" value="features/easy/download-trial" />
+      <input type="hidden" name="signup[OS]" value="" />
+    <div class="request-notice"></div>
+</form>
+	      </div>
+	    </div>
+		</div>
+		<!-- End of Newsletter Signup -->
+
+		<!-- Start of Social Share -->
+		<div class="overlay__content overlay__content--2 hidden">
+		  <div class="content__header">
+	      <div class="header__text">
+  	      <h2>Thank you for subscribing.</h2>
+  	      <h4>Please check your email to confirm.</h4>
+        </div>
+	      <button class="overlay__button--close" aria-label="Close dialog"><span aria-hidden="true"></span><span aria-hidden="true"></span></button>
+	    </div>
+		  <div class="content__body">
+	      <h3>Want to win one of our awesome Tower shirts?<br/><b>Tell your friends about Tower!</b></h3>
+	      <span><button class="button button--secondary button--twitter analytics--click" onclick="FN.socialShare('twitter', 'https://www.git-tower.com', 'The all-new Tower is finally here! The best Git client on Mac and Windows now with Pull Requests, Interactive Rebase, Quick Actions, and so much more. Try it free for 30 days. #gittower');">Share on Twitter</button></span>
+	      <p class="hint">We'll pick 4 winners every month who share this tweet!<br />Follow <a href="https://x.com/gittower" target="_blank">@gittower</a> to be notified if you win!</p>
+		  </div>
+		</div>
+		<!-- End of Social Share -->
+
+	</div>
+</div>
+<!-- End of modal element DOWNLOAD -->
+
+
+
+<!-- Start modal element SCREENCAST -->
+<div class="overlay__container--screencast" role="dialog" aria-modal="true" aria-label="Screencast viewer">
+
+	<div class="screencast__wrapper">
+		<button class="overlay__button--close" aria-label="Close screencast"><span aria-hidden="true"></span><span aria-hidden="true"></span></button>
+	</div>
+</div>
+<!-- End of modal element SCREENCAST -->
+
+
+
+<!-- Start modal element TRIAL VIA EMAIL -->
+<div class="overlay__container overlay__container--trial-via-email" role="dialog" aria-modal="true" aria-labelledby="overlay-trial-title">
+	<div class="overlay__wrapper">
+	  <!-- Start Newsletter Signup -->
+		<div class="overlay__content overlay__content--1">
+		  <div class="content__header">
+	      <div class="header__text">
+  	      <h2 id="overlay-trial-title">Try Tower for Free</h2>
+  	      <h6>Sign up below and use Tower "Pro" for 30 days without limitations!</h6>
+        </div>
+	      <button class="overlay__button--close" aria-label="Close dialog"><span aria-hidden="true"></span><span aria-hidden="true"></span></button>
+	    </div>
+	    <div class="content__body">
+	        <form class="newsletter-form analytics--submit"  id="signup-trial-via-email"  autocomplete="off">
+          <input type="hidden" name="lists[]" value="tower-newsletter" />
+  
+    <div class="newsletter-form__groups">
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_trial"  id="signup-tag__tower_trial" />Yes, send me instructions on <b>how to get started</b> with Tower.</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_newsletter"  id="signup-tag__tower_newsletter" />Yes, I want to hear about new <b>Tower updates, discounts and giveaways</b> as well as new content from the Tower blog.</label>
+    </div>
+      </div>
+  
+    <div class="newsletter-form__consent">
+        <label><input type="checkbox" id="consent--legal" class="consent__item consent__text" data-required="1" />I have read and accept the <a href="https://www.git-tower.com/legal/privacy-policy" target="_blank">Privacy Policy</a>. I understand that I can unsubscribe at any time.</label>
+      </div>
+  
+  <div class="newsletter-form__signup">
+    <label for="newsletter-email-signup-trial-via-email" class="sr-only">Email address</label>
+    <input type="email" name="email" id="newsletter-email-signup-trial-via-email" placeholder="Your email address" aria-required="true" />
+    <input type="submit" value="Go" class="newsletter-form__signup-button button--outlined" />
+  </div>
+
+    <input type="hidden" name="signup[medium]" value="tower-website" />
+      <input type="hidden" name="signup[URI]" value="features/easy/trial-via-email" />
+      <input type="hidden" name="signup[OS]" value="" />
+    <div class="request-notice"></div>
+</form>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- End modal element TRIAL VIA EMAIL -->
+
+<dialog class="modal-view" id="after-download-modal" aria-modal="true" aria-labelledby="after-download-modal-title">
+  <header class="modal-big-header">
+    <h2 class="modal-title" id="after-download-modal-title">Your trial is downloading…</h2>
+    <p class="modal-description">Try Tower "Pro" for 30 days without limitations!</p>
+    <div class="modal-app-icon">
+      <img src="https://www.git-tower.com/assets/img/icons/downloads-modal-app-icon.1787161387.png" alt="Tower Icon" />
+      <span class="modal-app-icon-name">Tower</span>
+    </div>
+    <button class="modal-close">Close</button>
+  </header>
+	<section class="modal-content after-download">
+    <h2>Updates, Courses &amp; Content via Email</h2>
+    <div class="visible-on--mac">
+      <form class="newsletter-form analytics--submit"  id="signup-after-download-form"  autocomplete="off">
+          <input type="hidden" name="lists[]" value="tower-newsletter" />
+  
+    <div class="newsletter-form__groups">
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_newsletter"  id="signup-tag__tower_newsletter" />Updates about <b>Tower, discounts, and giveaways</b> as well as new content from the Tower blog.</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_learngit"  id="signup-tag__tower_learngit" />Free email course "<b>Learn Git with Tower</b>" (8 emails)</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_tipstricks-mac"  id="signup-tag__tower_tipstricks-mac" />Free email course "<b>Tips &amp; Tricks for Tower</b>" (10 emails)</label>
+    </div>
+      </div>
+  
+    <div class="newsletter-form__consent">
+        <label><input type="checkbox" id="consent--legal" class="consent__item consent__text" data-required="1" />I have read and accept the <a href="https://www.git-tower.com/legal/privacy-policy" target="_blank">Privacy Policy</a>. I understand that I can unsubscribe at any time by clicking on the unsubscribe link in any email.</label>
+      </div>
+  
+  <div class="newsletter-form__signup">
+    <label for="newsletter-email-signup-after-download-form" class="sr-only">Email address</label>
+    <input type="email" name="email" id="newsletter-email-signup-after-download-form" placeholder="Your email address" aria-required="true" />
+    <input type="submit" value="Subscribe for Free" class="newsletter-form__signup-button button--outlined" />
+  </div>
+
+    <input type="hidden" name="signup[medium]" value="tower-website" />
+      <input type="hidden" name="signup[URI]" value="features/easy/download-trial" />
+      <input type="hidden" name="signup[OS]" value="" />
+    <div class="request-notice"></div>
+</form>
+    </div>
+    <div class="visible-on--windows">
+      <form class="newsletter-form analytics--submit"  id="signup-after-download-form"  autocomplete="off">
+          <input type="hidden" name="lists[]" value="tower-newsletter" />
+  
+    <div class="newsletter-form__groups">
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_newsletter"  id="signup-tag__tower_newsletter" />Updates about <b>Tower, discounts, and giveaways</b> as well as new content from the Tower blog.</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_learngit"  id="signup-tag__tower_learngit" />Free email course "<b>Learn Git with Tower</b>" (8 emails)</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_tipstricks-windows"  id="signup-tag__tower_tipstricks-windows" />Free email course "<b>Tips &amp; Tricks for Tower"</b> (10 emails)</label>
+    </div>
+      </div>
+  
+    <div class="newsletter-form__consent">
+        <label><input type="checkbox" id="consent--legal" class="consent__item consent__text" data-required="1" />I have read and accept the <a href="https://www.git-tower.com/legal/privacy-policy" target="_blank">Privacy Policy</a>. I understand that I can unsubscribe at any time by clicking on the unsubscribe link in any email.</label>
+      </div>
+  
+  <div class="newsletter-form__signup">
+    <label for="newsletter-email-signup-after-download-form" class="sr-only">Email address</label>
+    <input type="email" name="email" id="newsletter-email-signup-after-download-form" placeholder="Your email address" aria-required="true" />
+    <input type="submit" value="Subscribe for Free" class="newsletter-form__signup-button button--outlined" />
+  </div>
+
+    <input type="hidden" name="signup[medium]" value="tower-website" />
+      <input type="hidden" name="signup[URI]" value="features/easy/download-trial" />
+      <input type="hidden" name="signup[OS]" value="" />
+    <div class="request-notice"></div>
+</form>
+    </div>
+  </section>
+</dialog>
+
+<dialog class="modal-view" id="after-subscribe-modal" aria-modal="true" aria-labelledby="after-subscribe-modal-title">
+  <header class="modal-big-header">
+    <h2 class="modal-title" id="after-subscribe-modal-title">Thank you for subscribing</h2>
+    <p class="modal-description">Please check your email to confirm</p>
+    <button class="modal-close">Close</button>
+  </header>
+	<section class="modal-content after-subscribe">
+    <h2>
+      Want to win one of our awesome Tower shirts?<br />
+      <strong>Tell your friends about Tower!</strong>
+    </h2>
+    <div class="after-subscribe-share">
+      <button class="button button--secondary button--twitter analytics--click" onclick="FN.socialShare('twitter', 'https://www.git-tower.com', 'The all-new Tower is finally here! The best Git client on Mac and Windows now with Pull Requests, Interactive Rebase, Quick Actions, and so much more. Try it free for 30 days. #gittower')">Share on Twitter</button>
+    </div>
+    <p class="after-subscribe-winners">
+      We'll pick 4 winners every month who share this tweet!<br />
+      Follow <a href="https://x.com/gittower" target="_blank">@gittower</a> to be notified if you win!
+    </p>
+  </section>
+</dialog>
+
+<dialog class="modal-view" id="trial-via-email" aria-modal="true" aria-labelledby="trial-via-email-title">
+  <header class="modal-big-header">
+    <h2 class="modal-title" id="trial-via-email-title">Try Tower for Free</h2>
+    <p class="modal-description">Sign up below and use Tower "Pro" for 30 days without limitations!</p>
+    <button class="modal-close">Close</button>
+  </header>
+	<section class="modal-content trial-via-email">
+    <form class="newsletter-form analytics--submit"  id="signup-trial-via-email"  autocomplete="off">
+          <input type="hidden" name="lists[]" value="tower-newsletter" />
+  
+    <div class="newsletter-form__groups">
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_trial"  id="signup-tag__tower_trial" />Yes, send me instructions on <b>how to get started</b> with Tower.</label>
+    </div>
+        <div class="row" >
+      <label><input class="signup-tag__item consent__text" name="tags[]" type="checkbox" value="tower_newsletter"  id="signup-tag__tower_newsletter" />Yes, I want to hear about new <b>Tower updates, discounts and giveaways</b> as well as new content from the Tower blog.</label>
+    </div>
+      </div>
+  
+    <div class="newsletter-form__consent">
+        <label><input type="checkbox" id="consent--legal" class="consent__item consent__text" data-required="1" />I have read and accept the <a href="https://www.git-tower.com/legal/privacy-policy" target="_blank">Privacy Policy</a>. I understand that I can unsubscribe at any time.</label>
+      </div>
+  
+  <div class="newsletter-form__signup">
+    <label for="newsletter-email-signup-trial-via-email" class="sr-only">Email address</label>
+    <input type="email" name="email" id="newsletter-email-signup-trial-via-email" placeholder="Your email address" aria-required="true" />
+    <input type="submit" value="Go" class="newsletter-form__signup-button button--outlined" />
+  </div>
+
+    <input type="hidden" name="signup[medium]" value="tower-website" />
+      <input type="hidden" name="signup[URI]" value="features/easy/trial-via-email" />
+      <input type="hidden" name="signup[OS]" value="" />
+    <div class="request-notice"></div>
+</form>
+  </section>
+</dialog>
+
+
+		<!-- Project Seahawk -->
+	</body>
+</html>
+

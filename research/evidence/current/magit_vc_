@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>It's Magit! A Git Porcelain inside Emacs</title>
+    <meta charset="utf-8">
+    <meta name="author"      content="Jonas Bernoulli <jonas@bernoul.li>">
+    <meta name="description" content="Support Magit Development">
+    <meta name="keywords"    content="emacs, git, version control">
+    <link rel="me" href="https://fosstodon.org/@tarsius">
+    <link rel="me" href="https://bsky.app/profile/tarsius.bsky.social">
+    <link rel="me" href="https://github.com/tarsius">
+    <link rel="icon" href="https://magit.vc/assets/magit.ico">
+    <link rel="stylesheet" type="text/css" href="https://magit.vc/assets/page.css">
+    <link class="s-css-s--style" rel="stylesheet"           title="Default"               href="https://magit.vc/assets/themes/default.css">
+    <link class="s-css-s--style" rel="stylesheet alternate" title="Default high contrast" href="https://magit.vc/assets/themes/default-high-contrast.css">
+    <link class="s-css-s--style" rel="stylesheet alternate" title="Solarized dark xterm"  href="https://magit.vc/assets/themes/solarized-dark-xterm.css">
+    <link class="s-css-s--style" rel="stylesheet alternate" title="Black on white"        href="https://magit.vc/assets/themes/black-on-white.css">
+    <script src="https://magit.vc/assets/js/simple-css-switch.js"></script>
+    <script src="https://magit.vc/assets/js/count.js" async
+            data-goatcounter="https://magit-vc.goatcounter.com/count"></script>
+  </head>
+
+  <body onload="simpleCssSwitch()">
+    <header>
+      <a alt="Magit logo"
+         
+           title="go to manual" href="https://docs.magit.vc/magit#Top"
+         
+         >
+      
+        <img src="https://magit.vc/assets/magit-400x400px.png">
+      
+      </a>
+      <h1>A Git Porcelain inside Emacs</h1>
+    </header>
+<p>Magit is a complete text-based user interface to <a href="https://git-scm.com">Git</a>.  It fills the
+glaring gap between the Git command-line interface and various GUIs,
+letting you perform trivial as well as elaborate version control tasks
+with just a couple of mnemonic key presses.  Magit looks like a
+prettified version of what you get after running a few Git commands
+but in Magit every bit of visible information is also actionable to an
+extent that goes far beyond what any Git GUI provides and it takes
+care of automatically refreshing this output when it becomes outdated.
+In the background Magit just runs Git commands and if you wish you can
+see what exactly is being run, making it possible for you to learn
+the <code class="language-plaintext highlighter-rouge">git</code> command-line by using Magit.</p>
+
+<p>Using Magit for a while will make you a more effective version control
+user.  Magit supports and streamlines the use of Git features that
+most users and developers of other Git clients apparently thought
+could not be reasonably mapped to a non-command-line interface.  Magit
+is both faster and more intuitive than either the command line or any
+GUI and these holds for both Git beginners and experts alike.</p>
+
+<p><br />
+<img class="clear" src="/assets/L.png" align="top" style="float: left;" />
+<b>
+  If you are new to Magit, then either one of the following two
+  articles should help understanding how it differs from other Git
+  clients.  Click the triangles to expand brief summaries.
+<b></b></b></p>
+
+<details>
+  <summary>
+  <a href="https://emacsair.me/2017/09/01/magit-walk-through">Visual Magit walk-through</a>
+  </summary>
+
+  If you are completely new to Magit, then this article is a good
+  visual introduction.
+
+  Almost everything that you see in Magit can be acted on by pressing
+  some key, but that's not obvious from just seeing how Magit looks.
+  The screenshots and accompanying text of this article explain how to
+  perform a variety of actions on Magit's output.
+  <br />
+</details>
+
+<details>
+  <summary>
+  <a href="https://emacsair.me/2017/09/01/the-magical-git-interface">Magit, the magical Git interface</a>
+  </summary>
+
+  Magit differs significantly from other Git interfaces, and its
+  advantages are not immediately obvious simply from looking at a few
+  screenshots as presented in the preceding article.
+
+  This article discusses Magit's properties in somewhat more abstract
+  terms.
+</details>
+
+<p>Or you might prefer a <a href="/screencasts">video</a> introduction.</p>
+
+<p><a href="/screenshots">
+  <img class="screenshot" src="/screenshots/status.png" />
+</a></p>
+
+<p><br />
+<script type="text/javascript" src="/quotes/quotes.js"></script>
+<script type="text/javascript">window.onload = function(){inject_quotes(); simpleCssSwitch();}</script></p>
+
+<section>
+  <blockquote id="quote1"></blockquote>
+  <blockquote id="quote2"></blockquote>
+  <div id="donate">
+  <div>
+    Keeping its users <a href="/quotes">this excited</a> is
+    <a href="https://magit.vc/stats/magit/authors.html#cumulated_added_lines_of_code_per_author">
+      a lot of work
+    </a>.
+    If Magit makes you <br /> more productive too,
+    then <b>please consider making a donation</b>.
+  </div>
+  <div>
+    <em>Thank you! — Jonas Bernoulli</em>
+  </div>
+  <div>
+    <a href="https://github.com/sponsors/tarsius/">
+      <img title="Sponsor my work using Github Sponsors" alt="Sponsor my work using Github Sponsors" src="https://magit.vc/assets/donate/github-sponsors-50px.png" /></a>
+    &nbsp;&nbsp;
+    <a href="https://liberapay.com/magit/">
+      <img title="Sponsor my work using Liberapay" alt="Sponsor my work using Liberapay" src="https://magit.vc/assets/donate/liberapay-50px.png" /></a>
+    <br />
+    <a href="https://opencollective.com/magit/">
+      <img title="Sponsor my work using Opencollective" alt="Sponsor my work using Opencollective" src="https://magit.vc/assets/donate/opencollective-50px.png" /></a>
+    &nbsp;&nbsp;
+    <a href="https://magit.vc/donate/paypal.html">
+      <img title="Sponsor my work using PayPal" alt="Sponsor my work using PayPal" src="https://magit.vc/assets/donate/paypal-50px.png" /></a>
+  </div>
+  <div>
+    <a href="https://magit.vc/donate">Some alternative donation options are available</a>.
+  </div>
+</div>
+
+  <br />
+</section>
+
+<h1 id="news">News</h1>
+
+<!--Also update news/index.md-->
+<ul>
+  <li>2024-08-14 — Forge <strong>v0.4.0</strong> and <strong>v0.4.1</strong> released
+(<a href="https://emacsair.me/2024/08/14/forge-0.4">announcement</a>)</li>
+  <li>2024-08-09 — Magit <strong>v4.0.0</strong> <a href="https://github.com/magit/magit/blob/main/docs/RelNotes//4.0.0.org">released</a>
+(<a href="https://emacsair.me/2024/08/09/magit-4.0">announcement</a>)</li>
+  <li>2023-11-28 — Transient <strong>v0.5.0</strong> released
+(<a href="https://emacsair.me/2023/11/28/transient-0.5">announcement</a>)</li>
+  <li>2023-05-10 — Transient <strong>v0.4.0</strong> released
+(<a href="https://emacsair.me/2023/05/10/transient-0.4">announcement</a>)</li>
+</ul>
+
+<p><a href="/news">More news</a>.  Not all releases are announced on my blog.
+More releases are listed on the release pages for
+<a href="https://github.com/magit/magit/releases">Magit</a>,
+<a href="https://github.com/magit/transient/releases">Transient</a>,
+<a href="https://github.com/magit/forge/releases">Forge</a> and other packages.</p>
+
+<h1 id="documentation">Documentation</h1>
+
+<ul>
+  <li><a href="https://docs.magit.vc/magit">Magit User Manual</a>
+(<a href="https://docs.magit.vc/magit/magit.pdf">pdf</a>,
+ <a href="https://docs.magit.vc/magit-refcard.pdf">Reference Card</a>)</li>
+  <li><a href="https://docs.magit.vc/forge">Forge User Manual</a>
+(<a href="https://docs.magit.vc/forge/forge.pdf">pdf</a>)</li>
+  <li><a href="https://docs.magit.vc/ghub">Ghub User and Developer Manual</a>
+(<a href="https://docs.magit.vc/ghub/ghub.pdf">pdf</a>)</li>
+  <li><a href="https://docs.magit.vc/magit-section">Magit-Section Developer Manual</a>
+(<a href="https://docs.magit.vc/magit-section/magit-section.pdf">pdf</a>)</li>
+  <li><a href="https://docs.magit.vc/transient">Transient User and Developer Manual</a>
+(<a href="https://docs.magit.vc/transient/transient.pdf">pdf</a>)</li>
+  <li><a href="https://docs.magit.vc/with-editor">With-Editor User Manual</a>
+(<a href="https://docs.magit.vc/with-editor/with-editor.pdf">pdf</a>)</li>
+  <li><a href="https://docs.magit.vc/devel">Snapshot Manuals</a></li>
+  <li><a href="https://docs.magit.vc">FAQ</a></li>
+  <li><a href="https://github.com/magit/magit/wiki">Wiki</a></li>
+</ul>
+
+<h1 id="resources">Resources</h1>
+
+<ul>
+  <li><a href="https://github.com/magit/magit">Development</a>
+    <ul>
+      <li><a href="https://github.com/magit/magit/pulls">Pull requests</a></li>
+      <li><a href="https://github.com/magit/magit/issues">Issue tracker</a></li>
+      <li><a href="https://stats.magit.vc">Statistics</a></li>
+    </ul>
+  </li>
+  <li>Support
+    <ul>
+      <li><a href="https://www.reddit.com/r/emacs">Emacs Subreddit</a></li>
+      <li><a href="https://emacs.stackexchange.com/questions/tagged/magit">Emacs Stackexchange</a></li>
+      <li><a href="https://github.com/magit/magit/discussions/4630">Github discussions</a></li>
+    </ul>
+  </li>
+  <li><a href="https://fosstodon.org/@tarsius">Announcements on Mastodon</a></li>
+  <li><a href="https://emacsair.me/2017/09/01/magit-walk-through">Screenshots</a></li>
+  <li><a href="/screencasts">Screencasts</a></li>
+  <li><a href="/quotes">User quotes</a></li>
+  <li><a href="/blogs">Blog posts</a></li>
+</ul>
+
+<h1 id="support">Support</h1>
+
+<p>When something doesn’t work as expected then please first see the
+<a href="https://docs.magit.vc">FAQ</a>.  Then also try the list of <a href="https://github.com/magit/magit/issues">open issues</a> and use
+the search box at the top of that page to find older related issues.
+You should also consult the [manual][manual] and ask a general-purpose
+search engine.</p>
+
+<p>If that doesn’t answer your question, then ask for help on the
+<a href="https://emacs.stackexchange.com/questions/tagged/magit">Emacs Stackexchange site</a>, the <a href="https://www.reddit.com/r/emacs">Emacs Subreddit</a>
+or <a href="https://github.com/magit/magit/discussions/4630">Github discussions</a>.</p>
+
+<p>Please do NOT use the GitHub issue tracker for support requests.
+We only use it for feature requests and bug reports.</p>
+
+<h1 id="credits">Credits</h1>
+
+<p>Magit was started by <a href="https://github.com/mvollmer">Marius Vollmer</a>, and is now maintained
+by <a href="https://emacsair.me">Jonas Bernoulli</a>, <a href="https://github.com/kyleam">Kyle Meyer</a>, and
+<a href="https://github.com/npostavs">Noam Postavsky</a>.  Former maintainers are
+<a href="http://dudebout.com">Nicolas Dudebout</a>, <a href="https://github.com/pjweisberg">Peter J. Weisberg</a>,
+<a href="https://github.com/philjackson">Phil Jackson</a>, <a href="https://github.com/vanicat">Rémi Vanicat</a>, and <a href="http://www.hodique.info">Yann Hodique</a>.
+Many more people have <a href="https://stats.magit.vc/magit/authors.html">contributed code</a> and suggested
+features.</p>
+
+<p>Over the years a lot of people supported development financially,
+including the backers of the 2017 crowdfunding campaign.</p>
+
+<video id="gource" controls="" poster="/assets/videos/gource-700x700.png">
+  <source src="/assets/videos/gource-700x700.webm" type="video/webm" />
+</video>
+
+
+  </body>
+</html>

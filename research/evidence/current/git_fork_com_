@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>Fork - a fast and friendly git client for Mac and Windows</title>
+
+        <meta property="og:site_name" content="Fork - a fast and friendly git client for Mac and Windows">
+        <meta property="og:type" content="website">
+        <meta property="og:title" content="Fork - a fast and friendly git client for Mac and Windows">
+        <meta property="og:description" content="Fork - a fast and friendly git client for Mac and Windows">
+        <meta property="og:url" content="https://fork.dev">
+        <meta property="og:image" content="https://fork.dev/images/twitter4.jpg">
+
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:site" content="&#64;git_fork">
+        <meta name="twitter:title" content="Fork - a fast and friendly git client for Mac and Windows">
+        <meta name="twitter:description" content="Fork - a fast and friendly git client for Mac and Windows.">
+        <meta name="twitter:image" content="https://fork.dev/images/twitter4.jpg">
+
+        <link rel="shortcut icon" href="favicon.ico" type="image/x-icon">
+
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/css/bootstrap.min.css" integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+        <link rel="stylesheet" href="/css/site.css" />
+    </head>
+
+    <body id="page-top" class="landing-page">
+
+        <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+        <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js" integrity="sha384-DfXdz2htPH0lsSSs5nCTpuj/zy4C+OGpamoFVy38MVBnE+IbbVYUew+OrCXaRkfj" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.3/dist/js/bootstrap.min.js" integrity="sha384-w1Q4orYjBQndcko6MimVbzY0tgp4pWB4lZ7lr30WKz0vr/aWKhXdBNmNb5D92v7s" crossorigin="anonymous"></script>
+
+        <main b-r4cc9lzrbl role="main">
+            <div class="container-fluid background">
+
+    <div class="row" style="padding-top:10px;">
+        <div class="col-md-1"></div>
+        <div class="col-md-10">
+            <ul class="nav nav-pills justify-content-end">
+                <li class="nav-item">
+                    <a class="nav-link outline selected" href="/">Home</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link outline" id="releaseNotesBtn">Release Notes</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link outline" href="/blog">Blog</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link outline" href="/about">About Us</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link tw" href="https://twitter.com/git_fork">
+                        <img src="/images/twIcon.png" width="24" height="24" alt="icon"/>
+                    </a>
+                </li>
+            </ul>
+        </div>
+        <div class="col-md-1"></div>
+    </div>
+
+    <div class="row" style="padding-top:10px; margin-bottom:-30px;">
+        <div class="col-md-12 text-center">
+            <img src="images/logo3.png" style="width:325px; height:290px; margin-bottom: -36px;" class="img-fluid">
+        </div>
+    </div>
+
+    <div class="row main-image">
+        <div class="col-md-1 col-sm-1"></div>
+        <div class="col-md-10 col-sm-10">
+            <div class="container-xl">
+                <img id="image1" class="img-fluid main-image-shadow" alt="image 1">
+            </div>
+        </div>
+        <div class="col-md-1 col-sm-1"></div>
+    </div>
+
+</div>
+
+<div class="container-fluid gray">
+    <div class="row">
+        <div class="col-md-2 col-sm-2"></div>
+        <div class="col-md-8 col-sm-8 col-xs-12">
+            <h4 class="header4 text-center">Fork is getting better and better day after day and we are happy to share our results with you. </h4>
+        </div>
+
+        <div class="col-md-2 col-sm-2" ></div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-2 col-sm-0 col-xs-0"></div>
+
+        <div class="text-center col-md-4 col-sm-12 col-xs-12">
+            <span class="text-center">
+                <a id="downloadBtn1Mac" class="btn text-nowrap" href="https://cdn.fork.dev/mac/Fork-2.66.7.dmg">
+                    <p class="lead white text-center" style="font-weight:300; margin-bottom:2px;">Download Fork for Mac</p>
+                    <p class="white small text-center">OS X 10.11+</p>
+                </a>
+                <p class="small text-center" style="color:#7F7F7F; margin-top:4px; margin-bottom:30px;"><a class="price" href="/buy">$59.99</a>, free evaluation</p>
+            </span>
+        </div>
+
+        <div class="text-center col-md-4 col-sm-12 col-xs-12">
+            <span class="text-center">
+                <a id="downloadBtn1Win" class="btn text-nowrap" href="https://cdn.fork.dev/win/Fork-2.16.1.exe">
+                    <p class="lead white text-center" style="font-weight:300; margin-bottom:2px; min-width:180px;">Download Fork for Windows</p>
+                    <p class="white small text-center">Windows 7+</p>
+                </a>
+                <p class="small text-center" style="color:#7F7F7F; margin-top:4px; margin-bottom:30px;"><a class="price" href="/buy">$59.99</a>, free evaluation</p>
+            </span>
+        </div>
+
+        <div class="col-md-2 col-sm-0 col-xs-0"></div>
+    </div>
+</div>
+
+<div id="carouselMacContainer" class="container-xl">
+
+    <div class="carousel slide mt-5 mx-5" id="carouselMac" data-ride="carousel">
+        <ol class="carousel-indicators">
+            <li data-target="#carouselMac" data-slide-to="0" class="active"></li>
+            <li data-target="#carouselMac" data-slide-to="1"></li>
+            <li data-target="#carouselMac" data-slide-to="2"></li>
+            <li data-target="#carouselMac" data-slide-to="3"></li>
+            <li data-target="#carouselMac" data-slide-to="4"></li>
+        </ol><!-- /.carousel-indicators -->
+
+        <div class="carousel-inner">
+            <div class="carousel-item active">
+                <img class="d-block img-fluid" src="images/carousel/carousel_mainMac.jpg" alt="">
+            </div>
+            <div class="carousel-item">
+                <img class="d-block img-fluid" src="images/carousel/carousel_commitviewMac1.jpg" alt="">
+            </div>
+            <div class="carousel-item">
+                <img class="d-block img-fluid" src="images/carousel/carousel_commitviewMac2.jpg" alt="">
+            </div>
+            <div class="carousel-item">
+                <img class="d-block img-fluid" src="images/carousel/carousel_repomanagerMac1.jpg" alt="">
+            </div>
+            <div class="carousel-item">
+                <img class="d-block img-fluid" src="images/carousel/carousel_repomanagerMac2.jpg" alt="">
+            </div>
+
+        </div><!-- /.carousel-inner -->
+
+        <a href="#carouselMac" class="carousel-control-prev" data-slide="prev">
+            <span class="carousel-control-prev-icon"></span>
+            <span class="sr-only" aria-hidden="true">Prev</span>
+        </a>
+        <a href="#carouselMac" class="carousel-control-next" data-slide="next">
+            <span class="carousel-control-next-icon"></span>
+            <span class="sr-only" aria-hidden="true">Next</span>
+        </a>
+    </div><!-- /.carousel -->
+
+    <div class="row">
+        <div class="col-md-1"></div>
+        <div class="col-md-10 feature text-center">
+            <p class="lead feature">Commit List - Working Directory Changes - Side by Side Diff - Repository Manager Summary and Statistics</p>
+        </div>
+        <div class="col-md-1"></div>
+    </div>
+</div>
+
+
+<div id="carouselWinContainer" class="container-xl">
+
+    <div class="carousel slide mt-5 mx-5" id="carouselWin" data-ride="carousel">
+        <ol class="carousel-indicators" style="margin-bottom: -20px;">
+            <li data-target="#carouselWin" data-slide-to="0" class="active"></li>
+            <li data-target="#carouselWin" data-slide-to="1"></li>
+            <li data-target="#carouselWin" data-slide-to="2"></li>
+            <li data-target="#carouselWin" data-slide-to="3"></li>
+            <li data-target="#carouselWin" data-slide-to="4"></li>
+        </ol><!-- /.carousel-indicators -->
+
+        <div class="carousel-inner">
+            <div class="carousel-item active">
+                <img class="d-block img-fluid" src="images/carousel/carousel_mainWin.jpg" alt="">
+            </div>
+            <div class="carousel-item">
+                <img class="d-block img-fluid" src="images/carousel/carousel_commitviewWin1.jpg" alt="">
+            </div>
+            <div class="carousel-item">
+                <img class="d-block img-fluid" src="images/carousel/carousel_commitviewWin2.jpg" alt="">
+            </div>
+            <div class="carousel-item">
+                <img class="d-block img-fluid" src="images/carousel/carousel_repomanagerWin1.jpg" alt="">
+            </div>
+            <div class="carousel-item">
+                <img class="d-block img-fluid" src="images/carousel/carousel_repomanagerWin2.jpg" alt="">
+            </div>
+
+        </div><!-- /.carousel-inner -->
+
+        <a href="#carouselWin" class="carousel-control-prev" data-slide="prev">
+            <span class="carousel-control-prev-icon"></span>
+            <span class="sr-only" aria-hidden="true">Prev</span>
+        </a>
+        <a href="#carouselWin" class="carousel-control-next" data-slide="next">
+            <span class="carousel-control-next-icon"></span>
+            <span class="sr-only" aria-hidden="true">Next</span>
+        </a>
+    </div><!-- /.carousel -->
+
+    <div class="row mt-4">
+        <div class="col-md-1"></div>
+        <div class="col-md-10 feature text-center">
+            <p class="lead feature">Commit List - Working Directory Changes - Side by Side Diff - Repository Manager Summary and Statistics</p>
+        </div>
+        <div class="col-md-1"></div>
+    </div>
+</div>
+
+<div id="notificationContainer" class="container-fluid feature secondary">
+
+    <div class="container-xl">
+        <div class="row sideDescription">
+            <div class="col-sm-6 col-md-6 float-left p-0">
+                <img src="images/imageNotifications.jpg" class="img-fluid" alt="GitHub Notifications">
+            </div>
+            <div class="col-sm-6 col-md-6 float-right text-center">
+                <h3 class="header3 feature">GitHub Notifications</h3>
+                <p class="lead feature">Fork gently informs you about GitHub notifications without being annoying.</p>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div class="container-fluid feature">
+
+    <div class="row">
+        <div class="col-md-2"></div>
+        <div class="col-md-8 feature text-center">
+            <h3 class="header3 feature">Merge Conflicts</h3>
+            <p class="lead feature">Resolve your merge-conflicts easily using the merge-conflict helper and built-in merge-conflict resolver.</p>
+        </div>
+        <div class="col-md-2"></div>
+    </div>
+
+    <div class="container-xl">
+        <div class="row">
+            <div class="col-sm-6 col-md-6 feature" style="padding-right:0px;">
+                <img id="mergeConflict1" style="margin-top:0px;" class="img-fluid feature-shadow" alt="Merge Conflict">
+            </div>
+            <div class="col-sm-6 col-md-6 feature" style="padding-left:0px; padding-top:0px;margin-top:12%;">
+                <img id="mergeConflict2" class="img-fluid feature-shadow" alt="Merge Conflict">
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div class="container-lg feature">
+
+    <div class="row">
+        <div class="col-md-1" ></div>
+        <div class="col-md-10 feature text-center">
+            <h3 class="header3 feature">Interactive Rebase</h3>
+            <p class="lead feature">Edit, reorder and squash your commits using visual interactive rebase.</p>
+            <img id="interactiveRebase" class="img-fluid feature-shadow" alt="Interactive Rebase">
+        </div>
+        <div class="col-md-10"></div>
+    </div>
+
+</div>
+
+<div id="imageDiffContainer" class="container-lg feature">
+
+    <div class="row">
+        <div class="col-md-1" ></div>
+        <div class="col-md-10 feature text-center">
+            <h3 class="header3 feature">Image Diffs</h3>
+            <p class="lead feature">Fork allows you to see diffs for the common image formats.</p>
+            <img src="images/imageDiff.jpg" class="img-fluid feature-shadow rounded-corners" alt="Image Diffs">
+
+        </div>
+        <div class="col-md-1" ></div>
+    </div>
+
+</div>
+
+<div id="imageDiffWinContainer" class="container-fluid feature secondary">
+
+    <div class="container-xl">
+        <div class="row sideDescription">
+            <div class="col-sm-6 col-md-6 float-left pr-3 pl-0">
+                <img src="images/imageDiffWin.jpg" class="img-fluid" alt="Image Diffs">
+            </div>
+            <div class="col-sm-6 col-md-6 float-right text-center">
+                <h3 class="header3 feature">Image Diffs</h3>
+                <p class="lead feature">Fork allows you to see diffs for the common image formats.</p>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div id="diffViewerContainer" class="container-fluid feature secondary">
+
+    <div class="container-xl">
+        <div class="row sideDescription">
+            <div class="col-sm-6 col-md-6 float-left text-center">
+                <h3 class="header3 feature">Advanced Diff Viewer</h3>
+                <p class="lead feature">Fork's Diff Viewer provides a clear view to spot the changes in your source code quickly.</p>
+            </div>
+
+            <div class="col-sm-6 col-md-6 float-right pl-3 pr-0">
+                <img src="images/diffViewer.jpg" class="img-fluid" alt="Advanced Diff Viewer">
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div class="container-lg feature">
+    <div class="row">
+        <div class="col-md-1" ></div>
+        <div class="col-md-10 feature text-center">
+            <h3 class="header3 feature">History</h3>
+            <p class="lead feature">With history view you can find all commits where a particular file or directory was changed.</p>
+            <img id="history" class="img-fluid feature-shadow" alt="History">
+        </div>
+        <div class="col-md-1" ></div>
+    </div>
+</div>
+
+<div class="container-lg feature">
+    <div class="row">
+        <div class="col-md-1" ></div>
+        <div class="col-md-10 feature text-center">
+            <h3 class="header3 feature">Blame</h3>
+            <p class="lead feature">With blame view you can find the last commit which changed a particular file line.</p>
+            <img id="blame" class="img-fluid feature-shadow" alt="Blame">
+        </div>
+        <div class="col-md-1" ></div>
+    </div>
+</div>
+
+<div id="featuresMacContainer" style="padding-top:20px;" class="container-fluid feature solid">
+
+    <div class="row">
+        <div class="col-md-2"></div>
+        <div class="col-md-8 feature text-center">
+            <h3 class="header3 feature" style="margin-bottom:-10px;">Feature Overview</h3>
+        </div>
+        <div class="col-md-2"></div>
+    </div>
+
+    <div class="row feature row">
+        <div class="col-md-2 col-sm-1"></div>
+        <div class="clearfix col-md-4 col-sm-5 col-xs-12">
+
+            <h4 class="header4 feature-small"><img src="images/basicFeaturesIcon.png" class="feature-small" width="32" alt=""> Basic features</h4>
+
+            <p class="lead feature-small">Fetch, pull, push</p>
+            <p class="lead feature-small">Commit, amend</p>
+            <p class="lead feature-small">Create and delete branches and tags</p>
+            <p class="lead feature-small">Create and delete remote repos</p>
+            <p class="lead feature-small">Checkout branch or revision</p>
+            <p class="lead feature-small">Cherry-pick, revert</p>
+            <p class="lead feature-small">Merge</p>
+            <p class="lead feature-small">Rebase</p>
+            <p class="lead feature-small">Stashes</p>
+            <p class="lead feature-small">Submodules</p>
+
+        </div>
+
+        <div class="clearfix col-md-4 col-sm-5 col-xs-12">
+            <h4 class="header4 feature-small"><img src="images/repositoryFeaturesIcon.png" class="feature-small" width="32" alt=""> Work with repository</h4>
+
+            <p class="lead feature-small">Create, clone or add existing repos</p>
+            <p class="lead feature-small">Open recent repository quickly</p>
+
+            <h4 class="header4 feature-small"><img src="images/commitFeaturesIcon.png" class="feature-small" width="32" alt=""> Commit view</h4>
+
+            <p class="lead feature-small">Stage / unstage changes line-by-line</p>
+            <p class="lead feature-small">Access to recent commit messages</p>
+
+            <h4 class="header4 feature-small"><img src="images/otherFeaturesIcon.png" class="feature-small" width="32" alt=""> More features</h4>
+
+            <p class="lead feature-small">Interactive rebase</p>
+            <p class="lead feature-small">Blame</p>
+            <p class="lead feature-small">Browse the repository file tree at any commit</p>
+            <p class="lead feature-small">Intuitive merge conflict resolving</p>
+            <p class="lead feature-small">Restore lost commits with Reflog</p>
+            <p class="lead feature-small">See your stashes right in the commit list</p>
+            <p class="lead feature-small">Git-flow</p>
+            <p class="lead feature-small">Git LFS</p>
+            <p class="lead feature-small">GPG</p>
+
+        </div>
+
+        <div class="col-md-2 col-sm-1"></div>
+    </div>
+</div>
+
+<div id="featuresWinContainer" style="padding-top:20px;" class="container-fluid feature solid">
+
+    <div class="row">
+        <div class="col-md-2"></div>
+        <div class="col-md-8 feature text-center">
+            <h3 class="header3 feature" style="margin-bottom:-10px;">Feature Overview</h3>
+        </div>
+        <div class="col-md-2"></div>
+</div>
+
+<div class="row feature row">
+    <div class="col-md-2 col-sm-1"></div>
+    <div class="clearfix col-md-4 col-sm-5 col-xs-12">
+
+        <h4 class="header4 feature-small"><img src="images/basicFeaturesIcon.png" class="feature-small" width="32" alt=""> Basic features</h4>
+
+        <p class="lead feature-small">Fetch, pull, push</p>
+        <p class="lead feature-small">Commit, amend</p>
+        <p class="lead feature-small">Create and delete branches and tags</p>
+        <p class="lead feature-small">Create and delete remote repos</p>
+        <p class="lead feature-small">Checkout branch or revision</p>
+        <p class="lead feature-small">Cherry-pick</p>
+        <p class="lead feature-small">Revert</p>
+        <p class="lead feature-small">Merge</p>
+        <p class="lead feature-small">Rebase</p>
+        <p class="lead feature-small">Stashes</p>
+        <p class="lead feature-small">Submodules</p>
+
+    </div>
+
+    <div class="clearfix col-md-4 col-sm-5 col-xs-12">
+        <h4 class="header4 feature-small"><img src="images/repositoryFeaturesIcon.png" class="feature-small" width="32" alt=""> Work with repository</h4>
+
+        <!--
+        <p class="lead feature-small">Create, clone or add existing repos</p>
+        -->
+        <p class="lead feature-small">Open recent repository quickly</p>
+
+        <h4 class="header4 feature-small"><img src="images/commitFeaturesIcon.png" class="feature-small" width="32" alt=""> Commit view</h4>
+
+        <p class="lead feature-small">Stage / unstage changes line-by-line</p>
+        <p class="lead feature-small">Access to recent commit messages</p>
+
+        <!--
+        <p class="lead feature-small">Access to recent commit messages</p>
+        -->
+
+        <h4 class="header4 feature-small"><img src="images/otherFeaturesIcon.png" class="feature-small" width="32" alt=""> More features</h4>
+
+        <!--
+        <p class="lead feature-small">Interactive rebase</p>
+        -->
+        <p class="lead feature-small">Interactive rebase</p>
+        <p class="lead feature-small">Blame</p>
+        <p class="lead feature-small">Browse the repository file tree at any commit</p>
+        <p class="lead feature-small">Intuitive merge conflict resolving</p>
+        <p class="lead feature-small">Restore lost commits with Reflog</p>
+        <p class="lead feature-small">See your stashes right in the commit list</p>
+        <p class="lead feature-small">Git-flow</p>
+        <p class="lead feature-small">Git LFS</p>
+        <!--
+        <p class="lead feature-small">Git-flow</p>
+        -->
+    </div>
+
+    <div class="col-md-2 col-sm-1"></div>
+</div>
+</div>
+
+<div class="container-fluid" style="margin-bottom:30px;">
+
+    <div class="row">
+        <div class="col-md-4" ></div>
+        <div class="col-md-4">
+            <h3 class="text-center header3 feature">About Us</h2>
+        </div>
+        <div class="col-md-4"></div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-2" ></div>
+        <div class="col-md-8">
+            <p class="text-center lead">We are a family of software developers crafting Fork <del>in our spare time</del> full-time.</p>
+        </div>
+        <div class="col-md-2"></div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-2 col-sm-0" ></div>
+
+        <div class="col-md-4 col-sm-6">
+            <div class="row">
+                <div class="container text-center">
+                    <div class="card border-0">
+                        <img class="card-img-top rounded-circle mx-auto" src="/images/Dan.jpg" alt="Dan" style="width: 100px;">
+                        <div class="card-body">
+                            <h5 class="card-title">Dan Pristupov</h5>
+                            <p class="card-text small">Software developer (Swift, Cocoa)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4 col-sm-6">
+            <div class="row">
+                <div class="container text-center">
+                    <div class="card border-0">
+                        <img class="card-img-top rounded-circle mx-auto"  src="/images/Tanya.jpg" alt="Tanya" style="width: 100px;">
+                        <div class="card-body">
+                            <h5 class="card-title">Tanya Pristupova</h5>
+                            <p class="card-text small">Software developer (.NET, WPF)</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-2 col-sm-0"></div>
+    </div>
+</div>
+
+<div class="container-fluid gray">
+
+    <div class="row">
+        <div class="col-md-2 col-sm-2"></div>
+        <div class="col-md-8 col-sm-8 col-xs-12">
+            <h4 class="header4 text-center">Hit the button below to download Fork</h4>
+        </div>
+
+        <div class="col-md-2 col-sm-2" ></div>
+    </div>
+
+    <div class="row text-center">
+        <div class="col-md-2 col-sm-0 col-xs-0"></div>
+
+        <div class="col-md-4 col-sm-12 col-xs-12">
+            <span class="text-center">
+                <a id="downloadBtn2Mac" class="btn text-nowrap" href="https://cdn.fork.dev/mac/Fork-2.66.7.dmg">
+                    <p class="lead white text-center" style="font-weight:300; margin-bottom:2px;">Download Fork for Mac</p>
+                    <p class="white small text-center">OS X 10.11+</p>
+                </a>
+                <p class="small text-center" style="color:#7F7F7F; margin-top:4px; margin-bottom:30px;"><a class="price" href="/buy">$59.99</a>, free evaluation</p>
+            </span>
+        </div>
+
+        <div class="col-md-4 col-sm-12 col-xs-12">
+            <span class="text-center">
+                <a id="downloadBtn2Win" class="btn text-nowrap" href="https://cdn.fork.dev/win/Fork-2.16.1.exe">
+                    <p class="lead white text-center" style="font-weight:300; margin-bottom:2px; min-width:180px;">Download Fork for Windows</p>
+                    <p class="white small text-center">Windows 7+</p>
+                </a>
+                <p class="small text-center" style="color:#7F7F7F; margin-top:4px; margin-bottom:30px;"><a class="price" href="/buy">$59.99</a>, free evaluation</p>
+            </span>
+        </div>
+
+        <div class="col-md-2 col-sm-0 col-xs-0"></div>
+    </div>
+</div>
+
+<script type="text/javascript">
+    $(document).ready(function(){
+        var mac = /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform);
+        var image1 = document.getElementById('image1');
+        var mergeConflict1 = document.getElementById('mergeConflict1');
+        var mergeConflict2 = document.getElementById('mergeConflict2');
+        var interactiveRebase = document.getElementById('interactiveRebase');
+        var history = document.getElementById('history');
+        var blame = document.getElementById('blame');
+        var downloadBtn1Mac = document.getElementById('downloadBtn1Mac');
+        var downloadBtn1Win = document.getElementById('downloadBtn1Win');
+        var downloadBtn2Mac = document.getElementById('downloadBtn2Mac');
+        var downloadBtn2Win = document.getElementById('downloadBtn2Win');
+
+        if (mac) {
+            image1.src = "images/image1.jpg";
+            image1.classList.add("rounded-corners-top");
+
+            mergeConflict1.src = "images/mergeConflict1.jpg";
+            mergeConflict1.classList.add("rounded-corners");
+
+            mergeConflict2.src = "images/mergeConflict2.jpg";
+            mergeConflict2.classList.add("rounded-corners");
+
+            interactiveRebase.src = "images/interactiveRebase.jpg";
+            interactiveRebase.classList.add("rounded-corners");
+
+            history.src = "images/history.jpg";
+            history.classList.add("rounded-corners");
+            blame.src = "images/blame.jpg";
+            blame.classList.add("rounded-corners");
+
+            document.getElementById('imageDiffWinContainer').style.display = 'none';
+            document.getElementById('carouselWinContainer').style.display = 'none';
+            document.getElementById('featuresWinContainer').style.display = 'none';
+
+            downloadBtn1Mac.classList.add("blue");
+            downloadBtn2Mac.classList.add("blue");
+            downloadBtn1Win.classList.add("gray");
+            downloadBtn2Win.classList.add("gray");
+        }
+        else {
+            image1.src = "images/image1Win.jpg";
+            mergeConflict1.src = "images/mergeConflictWin1.jpg";
+            mergeConflict2.src = "images/mergeConflictWin2.jpg";
+            interactiveRebase.src = "images/interactiveRebaseWin.jpg";
+            history.src = "images/historyWin.jpg";
+            blame.src = "images/blameWin.jpg";
+
+            document.getElementById('notificationContainer').style.display = 'none';
+            document.getElementById('imageDiffContainer').style.display = 'none';
+            document.getElementById('diffViewerContainer').style.display = 'none';
+            document.getElementById('carouselMacContainer').style.display = 'none';
+            document.getElementById('featuresMacContainer').style.display = 'none';
+
+            downloadBtn1Mac.classList.add("gray");
+            downloadBtn2Mac.classList.add("gray");
+            downloadBtn1Win.classList.add("blue");
+            downloadBtn2Win.classList.add("blue");
+        }
+    });
+</script>
+
+        </main>
+
+        <footer b-r4cc9lzrbl class="container-fluid footer blue">
+            <div b-r4cc9lzrbl class="row">
+                <div b-r4cc9lzrbl class="col-md-5 col-xs-5"></div>
+                <div b-r4cc9lzrbl class="col-md-2 col-xs-2 text-center" style="margin-top:-30px;">
+                    <img b-r4cc9lzrbl src="images/logo.png" width="40" height="40" class="img-fluid" alt="logo">
+                </div>
+                <div b-r4cc9lzrbl class="col-md-5 col-xs-5"></div>
+            </div>
+            <div b-r4cc9lzrbl class="row">
+                <div b-r4cc9lzrbl class="col-md-6 col-xs-6">
+                    <div b-r4cc9lzrbl class="text-center">
+                        <p b-r4cc9lzrbl class="footer white">
+                            <a class="footer" href="/">Home</a>
+                            <a b-r4cc9lzrbl class="footer" id="releaseNotesFooterRef">Release Notes</a>
+                            <a b-r4cc9lzrbl class="footer" href="/blog">Blog</a>
+                            <a b-r4cc9lzrbl class="footer" href="/about">About Us</a>
+                            <a b-r4cc9lzrbl class="footer" href="https://twitter.com/git_fork">Twitter</a>
+                            <a b-r4cc9lzrbl class="footer" href="/license">License</a>
+                        </p>
+                    </div>
+                </div>
+
+                <div b-r4cc9lzrbl class="col-md-3 col-xs-3">
+                    <div b-r4cc9lzrbl class="text-center">
+                        <p b-r4cc9lzrbl class="footer white text-center">support@fork.dev</p>
+                    </div>
+                </div>
+
+                <div b-r4cc9lzrbl class="col-md-3 col-xs-3">
+                    <div b-r4cc9lzrbl class="text-center">
+                        <p b-r4cc9lzrbl class="footer white">Copyright &copy; 2025 Danil Pristupov</p>
+                    </div>
+                </div>
+            </div>
+        </footer>
+
+        <script type="text/javascript">
+            $(document).ready(function(){
+                var mac = /(Mac|iPhone|iPod|iPad)/i.test(navigator.platform);
+
+                var releaseNotesBtn = document.getElementById('releaseNotesBtn');
+                var releaseNotesFooterRef = document.getElementById('releaseNotesFooterRef');
+
+                if (mac) {
+                    releaseNotesBtn.setAttribute("href", '/releasenotes');
+                    releaseNotesFooterRef.setAttribute("href", '/releasenotes');
+                }
+                else {
+                    releaseNotesBtn.setAttribute("href", '/releasenoteswin');
+                    releaseNotesFooterRef.setAttribute("href", '/releasenoteswin');
+                }
+            });
+        </script>
+<!--
+        <script>
+            (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+            (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+            m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+            })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+            ga('create', 'UA-77266528-1', 'auto');
+            ga('send', 'pageview');
+        </script>
+-->
+    </body>
+</html>

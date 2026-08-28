@@ -1,0 +1,24 @@
+﻿Tool,Cohort,License,PriceUSD,Platforms,GitEngine,Unified,SideBySide,WordCharHL,SyntaxHL,ImageDiff,BinaryDiff,RenameDisplay,WhitespaceIgnore,InlineBlame,DiffSearch,NavJump,StageFile,StageHunk,StageLine,Conflict3Way,ConflictSplitEdit,UndoRedo,KeyboardFirst,CommandPalette,Theming,Accessibility,CrossPlatform,Extensibility,Virtualized,LargeDiffPaging
+VS Code,IDE,MIT (OSS),0,Win/Mac/Linux,CLI+builtin,Yes,Yes,Yes,Yes,Yes,Partial,Yes,Yes,Partial,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Partial,Yes,Yes,Yes,Partial,Yes,Yes
+JetBrains,IDE,Proprietary,159,Win/Mac/Linux,builtin,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Partial,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes
+Neovim,Modal,OSS (Apache2),0,Win/Mac/Linux,CLI,Yes,Yes,Yes,Yes,No,No,Yes,Yes,Yes,Yes,Yes,Yes,Partial,Yes,Yes,Yes,Yes,Yes,Partial,Partial,Yes,Yes,Partial,Yes,Yes
+Magit,Modal,OSS (GPL),0,Win/Mac/Linux,CLI,Yes,Yes,Yes,Yes,No,No,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Partial,Yes,Yes,Yes,Yes,Yes,Yes
+Sublime Text,Modal,Proprietary,139,Win/Mac/Linux,CLI,Yes,Yes,Yes,Yes,No,No,Yes,Yes,No,Yes,Yes,Partial,No,No,No,No,Yes,No,Yes,Yes,Yes,No,No,Yes,No
+GitKraken,GUI,Proprietary,60,Win/Mac/Linux,builtin,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Partial,Partial,Yes,Yes,Partial,Yes,Yes,Yes
+Sourcetree,GUI,Proprietary (free),0,Win/macOS,builtin,Yes,Yes,Partial,Partial,Yes,No,Yes,Yes,No,Yes,Yes,Yes,Yes,Partial,Partial,Yes,Partial,No,Yes,Yes,No,No,Yes,Yes
+Fork,GUI,Proprietary,59,Win/Mac,builtin,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,No,Yes,Yes,No,No,Yes,Yes
+Tower,GUI,Proprietary,69,Win/Mac,builtin,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,No,Yes,Yes,No,No,Yes,Yes
+SmartGit,GUI,Proprietary (free NC),99,Win/Mac/Linux,builtin,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,No,Yes,Yes,Partial,Yes,Yes
+Sublime Merge,GUI,Proprietary,99,Win/Mac/Linux,builtin,Yes,Yes,Yes,Yes,Yes,Partial,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,No,Yes,Yes,Yes
+GitHub Desktop,GUI,MIT (OSS),0,Win/Mac,CLI,Yes,No,Partial,Partial,Yes,No,Yes,Yes,No,Yes,Partial,Yes,Yes,Yes,Partial,No,No,Partial,No,Yes,Yes,No,Partial,Yes,No
+GitUp,GUI,MIT (OSS),0,macOS,builtin (libgit2),Yes,Yes,Partial,Partial,Yes,No,Yes,Yes,Partial,Yes,Yes,Yes,Yes,Yes,Partial,Yes,Partial,No,Yes,Yes,No,No,Partial,Yes
+lazygit,GUI (TUI),OSS (MIT),0,Win/Mac/Linux,CLI,Yes,Yes,Partial,Partial,No,No,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Partial,No,Yes,Yes,Yes,Partial,Yes,Partial,Yes,Yes,Yes
+tig,Terminal,OSS (GPL),0,Win/Mac/Linux,CLI,Yes,No,No,No,No,No,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,No,No,Yes,Yes,No,Yes,Yes,No,Yes,Yes,Yes
+difftastic,Specialist,OSS (MIT),0,Win/Mac/Linux,standalone,Yes,Yes,Yes,Yes,No,Partial,No,Yes,No,No,No,No,No,No,Partial,No,No,Partial,No,Partial,Yes,No,No,No,No
+git-delta,Specialist,OSS (MIT),0,Win/Mac/Linux,standalone (pager),Yes,Yes,Yes,Yes,No,No,Yes,Yes,No,No,No,No,No,No,No,No,No,Partial,Yes,Partial,Yes,No,No,No,No
+icdiff,Specialist,OSS (MIT),0,Win/Mac/Linux,standalone,No,Yes,Yes,No,No,No,No,Yes,No,No,No,No,No,No,No,No,No,No,No,Partial,Yes,No,No,No,No
+Kaleidoscope,Specialist,Proprietary,79,macOS,difftool,Yes,Yes,Partial,Partial,Yes,Yes,Yes,Yes,No,No,No,No,No,No,Yes,Yes,Partial,No,Yes,Yes,No,No,Yes,Yes
+Beyond Compare,Specialist,Proprietary,70,Win/Mac/Linux,difftool/mergetool,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,No,No,No,No,Yes,Yes,Yes,Yes,Partial,No,Yes,Yes,Partial,Yes,Yes,Yes
+Meld,Specialist,OSS (GPL),0,Win/Mac/Linux,difftool/mergetool,Yes,Yes,Yes,Yes,No,No,Yes,Yes,No,No,No,No,Yes,Yes,Yes,Partial,No,Yes,Yes,Partial,Yes,Yes,Partial,Yes
+P4Merge,Specialist,Freeware,0,Win/Mac/Linux,mergetool,Yes,Yes,Partial,Partial,No,No,No,Yes,No,No,No,No,Yes,Yes,Partial,Partial,No,Partial,Yes,No,Yes,Yes,Yes,Yes
+WinMerge,Specialist,OSS (GPL),0,Windows,difftool/mergetool,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,No,No,No,No,Yes,Yes,Partial,Partial,No,Yes,Yes,Partial,No,Yes,Yes,Yes

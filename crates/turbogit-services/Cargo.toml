@@ -4,5 +4,16 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[dependencies]
+chrono = { workspace = true }
+ron = { workspace = true }
+similar = { workspace = true }
+turbogit-domain = { workspace = true }
+turbogit-engine-api = { workspace = true }
+
+[dev-dependencies]
+turbogit-engine = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

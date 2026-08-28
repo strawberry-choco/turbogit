@@ -4,5 +4,16 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[dependencies]
+git2 = { workspace = true }
+turbogit-domain = { workspace = true }
+turbogit-engine-api = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[features]
+test-util = []
+
 [lints]
 workspace = true

@@ -3684,7 +3684,9 @@ dependencies = [
  "thiserror 2.0.20",
  "toml",
  "turbogit-domain",
+ "turbogit-engine",
  "turbogit-engine-api",
+ "turbogit-services",
 ]
 
 [[package]]
@@ -3703,6 +3705,12 @@ dependencies = [
 [[package]]
 name = "turbogit-engine"
 version = "0.1.0"
+dependencies = [
+ "git2",
+ "tempfile",
+ "turbogit-domain",
+ "turbogit-engine-api",
+]
 
 [[package]]
 name = "turbogit-engine-api"
@@ -3714,6 +3722,15 @@ dependencies = [
 [[package]]
 name = "turbogit-services"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "ron",
+ "similar",
+ "tempfile",
+ "turbogit-domain",
+ "turbogit-engine",
+ "turbogit-engine-api",
+]
 
 [[package]]
 name = "turbogit-ui"
