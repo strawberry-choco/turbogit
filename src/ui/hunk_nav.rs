@@ -11,17 +11,11 @@
 
 use std::time::{Duration, Instant};
 
-/// How long the second edge press may follow the first to cross files.
-pub const EDGE_WINDOW: Duration = Duration::from_millis(500);
-
-/// Direction of a hunk-navigation step.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Dir {
-    /// `F7` — next hunk / next file.
-    Next,
-    /// `Shift+F7` — previous hunk / previous file.
-    Prev,
-}
+// The plain-data edge-nudge vocabulary ([`Dir`], [`EDGE_WINDOW`]) lives in
+// [`crate::diff_data`] beside the app state — the UI imports it back up
+// (DDD split issue 04). Re-exported here so the historical `ui::hunk_nav`
+// paths keep resolving.
+pub use crate::diff_data::{Dir, EDGE_WINDOW};
 
 /// What the UI layer should do after one key press.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
