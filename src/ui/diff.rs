@@ -36,8 +36,9 @@
 //!   decoded results beside them.
 
 use crate::core::diff_engine;
-use crate::core::granular::{self, comparison_triple, diff_key};
-use crate::engine::{AppEvent, DecodedImage, FetchedBlob, GitExecutor};
+use crate::engine::GitExecutor;
+use crate::events::{AppEvent, DecodedImage, FetchedBlob};
+use crate::granular::{self, comparison_triple, diff_key};
 use crate::model::{ChangeStatus, DiffOpts};
 use crate::state::{AppState, DiffComparison};
 use crate::theme::Palette;

@@ -1,4 +1,4 @@
-//! Root caches deepening — headless suite for the [`turbogit::root_caches`]
+//! Root caches deepening — headless suite for the [`turbogit_app::root_caches`]
 //! interface and the [`AppState::refresh`] seam (plan:
 //! `docs/plans/root-caches-deepening.md`).
 //!
@@ -18,11 +18,12 @@
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use turbogit::engine::cli::CliExecutor;
-use turbogit::engine::{AppEvent, GitExecutor};
-use turbogit::model::{Commit, LogOpts, RootId, Signature, VcsSettings};
-use turbogit::root_caches::Affected;
-use turbogit::state::AppState;
+use turbogit_app::events::AppEvent;
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::AppState;
+use turbogit_domain::model::{Commit, LogOpts, RootId, Signature, VcsSettings};
+use turbogit_engine::GitExecutor;
+use turbogit_engine::cli::CliExecutor;
 
 // --- Seeded fixtures (mirrors the other redesign suites) ----------------------
 

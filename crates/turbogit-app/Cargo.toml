@@ -4,5 +4,20 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[dependencies]
+chrono = { workspace = true }
+crossbeam-channel = { workspace = true }
+dirs = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+turbogit-domain = { workspace = true }
+turbogit-engine = { workspace = true }
+turbogit-engine-api = { workspace = true }
+turbogit-services = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+test-support = { workspace = true }
+
 [lints]
 workspace = true

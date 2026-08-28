@@ -3481,6 +3481,10 @@ dependencies = [
 [[package]]
 name = "test-support"
 version = "0.1.0"
+dependencies = [
+ "turbogit-domain",
+ "turbogit-engine-api",
+]
 
 [[package]]
 name = "thiserror"
@@ -3683,6 +3687,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "toml",
+ "turbogit-app",
  "turbogit-domain",
  "turbogit-engine",
  "turbogit-engine-api",
@@ -3692,6 +3697,19 @@ dependencies = [
 [[package]]
 name = "turbogit-app"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crossbeam-channel",
+ "dirs",
+ "ron",
+ "serde",
+ "tempfile",
+ "test-support",
+ "turbogit-domain",
+ "turbogit-engine",
+ "turbogit-engine-api",
+ "turbogit-services",
+]
 
 [[package]]
 name = "turbogit-domain"

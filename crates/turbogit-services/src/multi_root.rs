@@ -122,7 +122,7 @@ pub fn roots_status(mgr: &MultiRootManager) -> Vec<(RootId, usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use turbogit_engine_api::fake::FakeExecutor;
+    use turbogit_engine::fake::FakeExecutor;
 
     fn repo_at(dir: &Path) {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
