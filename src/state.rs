@@ -270,11 +270,18 @@ pub struct UiState {
     pub diff_loading: bool,
     pub diff_error: Option<String>,
     pub diff_side_by_side: bool,
-    /// Non-text diff pane results (image textures + binary sizes, spec R8)
-    /// keyed by load key. Bounded few entries, evicts oldest; invalidated
-    /// wholesale with root refreshes like `diff_cache` (CONTEXT.md "Root
-    /// caches" philosophy).
-    pub pane_bytes: crate::ui::diff::PaneCache,
+    /// Non-text diff pane results (decoded image bytes + binary sizes, spec
+    /// R8) keyed by load key — the plain-data cache lives in
+    /// [`crate::diff_data`], not the UI module. Bounded few entries, evicts
+    /// oldest; invalidated wholesale with root refreshes like `diff_cache`
+    /// (CONTEXT.md "Root caches" philosophy). GPU textures are a UI-layer
+    /// concern: they are keyed by [`Self::pane_generation`], never stored
+    /// here.
+    pub pane_bytes: crate::diff_data::PaneCache,
+    /// Generation of [`Self::pane_bytes`]: bumped on every wholesale clear so
+    /// the UI layer can drop its lazily-uploaded GPU textures without the
+    /// application state naming any egui type (DDD split issue 04).
+    pub pane_generation: u64,
     /// Load key currently being fetched on a worker thread — one in-flight
     /// non-text pane load at a time (mirrors `diff_loading`).
     pub pane_bytes_loading: Option<String>,
@@ -288,9 +295,9 @@ pub struct UiState {
     pub diff_ignore_whitespace: bool,
     /// Armed edge press for F7/Shift+F7 cross-file navigation (spec R7): the
     /// direction and instant of the last edge nudge. A same-direction repeat
-    /// inside [`crate::ui::hunk_nav::EDGE_WINDOW`] crosses to the adjacent
+    /// inside [`crate::diff_data::EDGE_WINDOW`] crosses to the adjacent
     /// changed file; anything else re-arms.
-    pub hunk_nav_armed_edge: Option<(crate::ui::hunk_nav::Dir, std::time::Instant)>,
+    pub hunk_nav_armed_edge: Option<(crate::diff_data::Dir, std::time::Instant)>,
     /// The preview path a granular stage/unstage was last dispatched for
     /// (spec R2 story 9). Consumed by the op-completion handler to decide
     /// whether the file just left the changelist.
@@ -592,9 +599,13 @@ impl AppState {
         // a completed op may have changed exactly what it shows (spec R2
         // story 8), so drop it and let the viewer reload asynchronously.
         self.ui.diff_cache = None;
-        // Non-text pane bytes/textures follow the same wholesale rule
-        // (spec R8): dropped with root refreshes, never poked per field.
+        // Non-text pane bytes follow the same wholesale rule (spec R8):
+        // dropped with root refreshes, never poked per field. Bumping the
+        // generation tells the UI layer to drop its GPU textures too — the
+        // plain-data cache never holds an egui type itself (DDD split
+        // issue 04).
         self.ui.pane_bytes.clear();
+        self.ui.pane_generation += 1;
         self.ui.pane_bytes_loading = None;
         // Granular exclusions follow a refresh-scoped lifetime rule owned by
         // the granular module: they only hold while the path is still fully
@@ -882,9 +893,9 @@ impl AppState {
                     }
                     self.ui.pane_bytes.store(
                         key,
-                        crate::ui::diff::PaneEntry {
-                            old: old.map(crate::ui::diff::PaneSide::from_blob),
-                            new: new.map(crate::ui::diff::PaneSide::from_blob),
+                        crate::diff_data::PaneEntry {
+                            old: old.map(crate::diff_data::PaneSide::from_blob),
+                            new: new.map(crate::diff_data::PaneSide::from_blob),
                         },
                     );
                 }
