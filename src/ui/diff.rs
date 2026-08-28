@@ -48,7 +48,7 @@ use egui::{
     Sense, TextureOptions, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -674,78 +674,68 @@ fn diff_model(text: &str) -> Rc<DiffModel> {
 
 // --- non-text pane bytes & textures (R8) -------------------------------------
 
-/// One resolved side of a non-text pane: byte length plus the decoded
-/// image when the side was decodable within the cap. The GPU texture is
-/// built lazily at first paint and kept here so re-showing a file never
-/// re-uploads. Constructed off the frame path via [`PaneSide::from_blob`].
-pub struct PaneSide {
-    pub byte_len: u64,
-    pub image: Option<DecodedImage>,
-    texture: Option<egui::TextureHandle>,
+// The plain-data pane cache ([`PaneCache`], [`PaneEntry`], [`PaneSide`]) lives
+// in [`crate::diff_data`] beside the app state — the UI imports it back up
+// (DDD split issue 04). Re-exported here so the historical `ui::diff` paths
+// keep resolving.
+pub use crate::diff_data::{PaneCache, PaneEntry, PaneSide};
+
+// GPU textures for image panes are a UI-layer concern (DDD split issue 04):
+// the plain-data pane cache holds decoded bytes only, and textures are
+// uploaded lazily at first paint and cached here. Two invalidation rules
+// mirror the plain-data cache exactly: a generation change (wholesale root
+// refresh) discards everything, and cap eviction drops any texture whose
+// pane key the [`PaneCache`] no longer holds — so browsing many image files
+// never pins more GPU memory than the live entries.
+/// (pane generation, (pane key, side index) → uploaded texture).
+type PaneTextureCache = (u64, HashMap<(String, usize), egui::TextureHandle>);
+
+thread_local! {
+    static PANE_TEXTURES: RefCell<PaneTextureCache> = RefCell::new((0, HashMap::new()));
 }
 
-impl PaneSide {
-    pub(crate) fn from_blob(blob: FetchedBlob) -> Self {
-        Self {
-            byte_len: blob.byte_len,
-            image: blob.decoded,
-            texture: None,
+/// Align the UI-local texture cache with the app state before painting:
+/// clear on a generation change, otherwise prune to exactly the pane keys
+/// still cached in [`PaneCache`].
+fn sync_pane_textures(generation: u64, live_keys: impl IntoIterator<Item = String>) {
+    PANE_TEXTURES.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if cache.0 != generation {
+            cache.1.clear();
+            cache.0 = generation;
+            return;
         }
-    }
+        let live: std::collections::HashSet<String> = live_keys.into_iter().collect();
+        cache.1.retain(|(key, _), _| live.contains(key));
+    });
 }
 
-/// Both sides of one non-text pane result, keyed by load key.
-#[derive(Default)]
-pub struct PaneEntry {
-    pub old: Option<PaneSide>,
-    pub new: Option<PaneSide>,
-}
-
-/// Cache bound: a few entries cover back-and-forth file switching without
-/// pinning every visited image in memory.
-const PANE_CACHE_CAP: usize = 4;
-
-/// Bounded cache of non-text pane results (CONTEXT.md "Root caches"
-/// philosophy): invalidated wholesale with root refreshes through
-/// [`crate::state::AppState::refresh`], never poked field-by-field; evicts
-/// oldest beyond [`PANE_CACHE_CAP`].
-#[derive(Default)]
-pub struct PaneCache {
-    map: HashMap<String, PaneEntry>,
-    order: VecDeque<String>,
-}
-
-impl PaneCache {
-    pub fn get(&self, key: &str) -> Option<&PaneEntry> {
-        self.map.get(key)
-    }
-
-    pub fn get_mut(&mut self, key: &str) -> Option<&mut PaneEntry> {
-        self.map.get_mut(key)
-    }
-
-    /// Insert (or replace), evicting the oldest entry past the cap.
-    pub fn store(&mut self, key: String, entry: PaneEntry) {
-        if !self.map.contains_key(&key) {
-            self.order.push_back(key.clone());
-            while self.order.len() > PANE_CACHE_CAP
-                && let Some(evicted) = self.order.pop_front()
-            {
-                self.map.remove(&evicted);
-            }
-        }
-        self.map.insert(key, entry);
-    }
-
-    pub fn clear(&mut self) {
-        self.map.clear();
-        self.order.clear();
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.map.len()
-    }
+/// Texture for one pane side: uploaded once per (pane key, side index) and
+/// cached so re-showing a file never re-uploads. Call [`sync_pane_textures`]
+/// first each frame.
+fn pane_texture(
+    ui: &Ui,
+    pane_key: &str,
+    side_index: usize,
+    image: &DecodedImage,
+) -> egui::TextureHandle {
+    PANE_TEXTURES.with(|slot| {
+        slot.borrow_mut()
+            .1
+            .entry((pane_key.to_owned(), side_index))
+            .or_insert_with(|| {
+                let color = egui::ColorImage::from_rgba_unmultiplied(
+                    [image.width as usize, image.height as usize],
+                    &image.rgba,
+                );
+                ui.ctx().load_texture(
+                    format!("diff-pane-{pane_key}-{side_index}"),
+                    color,
+                    TextureOptions::LINEAR,
+                )
+            })
+            .clone()
+    })
 }
 
 /// Decode raw bytes into a [`DecodedImage`] when they are an in-cap image.
@@ -878,11 +868,7 @@ fn image_caption(side: &PaneSide) -> String {
 }
 
 /// One image cell: the texture fitted into `max`, caption centered below.
-fn image_cell(ui: &mut Ui, side: &PaneSide, max: Vec2) {
-    let tex = side
-        .texture
-        .as_ref()
-        .expect("texture built before painting");
+fn image_cell(ui: &mut Ui, side: &PaneSide, tex: &egui::TextureHandle, max: Vec2) {
     ui.with_layout(Layout::top_down(Align::Center), |ui| {
         ui.add_space(6.0);
         ui.add(egui::Image::new(tex).fit_to_exact_size(fitted(tex.size_vec2(), max)));
@@ -922,10 +908,12 @@ fn render_image_pane(
         centered_note(ui, "Loading image…");
         return;
     }
+    let generation = state.ui.pane_generation;
+    let live_keys: Vec<String> = state.ui.pane_bytes.keys().map(str::to_owned).collect();
     let entry = state
         .ui
         .pane_bytes
-        .get_mut(pane_key)
+        .get(pane_key)
         .expect("entry cached above");
     let present: Vec<&PaneSide> = [entry.old.as_ref(), entry.new.as_ref()]
         .into_iter()
@@ -942,36 +930,32 @@ fn render_image_pane(
         return;
     }
     // Lazy GPU upload: decoding happened on the worker; each texture is
-    // built once at first paint and kept in the cache entry.
-    for (i, side) in [entry.old.as_mut(), entry.new.as_mut()]
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        if side.texture.is_none()
-            && let Some(img) = &side.image
-        {
-            let color = egui::ColorImage::from_rgba_unmultiplied(
-                [img.width as usize, img.height as usize],
-                &img.rgba,
-            );
-            side.texture = Some(ui.ctx().load_texture(
-                format!("diff-pane-{pane_key}-{i}"),
-                color,
-                TextureOptions::LINEAR,
-            ));
-        }
-    }
+    // built once and kept in the UI-local cache — the plain-data pane
+    // entry never holds an egui type (DDD split issue 04).
+    sync_pane_textures(generation, live_keys);
+    let sides = [entry.old.as_ref(), entry.new.as_ref()];
+    let textures: [Option<egui::TextureHandle>; 2] = [
+        sides[0]
+            .and_then(|s| s.image.as_ref())
+            .map(|img| pane_texture(ui, pane_key, 0, img)),
+        sides[1]
+            .and_then(|s| s.image.as_ref())
+            .map(|img| pane_texture(ui, pane_key, 1, img)),
+    ];
 
     const CAPTION_H: f32 = 24.0;
     let avail_h = (ui.available_height() - CAPTION_H).max(ROW_H * 2.0);
     match (entry.old.as_ref(), entry.new.as_ref()) {
         (Some(old), Some(new)) => {
+            let (t_old, t_new) = (
+                textures[0].as_ref().expect("image present"),
+                textures[1].as_ref().expect("image present"),
+            );
             ui.columns(2, |cols| {
                 let w0 = cols[0].available_width();
                 let w1 = cols[1].available_width();
-                image_cell(&mut cols[0], old, Vec2::new(w0, avail_h));
-                image_cell(&mut cols[1], new, Vec2::new(w1, avail_h));
+                image_cell(&mut cols[0], old, t_old, Vec2::new(w0, avail_h));
+                image_cell(&mut cols[1], new, t_new, Vec2::new(w1, avail_h));
             });
         }
         // Single-sided (new / deleted file): the lone image, centered.
@@ -979,8 +963,9 @@ fn render_image_pane(
         // returned.
         (side, None) | (None, side) => {
             if let Some(side) = side {
+                let tex = textures.iter().flatten().next().expect("image present");
                 let width = ui.available_width();
-                image_cell(ui, side, Vec2::new(width, avail_h));
+                image_cell(ui, side, tex, Vec2::new(width, avail_h));
             }
         }
     }
@@ -2563,7 +2548,6 @@ mod tests {
                 height: 1080,
                 rgba: Vec::new(),
             }),
-            texture: None,
         };
         assert_eq!(image_caption(&side), "1920×1080 · 5 B");
     }
@@ -2617,21 +2601,5 @@ mod tests {
 
         // A missing side (new/deleted file) yields nothing.
         assert!(fetch_side(&exec, dir.path(), &SideSpec::Missing, "art.png", true).is_none());
-    }
-
-    #[test]
-    fn diff_pane_cache_evicts_oldest_beyond_cap() {
-        let mut cache = PaneCache::default();
-        for i in 0..6 {
-            cache.store(format!("k{i}"), PaneEntry::default());
-        }
-        assert_eq!(cache.len(), PANE_CACHE_CAP);
-        assert!(cache.get("k0").is_none());
-        assert!(cache.get("k1").is_none());
-        for i in 2..6 {
-            assert!(cache.get(&format!("k{i}")).is_some());
-        }
-        cache.clear();
-        assert_eq!(cache.len(), 0);
     }
 }

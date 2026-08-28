@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod core;
+pub mod diff_data;
 pub mod engine;
 pub use turbogit_domain::error;
 pub use turbogit_domain::model;
