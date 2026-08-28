@@ -61,12 +61,15 @@ similar = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 turbogit-domain = { workspace = true }
+turbogit-engine = { workspace = true }
 turbogit-engine-api = { workspace = true }
+turbogit-services = { workspace = true }
 
 [dev-dependencies]
 crossbeam-channel = { workspace = true }
 egui_kittest = { workspace = true }
 tempfile = { workspace = true }
+turbogit-engine = { workspace = true, features = ["test-util"] }
 
 [features]
 default = []
