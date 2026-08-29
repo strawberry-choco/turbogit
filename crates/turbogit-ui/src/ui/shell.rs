@@ -22,9 +22,9 @@ use egui::{
 use super::icons::Icon;
 use super::popups::{self, Action};
 use super::widgets;
-use crate::root_caches::Affected;
-use crate::state::{AppState, Dialog, Tab};
 use crate::theme::Palette;
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::{AppState, Dialog, Tab};
 
 // --- Spec metrics (§4.2 fixed heights) --------------------------------------
 
@@ -223,7 +223,7 @@ fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
                 super::hunk_nav::Dir::Next => "Press again for next file",
                 super::hunk_nav::Dir::Prev => "Press again for previous file",
             };
-            state.ui.toast = Some(crate::state::Toast::info(hint));
+            state.ui.toast = Some(turbogit_app::state::Toast::info(hint));
             state.ui.hunk_nav_armed_edge = Some((dir, now));
         }
         super::hunk_nav::Outcome::CrossFile => {

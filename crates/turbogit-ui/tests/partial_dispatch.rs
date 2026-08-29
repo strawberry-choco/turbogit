@@ -1,7 +1,7 @@
 //! Partial staging dispatch lane (spec R2) — headless harness tests.
 //!
-//! Drives the real `turbogit::ui::render()` through `egui_kittest` over a
-//! temporary repository with a [`common::RecordingExecutor`] injected at the
+//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` over a
+//! temporary repository with a [`RecordingExecutor`] injected at the
 //! executor boundary (after synchronous registration, per the
 //! `push_dialog.rs` pattern), asserting **what the engine was asked to do**
 //!
@@ -9,12 +9,11 @@
 //! `s`/`u` verbs, commit-with-partial-selection semantics, conflicted-file
 //! blocking.
 
-mod common;
-
-use common::{RecordedCall, RecordingExecutor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use test_support::harness::painted_text;
+use test_support::{RecordedCall, RecordingExecutor};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -113,7 +112,7 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
             state.drain_events();
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     )
@@ -549,7 +548,7 @@ fn preview_refreshes_after_granular_stage_to_show_remaining_unstaged_changes() {
     // remaining UNSTAGED changes — quebec still differs, bravo no longer does.
     assert!(
         wait_until(15_000, || {
-            let text = common::painted_text(&h).join("\n");
+            let text = painted_text(&h).join("\n");
             text.contains("QUEBEC") && !text.contains("BRAVO")
         }),
         "after staging hunk 1 the preview must show only the remaining \
@@ -585,7 +584,7 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
     h.run();
     assert!(
         wait_until(15_000, || {
-            let text = common::painted_text(&h).join("\n");
+            let text = painted_text(&h).join("\n");
             text.contains("QUEBEC") && !text.contains("BRAVO")
         }),
         "post-op refresh should settle on the remaining unstaged hunk"
@@ -597,7 +596,7 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
     // changelist and preview focus advances to the next changed file.
     assert!(
         wait_until(15_000, || {
-            let text = common::painted_text(&h).join("\n");
+            let text = painted_text(&h).join("\n");
             !text.contains("M words.txt")
         }),
         "a fully staged file must leave the changelist"

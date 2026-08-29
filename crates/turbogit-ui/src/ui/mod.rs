@@ -27,9 +27,9 @@ pub mod shell;
 pub mod welcome;
 pub mod widgets;
 
-use crate::state::{AppState, Dialog, PendingConfirm, ToastKind};
 use crate::theme::Palette;
 use egui::{Color32, Context, Ui};
+use turbogit_app::state::{AppState, Dialog, PendingConfirm, ToastKind};
 
 /// Render one full frame: the IDE shell plus its floating surfaces.
 pub fn render(ui: &mut Ui, state: &mut AppState) {

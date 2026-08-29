@@ -508,6 +508,15 @@ impl AppState {
         self
     }
 
+    /// Rebuild the engine from the current settings behind the seam
+    /// (ADR-0001: a changed git binary or backend applies live). The
+    /// composition-root factory lives in `turbogit-engine`, so the app
+    /// crate owns this call and the UI crate reaches it through here
+    /// instead of depending on the adapters.
+    pub fn rebuild_executor(&mut self) {
+        self.executor = build_executor(&self.settings);
+    }
+
     /// The effective config dir for the global recents file (ADR-0005).
     fn recents_config(&self) -> Option<PathBuf> {
         self.recents_config_dir

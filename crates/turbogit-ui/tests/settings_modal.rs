@@ -2,22 +2,20 @@
 //! toolbar gear, replacing the deleted tab-strip Settings page (spec §8.8,
 //! §9.1 correction).
 //!
-//! Headless egui_kittest harness driving [`turbogit::ui::render`] end-to-end.
+//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] end-to-end.
 //! Asserts only on public surfaces:
 //!
 //! - **Painted output** — text galleys / filled rects from `FullOutput`.
 //! - **Accessibility tree** — widget roles, labels, and the disabled flag.
 //! - **State transitions** — public `AppState` fields + persisted settings.
 
-mod common;
-
-use common::{assert_not_painted, assert_painted, settle, shell_harness};
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use turbogit::model::VcsSettings;
-use turbogit::persistence;
-use turbogit::state::{AppState, Tab};
+use test_support::harness::{assert_not_painted, assert_painted, settle, shell_harness};
+use turbogit_app::persistence;
+use turbogit_app::state::{AppState, Tab};
+use turbogit_domain::model::VcsSettings;
 
 /// The toolbar gear's accessible label: `icon_button` exposes the Lucide
 /// icon name (`"settings"`, lowercase) — distinct from the old tab label.

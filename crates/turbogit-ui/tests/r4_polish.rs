@@ -1,7 +1,7 @@
 //! Issue #23 — R4 polish audit: keyboard focus rings, small-window
 //! scrolling/reachability, and the frozen-shortcut regression suite.
 //!
-//! Headless egui_kittest harness driving [`turbogit::ui::render`] end-to-end,
+//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] end-to-end,
 //! asserting only on public surfaces:
 //!
 //! - **Painted output** — BRAND focus-ring strokes (token spec §7.2: a 1px
@@ -18,18 +18,18 @@
 //! - the five frozen shortcuts dispatch unchanged, fire even when a text
 //!   field holds focus, and never collide with plain typing or each other
 
-mod common;
-
-use common::{assert_painted, galley_origin, settle, shell_harness};
 use egui::{Key, Modifiers, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
-use turbogit::engine::GitExecutor;
-use turbogit::engine::cli::CliExecutor;
-use turbogit::events::AppEvent;
-use turbogit::model::{LogOpts, VcsSettings};
-use turbogit::state::{AppState, Dialog, Tab};
-use turbogit::theme::{Palette, configure_style, install_fonts};
+use test_support::harness::{
+    assert_painted, filled_rects, galley_origin, painted_text, settle, shell_harness,
+};
+use turbogit_app::events::AppEvent;
+use turbogit_app::state::{AppState, Dialog, Tab};
+use turbogit_domain::model::{LogOpts, VcsSettings};
+use turbogit_engine::cli::CliExecutor;
+use turbogit_engine_api::GitExecutor;
+use turbogit_ui::theme::{Palette, configure_style, install_fonts};
 
 // --- Shared helpers -----------------------------------------------------------
 
@@ -110,7 +110,7 @@ fn settle_long(harness: &mut Harness<'_, AppState>) {
         harness.step();
         let fingerprint = format!(
             "{:?}|busy={}",
-            common::painted_text(harness),
+            painted_text(harness),
             harness.state().ui.busy
         );
         if fingerprint == prev && !harness.state().ui.busy && !harness.state().ui.diff_loading {
@@ -244,7 +244,7 @@ fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, A
                 fonts_installed = true;
             }
             state.drain_events(); // production parity with app.rs
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     );
@@ -417,7 +417,7 @@ fn shell_chrome_holds_at_small_window_sizes() {
     // The harness insets the shell by an 8px outer margin, so "pinned to the
     // bottom" means the bottom of the laid-out content area, not the raw
     // viewport edge.
-    let status_bands: Vec<_> = common::filled_rects(&harness)
+    let status_bands: Vec<_> = filled_rects(&harness)
         .into_iter()
         .filter(|(r, c)| *c == Palette::SURFACE && r.top() >= status_top - 12.0)
         .collect();

@@ -12,10 +12,10 @@
 use std::time::{Duration, Instant};
 
 // The plain-data edge-nudge vocabulary ([`Dir`], [`EDGE_WINDOW`]) lives in
-// [`crate::diff_data`] beside the app state — the UI imports it back up
+// [`turbogit_app::diff_data`] beside the app state — the UI imports it back up
 // (DDD split issue 04). Re-exported here so the historical `ui::hunk_nav`
 // paths keep resolving.
-pub use crate::diff_data::{Dir, EDGE_WINDOW};
+pub use turbogit_app::diff_data::{Dir, EDGE_WINDOW};
 
 /// What the UI layer should do after one key press.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

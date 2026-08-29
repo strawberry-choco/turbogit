@@ -2,11 +2,11 @@
 //! New Branch (E3), Tag (O1–O4), Shelve (J1–J4), Stash (J5–J8). The Push
 //! dialog lives in [`super::push_dialog`] (issue #20).
 
-use crate::core::{branch_service, history_editor, integrate_service, shelve_stash};
-use crate::model::{MergeOpts, RebaseAction, RebaseOpts};
-use crate::root_caches::Affected;
-use crate::state::{AppState, Dialog};
 use egui::Ui;
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::{AppState, Dialog};
+use turbogit_domain::model::{MergeOpts, RebaseAction, RebaseOpts};
+use turbogit_services::{branch_service, history_editor, integrate_service, shelve_stash};
 
 pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
     let ctx = ui.ctx().clone();

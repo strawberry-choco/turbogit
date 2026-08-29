@@ -8,8 +8,3 @@
 
 pub use turbogit_engine::{build_executor, cli, git2_exec};
 pub use turbogit_engine_api::{ApplyDirection, GitExecutor};
-
-// The fake executor ships behind the engine crate's `test-util` feature,
-// which the root crate activates only through its dev-dependencies.
-#[cfg(test)]
-pub use turbogit_engine::fake;

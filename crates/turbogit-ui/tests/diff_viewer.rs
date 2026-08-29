@@ -1,6 +1,6 @@
 //! Issue #13 — diff viewer restyle: modes, comparison chips, tokens.
 //!
-//! Headless egui_kittest harness driving [`turbogit::ui::render`] over real
+//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] over real
 //! temp repositories (system `git`) seeded with staged/unstaged edits.
 //! Asserts only on public surfaces:
 //!
@@ -20,8 +20,8 @@ use std::process::Command;
 
 use egui::{Color32, Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
-use turbogit::state::{AppState, DiffComparison};
-use turbogit::theme::{Palette, configure_style, install_fonts};
+use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_ui::theme::{Palette, configure_style, install_fonts};
 
 // --- git seeding -------------------------------------------------------------
 
@@ -145,7 +145,7 @@ fn diff_harness(repo: &Path) -> Harness<'static, AppState> {
                 fonts_installed = true;
             }
             state.drain_events(); // production parity with app.rs
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     );

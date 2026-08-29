@@ -14,15 +14,15 @@
 //! renders per the mockup but is deliberately inert in v1 (ADR-0010).
 //! User-created changelists remain backlog.
 
-use crate::core::changes;
-use crate::model::{Change, ChangeStatus, Root};
-use crate::root_caches::Affected;
-use crate::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{Color32, Key, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType};
 use std::path::PathBuf;
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
+use turbogit_domain::model::{Change, ChangeStatus, Root};
+use turbogit_services::changes;
 
 /// Canonical bucket names (user-created changelists are backlog).
 pub const DEFAULT_CHANGELIST: &str = "Default Changelist";

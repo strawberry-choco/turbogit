@@ -1,6 +1,6 @@
 //! Issue #9 — IDE shell frame: topbar, toolbar, rail, tab strip, status bar.
 //!
-//! Headless egui_kittest harness driving [`turbogit::ui::render`] end-to-end
+//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] end-to-end
 //! over synthetic raw input (no GPU / window / display server). Asserts only
 //! on public surfaces:
 //!
@@ -15,15 +15,13 @@
 //! - the five frozen shortcuts dispatch unchanged
 //! - no project open → Welcome placeholder page
 
-mod common;
-
-use common::{
-    assert_not_painted, assert_painted, filled_rects, galley_origin, settle, shell_harness,
-};
 use egui::{Color32, Key, Modifiers, Rect};
 use egui_kittest::{Harness, kittest::Queryable};
-use turbogit::state::{AppState, Dialog, Tab};
-use turbogit::theme::Palette;
+use test_support::harness::{
+    assert_not_painted, assert_painted, filled_rects, galley_origin, settle, shell_harness,
+};
+use turbogit_app::state::{AppState, Dialog, Tab};
+use turbogit_ui::theme::Palette;
 
 // --- Region finders (geometry over painted filled rects) --------------------
 //

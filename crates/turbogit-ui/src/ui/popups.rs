@@ -4,12 +4,12 @@
 //! opens the command palette: a fuzzy-searchable list of every action, the
 //! IntelliJ "Find Action" hallmark.
 
-use crate::granular;
-use crate::root_caches::Affected;
-use crate::state::{AppState, Dialog, Tab, Toast};
 use egui::Ui;
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
+use turbogit_app::granular;
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::{AppState, Dialog, Tab, Toast};
 
 /// Every globally-invokable action, reused by both the VCS popup and the
 /// command palette — and by the shell's Git menu (issue #9).
@@ -140,7 +140,8 @@ pub fn run_action(state: &mut AppState, action: Action) {
         }
         Action::Pull => {
             let r = root.clone();
-            let rebase = state.settings.update_method == crate::model::UpdateMethod::Rebase;
+            let rebase =
+                state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
             state.run_git(
                 "Pull".into(),
                 Affected::from_optional_root(r.as_deref()),

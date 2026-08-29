@@ -1,6 +1,6 @@
 //! Issue #15 — 3-way merge editor redesign tests.
 //!
-//! Headless egui_kittest harness driving [`turbogit::ui::render`] against a
+//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] against a
 //! temporary repository seeded with a REAL two-hunk merge conflict, asserting
 //! only on public surfaces:
 //!
@@ -20,18 +20,16 @@
 //!   result through the engine's existing resolution flow and clears the
 //!   conflict state
 
-mod common;
-
-use common::{assert_not_painted, assert_painted, filled_rects, galley_origin};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use test_support::harness::{assert_not_painted, assert_painted, filled_rects, galley_origin};
 
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use turbogit::model::RootId;
-use turbogit::state::AppState;
-use turbogit::theme::Palette;
+use turbogit_app::state::AppState;
+use turbogit_domain::model::RootId;
+use turbogit_ui::theme::Palette;
 
 // ---------------------------------------------------------------- helpers --
 
@@ -136,7 +134,7 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
             state.drain_events();
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     )
