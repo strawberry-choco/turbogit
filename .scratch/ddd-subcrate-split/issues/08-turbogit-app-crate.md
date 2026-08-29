@@ -4,10 +4,10 @@
 
 **Blocked by:** 03 — Decouple domain from RON; 04 — Invert the state→UI type leak; 07 — Extract turbogit-services crate.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] State, root caches, persistence, recents, and event types live in `turbogit-app`; the engine module no longer defines or re-exports them
-- [ ] Granular service lives in the app crate, documented as an application service; the core service layer is now entirely pure
-- [ ] App crate manifest contains no egui dependency
-- [ ] Granular-ops and partial-dispatch suites run from the new crate and pass
-- [ ] All four quality gates pass
+- [x] State, root caches, persistence, recents, and event types live in `turbogit-app`; the engine module no longer defines or re-exports them
+- [x] Granular service lives in the app crate, documented as an application service; the core service layer is now entirely pure
+- [x] App crate manifest contains no egui dependency
+- [x] Granular-ops and partial-dispatch suites run from the new crate and pass
+- [x] All four quality gates pass

@@ -4,9 +4,9 @@
 
 **Blocked by:** 01 — Workspace scaffolding.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `turbogit-domain` crate exists with `model` and `error` modules moved verbatim
-- [ ] Domain crate manifest declares only `serde`, `chrono`, `thiserror`
-- [ ] Root library shims preserve all existing import paths; zero edits outside the new crate and root manifests
-- [ ] All four quality gates pass
+- [x] `turbogit-domain` crate exists with `model` and `error` modules moved verbatim
+- [x] Domain crate manifest declares only `serde`, `chrono`, `thiserror`
+- [x] Root library shims preserve all existing import paths; zero edits outside the new crate and root manifests
+- [x] All four quality gates pass
