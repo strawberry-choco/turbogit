@@ -85,7 +85,9 @@ pub fn record_into(recents: &mut Recents, path: &Path) {
     if let Some(newest) = recents.projects.iter().map(|p| p.last_opened).max()
         && now <= newest
     {
-        now = newest + 1;
+        // `last_opened` is parsed unvalidated from recents.ron, so `newest`
+        // can be i64::MAX; saturate instead of overflowing the bump.
+        now = newest.saturating_add(1);
     }
     recents.projects.push(RecentProject {
         path: path.to_path_buf(),
@@ -114,4 +116,35 @@ pub fn format_last_opened(unix_millis: i64) -> String {
             .unwrap_or(chrono::DateTime::UNIX_EPOCH),
     );
     format!("Last opened {}", t.format("%Y-%m-%d %H:%M"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `last_opened` is loaded unvalidated from recents.ron; an i64::MAX
+    /// entry must not overflow the same-millisecond bump (`newest + 1`).
+    #[test]
+    fn record_into_saturates_at_i64_max_last_opened() {
+        let mut recents = Recents {
+            projects: vec![RecentProject {
+                path: PathBuf::from("C:/projects/saturated"),
+                name: "saturated".into(),
+                last_opened: i64::MAX,
+            }],
+        };
+        record_into(&mut recents, Path::new("C:/projects/fresh"));
+        // The bump saturated (both entries tie at i64::MAX), so the stable
+        // sort keeps the pre-existing row first — assert by path, not index.
+        let fresh = recents
+            .projects
+            .iter()
+            .find(|p| p.path == Path::new("C:/projects/fresh"))
+            .expect("fresh entry recorded");
+        assert_eq!(
+            fresh.last_opened,
+            i64::MAX,
+            "the bump must saturate, not overflow"
+        );
+    }
 }
