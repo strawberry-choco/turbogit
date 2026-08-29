@@ -229,13 +229,21 @@ sequenceDiagram
 | ADR | Decision |
 |---|---|
 | ADR-0001 | Engine seam: `GitExecutor` trait; libgit2 vs CLI selectable by settings |
+| ADR-0002 | Embed JetBrains Mono rather than system font lookup |
 | ADR-0003 | Dark-only theme tokens |
 | ADR-0004 | Launch flow: dir → shell, none → Welcome |
 | ADR-0005 | Global recent-projects config |
 | ADR-0006 | Batch push covers every root; per-root targeting filters preview only |
+| ADR-0007 | Push dialog keeps explicit remote/branch fields alongside the commit tree |
+| ADR-0008 | Commit sub-tabs render placeholder panes for not-yet-implemented features |
 | ADR-0009 | Five frozen global shortcuts dispatched in the shell |
+| ADR-0010 | Commit window Advanced options is inert chrome in v1 |
+| ADR-0011 | Command palette and VCS popup keep their action sets; palette gains shell actions |
+| ADR-0012 | Branch popup row actions render inert until their flows exist |
 | ADR-0013 | Partial staging filters raw diff text |
-| ADR-0016 | One crate per layer; the app→engine edge is the single composition touchpoint |
+| ADR-0014 | Diff rendering virtualizes over `ScrollArea::show_rows`, not `egui_extras::Table` |
+| ADR-0015 | Non-text diffs render outside the display-row model |
+| ADR-0016 | Mockups are the single source of truth for the UI redesign |
 
 The crate-per-layer split, the sanctioned edge, and the deferred options are
 specified in `docs/ddd-subcrate-proposal.md`.

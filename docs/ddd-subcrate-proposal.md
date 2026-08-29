@@ -1,5 +1,10 @@
 # TurboGit DDD Subcrate Split — Architectural Proposal
 
+> **Status:** superseded — this proposal was executed and completed on
+> 2026-08-29; the workspace is now one crate per layer (see
+> `docs/architecture.md`). Paths below (`src/core`, `src/engine`, …) are the
+> pre-split layout the plan was written against.
+
 > Single-crate app → DDD-aligned Cargo workspace. Grounded in inspection of the current source layout.
 
 **Note:** the layout below reflects the actual file organization in the repo.
