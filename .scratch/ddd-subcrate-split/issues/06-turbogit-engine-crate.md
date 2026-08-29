@@ -4,9 +4,9 @@
 
 **Blocked by:** 05 — Extract turbogit-engine-api crate.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] CLI executor, git2 executor, and `build_executor` live in `turbogit-engine`; fake executor is gated behind the `test-util` feature
-- [ ] Root engine module shims keep existing import paths resolving
-- [ ] Engine test suites run from the new crate and pass
-- [ ] All four quality gates pass
+- [x] CLI executor, git2 executor, and `build_executor` live in `turbogit-engine`; fake executor is gated behind the `test-util` feature
+- [x] Root engine module shims keep existing import paths resolving
+- [x] Engine test suites run from the new crate and pass
+- [x] All four quality gates pass

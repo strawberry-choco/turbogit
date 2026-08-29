@@ -4,9 +4,9 @@
 
 **Blocked by:** 05 — Extract turbogit-engine-api crate; 06 — Extract turbogit-engine crate.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] All pure core services and their unit tests live in `turbogit-services`; the granular service does not move
-- [ ] Services crate depends on the port, never on adapters, egui, or app state (fake executor only as dev-dependency)
-- [ ] Sync outgoing suite runs from the new crate and passes
-- [ ] All four quality gates pass
+- [x] All pure core services and their unit tests live in `turbogit-services`; the granular service does not move
+- [x] Services crate depends on the port, never on adapters, egui, or app state (fake executor only as dev-dependency)
+- [x] Sync outgoing suite runs from the new crate and passes
+- [x] All four quality gates pass

@@ -4,8 +4,8 @@
 
 **Blocked by:** 10 — Composition root cutover and shim removal.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Repository guidelines describe the workspace layout, crate responsibilities, and where tests live
-- [ ] Progress tracker and spec/architecture docs reference current crate paths, not old module paths
-- [ ] The sanctioned app→engine edge and the deferred options are documented
+- [x] Repository guidelines describe the workspace layout, crate responsibilities, and where tests live
+- [x] Progress tracker and spec/architecture docs reference current crate paths, not old module paths
+- [x] The sanctioned app→engine edge and the deferred options are documented
