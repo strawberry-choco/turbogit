@@ -5,10 +5,11 @@
 //! `fn ui(&mut self, ui: &mut Ui, frame)`, and `egui::Context` is reached via
 //! `ui.ctx()`.
 
-use crate::state::AppState;
-use crate::ui;
 use eframe::{App, Frame};
 use egui::Ui;
+use turbogit_app::state::AppState;
+use turbogit_ui::theme;
+use turbogit_ui::ui;
 
 pub struct TurbogitApp {
     pub state: AppState,
@@ -34,7 +35,7 @@ impl App for TurbogitApp {
         let ctx = ui.ctx();
 
         // Dark-only design tokens (ADR-0003); idempotent per-frame application.
-        crate::theme::configure_style(ctx);
+        theme::configure_style(ctx);
 
         // Drain worker-thread events and apply them to state, then repaint.
         // The pump itself lives on AppState so headless harnesses get

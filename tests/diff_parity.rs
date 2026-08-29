@@ -1,7 +1,7 @@
 //! Phase L1 parity — in-process `similar` diffs vs the CLI `git diff` text.
 //!
 //! Drives real temporary repositories and asserts, per fixture, that the
-//! row stream the UI's parser builds from [`turbogit::core::diff_engine`]
+//! row stream the UI's parser builds from [`turbogit_services::diff_engine`]
 //! output equals the row stream built from `git diff` output. The producer
 //! switch lives at the text level (the cached raw patch), so row-stream
 //! equality is exactly the renderer-visible contract.
@@ -16,18 +16,18 @@
 //!
 //! The 3-way merge is checked against the canonical raw-marker parser:
 //! `similar`'s own marker rendering of a merge, fed through
-//! [`turbogit::core::conflict::parse_conflict_markers`], must produce the
-//! same segment tuples [`turbogit::core::diff_engine::merge_segments`]
+//! [`turbogit_services::conflict::parse_conflict_markers`], must produce the
+//! same segment tuples [`turbogit_services::diff_engine::merge_segments`]
 //! builds structurally from merge regions.
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use turbogit::core::conflict;
-use turbogit::core::diff_engine;
-use turbogit::engine::GitExecutor;
-use turbogit::engine::cli::CliExecutor;
-use turbogit::model::{DiffOpts, VcsSettings};
-use turbogit::ui::diff::{RowSummary, parsed_rows};
+use turbogit_domain::model::{DiffOpts, VcsSettings};
+use turbogit_engine::cli::CliExecutor;
+use turbogit_engine_api::GitExecutor;
+use turbogit_services::conflict;
+use turbogit_services::diff_engine;
+use turbogit_ui::ui::diff::{RowSummary, parsed_rows};
 
 // ---------------------------------------------------------------- helpers --
 

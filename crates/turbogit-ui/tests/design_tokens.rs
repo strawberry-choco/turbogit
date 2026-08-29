@@ -5,7 +5,7 @@
 //! — the stale key is ignored and the app renders the designed dark
 //! experience regardless.
 
-use turbogit::model::ProjectState;
+use turbogit_domain::model::ProjectState;
 
 /// Complete pre-redesign `state.ron` document whose theme is a removed
 /// mode (`HighContrast`; `Light` is exercised via the same shape).
@@ -48,7 +48,7 @@ fn legacy_state_with_removed_theme_mode_still_loads() {
 // --- Cycle 2: dark-only Visuals derive from the central token set (spec §2.5) ---
 
 use egui::Color32;
-use turbogit::theme::configure_style;
+use turbogit_ui::theme::configure_style;
 
 const BG: Color32 = Color32::from_rgb(0x1e, 0x1f, 0x22);
 const SURFACE: Color32 = Color32::from_rgb(0x2b, 0x2d, 0x30);
@@ -114,7 +114,7 @@ fn selection_uses_brand_with_brand_stroke() {
 
 // --- Cycle 3: embedded JetBrains Mono with system fallbacks (ADR-0002, spec §3.1) ---
 
-use turbogit::theme::font_definitions;
+use turbogit_ui::theme::font_definitions;
 
 #[test]
 fn proportional_family_is_jetbrains_mono_with_segoe_ui_fallback() {
@@ -192,7 +192,7 @@ fn embedded_font_data_is_valid_truetype() {
 
 // --- Cycle 4: the app installs the stack into its context (ADR-0002) ---
 
-use turbogit::theme::install_fonts;
+use turbogit_ui::theme::install_fonts;
 
 #[test]
 fn install_fonts_applies_the_embedded_stack_to_the_context() {
