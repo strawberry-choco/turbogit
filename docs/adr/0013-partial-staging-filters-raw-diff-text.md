@@ -12,7 +12,7 @@ index via a direction flag on `apply_patch_to_index`
 
 ## Considered options
 
-- **Rebuild from the parsed row model** (`Row` structs in `src/ui/diff.rs`) —
+- **Rebuild from the parsed row model** (`Row` structs in `crates/turbogit-ui/src/ui/diff.rs`) —
   cleaner data flow, but synthesizing headers and line counts re-derives what
   git produced and risks subtle mismatches.
 - **`git add -p` / interactive add** — interactive-only, unusable from a GUI.

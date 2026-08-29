@@ -4,9 +4,9 @@
 
 **Blocked by:** 02 — Extract turbogit-domain crate; 03 — Decouple domain from RON; 04 — Invert the state→UI type leak; 05 — Extract turbogit-engine-api crate; 06 — Extract turbogit-engine crate; 07 — Extract turbogit-services crate; 08 — Extract turbogit-app crate; 09 — Extract turbogit-ui and test-support crates.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] No `pub use` shim remains in the root library; every import names its real crate
-- [ ] Root crate contains only the binary wiring and the cross-layer parity suite
-- [ ] Plain `cargo check` (release profile) does not build the `test-util` feature; `cargo check --all-targets` does
-- [ ] All four quality gates pass
+- [x] No `pub use` shim remains in the root library; every import names its real crate
+- [x] Root crate contains only the binary wiring and the cross-layer parity suite
+- [x] Plain `cargo check` (release profile) does not build the `test-util` feature; `cargo check --all-targets` does
+- [x] All four quality gates pass

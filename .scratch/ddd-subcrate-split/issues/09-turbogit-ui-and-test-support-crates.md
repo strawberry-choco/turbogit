@@ -4,10 +4,10 @@
 
 **Blocked by:** 08 — Extract turbogit-app crate.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Theme and all UI modules live in `turbogit-ui`; kittest helpers and recording executor live in `test-support`
-- [ ] Redesign UI suites run from the UI crate and pass
-- [ ] Screenshot-acceptance suite's output path is corrected for the new crate depth and snapshots regenerate cleanly
-- [ ] `egui-kittest` appears only in `test-support` deps and UI dev-deps
-- [ ] All four quality gates pass
+- [x] Theme and all UI modules live in `turbogit-ui`; kittest helpers and recording executor live in `test-support`
+- [x] Redesign UI suites run from the UI crate and pass
+- [x] Screenshot-acceptance suite's output path is corrected for the new crate depth and snapshots regenerate cleanly
+- [x] `egui-kittest` appears only in `test-support` deps and UI dev-deps
+- [x] All four quality gates pass

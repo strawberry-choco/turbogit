@@ -4,9 +4,9 @@
 
 **Blocked by:** 02 — Extract turbogit-domain crate.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Pane and hunk-nav plain-data types live beside the app state, not in UI modules
-- [ ] UI modules import the types back up; public `ui::diff` / `ui::hunk_nav` paths used by state and test suites keep resolving
-- [ ] Diff redesign and diff parity suites pass unchanged
-- [ ] All four quality gates pass
+- [x] Pane and hunk-nav plain-data types live beside the app state, not in UI modules
+- [x] UI modules import the types back up; public `ui::diff` / `ui::hunk_nav` paths used by state and test suites keep resolving
+- [x] Diff redesign and diff parity suites pass unchanged
+- [x] All four quality gates pass

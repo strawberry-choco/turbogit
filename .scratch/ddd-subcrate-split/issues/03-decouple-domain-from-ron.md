@@ -4,9 +4,9 @@
 
 **Blocked by:** 02 — Extract turbogit-domain crate.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The serde error variant holds a `String`; `ron` is absent from the domain crate's manifest
-- [ ] Every place that previously relied on the implicit conversion now maps the RON error explicitly
-- [ ] Error display output for serialization failures is unchanged for users
-- [ ] All four quality gates pass
+- [x] The serde error variant holds a `String`; `ron` is absent from the domain crate's manifest
+- [x] Every place that previously relied on the implicit conversion now maps the RON error explicitly
+- [x] Error display output for serialization failures is unchanged for users
+- [x] All four quality gates pass

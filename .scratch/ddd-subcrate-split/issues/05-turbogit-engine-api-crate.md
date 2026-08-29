@@ -4,8 +4,8 @@
 
 **Blocked by:** 02 — Extract turbogit-domain crate.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `turbogit-engine-api` crate contains the whole `GitExecutor` trait and `ApplyDirection`, depending only on the domain crate
-- [ ] Engine module re-exports the port; the `Affected` re-export is gone and all its importers are fixed
-- [ ] All four quality gates pass
+- [x] `turbogit-engine-api` crate contains the whole `GitExecutor` trait and `ApplyDirection`, depending only on the domain crate
+- [x] Engine module re-exports the port; the `Affected` re-export is gone and all its importers are fixed
+- [x] All four quality gates pass

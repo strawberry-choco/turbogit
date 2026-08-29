@@ -4,8 +4,8 @@
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Root manifest declares `[workspace]`, `[workspace.dependencies]`, and `[workspace.lints]`
-- [ ] Existing root package dependencies are repointed at the workspace table (no duplicated version strings)
-- [ ] All four quality gates pass: `cargo fmt -- --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets`
+- [x] Root manifest declares `[workspace]`, `[workspace.dependencies]`, and `[workspace.lints]`
+- [x] Existing root package dependencies are repointed at the workspace table (no duplicated version strings)
+- [x] All four quality gates pass: `cargo fmt -- --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo test --all-targets`
