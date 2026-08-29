@@ -5,8 +5,8 @@ use std::sync::Mutex;
 
 use egui::epaint::ColorMode;
 use egui::{Color32, Pos2, Shape};
-use turbogit::theme::{Palette, icon_color};
-use turbogit::ui::icons;
+use turbogit_ui::theme::{Palette, icon_color};
+use turbogit_ui::ui::icons;
 
 /// Run one headless frame painting via `paint`; return all painted shapes.
 fn painted_shapes(paint: impl Fn(&mut egui::Ui)) -> Vec<Shape> {

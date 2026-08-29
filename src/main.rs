@@ -1,8 +1,9 @@
-//! TurboGit binary entry point. The real logic lives in the `turbogit` lib.
+//! TurboGit binary entry point — the workspace's composition root.
 
 use eframe::NativeOptions;
 use std::path::PathBuf;
 use turbogit::app::TurbogitApp;
+use turbogit_ui::theme;
 
 fn main() {
     // Project directory: optional first CLI arg (ADR-0004). With a path the
@@ -24,7 +25,7 @@ fn main() {
         options,
         Box::new(|cc| {
             // Embedded JetBrains Mono (ADR-0002), once before the first frame.
-            turbogit::theme::install_fonts(&cc.egui_ctx);
+            theme::install_fonts(&cc.egui_ctx);
             Ok(Box::new(TurbogitApp::launch(project_dir)) as Box<dyn eframe::App>)
         }),
     );

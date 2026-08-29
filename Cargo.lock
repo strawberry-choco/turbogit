@@ -3508,9 +3508,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
- "log",
  "rfd",
- "ron",
  "similar",
  "tempfile",
  "turbogit-app",
@@ -3587,6 +3585,7 @@ dependencies = [
  "image",
  "log",
  "nucleo-matcher",
+ "ron",
  "tempfile",
  "test-support",
  "turbogit-app",

@@ -1,11 +1,9 @@
-//! TurboGit library crate — shared by the `turbogit` binary and the
-//! integration tests. Module layout mirrors `execution-plan.md` §4.
+//! TurboGit composition root. Everything except the eframe wiring lives in
+//! the workspace crates; this library exposes only the root-owned
+//! `app` module so the binary can `use turbogit::app::TurbogitApp`.
+//!
+//! No re-export shims: every caller names its real crate
+//! (`turbogit_domain`, `turbogit_app`, `turbogit_ui`, `turbogit_services`,
+//! `turbogit_engine_api`).
 
 pub mod app;
-pub mod core;
-pub use turbogit_app::{diff_data, events, granular, persistence, recents, root_caches, state};
-pub mod engine;
-pub use turbogit_domain::error;
-pub use turbogit_domain::model;
-pub use turbogit_ui::theme;
-pub use turbogit_ui::ui;
