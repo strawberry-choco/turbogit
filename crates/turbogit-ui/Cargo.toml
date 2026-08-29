@@ -16,15 +16,15 @@ turbogit-engine-api = { workspace = true }
 turbogit-services = { workspace = true }
 
 [dev-dependencies]
+egui_kittest = { workspace = true }
+ron = { workspace = true }
+tempfile = { workspace = true }
+test-support = { workspace = true, features = ["harness"] }
 turbogit-app = { workspace = true }
 turbogit-domain = { workspace = true }
 turbogit-engine = { workspace = true, features = ["test-util"] }
 turbogit-engine-api = { workspace = true }
 turbogit-services = { workspace = true }
-tempfile = { workspace = true }
-test-support = { workspace = true, features = ["harness"] }
-egui = { workspace = true }
-egui_kittest = { workspace = true }
 
 [lints]
 workspace = true
