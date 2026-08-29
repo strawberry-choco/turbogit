@@ -1,6 +1,6 @@
 //! Issue #11 — Commit tool window redesign tests.
 //!
-//! Drives the real `turbogit::ui::render()` through `egui_kittest` against
+//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
 //! temporary git repositories seeded with modified / added / unversioned /
 //! conflicted files, asserting painted labels (canonical groups, count
 //! badges, M/A/C file-row badges) and public `AppState` transitions only.
@@ -13,15 +13,13 @@
 //! Painted-text assertions come from `tests/common`; harness helpers beyond
 //! those remain local to this file (per issue spec: do not edit
 //! `tests/shell_frame.rs`).
-mod common;
-
-use common::{assert_not_painted, assert_painted};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use test_support::harness::{assert_not_painted, assert_painted};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use turbogit::state::{AppState, CommitSubTab, Dialog};
+use turbogit_app::state::{AppState, CommitSubTab, Dialog};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -129,7 +127,7 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
             state.drain_events();
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     )
@@ -510,7 +508,7 @@ fn advanced_options_control_is_visible_but_inert() {
         message: String,
         amend: bool,
         selected_len: usize,
-        toast: Option<turbogit::state::Toast>,
+        toast: Option<turbogit_app::state::Toast>,
         busy: bool,
     }
     fn snap(h: &Harness<'_, AppState>) -> CommitUiSnap {

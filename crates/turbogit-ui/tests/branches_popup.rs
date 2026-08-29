@@ -1,7 +1,7 @@
 //! Issue #14 — Branches popup: groups, row actions, keyboard flow.
 //!
 //! Headless egui_kittest harness (same pattern as `shell_frame.rs`)
-//! driving [`turbogit::ui::render`] over a **real temp git repository**.
+//! driving [`turbogit_ui::ui::render`] over a **real temp git repository**.
 //! Asserts only on public surfaces: painted text/geometry and public
 //! `AppState` transitions.
 //! Covered (spec §8.5, ADR-0012):
@@ -14,19 +14,17 @@
 //! - multi-root sync notice states the N repositories count
 //! - Esc closes; typing filters live
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use common::{assert_not_painted, assert_painted, galley_origin, painted_text};
 use egui::Key;
 use egui_kittest::{Harness, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
-use turbogit::state::{AppState, Dialog};
-use turbogit::theme::Palette;
-use turbogit::ui::branch_widget;
+use test_support::harness::{assert_not_painted, assert_painted, galley_origin, painted_text};
+use turbogit_app::state::{AppState, Dialog};
+use turbogit_ui::theme::Palette;
+use turbogit_ui::ui::branch_widget;
 
 // --- git fixture -------------------------------------------------------------
 
@@ -99,12 +97,12 @@ fn branches_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
             state.drain_events();
-            turbogit::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             if !fonts_installed {
-                turbogit::theme::install_fonts(ui.ctx());
+                turbogit_ui::theme::install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     );
@@ -150,7 +148,7 @@ fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&Ap
         s.ui.busy,
         s.ui.toast,
         s.ui.branches_popup,
-        common::painted_text(harness),
+        painted_text(harness),
     );
 }
 
@@ -433,8 +431,8 @@ fn multi_root_sync_notice_states_n_repositories() {
 // --- Pure logic (no harness): ordering, filtering, recents --------------------------
 
 mod pure {
-    use turbogit::model::{Branch, BranchKind};
-    use turbogit::ui::branch_widget::{popup_entries, push_recent};
+    use turbogit_domain::model::{Branch, BranchKind};
+    use turbogit_ui::ui::branch_widget::{popup_entries, push_recent};
 
     fn b(name: &str, kind: BranchKind, favorite: bool) -> Branch {
         Branch {

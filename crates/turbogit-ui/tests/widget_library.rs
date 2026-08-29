@@ -3,7 +3,7 @@
 //! Three layers of proof, mirroring spec §7 and the R1.4 plan row:
 //!
 //! 1. **Palette-token completeness** — every token the widget vocabulary
-//!    relies on exists in [`turbogit::theme::Palette`] with the exact hex
+//!    relies on exists in [`turbogit_ui::theme::Palette`] with the exact hex
 //!    values from spec §2, and the surface ladder is strictly ordered.
 //! 2. **Pure styling decisions** — badge-kind→color, ref-kind→color,
 //!    button-variant×state fills/text, and tree-row selection logic are all
@@ -17,9 +17,9 @@ use std::rc::Rc;
 
 use egui::{Color32, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
-use turbogit::theme::Palette;
-use turbogit::ui::icons::Icon;
-use turbogit::ui::widgets::{self, BadgeKind, ButtonVariant, RefKind, WidgetState};
+use turbogit_ui::theme::Palette;
+use turbogit_ui::ui::icons::Icon;
+use turbogit_ui::ui::widgets::{self, BadgeKind, ButtonVariant, RefKind, WidgetState};
 
 // ---------------------------------------------------------------------------
 // 1. Palette-token completeness (spec §2)
@@ -216,9 +216,9 @@ fn widgets_harness(
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, _state| {
-            turbogit::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             if !fonts_installed {
-                turbogit::theme::install_fonts(ui.ctx());
+                turbogit_ui::theme::install_fonts(ui.ctx());
                 fonts_installed = true;
             }
             egui::CentralPanel::default().show(ui, |ui| {

@@ -35,12 +35,6 @@
 //!   frame path through the same async-event seam as diffs and cache
 //!   decoded results beside them.
 
-use crate::core::diff_engine;
-use crate::engine::GitExecutor;
-use crate::events::{AppEvent, DecodedImage, FetchedBlob};
-use crate::granular::{self, comparison_triple, diff_key};
-use crate::model::{ChangeStatus, DiffOpts};
-use crate::state::{AppState, DiffComparison};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
@@ -53,6 +47,12 @@ use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+use turbogit_app::events::{AppEvent, DecodedImage, FetchedBlob};
+use turbogit_app::granular::{self, comparison_triple, diff_key};
+use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_domain::model::{ChangeStatus, DiffOpts};
+use turbogit_engine_api::GitExecutor;
+use turbogit_services::diff_engine;
 
 // --- metrics -----------------------------------------------------------------
 
@@ -93,7 +93,7 @@ struct Row {
     /// pointer, spec R2). Meta rows own no hunk.
     hunk: usize,
     /// 0-based ordinal over the hunk's +/- lines in order (changed rows
-    /// only) — exactly [`crate::core::partial::HunkSelection::Lines`]
+    /// only) — exactly [`turbogit_services::partial::HunkSelection::Lines`]
     /// semantics for sub-hunk selection (spec R2 story 3).
     line_ord: usize,
     /// 1-based old-file line number (0 when not applicable).
@@ -676,10 +676,10 @@ fn diff_model(text: &str) -> Rc<DiffModel> {
 // --- non-text pane bytes & textures (R8) -------------------------------------
 
 // The plain-data pane cache ([`PaneCache`], [`PaneEntry`], [`PaneSide`]) lives
-// in [`crate::diff_data`] beside the app state — the UI imports it back up
+// in [`turbogit_app::diff_data`] beside the app state — the UI imports it back up
 // (DDD split issue 04). Re-exported here so the historical `ui::diff` paths
 // keep resolving.
-pub use crate::diff_data::{PaneCache, PaneEntry, PaneSide};
+pub use turbogit_app::diff_data::{PaneCache, PaneEntry, PaneSide};
 
 // GPU textures for image panes are a UI-layer concern (DDD split issue 04):
 // the plain-data pane cache holds decoded bytes only, and textures are
@@ -1053,7 +1053,7 @@ fn ensure_diff(
         }
 
         state.ui.diff_loading = true;
-        let executor: Arc<dyn crate::engine::GitExecutor> = state.executor.clone();
+        let executor: Arc<dyn turbogit_engine_api::GitExecutor> = state.executor.clone();
         let tx = state.tx.clone();
         let root = root.to_path_buf();
         // Phase L1: when the setting asks for in-process diffs, the worker
@@ -2568,7 +2568,7 @@ mod tests {
             img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
             buf.into_inner()
         };
-        let exec = crate::engine::fake::FakeExecutor::new();
+        let exec = turbogit_engine::fake::FakeExecutor::new();
         exec.files_bytes
             .lock()
             .unwrap()

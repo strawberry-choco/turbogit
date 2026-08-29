@@ -1,6 +1,6 @@
 //! Issue #20 — Push dialog core tests.
 //!
-//! Drives the real `turbogit::ui::render()` through `egui_kittest` against
+//! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` against
 //! temporary multi-root git repositories, each with its own local bare
 //! "remote", asserting painted labels and public `AppState` transitions only.
 //!
@@ -25,19 +25,18 @@
 
 #![allow(dead_code)]
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::{RecordingExecutor, assert_not_painted, assert_painted, painted_text};
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
-use turbogit::engine::GitExecutor;
-use turbogit::error::TgError;
-use turbogit::model::{RootId, VcsSettings};
-use turbogit::state::{AppState, Dialog};
+use test_support::RecordingExecutor;
+use test_support::harness::{assert_not_painted, assert_painted, painted_text};
+use turbogit_app::state::{AppState, Dialog};
+use turbogit_domain::error::TgError;
+use turbogit_domain::model::{RootId, VcsSettings};
+use turbogit_engine_api::GitExecutor;
 
 // ---------------------------------------------------------------- helpers --
 
@@ -189,7 +188,7 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
             state.drain_events();
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     )
@@ -425,7 +424,7 @@ fn per_root_failure_is_surfaced_while_other_roots_succeed() {
 /// A real CLI engine behind a recording wrapper, plus the settings clone to
 /// hand to [`app_state_with`].
 fn recording_engine(settings: VcsSettings) -> (Arc<RecordingExecutor>, VcsSettings) {
-    let cli: Arc<dyn GitExecutor> = Arc::new(turbogit::engine::cli::CliExecutor {
+    let cli: Arc<dyn GitExecutor> = Arc::new(turbogit_engine::cli::CliExecutor {
         settings: settings.clone(),
     });
     let rec = Arc::new(RecordingExecutor::new(cli));

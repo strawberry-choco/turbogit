@@ -1,5 +1,5 @@
 //! Push dialog (issue #20): an aggregated outgoing-commit tree over every
-//! registered root, fed by [`crate::core::sync_service::outgoing_per_root`]
+//! registered root, fed by [`turbogit_services::sync_service::outgoing_per_root`]
 //! behind the executor seam (ADR-0001).
 //!
 //! Scope semantics follow ADR-0006: Push always executes the batch push across
@@ -16,13 +16,13 @@
 //! exact Remote/Branch fields — a blocked push never reaches the engine
 //! instead of being silently downgraded. Deferred: "Push tags".
 
-use crate::core::sync_service;
-use crate::error::TgError;
-use crate::model::{BranchKind, ChangeStatus, Commit, LogOpts, RootId, Signature};
-use crate::root_caches::Affected;
-use crate::state::{AppState, OutgoingRoot};
 use crate::theme::Palette;
 use egui::{Color32, RichText, Ui};
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::{AppState, OutgoingRoot};
+use turbogit_domain::error::TgError;
+use turbogit_domain::model::{BranchKind, ChangeStatus, Commit, LogOpts, RootId, Signature};
+use turbogit_services::sync_service;
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();

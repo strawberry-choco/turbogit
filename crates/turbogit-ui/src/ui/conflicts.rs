@@ -6,12 +6,12 @@
 //! and an Apply gated at zero remaining (spec §8.7; free-text editing is
 //! explicitly deferred).
 
-use crate::core::conflict;
-use crate::core::diff_engine;
-use crate::root_caches::Affected;
-use crate::state::{AppState, Toast};
 use crate::theme::Palette;
 use egui::{Color32, CornerRadius, Margin, Rect, RichText, ScrollArea, Stroke, Ui, Vec2};
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::{AppState, Toast};
+use turbogit_services::conflict;
+use turbogit_services::diff_engine;
 
 /// Parse a file's conflict markers into alternating normal / conflict blocks.
 /// Returns (segments, conflict_count) where each segment is
