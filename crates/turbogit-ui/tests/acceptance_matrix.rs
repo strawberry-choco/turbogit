@@ -7,11 +7,11 @@
 
 use egui_kittest::Harness;
 use std::path::{Path, PathBuf};
-use turbogit::model::RootId;
-use turbogit::state::{AppState, Dialog};
-use turbogit::theme::{configure_style, install_fonts};
+use turbogit_app::state::{AppState, Dialog};
+use turbogit_domain::model::RootId;
+use turbogit_ui::theme::{configure_style, install_fonts};
 
-const SNAPSHOT_DIR: &str = "turbogit-screens/redesign";
+const SNAPSHOT_DIR: &str = "../../../turbogit-screens/redesign";
 
 /// Run `git` in `repo`, asserting success.
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -39,7 +39,7 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
                 fonts_installed = true;
             }
             state.drain_events();
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     );
@@ -167,7 +167,7 @@ fn acceptance_matrix_screenshots() {
     snap(&mut h, "02-commit");
 
     // Git Log four panes with decorated history.
-    h.state_mut().ui.tab = turbogit::state::Tab::Log;
+    h.state_mut().ui.tab = turbogit_app::state::Tab::Log;
     settle(&mut h);
     assert!(
         h.state().caches.log(&RootId(repo.clone().into())).is_some(),

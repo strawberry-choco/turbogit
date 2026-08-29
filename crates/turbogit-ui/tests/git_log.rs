@@ -1,7 +1,7 @@
 //! Issue #12 — Git Log four-pane workspace: branches, graph, changed files,
 //! commit details.
 //!
-//! Headless egui_kittest harness driving [`turbogit::ui::render`] end-to-end
+//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] end-to-end
 //! over a seeded multi-root project (two real git repos in a tempdir):
 //!
 //! - `alpha` — `main` with a tagged, remote-decorated history plus a
@@ -16,12 +16,12 @@ use std::path::{Path, PathBuf};
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
-use turbogit::engine::GitExecutor;
-use turbogit::engine::cli::CliExecutor;
-use turbogit::events::AppEvent;
-use turbogit::model::{LogOpts, RootId, VcsSettings};
-use turbogit::state::{AppState, Tab};
-use turbogit::theme::{Palette, configure_style, install_fonts};
+use turbogit_app::events::AppEvent;
+use turbogit_app::state::{AppState, Tab};
+use turbogit_domain::model::{LogOpts, RootId, VcsSettings};
+use turbogit_engine::cli::CliExecutor;
+use turbogit_engine_api::GitExecutor;
+use turbogit_ui::theme::{Palette, configure_style, install_fonts};
 
 // --- Locally-defined harness helpers (issue #12; mirrors tests/common) -------
 
@@ -236,7 +236,7 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
                 install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     );
@@ -597,7 +597,7 @@ fn changed_files_pane_lists_selected_commit_files_with_status_badges() {
 
     // Modified badge: tinted pill carrying exactly "M".
     let pos = galley_origin(&harness, "M").expect("status badge painted");
-    let expected = turbogit::ui::widgets::BadgeKind::Modified.colors().bg;
+    let expected = turbogit_ui::ui::widgets::BadgeKind::Modified.colors().bg;
     let badge = filled_rects(&harness)
         .into_iter()
         .find(|(r, c)| *c == expected && r.contains(pos))

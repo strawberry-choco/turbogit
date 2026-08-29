@@ -19,9 +19,9 @@ use egui::{
 };
 
 use super::widgets;
-use crate::model::{CleanTreeMethod, DateFormat, GitBackend, UpdateMethod, VcsSettings};
-use crate::state::{AppState, Toast};
 use crate::theme::Palette;
+use turbogit_app::state::{AppState, Toast};
+use turbogit_domain::model::{CleanTreeMethod, DateFormat, GitBackend, UpdateMethod, VcsSettings};
 
 /// Spec §8.8: large modal, ~768px wide.
 const MODAL_WIDTH: f32 = 768.0;
@@ -377,8 +377,8 @@ fn apply_settings(state: &mut AppState) {
         return;
     };
     state.settings = draft;
-    let _ = crate::persistence::save_settings(&state.project_dir, &state.settings);
-    state.executor = crate::engine::build_executor(&state.settings);
+    let _ = turbogit_app::persistence::save_settings(&state.project_dir, &state.settings);
+    state.rebuild_executor();
     state.persist_ui();
     state.ui.toast = Some(Toast::success("Settings saved"));
 }

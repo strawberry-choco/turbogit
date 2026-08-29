@@ -1,7 +1,7 @@
 //! Issue #22 — Feedback chrome: toasts, confirm prompts, VCS popup, palette.
 //!
 //! Headless egui_kittest harness (same pattern as `shell_frame.rs`)
-//! driving [`turbogit::ui::render`] over a **real temp git repository**.
+//! driving [`turbogit_ui::ui::render`] over a **real temp git repository**.
 //! Asserts only on public surfaces: painted shapes (text galleys, filled
 //! rects, stroked paths) and public `AppState` transitions.
 //! Covered (spec §7.1/§10, R4.x, ADR-0011):
@@ -12,20 +12,20 @@
 //! - command palette retains every prior entry and gains Go to Log /
 //!   Open Welcome / Toggle Toolbar, each verified reachable
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use common::{assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text};
 use egui::epaint::ColorMode;
 use egui::{Color32, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
-use turbogit::state::{AppState, PendingConfirm, Tab, Toast, ToastKind};
-use turbogit::theme::Palette;
-use turbogit::ui::popups::Action;
+use test_support::harness::{
+    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text,
+};
+use turbogit_app::state::{AppState, PendingConfirm, Tab, Toast, ToastKind};
+use turbogit_ui::theme::Palette;
+use turbogit_ui::ui::popups::Action;
 
 // --- git fixture ---------------------------------------------------------------
 
@@ -80,12 +80,12 @@ fn feedback_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
             state.drain_events();
-            turbogit::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             if !fonts_installed {
-                turbogit::theme::install_fonts(ui.ctx());
+                turbogit_ui::theme::install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     );
@@ -130,7 +130,7 @@ fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&Ap
         s.last_error,
         s.ui.busy,
         s.ui.toast.clone().map(|t| t.message),
-        common::painted_text(harness),
+        painted_text(harness),
     );
 }
 

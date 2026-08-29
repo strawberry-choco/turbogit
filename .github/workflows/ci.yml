@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo check --all-targets
+      - run: cargo check --workspace --all-targets
 
   test:
     name: Test (${{ matrix.os }})
@@ -30,7 +30,7 @@ jobs:
       - name: Install git (ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y git
-      - run: cargo test --all-targets
+      - run: cargo test --workspace --all-targets
 
   fmt:
     name: Format
@@ -52,4 +52,4 @@ jobs:
       - name: Install git (ubuntu)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y git
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings

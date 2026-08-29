@@ -8,5 +8,33 @@ publish = false
 turbogit-domain = { workspace = true }
 turbogit-engine-api = { workspace = true }
 
+# The egui shell harness (`harness`) is gated so consumers that only need the
+# recording executor — e.g. `turbogit-app`'s unit tests — never compile the
+# egui_kittest stack. The harness needs the app state and the UI render
+# entry point, so it pulls both in when enabled.
+[dependencies.turbogit-ui]
+workspace = true
+optional = true
+
+[dependencies.turbogit-app]
+workspace = true
+optional = true
+
+[dependencies.egui]
+workspace = true
+optional = true
+
+[dependencies.egui_kittest]
+workspace = true
+optional = true
+
+[dependencies.tempfile]
+workspace = true
+optional = true
+
+[features]
+default = []
+harness = ["dep:egui", "dep:egui_kittest", "dep:turbogit-ui", "dep:turbogit-app", "dep:tempfile"]
+
 [lints]
 workspace = true

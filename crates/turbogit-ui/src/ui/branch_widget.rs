@@ -7,17 +7,17 @@
 //! flows exist (ADR-0012). Keyboard: typing filters live, ↑/↓ move the
 //! highlight, Enter checks the highlighted row out, Esc closes.
 //!
-//! All git mutations cross the [`crate::engine::GitExecutor`] seam via
+//! All git mutations cross the [`turbogit_engine_api::GitExecutor`] seam via
 //! [`AppState::run_git`]; the pure row-model helpers are unit-testable.
 
-use crate::core::branch_service;
-use crate::model::{Branch, BranchKind, RootId};
-use crate::root_caches::Affected;
-use crate::state::{AppState, Dialog};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{Align, Color32, Key, Layout, RichText, ScrollArea, Ui, vec2};
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::{AppState, Dialog};
+use turbogit_domain::model::{Branch, BranchKind, RootId};
+use turbogit_services::branch_service;
 
 /// Favorite-star ink: the central warning token (spec §8.5 row anatomy).
 pub const STAR_COLOR: Color32 = Palette::STATE_WARNING;

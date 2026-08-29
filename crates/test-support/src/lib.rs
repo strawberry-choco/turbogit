@@ -1,13 +1,18 @@
 //! Shared headless test doubles (DDD split issue 09).
 //!
-//! The recording executor that the integration suites inject at the executor
-//! boundary. Kept dependency-light on purpose: it needs only the engine port
-//! and the domain model, so `turbogit-app`'s tests can use it without ever
-//! pulling in egui or the UI crate.
+//! The recording executor below lives in this crate's root module so the
+//! integration suites can inject it at the executor boundary. Kept
+//! dependency-light on purpose: it needs only the engine port and the domain
+//! model, so `turbogit-app`'s tests can use it without ever pulling in egui
+//! or the UI crate.
 //!
-//! Harness helpers that drive `turbogit_ui::render` through `egui_kittest`
-//! live in each UI-facing test crate instead — they need the egui stack and
-//! would drag it onto every consumer of this crate.
+//! The egui shell harness (`harness::`) drives `turbogit_ui::render` through
+//! `egui_kittest`. It is gated behind the `harness` feature so consumers
+//! that only need the recording executor never compile the egui stack; the
+//! UI crate activates it through its own dev-dependencies.
+
+#[cfg(feature = "harness")]
+pub mod harness;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -18,8 +23,6 @@ use turbogit_domain::model::{
     RebaseOpts, RebasePlanEntry, Remote, RootStatus, Stash, Worktree,
 };
 use turbogit_engine_api::GitExecutor;
-
-//
 // `engine::fake` is unit-test-only (`#[cfg(test)]`), so integration tests
 // assert flag selection at the executor boundary through this transparent
 // wrapper: every call delegates to a real inner engine while push /

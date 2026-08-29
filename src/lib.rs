@@ -7,5 +7,5 @@ pub use turbogit_app::{diff_data, events, granular, persistence, recents, root_c
 pub mod engine;
 pub use turbogit_domain::error;
 pub use turbogit_domain::model;
-pub mod theme;
-pub mod ui;
+pub use turbogit_ui::theme;
+pub use turbogit_ui::ui;

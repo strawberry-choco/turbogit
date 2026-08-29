@@ -12,13 +12,13 @@
 //! Branch indicators on recent rows are computed live at render time through
 //! the engine seam and cached in memory only (never persisted).
 
-use crate::state::{AppState, Toast};
 use crate::theme::Palette;
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke,
     StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::time::{Duration, Instant};
+use turbogit_app::state::{AppState, Toast};
 
 use super::icons::{self, Icon};
 use super::widgets;
@@ -325,7 +325,7 @@ fn clone_from_url(state: &mut AppState) {
     }
     let dest = parent.join(name);
     let depth = state.ui.welcome_shallow.then_some(1);
-    match crate::engine::GitExecutor::clone(&*state.executor, &url, &dest, depth) {
+    match turbogit_engine_api::GitExecutor::clone(&*state.executor, &url, &dest, depth) {
         Ok(()) => {
             state.ui.welcome_clone_url.clear();
             state.open_project(&dest);
@@ -369,7 +369,7 @@ fn recents_column(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-fn recent_row(ui: &mut Ui, state: &mut AppState, project: &crate::recents::RecentProject) {
+fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents::RecentProject) {
     let width = ui.available_width();
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, RECENT_ROW_HEIGHT), Sense::click());
@@ -392,7 +392,7 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &crate::recents::Recen
         Palette::INK_3,
     );
     let meta_galley = painter.layout_no_wrap(
-        crate::recents::format_last_opened(project.last_opened),
+        turbogit_app::recents::format_last_opened(project.last_opened),
         FontId::new(11.0, FontFamily::Proportional),
         Palette::INK_3,
     );

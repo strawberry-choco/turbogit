@@ -1,6 +1,6 @@
 //! Issue #10 — Welcome screen core: action cards, global recents, launch flow.
 //!
-//! Headless egui_kittest harness driving [`turbogit::ui::render`] end-to-end
+//! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] end-to-end
 //! (same pattern as `shell_frame.rs`, with locally-defined helpers so
 //! this file is self-contained). Asserts only on public surfaces:
 //!
@@ -33,8 +33,8 @@ use egui::Shape;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use turbogit::recents::{RecentProject, Recents, load, recents_file, record, save};
-use turbogit::state::AppState;
+use turbogit_app::recents::{RecentProject, Recents, load, recents_file, record, save};
+use turbogit_app::state::AppState;
 
 // --- Locally-defined harness helpers -----------------------------------------
 
@@ -196,12 +196,12 @@ fn fixture_inner(picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>)
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
-            turbogit::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             if !fonts_installed {
-                turbogit::theme::install_fonts(ui.ctx());
+                turbogit_ui::theme::install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     );
@@ -323,12 +323,12 @@ fn seeded_recents_render_name_path_last_opened_and_live_branch() {
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
-            turbogit::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             if !fonts_installed {
-                turbogit::theme::install_fonts(ui.ctx());
+                turbogit_ui::theme::install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            turbogit::ui::render(ui, state);
+            turbogit_ui::ui::render(ui, state);
         },
         state,
     );
@@ -371,10 +371,10 @@ fn clicking_a_recent_reopens_the_project() {
     let cfg = config.path().to_path_buf();
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
-            turbogit::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit::theme::install_fonts(ui.ctx()));
-            turbogit::ui::render(ui, state);
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
         },
         AppState::launch_in(None, Some(cfg)),
     );
@@ -413,10 +413,10 @@ fn branch_indicator_is_cached_then_updates_after_invalidation() {
     let cfg = config.path().to_path_buf();
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
-            turbogit::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit::theme::install_fonts(ui.ctx()));
-            turbogit::ui::render(ui, state);
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
         },
         AppState::launch_in(None, Some(cfg)),
     );
@@ -446,10 +446,10 @@ fn file_menu_welcome_closes_projects_and_returns_to_welcome() {
 
     let mut harness = Harness::new_ui_state(
         |ui, state| {
-            turbogit::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit::theme::install_fonts(ui.ctx()));
-            turbogit::ui::render(ui, state);
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
         },
         AppState::launch(Some(repo.clone())),
     );
@@ -527,7 +527,7 @@ fn recents_store_roundtrips_upserts_sorts_and_caps() {
     assert_eq!(recents.projects[0].name, "alpha", "re-opened moves to top");
 
     // The store caps at MAX_RECENTS entries.
-    for i in 0..(turbogit::recents::MAX_RECENTS + 4) {
+    for i in 0..(turbogit_app::recents::MAX_RECENTS + 4) {
         let p = config.path().join(format!("r{i}"));
         std::fs::create_dir_all(&p).unwrap();
         record(config.path(), &p);
@@ -535,7 +535,7 @@ fn recents_store_roundtrips_upserts_sorts_and_caps() {
     let recents = load(config.path());
     assert_eq!(
         recents.projects.len(),
-        turbogit::recents::MAX_RECENTS,
+        turbogit_app::recents::MAX_RECENTS,
         "store must cap at MAX_RECENTS"
     );
 

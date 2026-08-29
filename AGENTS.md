@@ -18,9 +18,9 @@ TurboGit is a Rust binary/library crate built with `eframe`/`egui`.
 ### Quality Gates (must pass before any commit or PR)
 
 - `cargo fmt -- --check` — verify formatting without modifying files.
-- `cargo check --all-targets` — type/borrow checking across all targets.
-- `cargo clippy --all-targets -- -D warnings` — lint with warnings as errors.
-- `cargo test --all-targets` — run all unit and integration tests.
+- `cargo check --workspace --all-targets` — type/borrow checking across all targets.
+- `cargo clippy --workspace --all-targets -- -D warnings` — lint with warnings as errors.
+- `cargo test --workspace --all-targets` — run all unit and integration tests.
 
 All four gates must pass; a failure in any one blocks the change.
 

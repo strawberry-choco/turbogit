@@ -15,8 +15,6 @@
 //! 4. **Commit details** (right-bottom, ~200px SURFACE): key-value hash /
 //!    author / date / parents plus the full message below.
 
-use crate::model::{ChangeStatus, Commit, DateFormat, GitRefKind, RootId};
-use crate::state::{AppState, DiffTarget};
 use crate::theme::Palette;
 use crate::ui::icons;
 use crate::ui::icons::Icon;
@@ -27,6 +25,8 @@ use egui::{
     Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::PathBuf;
+use turbogit_app::state::{AppState, DiffTarget};
+use turbogit_domain::model::{ChangeStatus, Commit, DateFormat, GitRefKind, RootId};
 
 // --- Pane metrics (spec §8.3) -------------------------------------------------
 
@@ -175,7 +175,7 @@ fn visible_root_ids(state: &AppState) -> Vec<RootId> {
 /// need beyond the log itself: ref decorations per visible root, the
 /// changed-file list of the selected commit, and — when a path scope is
 /// active (issue #19) — the path-scoped commit listing. All fills happen
-/// behind the [`crate::root_caches::RootCaches`] interface.
+/// behind the [`turbogit_app::root_caches::RootCaches`] interface.
 fn ensure_log_data(state: &mut AppState) {
     for id in visible_root_ids(state) {
         state.caches.ensure_refs(state.executor.as_ref(), &id);
@@ -834,7 +834,7 @@ fn badge_kind(status: ChangeStatus) -> BadgeKind {
 /// context menu scopes the workspace to the file's history (issue #19).
 /// Renders against a shared [`AppState`] and reports its intent; the caller
 /// applies it after rendering (plan §1.3 defer pattern).
-fn file_row(ui: &mut Ui, state: &AppState, change: &crate::model::Change) -> FileAction {
+fn file_row(ui: &mut Ui, state: &AppState, change: &turbogit_domain::model::Change) -> FileAction {
     let path_str = change.path.display().to_string();
     let selected = state.ui.log_selected_file.as_ref() == Some(&change.path);
     let (rect, response) = allocate_row(ui);
