@@ -1,5 +1,10 @@
 # Git2Executor Migration Plan
 
+> **Status:** open — written before the subcrate split, so paths below reflect
+> the pre-split single-crate layout; the code now lives in
+> `crates/turbogit-engine`. As of 2026-08-29 the migration is partial:
+> `git2_exec.rs` still delegates sync/mutating ops to `cli.rs`.
+
 ## Goal
 
 Replace every remaining `self.cli.<method>(…)` delegation in `Git2Executor` with a real libgit2 implementation. Keep `cli.rs` as a fallback only; do not change the `GitExecutor` trait contract.
