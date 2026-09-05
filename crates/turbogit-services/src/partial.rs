@@ -1,15 +1,18 @@
 //! Pure patch composition for partial staging (ADR-0013).
 //!
 //! Composes a stageable patch by filtering raw unified-diff text: git's
-//! original `@@` headers and file meta lines are preserved verbatim while
-//! unselected hunks are dropped. Line counts inside kept headers are left
-//! untouched; the engine applies patches with `git apply --recount`.
+//! original `@@` headers and file meta lines are preserved (with line
+//! counts recounted to match the kept body) while unselected hunks are
+//! dropped. The engine applies patches with `git apply --recount`; the
+//! recount here keeps libgit2 — which has no `--recount` knob —
+//! honest about the body it ships.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use std::path::{Path, PathBuf};
+use crate::hunk_stats;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::ChangeStatus;
 use turbogit_engine_api::{ApplyDirection, GitExecutor};
@@ -22,6 +25,18 @@ pub enum HunkSelection {
     /// Only the listed changed lines. Positions are 0-based ordinals counted
     /// over the hunk's `+`/`-` lines in order; context lines are not numbered.
     Lines(BTreeSet<usize>),
+    /// A character range within one changed line (story: line-granularity
+    /// staging, issue 19). `ord` follows the [`HunkSelection::Lines`]
+    /// ordinal scheme; `start..end` are char offsets into that line's body
+    /// (the text after the `+`/`-` marker), end exclusive and clamped to the
+    /// line. Defined for addition lines: the staged index gains a line
+    /// holding exactly the selected bytes while the old line's deletion
+    /// stays unstaged. On a deletion line the range selects nothing.
+    Chars {
+        ord: usize,
+        start: usize,
+        end: usize,
+    },
 }
 
 /// Partial-staging selection for one file's diff, keyed by 0-based hunk index
@@ -54,19 +69,98 @@ pub fn compose_patch(diff: &str, selection: &Selection) -> String {
         let kept: Option<Cow<'_, str>> = match selection.hunks.get(&idx) {
             Some(HunkSelection::Whole) => Some(Cow::Borrowed(body.as_str())),
             Some(HunkSelection::Lines(lines)) if !lines.is_empty() => {
-                Some(Cow::Owned(filter_body(body, lines)))
+                Some(Cow::Owned(filter_body(body, &Filter::Lines(lines))))
             }
+            Some(HunkSelection::Chars { ord, start, end }) => Some(Cow::Owned(filter_body(
+                body,
+                &Filter::Chars {
+                    ord: *ord,
+                    start: *start,
+                    end: *end,
+                },
+            ))),
             _ => None,
         };
         if let Some(body) = kept {
             if out.is_empty() {
                 out.push_str(&meta);
             }
-            out.push_str(header);
+            let header: Cow<'_, str> =
+                if matches!(selection.hunks.get(&idx), Some(HunkSelection::Whole)) {
+                    Cow::Borrowed(*header)
+                } else {
+                    Cow::Owned(recount_header(header, &body))
+                };
+            out.push_str(&header);
             out.push_str(&body);
         }
     }
     out
+}
+
+/// Count the old-side and new-side lines of a filtered hunk body so the
+/// header can be rewritten to match. Context and kept `-` lines count on
+/// the old side; context and kept `+` lines count on the new side. `\`
+/// markers (`\ No newline at end of file`) ride on the changed line above
+/// them and contribute nothing themselves.
+fn body_line_counts(body: &str) -> (usize, usize) {
+    let mut old = 0usize;
+    let mut new = 0usize;
+    for line in body.split_inclusive('\n') {
+        if line.starts_with('+') {
+            new += 1;
+        } else if line.starts_with('-') {
+            old += 1;
+        } else if line.starts_with('\\') {
+            // Marker for the changed line above; not counted.
+        } else {
+            old += 1;
+            new += 1;
+        }
+    }
+    (old, new)
+}
+
+/// Rewrite `header` so `-old_count` / `+new_count` match the lines actually
+/// present in `body` — the count-1 default that the parser drops when
+/// omitted is restored, and the optional trailing heading (`@@ … @@ fn alpha`)
+/// is preserved verbatim.
+///
+/// Compose only drops additions and demotes deletions to context, never
+/// removes context lines, so the first kept line is always context and
+/// both start positions stay put. When the body genuinely shrinks on a
+/// side (added line gone, no replacement), the count follows.
+fn recount_header(header: &str, body: &str) -> String {
+    let Some(span) = hunk_stats::parse_hunk_header(header) else {
+        return header.to_owned();
+    };
+    let (old_count, new_count) = body_line_counts(body);
+    // Keep the trailing heading after `@@ … @@` verbatim: empty, a
+    // function label like `fn alpha`, or the diff-context marker. The
+    // string after the last `@` is either the heading + `\n`, or just the
+    // `\n` (no heading); treat any pure-whitespace remainder as no heading.
+    // Header shape: `@@ -a,b +c,d @@ [<heading>]\n`.
+    let tail = header
+        .rsplit('@')
+        .next()
+        .map(|t| t.trim_start_matches(' ').trim_end_matches('\n'))
+        .filter(|t| !t.is_empty())
+        .unwrap_or("");
+    let old = if old_count == 1 {
+        format!("-{}", span.old_start)
+    } else {
+        format!("-{},{}", span.old_start, old_count)
+    };
+    let new = if new_count == 1 {
+        format!("+{}", span.new_start)
+    } else {
+        format!("+{},{}", span.new_start, new_count)
+    };
+    if tail.is_empty() {
+        format!("@@ {old} {new} @@\n")
+    } else {
+        format!("@@ {old} {new} @@ {tail}\n")
+    }
 }
 
 /// Granular operations are forbidden on conflicted files (spec R2): a patch
@@ -180,6 +274,20 @@ pub fn stage_untracked_selection(
     retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &patch, ApplyDirection::Forward))
 }
 
+/// Which changed lines of one hunk body survive composition, and how.
+enum Filter<'a> {
+    /// The listed line ordinals, whole.
+    Lines(&'a BTreeSet<usize>),
+    /// One line's char range (`Chars` selection): the selected slice of the
+    /// addition becomes the staged line; every other changed line is
+    /// unselected (deletions turn context, additions drop).
+    Chars {
+        ord: usize,
+        start: usize,
+        end: usize,
+    },
+}
+
 /// Keep context lines and the selected changed lines of one hunk body.
 ///
 /// An unselected addition is dropped entirely (it must not come into
@@ -188,13 +296,27 @@ pub fn stage_untracked_selection(
 /// outright would misalign every later old-side line of the hunk. A
 /// `\ No newline at end of file` marker annotates the changed line above it,
 /// so it survives only when that line does.
-fn filter_body(body: &str, selected: &BTreeSet<usize>) -> String {
+fn filter_body(body: &str, filter: &Filter) -> String {
+    /// The selected slice of one addition body (char-indexed, clamped,
+    /// end exclusive), or None when the range selects nothing.
+    fn char_slice(text: &str, start: usize, end: usize) -> Option<String> {
+        let chars: Vec<char> = text.chars().collect();
+        let start = start.min(chars.len());
+        let end = end.min(chars.len());
+        (start < end).then(|| chars[start..end].iter().collect::<String>())
+    }
+
     let mut out = String::new();
     let mut changed = 0usize;
     let mut prev_kept = true;
     for line in body.split_inclusive('\n') {
         if let Some(rest) = line.strip_prefix('-') {
-            let keep = selected.contains(&changed);
+            let keep = match filter {
+                Filter::Lines(selected) => selected.contains(&changed),
+                // A Chars selection never stages a deletion: the old line
+                // stays in the index and only the selected bytes are added.
+                Filter::Chars { .. } => false,
+            };
             changed += 1;
             prev_kept = true;
             if keep {
@@ -203,12 +325,23 @@ fn filter_body(body: &str, selected: &BTreeSet<usize>) -> String {
                 out.push(' ');
                 out.push_str(rest);
             }
-        } else if line.starts_with('+') {
-            let keep = selected.contains(&changed);
+        } else if let Some(rest) = line.strip_prefix('+') {
+            let kept_line: Option<String> = match filter {
+                Filter::Lines(selected) => selected.contains(&changed).then(|| line.to_owned()),
+                Filter::Chars { ord, start, end } => {
+                    // Char offsets index the line's text without its newline;
+                    // the newline is re-added uniformly below.
+                    let text = rest.strip_suffix('\n').unwrap_or(rest);
+                    (changed == *ord)
+                        .then(|| char_slice(text, *start, *end))
+                        .flatten()
+                        .map(|s| format!("+{s}\n"))
+                }
+            };
             changed += 1;
-            prev_kept = keep;
-            if keep {
-                out.push_str(line);
+            prev_kept = kept_line.is_some();
+            if let Some(kept_line) = kept_line {
+                out.push_str(&kept_line);
             }
         } else if line.starts_with('\\') {
             if prev_kept {
@@ -396,6 +529,77 @@ mod tests {
         assert!(
             engine.calls.lock().unwrap().is_empty(),
             "empty selection must not intent-to-add the file"
+        );
+    }
+
+    /// One-hunk diff whose changed pair edits one long line — the char-range
+    /// staging fixture: only a slice of the addition should reach the index.
+    const SINGLE_EDIT_DIFF: &str = concat!(
+        "diff --git a/code.rs b/code.rs\n",
+        "--- a/code.rs\n",
+        "+++ b/code.rs\n",
+        "@@ -1,3 +1,3 @@\n",
+        " fn main() {\n",
+        "-    let x = 1;\n",
+        "+    let calculated_value = compute(x);\n",
+        " }\n",
+    );
+
+    #[test]
+    fn compose_patch_char_range_on_an_addition_keeps_exactly_the_selected_bytes() {
+        // The addition is changed-line ordinal 1 (the deletion is 0). Chars
+        // 8..24 of the addition body select `calculated_value` exactly (four
+        // leading spaces precede it).
+        let selection = Selection {
+            hunks: [(
+                0usize,
+                HunkSelection::Chars {
+                    ord: 1,
+                    start: 8,
+                    end: 24,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let patch = compose_patch(SINGLE_EDIT_DIFF, &selection);
+
+        // The old line stays context (its deletion is not selected), and the
+        // addition collapses to exactly the selected bytes.
+        let expected = concat!(
+            "diff --git a/code.rs b/code.rs\n",
+            "--- a/code.rs\n",
+            "+++ b/code.rs\n",
+            "@@ -1,3 +1,4 @@\n",
+            " fn main() {\n",
+            "     let x = 1;\n",
+            "+calculated_value\n",
+            " }\n",
+        );
+        assert_eq!(patch, expected);
+    }
+
+    #[test]
+    fn compose_patch_char_range_outside_the_line_clamps_to_the_line() {
+        let selection = Selection {
+            hunks: [(
+                0usize,
+                HunkSelection::Chars {
+                    ord: 1,
+                    start: 4,
+                    end: 999,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let patch = compose_patch(SINGLE_EDIT_DIFF, &selection);
+
+        assert!(
+            patch.contains("+let calculated_value = compute(x);\n"),
+            "an over-long range must clamp to the line's bytes, got:\n{patch}"
         );
     }
 

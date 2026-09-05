@@ -23,6 +23,10 @@ pub enum Call {
         remote: String,
         branch: String,
         force: bool,
+        tags: bool,
+        no_verify: bool,
+        set_upstream: bool,
+        selected_oldest: Option<String>,
     },
     PushDryRun {
         root: PathBuf,
@@ -34,6 +38,17 @@ pub enum Call {
         direction: turbogit_engine_api::ApplyDirection,
     },
     AddIntentToAdd(Vec<PathBuf>),
+    /// A tag creation with its full spec (issue 31).
+    TagCreate {
+        spec: TagSpec,
+    },
+    /// A tag push (`remote`, tag name or `None` for `--follow-tags`)
+    /// (issue 31).
+    TagPush {
+        root: PathBuf,
+        remote: String,
+        name: Option<String>,
+    },
 }
 
 /// In-memory fake. Configure per-test state through the public fields before
@@ -91,6 +106,10 @@ impl FakeExecutor {
             favorite: false,
             protected: false,
             exists: true,
+            ahead: 0,
+            behind: 0,
+            gone: false,
+            last_touched: None,
         })
     }
 }
@@ -131,6 +150,13 @@ impl GitExecutor for FakeExecutor {
         Ok((0, 0))
     }
 
+    fn is_ancestor(&self, _root: &Path, _upstream: &str, _branch: &str) -> TgResult<bool> {
+        // The fake never has unmerged branches in tests; default to
+        // "merged" so existing test fixtures (which don't push a
+        // specific ahead state) don't trigger the warning.
+        Ok(true)
+    }
+
     fn outgoing_commits(
         &self,
         _root: &Path,
@@ -156,6 +182,10 @@ impl GitExecutor for FakeExecutor {
         Ok(Vec::new())
     }
 
+    fn submodule_status(&self, _root: &Path) -> TgResult<Vec<Submodule>> {
+        Ok(Vec::new())
+    }
+
     fn config_get(&self, _root: &Path, _key: &str) -> TgResult<Option<String>> {
         Ok(None)
     }
@@ -178,6 +208,28 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
+    fn set_remote_url(
+        &self,
+        _root: &Path,
+        _name: &str,
+        _fetch_url: Option<&str>,
+        _push_url: Option<&str>,
+    ) -> TgResult<()> {
+        Ok(())
+    }
+
+    fn rename_remote(&self, _root: &Path, _old: &str, _new: &str) -> TgResult<()> {
+        Ok(())
+    }
+
+    fn remove_remote(&self, _root: &Path, _name: &str) -> TgResult<()> {
+        Ok(())
+    }
+
+    fn set_branch_upstream(&self, _root: &Path, _branch: &str, _upstream: &str) -> TgResult<()> {
+        Ok(())
+    }
+
     fn fetch(&self, _root: &Path, _remote: Option<&str>) -> TgResult<()> {
         Ok(())
     }
@@ -186,7 +238,17 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn push(&self, root: &Path, remote: &str, branch: &str, force: bool) -> TgResult<()> {
+    fn push(
+        &self,
+        root: &Path,
+        remote: &str,
+        branch: &str,
+        force: bool,
+        tags: bool,
+        no_verify: bool,
+        set_upstream: bool,
+        selected_oldest: Option<&str>,
+    ) -> TgResult<()> {
         if force && self.reject_force_branches.iter().any(|p| p == branch) {
             return Err(turbogit_domain::error::TgError::Other(format!(
                 "Refusing force-push to protected branch '{branch}'"
@@ -197,6 +259,10 @@ impl GitExecutor for FakeExecutor {
             remote: remote.to_string(),
             branch: branch.to_string(),
             force,
+            tags,
+            no_verify,
+            set_upstream,
+            selected_oldest: selected_oldest.map(|s| s.to_string()),
         });
         Ok(())
     }
@@ -247,6 +313,16 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
+    fn merge_auto_merged_files(
+        &self,
+        _root: &Path,
+        _conflicted: &[PathBuf],
+    ) -> TgResult<Vec<PathBuf>> {
+        // The fake is never mid-merge (production tests use the CLI engine
+        // for the redesigned resolver — see `tests/conflict_resolver.rs`).
+        Ok(Vec::new())
+    }
+
     fn rebase_interactive(&self, _root: &Path, _plan: &[RebasePlanEntry]) -> TgResult<()> {
         Ok(())
     }
@@ -263,7 +339,25 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn worktree_add(&self, _root: &Path, _path: &Path, _branch: &str) -> TgResult<()> {
+    fn worktree_add(
+        &self,
+        _root: &Path,
+        _path: &Path,
+        _branch: &str,
+        _create: bool,
+    ) -> TgResult<()> {
+        Ok(())
+    }
+
+    fn worktree_remove(&self, _root: &Path, _path: &Path, _force: bool) -> TgResult<()> {
+        Ok(())
+    }
+
+    fn submodule_update(&self, _root: &Path, _path: &Path, _init: bool) -> TgResult<()> {
+        Ok(())
+    }
+
+    fn submodule_deinit(&self, _root: &Path, _path: &Path, _force: bool) -> TgResult<()> {
         Ok(())
     }
 
@@ -337,7 +431,11 @@ impl GitExecutor for FakeExecutor {
 
     // ---- tags ----
 
-    fn tag_create(&self, _root: &Path, _name: &str, _message: Option<&str>) -> TgResult<()> {
+    fn tag_create(&self, _root: &Path, spec: &TagSpec) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(Call::TagCreate { spec: spec.clone() });
         Ok(())
     }
 
@@ -349,13 +447,12 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn tag_push(
-        &self,
-        _root: &Path,
-        _remote: &str,
-        _name: Option<&str>,
-        _all: bool,
-    ) -> TgResult<()> {
+    fn tag_push(&self, root: &Path, remote: &str, name: Option<&str>, _all: bool) -> TgResult<()> {
+        self.calls.lock().expect("calls mutex").push(Call::TagPush {
+            root: root.to_path_buf(),
+            remote: remote.to_string(),
+            name: name.map(str::to_string),
+        });
         Ok(())
     }
 

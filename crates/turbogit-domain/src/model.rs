@@ -80,15 +80,17 @@ impl Root {
 /// Reference to a branch by name (local or fully-qualified remote).
 pub type BranchRef = String;
 
-/// A configured remote (`origin`, …).
+/// A configured remote (`origin`, …). Fetch and push URLs are tracked
+/// separately because git lets them diverge (`remote set-url --push`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Remote {
     pub name: String,
-    pub url: String,
+    pub fetch_url: Option<String>,
+    pub push_url: Option<String>,
 }
 
 /// Local vs remote branch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BranchKind {
     Local,
     Remote,
@@ -105,6 +107,22 @@ pub struct Branch {
     pub protected: bool,
     /// Whether the branch currently exists on disk (false for a "create" preview).
     pub exists: bool,
+    /// Commits on this branch missing from its upstream (issue 32 popup
+    /// sync markers; zeros for untracked/remote branches).
+    #[serde(default)]
+    pub ahead: usize,
+    /// Commits on the upstream missing from this branch (issue 32 popup
+    /// sync markers; zeros for untracked/remote branches).
+    #[serde(default)]
+    pub behind: usize,
+    /// The tracked upstream was deleted on the remote (`[gone]` in
+    /// `git branch -vv`). Drives the popup's "gone" marker.
+    #[serde(default)]
+    pub gone: bool,
+    /// Committer time of the branch tip — the popup's stale badge input.
+    /// `None` when the engine cannot answer.
+    #[serde(default)]
+    pub last_touched: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// SHA-1 hex string.
@@ -126,6 +144,37 @@ pub enum GitRefKind {
 pub struct CommitRef {
     pub kind: GitRefKind,
     pub name: String,
+    /// Sync state of the decoration (issue 17): a remote-tracking ref is
+    /// [`RefState::Gone`] when its upstream branch was deleted on the
+    /// remote; a tag is [`RefState::Pushed`] or [`RefState::LocalOnly`];
+    /// everything else is [`RefState::Default`] (no marker).
+    #[serde(default)]
+    pub state: RefState,
+}
+
+/// State of a ref decoration (issue 17) — see [`CommitRef::state`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RefState {
+    #[default]
+    Default,
+    /// Remote-tracking ref whose upstream branch no longer exists on the
+    /// remote (`git branch -vv`'s `[gone]`).
+    Gone,
+    /// Tag that exists on at least one remote.
+    Pushed,
+    /// Tag that exists only on this machine.
+    LocalOnly,
+}
+
+impl CommitRef {
+    /// A decoration in its default state (no gone/pushed marker).
+    pub fn new(kind: GitRefKind, name: impl Into<String>) -> Self {
+        Self {
+            kind,
+            name: name.into(),
+            state: RefState::Default,
+        }
+    }
 }
 
 /// An author / committer signature.
@@ -135,6 +184,22 @@ pub struct Signature {
     pub email: String,
     /// Seconds since epoch.
     pub time: i64,
+}
+
+/// GPG signature state of a commit (issue 17). The CLI adapter derives it
+/// from `git log`'s `%G?`; libgit2 can only see a signature's presence, so
+/// a signed commit surfaces as [`SignatureState::Unverified`] there.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SignatureState {
+    /// No signature (`%G?` = N).
+    #[default]
+    Unsigned,
+    /// Signed and verified good (`%G?` = G).
+    Good,
+    /// Signed and verified bad (`%G?` = B).
+    Bad,
+    /// Signed but not verifiable (`%G?` = U/E/X, or libgit2 presence-only).
+    Unverified,
 }
 
 /// A single commit, tied to the root it belongs to (for unified multi-root log).
@@ -147,6 +212,8 @@ pub struct Commit {
     pub message: String,
     pub time: i64,
     pub root: RootId,
+    /// Committer's GPG signature state (issue 17).
+    pub signature: SignatureState,
 }
 
 /// Status of one file in a working tree.
@@ -286,6 +353,36 @@ pub struct Stash {
 pub struct Worktree {
     pub path: PathBuf,
     pub branch: String,
+    /// The worktree has uncommitted changes (issue 14 status column).
+    pub dirty: bool,
+    pub root: RootId,
+}
+
+/// Lifecycle state of one submodule (issue 14 Submodules tab status column).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SubmoduleState {
+    /// The submodule's checked-out commit matches the recorded gitlink.
+    UpToDate,
+    /// The submodule's HEAD moved off the recorded gitlink (`+` in
+    /// `git submodule status`).
+    NeedsUpdate,
+    /// Registered but not initialized (`-`): no working copy checked out.
+    Uninitialized,
+    /// Merge conflicts inside the submodule (`U`).
+    Conflicted,
+}
+
+/// A registered submodule of a repository (issue 14 Submodules tab row).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Submodule {
+    /// Path relative to the superproject root.
+    pub path: PathBuf,
+    /// Commit pinned (checked out) in the submodule's HEAD; `None` when
+    /// uninitialized.
+    pub head: Option<String>,
+    /// Gitlink commit recorded in the superproject's index.
+    pub recorded: Option<String>,
+    pub state: SubmoduleState,
     pub root: RootId,
 }
 
@@ -342,13 +439,25 @@ pub enum CleanTreeMethod {
     Shelve,
 }
 
-/// When to explicitly check remotes for incoming commits.
+/// How often the background incoming check polls remotes (issue #27,
+/// screen 11). Only meaningful while `VcsSettings::incoming_poll` is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum IncomingCheckMode {
+pub enum IncomingCheckInterval {
     #[default]
-    Auto,
-    Always,
-    Never,
+    Min15,
+    Min30,
+    Min60,
+}
+
+impl IncomingCheckInterval {
+    /// The poll period in whole minutes.
+    pub fn minutes(self) -> u64 {
+        match self {
+            IncomingCheckInterval::Min15 => 15,
+            IncomingCheckInterval::Min30 => 30,
+            IncomingCheckInterval::Min60 => 60,
+        }
+    }
 }
 
 /// Timestamp rendering style in the log.
@@ -361,17 +470,18 @@ pub enum DateFormat {
 }
 
 /// Which engine implementation performs git operations
-/// (library-migration plan Phase L2). Libgit2 is now the default in-process
-/// backend; the CLI remains available as a selectable fallback.
+/// (library-migration plan Phase L2). `Auto` is the default strategy: reads
+/// go to libgit2 and anything libgit2 cannot do falls back to the CLI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GitBackend {
-    /// Shell out to the system `git` binary. Selectable fallback; also used
-    /// internally by `Git2Executor` for operations git2 cannot perform
-    /// (sync/credential ops, reverse patch apply, intent-to-add).
+    /// Shell out to the system `git` binary for every operation.
     Cli,
-    /// In-process libgit2 via `git2` for supported operations (default).
-    #[default]
+    /// In-process libgit2 via `git2` for supported operations.
     Libgit2,
+    /// Reads go to libgit2; anything libgit2 cannot do falls back to the
+    /// CLI (issue #26). The factory maps this to the composed executor.
+    #[default]
+    Auto,
 }
 
 /// Project + per-root settings, serialized under `.turbogit/`.
@@ -387,8 +497,12 @@ pub struct VcsSettings {
     pub update_method: UpdateMethod,
     /// Clean working tree using stash or shelf.
     pub clean_tree_method: CleanTreeMethod,
-    /// Explicit incoming-check mode.
-    pub incoming_check: IncomingCheckMode,
+    /// Poll remotes in the background for incoming commits (issue #27).
+    #[serde(default)]
+    pub incoming_poll: bool,
+    /// How often the background incoming check runs.
+    #[serde(default)]
+    pub incoming_interval: IncomingCheckInterval,
     /// Local protected-branch patterns (e.g. `main`, `release/*`).
     pub protected_branch_patterns: Vec<String>,
     /// Warn before committing CRLF.
@@ -427,7 +541,8 @@ impl Default for VcsSettings {
             synchronous_branches: false,
             update_method: UpdateMethod::default(),
             clean_tree_method: CleanTreeMethod::default(),
-            incoming_check: IncomingCheckMode::default(),
+            incoming_poll: false,
+            incoming_interval: IncomingCheckInterval::default(),
             protected_branch_patterns: vec!["main".to_string(), "master".to_string()],
             warn_crlf: true,
             warn_detached: true,
@@ -455,22 +570,81 @@ pub struct LogOpts {
     pub max_count: Option<usize>,
     pub branch: Option<String>,
     pub path: Option<PathBuf>,
+    /// Pickaxe search (issue 17): `Some(s)` scopes the log to commits where
+    /// the occurrence count of `s` in the tracked content changed — how
+    /// commit search covers code changes. Maps to `git log -S`.
+    pub pickaxe: Option<String>,
 }
 
 /// Options for a merge.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MergeOpts {
     pub no_ff: bool,
     pub ff_only: bool,
     pub squash: bool,
     pub no_commit: bool,
     pub no_verify: bool,
+    pub verify_signatures: bool,
     pub allow_unrelated: bool,
     pub message: Option<String>,
 }
 
+/// Options for creating a tag (issue 31, screen 16).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TagSpec {
+    pub name: String,
+    /// Commit-ish the tag points at; `None` = HEAD.
+    pub target: Option<String>,
+    /// Annotation message; `Some` = an annotated tag (`-a -m`), `None` =
+    /// lightweight.
+    pub message: Option<String>,
+    /// Tagger identity override ("Name <email>"); `None` = the git config
+    /// identity.
+    pub tagger: Option<String>,
+    /// GPG-sign the tag (`-s`).
+    pub sign: bool,
+}
+
+/// Split a "Name <email>" identity string into its parts (issue 31). The
+/// email is the bracketed segment; everything before it is the name. A
+/// string without brackets is treated as a bare name; blank input yields
+/// `(None, None)`.
+pub fn parse_identity(s: &str) -> (Option<String>, Option<String>) {
+    let s = s.trim();
+    if s.is_empty() {
+        return (None, None);
+    }
+    match (s.find('<'), s.find('>')) {
+        (Some(l), Some(r)) if l < r => {
+            let name = s[..l].trim();
+            let email = s[l + 1..r].trim();
+            (
+                (!name.is_empty()).then(|| name.to_string()),
+                (!email.is_empty()).then(|| email.to_string()),
+            )
+        }
+        _ => (Some(s.to_string()), None),
+    }
+}
+
+/// The merge dialog's STRATEGY segmented control (issue 28, screen 14): the
+/// one choice that drives which mutually exclusive merge flags are sent, as
+/// mapped by `integrate_service::merge_flags`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MergeStrategy {
+    /// `--no-commit`: merge and stage, leave the commit to the user.
+    #[default]
+    NoCommit,
+    /// A plain merge (commit created by git).
+    Commit,
+    /// `--squash`: fold the incoming changes into one non-merge commit.
+    Squash,
+    /// `--ff-only`: refuse unless the merge is a fast-forward.
+    FastForward,
+}
+
 /// Options for a rebase.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RebaseOpts {
     pub onto: Option<String>,
     pub rebase_merges: bool,
@@ -478,6 +652,20 @@ pub struct RebaseOpts {
     pub root: bool,
     pub update_refs: bool,
     pub autosquash: bool,
+}
+
+/// The rebase dialog's MODE segmented control (issue 29, screen 15). The
+/// mode decides which rebase invocation runs, as mapped by
+/// `integrate_service::rebase_mode_opts`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RebaseMode {
+    /// Replay `onto..HEAD` through the interactive plan (all-pick).
+    #[default]
+    Interactive,
+    /// A plain `git rebase <onto>` with the chosen options.
+    Standard,
+    /// `git rebase --autosquash <onto>`: fixup!/squash! commits folded.
+    Autosquash,
 }
 
 /// Helper: resolve a git executable path (settings override, else `git` on PATH).
@@ -529,7 +717,7 @@ pub enum RebaseAction {
 }
 
 /// A row of the interactive rebase plan.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RebasePlanEntry {
     pub action: RebaseAction,
     pub commit: CommitId,

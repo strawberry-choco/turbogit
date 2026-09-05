@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+chrono = { workspace = true }
 git2 = { workspace = true }
 turbogit-domain = { workspace = true }
 turbogit-engine-api = { workspace = true }

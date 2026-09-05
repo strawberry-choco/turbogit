@@ -67,12 +67,62 @@ fn merged_into(
     Ok(base == tip || repo.graph_descendant_of(base, tip)?)
 }
 
+/// A local branch's tracking ref and whether it is gone (issue 32), read
+/// from the branch config. git keeps `branch.<name>.remote`/`.merge` after
+/// the upstream ref is pruned, which is exactly what `git branch -vv`
+/// reports as `[gone]`; libgit2's `Branch::upstream` instead errors once
+/// the ref disappears, so the config is the only stable source.
+///
+/// Returns `None` when the branch tracks nothing. A `"."` remote means a
+/// local branch tracks another local branch, so the ref to probe is
+/// `refs/heads/<name>`.
+fn tracking_state(repo: &git2::Repository, name: &str) -> Option<(String, bool)> {
+    let config = repo.config().ok()?;
+    let remote = config.get_string(&format!("branch.{name}.remote")).ok()?;
+    let merge = config.get_string(&format!("branch.{name}.merge")).ok()?;
+    let branch = merge
+        .strip_prefix("refs/heads/")
+        .unwrap_or(&merge)
+        .to_string();
+    if remote == "." {
+        let exists = repo.find_reference(&format!("refs/heads/{branch}")).is_ok();
+        return Some((branch, !exists));
+    }
+    let track = format!("{remote}/{branch}");
+    let exists = repo
+        .find_reference(&format!("refs/remotes/{track}"))
+        .is_ok();
+    Some((track, !exists))
+}
+
+/// Tip commit OIDs of a local branch and its tracking ref, or `None` when
+/// either cannot be resolved (e.g. the upstream is gone).
+fn tip_oids(
+    repo: &git2::Repository,
+    branch: &str,
+    upstream: &str,
+) -> Option<(git2::Oid, git2::Oid)> {
+    let local = repo
+        .revparse_single(branch)
+        .ok()?
+        .peel_to_commit()
+        .ok()?
+        .id();
+    let up = repo
+        .revparse_single(upstream)
+        .ok()?
+        .peel_to_commit()
+        .ok()?
+        .id();
+    Some((local, up))
+}
+
 /// Map a libgit2 `Commit` to the project's `Commit` model. Used by `log`
 /// to honor the CLI's parser quirks: trailing whitespace stripped from
 /// the raw message, and the same author-time value used for both the
 /// `author.time` and `committer.time` fields (the CLI's `%at` only
 /// yields author time, but the model stores it twice).
-fn commit_to_commit(commit: &git2::Commit<'_>, root: &RootId) -> Commit {
+fn commit_to_commit(repo: &git2::Repository, commit: &git2::Commit<'_>, root: &RootId) -> Commit {
     let author = commit.author();
     let committer = commit.committer();
     let time = author.when().seconds();
@@ -92,6 +142,17 @@ fn commit_to_commit(commit: &git2::Commit<'_>, root: &RootId) -> Commit {
         message: commit.message().unwrap_or("").trim_end().to_string(),
         time,
         root: root.clone(),
+        signature: signature_state_of(repo, &commit.id()),
+    }
+}
+
+/// libgit2 can see a commit's signature but never verify it (issue 17):
+/// presence maps to `Unverified`, absence to `Unsigned` — never to a
+/// claimed-good state.
+fn signature_state_of(repo: &git2::Repository, oid: &git2::Oid) -> SignatureState {
+    match repo.extract_signature(oid, Some("gpgsig")) {
+        Ok(_) => SignatureState::Unverified,
+        Err(_) => SignatureState::Unsigned,
     }
 }
 
@@ -140,6 +201,11 @@ impl GitExecutor for Git2Executor {
     }
 
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
+        // Pickaxe (issue 17) has no libgit2 equivalent: delegate to the CLI
+        // fallback, like the other git2-unsupported operations.
+        if opts.pickaxe.is_some() {
+            return self.cli.log(root, opts);
+        }
         // libgit2 parity for `git log --pretty=format:%H\x00%P\x00%an\x00
         // %ae\x00%cn\x00%ce\x00%at\x00%B`. Differences worth knowing:
         // - `%B` ends in a trailing newline; the CLI parser trims trailing
@@ -174,7 +240,7 @@ impl GitExecutor for Git2Executor {
             {
                 continue;
             }
-            commits.push(commit_to_commit(&commit, &root_id));
+            commits.push(commit_to_commit(&repo, &commit, &root_id));
             if let Some(max) = opts.max_count
                 && commits.len() >= max
             {
@@ -227,73 +293,12 @@ impl GitExecutor for Git2Executor {
     }
 
     fn ref_decorations(&self, root: &Path) -> TgResult<Vec<(CommitId, Vec<CommitRef>)>> {
-        let repo = self.open(root)?;
-        let mut by_sha: std::collections::HashMap<CommitId, Vec<CommitRef>> =
-            std::collections::HashMap::new();
-        let mut order: Vec<CommitId> = Vec::new();
-
-        // Same classification logic as `parse_ref_name` in `cli.rs`.
-        let classify = |refname: &str| -> Option<CommitRef> {
-            if let Some(name) = refname.strip_prefix("refs/heads/") {
-                return Some(CommitRef {
-                    kind: GitRefKind::Branch,
-                    name: name.to_string(),
-                });
-            }
-            if let Some(rest) = refname.strip_prefix("refs/remotes/") {
-                if rest.is_empty() {
-                    return None;
-                }
-                return Some(CommitRef {
-                    kind: GitRefKind::Remote,
-                    name: rest.to_string(),
-                });
-            }
-            if let Some(name) = refname.strip_prefix("refs/tags/") {
-                return Some(CommitRef {
-                    kind: GitRefKind::Tag,
-                    name: name.to_string(),
-                });
-            }
-            None
-        };
-
-        // Iterate every ref, resolve it to the commit it ultimately points at
-        // (peel annotated tags to their commit), group by SHA, keep insertion
-        // order for stable output.
-        if let Ok(refs) = repo.references() {
-            for ref_ in refs {
-                let ref_ = match ref_ {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
-                let refname = match ref_.name() {
-                    Ok(n) => n,
-                    Err(_) => continue,
-                };
-                let cr = match classify(refname) {
-                    Some(c) => c,
-                    None => continue,
-                };
-                // `%(objectname)` in `git for-each-ref` returns the OID of
-                // whatever the ref points at (tag object for annotated tags,
-                // commit for branches and lightweight tags), so we key by the
-                // raw target, not the peeled commit.
-                let target = match ref_.target() {
-                    Some(o) => o,
-                    None => continue,
-                };
-                let sha = target.to_string();
-                if !by_sha.contains_key(&sha) {
-                    order.push(sha.clone());
-                }
-                by_sha.entry(sha).or_default().push(cr);
-            }
-        }
-        Ok(order
-            .into_iter()
-            .map(|id| (id.clone(), by_sha.remove(&id).unwrap_or_default()))
-            .collect())
+        // Issue 17 states (remote `[gone]` via `%(upstream:track)`, tag
+        // pushed/local-only via `ls-remote`) have no cheap libgit2 path,
+        // and the one shared implementation keeps the classification from
+        // drifting — delegate to the CLI fallback like the other
+        // git2-unsupported operations.
+        self.cli.ref_decorations(root)
     }
 
     fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
@@ -386,6 +391,11 @@ impl GitExecutor for Git2Executor {
         //   branch popup) see identical shapes on both sides.
         // - Detached HEAD: `BranchType::Local` iteration never yields a
         //   phantom HEAD entry, so nothing extra to filter.
+        // - Issue 32 sync fields: tracking and `gone` come from the branch
+        //   config (`branch.<name>.remote`/`.merge`), which survives the
+        //   upstream ref being pruned — exactly the state `git branch -vv`
+        //   reports as `[gone]`. ahead/behind come from `graph_ahead_behind`
+        //   on the tip pair; last_touched from the tip commit time.
         let repo = self.open(root)?;
         let mut result = Vec::new();
 
@@ -411,13 +421,26 @@ impl GitExecutor for Git2Executor {
             // warning by consuming it.
             let _ = _type;
 
-            let tracking = match branch.upstream() {
-                Ok(up) => match up.name() {
-                    Ok(Some(un)) => Some(un.to_string()),
-                    Ok(None) | Err(_) => None,
-                },
-                Err(_) => None,
+            let (tracking, gone) = match tracking_state(&repo, &name) {
+                Some((track, gone)) => (Some(track), gone),
+                None => (None, false),
             };
+            let (ahead, behind) = if gone {
+                (0, 0)
+            } else {
+                match tracking.as_deref().and_then(|t| tip_oids(&repo, &name, t)) {
+                    Some((local_oid, up_oid)) => repo
+                        .graph_ahead_behind(local_oid, up_oid)
+                        .ok()
+                        .unwrap_or((0, 0)),
+                    None => (0, 0),
+                }
+            };
+
+            let last_touched = branch.get().peel_to_commit().ok().map(|c| {
+                chrono::DateTime::from_timestamp(c.time().seconds(), 0)
+                    .expect("git commits are post-epoch")
+            });
 
             result.push(Branch {
                 name,
@@ -426,6 +449,10 @@ impl GitExecutor for Git2Executor {
                 favorite: false,
                 protected: false,
                 exists: true,
+                ahead,
+                behind,
+                gone,
+                last_touched,
             });
         }
 
@@ -442,6 +469,11 @@ impl GitExecutor for Git2Executor {
                 Ok(Some(n)) => n.to_string(),
                 Ok(None) | Err(_) => continue,
             };
+            // `refs/remotes/<remote>/HEAD` is a symbolic ref the CLI's
+            // `-vv` listing skips; never invent a branch row for it.
+            if name.ends_with("/HEAD") {
+                continue;
+            }
             // libgit2 returns full short names like `origin/main`.
             // Strip the `remote/` prefix to match the CLI's parser,
             // which yields `main` from `remotes/origin/main`.
@@ -450,6 +482,11 @@ impl GitExecutor for Git2Executor {
                 .map(|(_, rest)| rest.to_string())
                 .unwrap_or(name);
 
+            let last_touched = branch.get().peel_to_commit().ok().map(|c| {
+                chrono::DateTime::from_timestamp(c.time().seconds(), 0)
+                    .expect("git commits are post-epoch")
+            });
+
             result.push(Branch {
                 name: short,
                 kind: BranchKind::Remote,
@@ -457,6 +494,10 @@ impl GitExecutor for Git2Executor {
                 favorite: false,
                 protected: false,
                 exists: true,
+                ahead: 0,
+                behind: 0,
+                gone: false,
+                last_touched,
             });
         }
 
@@ -484,6 +525,25 @@ impl GitExecutor for Git2Executor {
             .graph_ahead_behind(branch_oid, upstream_oid)
             .map_err(err)?;
         Ok((ahead, behind))
+    }
+
+    fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
+        let repo = self.open(root)?;
+        let upstream_oid = repo
+            .revparse_single(upstream)
+            .map_err(err)?
+            .peel_to_commit()
+            .map_err(err)?
+            .id();
+        let branch_oid = repo
+            .revparse_single(branch)
+            .map_err(err)?
+            .peel_to_commit()
+            .map_err(err)?
+            .id();
+        // Reuse the local `merged_into` helper (used by `branch_delete`
+        // for the safe-delete path) — same answer, equal SHAs included.
+        merged_into(&repo, upstream_oid, branch_oid).map_err(err)
     }
 
     fn outgoing_commits(
@@ -518,13 +578,12 @@ impl GitExecutor for Git2Executor {
         let mut result = Vec::new();
         for name in names.iter_bytes() {
             let name = String::from_utf8_lossy(name).into_owned();
-            let url = repo
-                .find_remote(&name)
-                .map_err(err)?
-                .url()
-                .unwrap_or_default()
-                .to_string();
-            result.push(Remote { name, url });
+            let remote = repo.find_remote(&name).map_err(err)?;
+            result.push(Remote {
+                name,
+                fetch_url: remote.url().map_err(err).ok().map(|u| u.to_string()),
+                push_url: remote.pushurl().map_err(err)?.map(str::to_string),
+            });
         }
         Ok(result)
     }
@@ -573,30 +632,44 @@ impl GitExecutor for Git2Executor {
                     result.push(Worktree {
                         path: PathBuf::from(name),
                         branch: String::new(),
+                        dirty: false,
                         root: RootId(root.into()),
                     });
                     continue;
                 }
             };
 
-            let path = wt.path().to_path_buf();
+            let path = wt
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| wt.path().to_path_buf());
 
             // Skip the main worktree — its path equals the repo root.
             if path == root {
                 continue;
             }
 
-            let branch = (|| -> Option<String> {
+            // One open answers both branch and dirty. Dirty = the worktree
+            // repo reports any status entry (libgit2 includes untracked
+            // files with the default show flags).
+            let (branch, dirty) = (|| -> Option<(Option<String>, bool)> {
                 let wt_repo = git2::Repository::open_from_worktree(&wt).ok()?;
+                let dirty = wt_repo
+                    .statuses(None)
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
                 if wt_repo.head_detached().ok()? {
-                    return None;
+                    return Some((None, dirty));
                 }
-                wt_repo.head().ok()?.shorthand().ok().map(|s| s.to_string())
-            })();
+                let branch = wt_repo.head().ok()?.shorthand().ok().map(|s| s.to_string());
+                Some((branch, dirty))
+            })()
+            .unwrap_or((None, false));
 
             result.push(Worktree {
                 path,
                 branch: branch.unwrap_or_default(),
+                dirty,
                 root: RootId(root.into()),
             });
         }
@@ -613,6 +686,13 @@ impl GitExecutor for Git2Executor {
             result.push(rel);
         }
         Ok(result)
+    }
+
+    /// Submodule reads parse `git submodule status` output — delegate to the
+    /// CLI adapter (the git2 submodule API carries no pinned-vs-recorded
+    /// pairing).
+    fn submodule_status(&self, root: &Path) -> TgResult<Vec<Submodule>> {
+        self.cli.submodule_status(root)
     }
 
     fn config_get(&self, root: &Path, key: &str) -> TgResult<Option<String>> {
@@ -638,6 +718,28 @@ impl GitExecutor for Git2Executor {
         self.cli.add_remote(root, name, url)
     }
 
+    fn set_remote_url(
+        &self,
+        root: &Path,
+        name: &str,
+        fetch_url: Option<&str>,
+        push_url: Option<&str>,
+    ) -> TgResult<()> {
+        self.cli.set_remote_url(root, name, fetch_url, push_url)
+    }
+
+    fn rename_remote(&self, root: &Path, old: &str, new: &str) -> TgResult<()> {
+        self.cli.rename_remote(root, old, new)
+    }
+
+    fn remove_remote(&self, root: &Path, name: &str) -> TgResult<()> {
+        self.cli.remove_remote(root, name)
+    }
+
+    fn set_branch_upstream(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<()> {
+        self.cli.set_branch_upstream(root, branch, upstream)
+    }
+
     fn fetch(&self, root: &Path, remote: Option<&str>) -> TgResult<()> {
         self.cli.fetch(root, remote)
     }
@@ -646,8 +748,27 @@ impl GitExecutor for Git2Executor {
         self.cli.pull(root, rebase)
     }
 
-    fn push(&self, root: &Path, remote: &str, branch: &str, force: bool) -> TgResult<()> {
-        self.cli.push(root, remote, branch, force)
+    fn push(
+        &self,
+        root: &Path,
+        remote: &str,
+        branch: &str,
+        force: bool,
+        tags: bool,
+        no_verify: bool,
+        set_upstream: bool,
+        selected_oldest: Option<&str>,
+    ) -> TgResult<()> {
+        self.cli.push(
+            root,
+            remote,
+            branch,
+            force,
+            tags,
+            no_verify,
+            set_upstream,
+            selected_oldest,
+        )
     }
 
     fn push_dry_run(
@@ -688,12 +809,40 @@ impl GitExecutor for Git2Executor {
         self.cli.continue_op(root, op)
     }
 
+    fn merge_auto_merged_files(
+        &self,
+        root: &Path,
+        conflicted: &[PathBuf],
+    ) -> TgResult<Vec<PathBuf>> {
+        // The git2 adapter has no shell — defer to the CLI for the merge
+        // metadata lookup, mirroring how abort/continue already delegate.
+        self.cli.merge_auto_merged_files(root, conflicted)
+    }
+
     fn rebase_interactive(&self, root: &Path, plan: &[RebasePlanEntry]) -> TgResult<()> {
         self.cli.rebase_interactive(root, plan)
     }
 
-    fn worktree_add(&self, root: &Path, path: &Path, branch: &str) -> TgResult<()> {
-        self.cli.worktree_add(root, path, branch)
+    fn worktree_add(&self, root: &Path, path: &Path, branch: &str, create: bool) -> TgResult<()> {
+        self.cli.worktree_add(root, path, branch, create)
+    }
+
+    fn worktree_remove(&self, root: &Path, path: &Path, force: bool) -> TgResult<()> {
+        self.cli.worktree_remove(root, path, force)
+    }
+
+    fn submodule_update(&self, root: &Path, path: &Path, init: bool) -> TgResult<()> {
+        self.cli.submodule_update(root, path, init)
+    }
+
+    fn submodule_deinit(&self, root: &Path, path: &Path, force: bool) -> TgResult<()> {
+        self.cli.submodule_deinit(root, path, force)
+    }
+
+    /// An arbitrary git command can only be exec'd — delegate to the CLI
+    /// fallback engine (issue 13 custom commands work on every backend).
+    fn run_raw(&self, root: &Path, args: &[String]) -> TgResult<String> {
+        self.cli.run_raw(root, args)
     }
 
     // --------------------------------------------------- staging / worktree ----
@@ -787,6 +936,13 @@ impl GitExecutor for Git2Executor {
         let diff = git2::Diff::from_buffer(patch.as_bytes()).map_err(err)?;
         repo.apply(&diff, ApplyLocation::Index, None).map_err(err)?;
         Ok(())
+    }
+
+    fn check_patch(&self, root: &Path, patch: &str) -> TgResult<()> {
+        // Delegated to the CLI: libgit2's GIT_APPLY_CHECK has no `--check`
+        // equivalent with the `--recount` tolerance the patch previews rely
+        // on, and the verbatim git stderr is the forecast's signal (issue 16).
+        self.cli.check_patch(root, patch)
     }
 
     fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
@@ -891,19 +1047,35 @@ impl GitExecutor for Git2Executor {
 
     // --------------------------------------------------------------- tags ----
 
-    fn tag_create(&self, root: &Path, name: &str, message: Option<&str>) -> TgResult<()> {
+    fn tag_create(&self, root: &Path, spec: &TagSpec) -> TgResult<()> {
+        // git2 has no native GPG tag signing; a signed tag delegates to the
+        // CLI adapter, which passes `-s` and the tagger env through to git.
+        if spec.sign {
+            return self.cli.tag_create(root, spec);
+        }
         let repo = self.open(root)?;
-        let obj = repo.revparse_single("HEAD").map_err(err)?;
-        match message {
+        let target = spec.target.as_deref().unwrap_or("HEAD");
+        let obj = repo.revparse_single(target).map_err(err)?;
+        match &spec.message {
             Some(m) => {
-                // Same identity source as `git tag -a`: user.name/email from
-                // config; unset identity fails exactly like the CLI does.
-                let sig = repo.signature().map_err(err)?;
-                repo.tag_annotation_create(name, &obj, &sig, m)
+                // The tagger override (issue 31); unset, the identity comes
+                // from config exactly like `git tag -a`.
+                let sig = match &spec.tagger {
+                    Some(id) => {
+                        let (name, email) = parse_identity(id);
+                        git2::Signature::now(
+                            name.as_deref().unwrap_or("unknown"),
+                            email.as_deref().unwrap_or("unknown@unknown"),
+                        )
+                        .map_err(err)?
+                    }
+                    None => repo.signature().map_err(err)?,
+                };
+                repo.tag_annotation_create(&spec.name, &obj, &sig, m)
                     .map_err(err)?;
             }
             None => {
-                repo.tag_lightweight(name, &obj, false).map_err(err)?;
+                repo.tag_lightweight(&spec.name, &obj, false).map_err(err)?;
             }
         }
         Ok(())

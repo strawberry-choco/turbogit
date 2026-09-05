@@ -12,3 +12,14 @@ than hidden by removing controls).
 
 Rejected: omitting unwired actions (diverges from approved mockup) and
 half-wiring them to placeholder dialogs (worse than honest inertness).
+
+## Status: superseded for the wired flows (issue 32)
+
+Issue 32 gave the remaining popup actions their flows, so they are no longer
+inert: Delete routes through the issue-02 rich confirmation
+(`PendingConfirm::DeleteLocalBranch` / `DeleteRemoteBranch`), Rename opens
+`Dialog::RenameBranch`, and Compare… opens `Dialog::CompareBranches` (spec
+E9's commit list with Swap). New Worktree… stays visibly inert until its flow
+exists. The inertness rule itself still holds for any control without a flow
+— it is the mockup-wins / explicit-gap principle (ADR-0016), not a licence to
+render dead buttons forever.

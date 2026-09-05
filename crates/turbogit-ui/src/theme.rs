@@ -50,6 +50,27 @@ impl Palette {
     /// Info (`--tg-state-info`).
     pub const STATE_INFO: Color32 = Color32::from_rgb(0x42, 0xa5, 0xf5);
 
+    // Risk scale (issue #01): three severity tiers aliased onto the status
+    // family so a risk surface never invents a hue.
+    /// Low-risk surface color (issue #01).
+    pub const RISK_LOW: Color32 = Self::STATE_SUCCESS;
+    /// Medium-risk surface color (issue #01).
+    pub const RISK_MEDIUM: Color32 = Self::STATE_WARNING;
+    /// High-risk surface color (issue #01).
+    pub const RISK_HIGH: Color32 = Self::STATE_ERROR;
+
+    // Status semantics (issue #01): clean / dirty / diverged / stale mapped
+    // onto the four state tokens — every status chip paints a real color,
+    // never a fallback.
+    /// Working tree matches HEAD (no local edits) — issue #01.
+    pub const STATUS_CLEAN: Color32 = Self::STATE_SUCCESS;
+    /// Working tree has uncommitted edits — issue #01.
+    pub const STATUS_DIRTY: Color32 = Self::STATE_WARNING;
+    /// Local branch has diverged from upstream — issue #01.
+    pub const STATUS_DIVERGED: Color32 = Self::STATE_ERROR;
+    /// Cached state is older than the source it mirrors — issue #01.
+    pub const STATUS_STALE: Color32 = Self::STATE_INFO;
+
     // Diff colors.
     /// Added-line background (`--tg-diff-add`).
     pub const DIFF_ADD_BG: Color32 = Color32::from_rgb(0x34, 0x4f, 0x3e);

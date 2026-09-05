@@ -193,6 +193,59 @@ impl RefKind {
     }
 }
 
+/// Direction of a branch ahead/behind count chip (issue #01).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CountDirection {
+    /// Ahead of upstream — outgoing commits waiting to push.
+    Ahead,
+    /// Behind upstream — incoming commits waiting to pull/fetch.
+    Behind,
+}
+
+/// Status badges from the screens-gap vocabulary (issue #01): direction-tagged
+/// ahead/behind counts, protected-branch lock, stale-age, FOCUSED modal
+/// marker, and CASCADE operation indicator. Each variant picks a token from
+/// the central palette so a chip carrying any of them has a real color and
+/// never invents a hue.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StatusBadge {
+    /// Ahead/behind count chip, direction decides the hue.
+    Count(CountDirection),
+    /// Lock indicator on a protected branch.
+    Lock,
+    /// Stale-age chip ("3d ago"); mirrors the `STATUS_STALE` token.
+    Stale,
+    /// FOCUSED marker — a modal-active accent.
+    Focused,
+    /// CASCADE operation indicator.
+    Cascade,
+}
+
+impl StatusBadge {
+    /// The palette token this kind is decided by.
+    ///
+    /// Ahead counts share the success accent; behind counts share the warning
+    /// accent; lock reads as a caution (mirroring the tag-ref decision);
+    /// stale mirrors STATUS_STALE/INFO; focused mirrors BRAND/selection;
+    /// cascade has its own accent so cascade chips never collide with focus
+    /// or selection color.
+    pub fn accent(self) -> Color32 {
+        match self {
+            Self::Count(CountDirection::Ahead) => Palette::STATE_SUCCESS,
+            Self::Count(CountDirection::Behind) => Palette::STATE_WARNING,
+            Self::Lock => Palette::STATE_WARNING,
+            Self::Stale => Palette::STATE_INFO,
+            Self::Focused => Palette::BRAND,
+            Self::Cascade => CASCADE_ACCENT,
+        }
+    }
+}
+
+/// CASCADE accent — distinct from BRAND/STATE_* so cascade operations never
+/// read as focus, success, warning, info, or error. Reused by chips and any
+/// other cascade surface.
+pub const CASCADE_ACCENT: Color32 = Color32::from_rgb(0xa7, 0x8b, 0xfa);
+
 // --- Focus -------------------------------------------------------------------
 
 /// Paint the token-spec keyboard-focus ring (§7.2): a 1px `BRAND` stroke just
@@ -246,9 +299,62 @@ pub fn compact_button(ui: &mut Ui, label: &str) -> Response {
     button_response(ui, ButtonVariant::Compact, None, Some(label))
 }
 
+/// [`compact_button`] with an explicit `enabled` flag (issue 32 popup row
+/// actions): disabled dims the button and turns clicks into no-ops, rendered
+/// in a child scope so the disabled state never leaks into the caller's
+/// remaining widgets. Pair it with `on_disabled_hover_text` so the gating
+/// reason stays discoverable.
+pub fn compact_button_enabled(ui: &mut Ui, label: &str, enabled: bool) -> Response {
+    if enabled {
+        return compact_button(ui, label);
+    }
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(ui.available_rect_before_wrap())
+            .layout(*ui.layout()),
+    );
+    child.disable();
+    let response = button_response(&mut child, ButtonVariant::Compact, None, Some(label));
+    ui.advance_cursor_after_rect(child.min_rect());
+    response
+}
+
 /// Square ghost button holding only an icon (e.g. dialog close X).
 pub fn icon_button(ui: &mut Ui, icon: Icon) -> Response {
     button_response(ui, ButtonVariant::Icon, Some(icon), None)
+}
+
+/// Full-width stacked action button (issue 15 details-pane Actions section):
+/// ghost at rest, or the solid-brand primary when `primary`; `enabled =
+/// false` dims it and turns clicks into no-ops. Rendered in a child scope so
+/// the disabled state never leaks into the caller's remaining widgets.
+pub fn action_button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Response {
+    let variant = if primary {
+        ButtonVariant::Primary
+    } else {
+        ButtonVariant::Ghost
+    };
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(ui.available_rect_before_wrap())
+            .layout(*ui.layout()),
+    );
+    if !enabled {
+        child.disable();
+    }
+    let width = child.available_width();
+    let response = button_response_sized(
+        &mut child,
+        variant,
+        None,
+        Some(label),
+        None,
+        None,
+        None,
+        Some(width),
+    );
+    ui.advance_cursor_after_rect(child.min_rect());
+    response
 }
 
 /// Toolbar button (spec §4.2/§6.2): 26px tall, 0×8 padding, 14×14 icon +
@@ -268,6 +374,7 @@ pub fn toolbar_button(ui: &mut Ui, icon: Icon, label: &str, primary: bool) -> Re
         Some(TOOLBAR_BUTTON_HEIGHT),
         Some(8.0),
         Some(TOOLBAR_ICON_SIZE),
+        None,
     )
 }
 
@@ -277,9 +384,10 @@ fn button_response(
     icon: Option<Icon>,
     label: Option<&str>,
 ) -> Response {
-    button_response_sized(ui, variant, icon, label, None, None, None)
+    button_response_sized(ui, variant, icon, label, None, None, None, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn button_response_sized(
     ui: &mut Ui,
     variant: ButtonVariant,
@@ -288,6 +396,7 @@ fn button_response_sized(
     height_override: Option<f32>,
     pad_x_override: Option<f32>,
     icon_size_override: Option<f32>,
+    width_override: Option<f32>,
 ) -> Response {
     let enabled = ui.is_enabled();
     let compact = matches!(variant, ButtonVariant::Compact);
@@ -331,11 +440,11 @@ fn button_response_sized(
         0.0
     };
     let content_w = icon_w + label_w;
-    let width = if icon_only {
+    let width = width_override.unwrap_or(if icon_only {
         height
     } else {
         pad_x * 2.0 + content_w
-    };
+    });
 
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(width, height),
@@ -422,6 +531,16 @@ pub fn ref_label(ui: &mut Ui, text: &str, kind: RefKind) -> Response {
     chip(ui, text, kind.colors())
 }
 
+/// Status badge from the screens-gap vocabulary (issue #01): count chips,
+/// lock, stale-age, FOCUSED, and CASCADE markers. Paints the same 18px pill
+/// shape as [`badge`] so any chip carrying these states matches the rest of
+/// the badge vocabulary at every callsite.
+pub fn status_badge(ui: &mut Ui, text: &str, kind: StatusBadge) -> Response {
+    let fg = kind.accent();
+    let bg = tint_over_bg(fg, BADGE_TINT);
+    chip(ui, text, ChipColors { bg, fg })
+}
+
 fn chip(ui: &mut Ui, text: &str, colors: ChipColors) -> Response {
     let font_id = FontId::new(MICRO_TEXT, FontFamily::Proportional);
     let galley = ui
@@ -447,6 +566,74 @@ fn chip(ui: &mut Ui, text: &str, colors: ChipColors) -> Response {
 
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, text));
     response
+}
+
+// --- Segmented control ------------------------------------------------------
+
+/// Compact segmented control (spec §8.4, issue #01): SURFACE_2 track, the
+/// selected segment sits on SURFACE_3 with INK ink. Returns the clicked
+/// option index (the caller applies the change to its own state).
+///
+/// The widget is the shared picker used by every surface that needs a
+/// token-exact two- or three-way choice — diff side-by-side/unified, file/
+/// hunk/line granularity, CLI/libgit2/Auto backend, strategy pickers — so
+/// these controls render identically everywhere and a new surface can adopt
+/// the widget instead of inventing a second variant.
+pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Option<usize> {
+    const SEGMENT_H: f32 = 24.0;
+    const PAD_X: f32 = 10.0;
+    let font_id = FontId::new(12.0, FontFamily::Proportional);
+
+    let widths: Vec<f32> = options
+        .iter()
+        .map(|o| {
+            let g = ui
+                .painter()
+                .layout_no_wrap((*o).to_owned(), font_id.clone(), Color32::WHITE);
+            g.size().x + PAD_X * 2.0
+        })
+        .collect();
+    let track_w: f32 = widths.iter().sum();
+
+    let (track, _) = ui.allocate_exact_size(Vec2::new(track_w, SEGMENT_H), Sense::hover());
+    ui.painter()
+        .rect_filled(track, CornerRadius::same(4), Palette::SURFACE_2);
+
+    let mut clicked = None;
+    let mut x = track.left();
+    for (i, option) in options.iter().enumerate() {
+        let seg = Rect::from_min_size(Pos2::new(x, track.top()), Vec2::new(widths[i], SEGMENT_H));
+        let id = ui.id().with(("segment", i));
+        let resp = ui.interact(seg, id, Sense::click());
+        let is_selected = i == selected;
+        if is_selected {
+            ui.painter()
+                .rect_filled(seg, CornerRadius::same(3), Palette::SURFACE_3);
+        }
+        let ink = if is_selected || resp.hovered() {
+            Palette::INK
+        } else {
+            Palette::INK_2
+        };
+        let galley = ui
+            .painter()
+            .layout_no_wrap((*option).to_owned(), font_id.clone(), ink);
+        ui.painter().galley(
+            Pos2::new(
+                seg.center().x - galley.size().x / 2.0,
+                seg.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            ink,
+        );
+        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, *option));
+        focus_ring(ui, &resp);
+        if resp.clicked() {
+            clicked = Some(i);
+        }
+        x += widths[i];
+    }
+    clicked
 }
 
 // --- Trees & lists -----------------------------------------------------------

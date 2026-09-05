@@ -21,7 +21,7 @@ use tempfile::TempDir;
 use turbogit_app::events::AppEvent;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
-use turbogit_domain::model::{Commit, LogOpts, RootId, Signature, VcsSettings};
+use turbogit_domain::model::{Commit, LogOpts, RootId, Signature, SignatureState, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
@@ -72,6 +72,7 @@ fn fake_commit(root: &RootId, message: &str) -> Commit {
         message: message.to_string(),
         time: 0,
         root: root.clone(),
+        signature: SignatureState::Unsigned,
     }
 }
 
@@ -202,6 +203,7 @@ fn scoped_op_completion_keeps_unaffected_roots_cached() {
             label: "op".to_string(),
             affected: Affected::Root(alpha_id.clone()),
             result: Ok(()),
+            retry: None,
         })
         .expect("send OpCompleted");
     state.drain_events();
@@ -248,6 +250,7 @@ fn op_outside_selected_root_does_not_refetch_selected_log() {
             label: "op".to_string(),
             affected: Affected::Root(alpha_id.clone()),
             result: Ok(()),
+            retry: None,
         })
         .expect("send OpCompleted");
     state.drain_events();
@@ -309,4 +312,78 @@ fn refresh_all_clears_every_cache_and_refetches_selected_log() {
     assert_eq!(state.caches.log(&alpha_id), Some(expected.as_slice()));
     // …and ahead/behind is recomputed synchronously.
     assert_eq!(state.caches.ahead_behind(&alpha_id), Some((0, 0)));
+}
+
+// --- Issue 20: per-root hunk-span statistics ---------------------------------
+
+/// One unstaged edit (file.txt) plus one staged edit (other.txt), so all
+/// three working-tree diffs carry distinct content.
+fn seed_staged_and_unstaged_edits(dir: &Path) {
+    std::fs::write(dir.join("file.txt"), "file: v1\nfile: v2\n").expect("unstaged edit");
+    std::fs::write(dir.join("other.txt"), "other: v1\nother: v2\n").expect("staged edit");
+    run_git(dir, &["add", "other.txt"]);
+}
+
+#[test]
+fn hunk_stats_ensure_fills_per_root_and_refresh_invalidates() {
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("stats");
+    seed_repo(&dir, "stats");
+    seed_staged_and_unstaged_edits(&dir);
+
+    let mut state = AppState::for_roots(parent.path(), std::slice::from_ref(&dir));
+    let root = RootId(dir.clone().into());
+    assert!(state.caches.hunk_stats(&root).is_none());
+
+    let exec = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+    state.caches.ensure_hunk_stats(&exec, &root);
+    let stats = state
+        .caches
+        .hunk_stats(&root)
+        .expect("stats filled on miss");
+
+    let local_of = |name: &str| {
+        stats
+            .local
+            .iter()
+            .find(|f| f.path == name)
+            .map(|f| f.hunks.len())
+    };
+    let staged_of = |name: &str| {
+        stats
+            .staged
+            .iter()
+            .find(|f| f.path == name)
+            .map(|f| f.hunks.len())
+    };
+    let repo_of = |name: &str| {
+        stats
+            .repo
+            .iter()
+            .find(|f| f.path == name)
+            .map(|f| f.hunks.len())
+    };
+
+    // The staged edit lives only in the staged (HEAD↔index) view, the
+    // unstaged edit only in the local (index↔worktree) view; the HEAD↔
+    // worktree view shows both.
+    assert_eq!(staged_of("other.txt"), Some(1));
+    assert_eq!(local_of("other.txt"), None);
+    assert_eq!(local_of("file.txt"), Some(1));
+    assert_eq!(staged_of("file.txt"), None);
+    assert_eq!(repo_of("file.txt"), Some(1));
+    assert_eq!(repo_of("other.txt"), Some(1));
+
+    // A completed op refreshes the affected root and drops the stats with
+    // the rest of the caches (one invalidation unit).
+    state.refresh(Affected::Root(root.clone()));
+    assert!(
+        state.caches.hunk_stats(&root).is_none(),
+        "refresh must drop the hunk stats with the other caches"
+    );
+    // And the next ensure recomputes them.
+    state.caches.ensure_hunk_stats(&exec, &root);
+    assert!(state.caches.hunk_stats(&root).is_some());
 }

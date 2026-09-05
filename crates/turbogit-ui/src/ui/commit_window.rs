@@ -17,15 +17,19 @@
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
-use egui::{Color32, Key, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType};
-use std::path::PathBuf;
-use turbogit_app::root_caches::Affected;
+use egui::{Align, Color32, Key, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType};
+use std::path::{Path, PathBuf};
+use turbogit_app::root_caches::{Affected, StatsView};
 use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use turbogit_domain::model::{Change, ChangeStatus, Root};
 use turbogit_services::changes;
 
-/// Canonical bucket names (user-created changelists are backlog).
-pub const DEFAULT_CHANGELIST: &str = "Default Changelist";
+/// Canonical bucket names. The staging sections (issue 20, screen 06) mirror
+/// Git's index: files with unstaged content under UNSTAGED, fully staged
+/// files under STAGED; conflicts keep their own group. The Unversioned Files
+/// sub-tab keeps its canonical bucket name.
+pub const UNSTAGED: &str = "UNSTAGED";
+pub const STAGED: &str = "STAGED";
 pub const UNVERSIONED_FILES: &str = "Unversioned Files";
 pub const MERGE_CONFLICTS: &str = "Merge conflicts";
 
@@ -46,36 +50,40 @@ enum RowAction {
     Toggle { key: PathBuf, include: bool },
     /// Select a file for the diff preview pane.
     Preview(PathBuf),
+    /// Stage (true) / unstage (false) one staging section's files
+    /// (issue 20): the section's changes plus their root path.
+    StageSection {
+        changes: Vec<Change>,
+        root: PathBuf,
+        stage: bool,
+    },
 }
 
-/// Split one root's status into the three canonical buckets (empty buckets
-/// are dropped so the tree only shows groups that have content). Paths that
-/// granular staging fully staged (spec R2 story 9) are not listed anymore.
-fn canonical_buckets(state: &AppState) -> Vec<Bucket<'_>> {
+/// Split one root's status into the staging sections (issue 20, screen 06):
+/// files with unstaged content under UNSTAGED (untracked files included —
+/// they are stageable work), fully staged files under STAGED, and conflicts
+/// in their own group (empty buckets are dropped). The staging view mirrors
+/// the index itself, so granularly-completed paths still show under STAGED —
+/// unlike the old changelist view they replaced, where they left the list.
+fn staging_buckets(state: &AppState) -> Vec<Bucket<'_>> {
     let mut out = Vec::new();
     for root in &state.multi.roots {
-        let mut default = Vec::new();
-        let mut unversioned = Vec::new();
+        let mut unstaged = Vec::new();
+        let mut staged = Vec::new();
         let mut conflicts = Vec::new();
         for c in &root.status.changes {
-            if state
-                .ui
-                .granularly_completed
-                .contains(&root.canonical_key(c))
-            {
-                continue;
-            }
             match c.status {
                 ChangeStatus::Conflicted => conflicts.push(c),
-                ChangeStatus::Unversioned => unversioned.push(c),
-                // Ignored files never belong in the commit window.
+                // Fully staged content only: a partially staged file still
+                // has unstaged work and belongs in UNSTAGED.
+                _ if c.staged && !c.unstaged => staged.push(c),
                 ChangeStatus::Ignored => {}
-                _ => default.push(c),
+                _ => unstaged.push(c),
             }
         }
         for (name, changes) in [
-            (DEFAULT_CHANGELIST, default),
-            (UNVERSIONED_FILES, unversioned),
+            (UNSTAGED, unstaged),
+            (STAGED, staged),
             (MERGE_CONFLICTS, conflicts),
         ] {
             if !changes.is_empty() {
@@ -102,6 +110,24 @@ fn apply_actions(state: &mut AppState, actions: Vec<RowAction>) {
                 }
             }
             RowAction::Preview(path) => state.ui.preview_change = Some(path),
+            RowAction::StageSection {
+                changes,
+                root,
+                stage,
+            } => {
+                let label = if stage { "Stage" } else { "Unstage" };
+                state.run_git(
+                    label.to_owned(),
+                    Affected::from_optional_root(Some(root.as_path())),
+                    move |v| {
+                        if stage {
+                            changes::stage_selected(v, &root, &changes)
+                        } else {
+                            changes::unstage_selected(v, &root, &changes)
+                        }
+                    },
+                );
+            }
         }
     }
 }
@@ -135,6 +161,13 @@ fn has_selected_changes(state: &AppState) -> bool {
 }
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
+    // Hunk-span statistics (issue 20) feed the per-file hunk badges and the
+    // staged-hunk rail; computed on miss through the engine seam, keyed per
+    // root and invalidated with the other root caches.
+    if let Some(root_id) = state.selected_root.clone() {
+        let exec = state.executor.clone();
+        state.caches.ensure_hunk_stats(exec.as_ref(), &root_id);
+    }
     sub_tab_strip(ui, state);
     file_filter_row(ui, state);
     match state.ui.commit_subtab {
@@ -271,7 +304,7 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    let (buckets, no_match) = filter_buckets(state, canonical_buckets(state));
+    let (buckets, no_match) = filter_buckets(state, staging_buckets(state));
     let empty_text = if no_match.is_empty() {
         "No local changes."
     } else {
@@ -337,11 +370,11 @@ fn unversioned_pane(ui: &mut Ui, state: &mut AppState) {
 
 /// Flat changed-file paths of the active Commit sub-tab in display order —
 /// the F7/Shift+F7 cross-file traversal list (spec R7). Unfiltered by the
-/// file filter: navigation walks the real changelist. The Phase-J
+/// file filter: navigation walks the real staging sections. The Phase-J
 /// placeholder tabs contribute nothing.
 pub(crate) fn active_subtab_files(state: &AppState) -> Vec<PathBuf> {
     let buckets = match state.ui.commit_subtab {
-        CommitSubTab::LocalChanges => canonical_buckets(state),
+        CommitSubTab::LocalChanges => staging_buckets(state),
         CommitSubTab::UnversionedFiles => unversioned_buckets(state),
         CommitSubTab::Shelf | CommitSubTab::Stash => return Vec::new(),
     };
@@ -376,15 +409,22 @@ fn bucket_groups(
                 return;
             }
             for bucket in buckets {
+                if bucket.name == UNSTAGED || bucket.name == STAGED {
+                    staging_section(ui, state, bucket, actions);
+                    continue;
+                }
                 let header = format!("{} ({})", bucket.name, bucket.changes.len());
                 egui::CollapsingHeader::new(header)
+                    // Multi-root projects emit one header per root with the
+                    // same text; the id must include the root or they collide.
+                    .id_salt(("changelist_bucket", &bucket.root.id, &bucket.name))
                     .default_open(true)
                     .show(ui, |ui| {
                         if multi_root {
-                            root_subgroup(ui, state, bucket, actions);
+                            root_subgroup(ui, state, bucket, false, actions);
                         } else {
                             for c in &bucket.changes {
-                                change_row(ui, state, bucket.root, c, actions);
+                                change_row(ui, state, bucket.root, c, false, actions);
                             }
                         }
                     });
@@ -392,8 +432,59 @@ fn bucket_groups(
         });
 }
 
+/// One staging section (issue 20, screen 06): a flat count-badged header
+/// row with the section-wide action — Stage all under UNSTAGED, Unstage all
+/// under STAGED — then the file rows. Actions dispatch through the async op
+/// seam and scope to the section's own root.
+fn staging_section(ui: &mut Ui, state: &AppState, bucket: &Bucket, actions: &mut Vec<RowAction>) {
+    let multi_root = state.multi.roots.len() > 1;
+    ui.horizontal(|ui| {
+        ui.strong(format!("{} ({})", bucket.name, bucket.changes.len()));
+        let (label, hover, stage) = if bucket.name == UNSTAGED {
+            (
+                "Stage all",
+                "Stage every file of the UNSTAGED section",
+                true,
+            )
+        } else {
+            (
+                "Unstage all",
+                "Unstage every file of the STAGED section",
+                false,
+            )
+        };
+        if ui.button(label).on_hover_text(hover).clicked() {
+            actions.push(RowAction::StageSection {
+                changes: bucket.changes.iter().map(|c| (*c).clone()).collect(),
+                root: bucket.root.path.clone(),
+                stage,
+            });
+        }
+    });
+    ui.indent(
+        ui.id()
+            .with(("staging_section", &bucket.root.id, bucket.name)),
+        |ui| {
+            if multi_root {
+                root_subgroup(ui, state, bucket, bucket.name == STAGED, actions);
+            } else {
+                for c in &bucket.changes {
+                    change_row(ui, state, bucket.root, c, bucket.name == STAGED, actions);
+                }
+            }
+        },
+    );
+}
+
 /// Per-root sub-group with count badge + select-all (multi-root projects).
-fn root_subgroup(ui: &mut Ui, state: &AppState, bucket: &Bucket, actions: &mut Vec<RowAction>) {
+/// `staged_section` selects the hunk-badge flavor of the nested rows.
+fn root_subgroup(
+    ui: &mut Ui,
+    state: &AppState,
+    bucket: &Bucket,
+    staged_section: bool,
+    actions: &mut Vec<RowAction>,
+) {
     let root_name = bucket.root.id.name();
     let all_included = bucket
         .changes
@@ -406,10 +497,8 @@ fn root_subgroup(ui: &mut Ui, state: &AppState, bucket: &Bucket, actions: &mut V
 
     ui.horizontal(|ui| {
         let mut select_all = all_included;
-        if ui
-            .checkbox(&mut select_all, format!("Select all {root_name}"))
-            .changed()
-        {
+        let resp = ui.checkbox(&mut select_all, format!("Select all {root_name}"));
+        if resp.changed() {
             for c in &bucket.changes {
                 actions.push(RowAction::Toggle {
                     key: bucket.root.canonical_key(c),
@@ -430,7 +519,7 @@ fn root_subgroup(ui: &mut Ui, state: &AppState, bucket: &Bucket, actions: &mut V
         ui.id().with(("subgroup", &bucket.root.id, bucket.name)),
         |ui| {
             for c in &bucket.changes {
-                change_row(ui, state, bucket.root, c, actions);
+                change_row(ui, state, bucket.root, c, staged_section, actions);
             }
         },
     );
@@ -472,6 +561,34 @@ fn partially_staged_dot(ui: &mut Ui) {
     resp.on_hover_text("Partially staged");
 }
 
+/// Per-file hunk-count badge (issue 20, screen 06): unstaged rows show the
+/// hunk count of the file's unstaged diff ("7 hunks"), fully staged rows the
+/// staged/total ratio ("2/2"). `None` while the stats are absent (fresh
+/// root, untracked files, binary-only changes).
+fn hunk_badge(state: &AppState, root: &Root, c: &Change, staged_section: bool) -> Option<String> {
+    if matches!(
+        c.status,
+        ChangeStatus::Unversioned | ChangeStatus::Conflicted
+    ) {
+        return None;
+    }
+    let stats = state.caches.hunk_stats(&root.id)?;
+    if staged_section {
+        let staged = stats.file(StatsView::Staged, &c.path)?.hunks.len();
+        let total = stats.file(StatsView::Repo, &c.path)?.hunks.len();
+        Some(format!("{staged}/{total}"))
+    } else {
+        let n = stats.file(StatsView::Local, &c.path)?.hunks.len();
+        (n > 0).then(|| {
+            if n == 1 {
+                "1 hunk".to_owned()
+            } else {
+                format!("{n} hunks")
+            }
+        })
+    }
+}
+
 /// One file row: inclusion checkbox ("M base.txt"), status icon, and a
 /// path button that selects the file for the diff preview pane. Conflicted
 /// files render as a single review row ("C conf.txt") instead — an unmerged
@@ -481,12 +598,14 @@ fn partially_staged_dot(ui: &mut Ui) {
 /// Renames/copies (spec R8) carry a muted arrow plus the old path — an
 /// annotation paired with the diff viewer's rename header, never stageable
 /// text. Interactions are pushed onto `actions` and applied by the caller
-/// after rendering (plan §1.4 defer pattern).
+/// after rendering (plan §1.4 defer pattern). `staged_section` selects the
+/// hunk-badge flavor (issue 20).
 fn change_row(
     ui: &mut Ui,
     state: &AppState,
     root: &Root,
     c: &Change,
+    staged_section: bool,
     actions: &mut Vec<RowAction>,
 ) {
     let key = root.canonical_key(c);
@@ -526,6 +645,12 @@ fn change_row(
         let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
         if ui.selectable_label(previewing, path_text).clicked() {
             actions.push(RowAction::Preview(c.path.clone()));
+        }
+        // Hunk-count badge (issue 20), right-aligned to the pane edge.
+        if let Some(badge) = hunk_badge(state, root, c, staged_section) {
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                ui.colored_label(Palette::INK_3, badge);
+            });
         }
     });
 }
@@ -608,7 +733,69 @@ fn staging_toolbar_row(ui: &mut Ui, state: &mut AppState) {
 
 // --------------------------------------------- preview + editor pane ------
 
+/// The staged-hunk summary rail (issue 20, screen 06): "N hunks staged"
+/// plus one chip per staged hunk of the selected root's files —
+/// "file @@start", with " (part)" when an unstaged remainder overlaps the
+/// staged hunk's region. A chip click previews that file. Rendered only
+/// when at least one hunk is staged.
+fn staged_hunks_rail(ui: &mut Ui, state: &mut AppState) {
+    use turbogit_services::hunk_stats;
+    let Some(root_id) = state.selected_root.clone() else {
+        return;
+    };
+    let Some(stats) = state.caches.hunk_stats(&root_id) else {
+        return;
+    };
+    // Collect the chips first — rendering the clicks needs `&mut state`.
+    let mut total = 0usize;
+    let mut chips: Vec<(String, PathBuf)> = Vec::new();
+    for f in &stats.staged {
+        if f.hunks.is_empty() {
+            continue;
+        }
+        let local = stats
+            .file(StatsView::Local, Path::new(&f.path))
+            .map(|lf| lf.hunks.as_slice())
+            .unwrap_or(&[]);
+        let name = Path::new(&f.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| f.path.clone());
+        for s in &f.hunks {
+            total += 1;
+            let part = if hunk_stats::staged_hunk_partial(s, local) {
+                " (part)"
+            } else {
+                ""
+            };
+            chips.push((
+                format!("{name} @@{}{part}", s.old_start),
+                PathBuf::from(&f.path),
+            ));
+        }
+    }
+    if total == 0 {
+        return;
+    }
+    ui.colored_label(
+        Palette::BRAND,
+        format!(
+            "{total} {} staged",
+            if total == 1 { "hunk" } else { "hunks" }
+        ),
+    );
+    ui.horizontal_wrapped(|ui| {
+        for (label, path) in chips {
+            if crate::ui::diff::chip_button(ui, &label, false).clicked() {
+                state.ui.preview_change = Some(path);
+            }
+        }
+    });
+    ui.add_space(4.0);
+}
+
 fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
+    staged_hunks_rail(ui, state);
     ui.heading("Preview");
     match state.ui.preview_change.clone() {
         Some(path) => {
@@ -685,6 +872,29 @@ fn message_editor(ui: &mut Ui, state: &mut AppState) {
             .clicked()
         {
             do_commit(state, true);
+        }
+        // Cascade commit (issue 21, screen 06): one commit fan-out across
+        // every selected repo. The rail footer above names the scope
+        // ("Commit M hunks · skips repos with nothing staged"); the button
+        // label counts the selection. Hidden when nothing is selected —
+        // the single-repo "Commit" already covers that case.
+        let selection_count = state.ui.repo_selection.len();
+        if selection_count > 1 {
+            let footer = state.commit_rail_footer(&state.ui.commit_message);
+            ui.label(footer);
+            let button_label = format!("Also commit on {selection_count} selected repos");
+            if ui
+                .add_enabled(can_commit, egui::Button::new(button_label))
+                .on_hover_text("Commit the same message on every selected repo")
+                .clicked()
+            {
+                let message = state.ui.commit_message.clone();
+                let amend = state.ui.amend;
+                state.run_commit_across(&message, amend);
+                state.ui.commit_message.clear();
+                state.ui.selected.clear();
+                state.persist_ui();
+            }
         }
         if ui
             .button("Shelve…")

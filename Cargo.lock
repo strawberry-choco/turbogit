@@ -3549,6 +3549,7 @@ dependencies = [
 name = "turbogit-engine"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "git2",
  "tempfile",
  "turbogit-domain",
@@ -3568,6 +3569,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "ron",
+ "serde",
  "similar",
  "tempfile",
  "turbogit-domain",

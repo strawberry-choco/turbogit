@@ -82,6 +82,22 @@ fn settle(harness: &mut Harness<'_, AppState>) {
     panic!("welcome layout did not settle within 10 frames");
 }
 
+/// Step frames until `needle` is painted or the wall-clock budget runs out
+/// (async worker results — status scans, recents branches — repaint later
+/// than the layout settles).
+#[track_caller]
+fn wait_painted(harness: &mut Harness<'_, AppState>, needle: &str, what: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !painted_text(harness).iter().any(|t| t.contains(needle)) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what}: `{needle}` was never painted"
+        );
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
 /// Run `git <args>` in `cwd`, panicking on failure (tests need real repos).
 #[track_caller]
 fn git(args: &[&str], cwd: &Path) {
@@ -273,9 +289,12 @@ fn open_card_opens_a_real_repository_into_the_shell() {
         s.selected_root.as_ref().map(|r| r.0.to_path_buf()),
         Some(repo)
     );
-    // The welcome page is gone; the shell status bar reports the root.
+    // The welcome page is gone; the shell status bar reports the opened
+    // root through the workspace aggregate (issue #03), not per-root text.
+    // The freshly-initialized seed repo is clean, so only the total chip
+    // can appear.
     assert_not_painted(&fx.harness, "A fast, keyboard-friendly Git client");
-    assert_painted(&fx.harness, "modified:");
+    wait_painted(&mut fx.harness, "1 total", "opened repo status aggregate");
 }
 
 #[test]
@@ -315,6 +334,8 @@ fn seeded_recents_render_name_path_last_opened_and_live_branch() {
             path: repo.clone(),
             name: "alpha".into(),
             last_opened: 1_755_000_000_000,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
         }],
     );
 
@@ -365,6 +386,8 @@ fn clicking_a_recent_reopens_the_project() {
             path: repo.clone(),
             name: "alpha".into(),
             last_opened: 1_755_000_000_000,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
         }],
     );
 
@@ -407,6 +430,8 @@ fn branch_indicator_is_cached_then_updates_after_invalidation() {
             path: repo.clone(),
             name: "alpha".into(),
             last_opened: 1_755_000_000_000,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
         }],
     );
 
@@ -460,17 +485,16 @@ fn file_menu_welcome_closes_projects_and_returns_to_welcome() {
         "launching with a path must enter the shell directly"
     );
 
-    harness.get_by_label("File").click();
+    // The old File → Welcome Screen menu retired with the IDE chrome
+    // (issue #03); the command palette's Open Welcome action (topbar's
+    // More button) is the way back now.
+    harness.get_by_label("More").click();
     settle(&mut harness);
-    harness.get_by_label("Welcome Screen").click();
+    harness.get_by_label("Open Welcome").click();
     settle(&mut harness);
 
     let s = harness.state();
-    assert!(s.show_welcome(), "File → Welcome must return to the screen");
-    assert!(
-        s.multi.roots.is_empty(),
-        "File → Welcome must close every open project"
-    );
+    assert!(s.show_welcome(), "Open Welcome must return to the screen");
     assert!(s.ui.welcome_visible);
     assert_painted(&harness, "A fast, keyboard-friendly Git client");
 }
@@ -724,4 +748,136 @@ fn folder_picker_seam_is_only_invoked_behind_user_initiated_flows() {
         fx.harness.state().show_welcome(),
         "a cancelled pick leaves the user on Welcome"
     );
+}
+
+// --- Cycle 9: Workspace upgrades (issue #34) ----------------------------------
+
+/// Build a workspace container with two nested repos, one strictly deeper
+/// than the bounded scanner's SCAN_MAX_DEPTH so only the deep scan finds it.
+fn seed_workspace(base: &Path) -> PathBuf {
+    let ws = base.join("ws");
+    std::fs::create_dir_all(&ws).unwrap();
+    let shallow = ws.join("alpha");
+    std::fs::create_dir_all(&shallow).unwrap();
+    git(&["init", "-q", "-b", "main"], &shallow);
+    let deep = ws.join("a").join("b").join("c").join("d");
+    std::fs::create_dir_all(&deep).unwrap();
+    git(&["init", "-q", "-b", "main"], &deep);
+    ws
+}
+
+#[test]
+fn welcome_paints_the_attach_workspace_card() {
+    let mut fx = bare_fixture();
+    settle(&mut fx.harness);
+    assert_painted(&fx.harness, "Attach Workspace Root");
+}
+
+#[test]
+fn attach_card_registers_every_repo_in_the_picked_tree() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let ws = seed_workspace(project.path());
+
+    let picked = ws.clone();
+    let mut fx = fixture_with_picker(move || Some(picked.clone()));
+    settle(&mut fx.harness);
+
+    fx.harness.get_by_label("Attach Workspace Root").click();
+    settle(&mut fx.harness);
+
+    let s = fx.harness.state();
+    assert!(
+        !s.show_welcome(),
+        "attaching a workspace must enter the shell"
+    );
+    // Both repos — the shallow sibling and the deep-nested one — register.
+    assert_eq!(s.multi.roots.len(), 2, "both repos must be indexed");
+
+    // The workspace is offered back in the persisted recents as a workspace
+    // row carrying the indexed repo count.
+    let persisted = load(fx.config.path());
+    let ws_row = persisted
+        .projects
+        .iter()
+        .find(|p| p.path == ws)
+        .expect("workspace must be recorded in the global store");
+    assert_eq!(ws_row.kind, turbogit_app::recents::RecentKind::Workspace);
+    assert_eq!(ws_row.repo_count, Some(2));
+}
+
+#[test]
+fn workspace_recent_renders_repo_count_and_clicking_restores_it() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let ws = seed_workspace(project.path());
+
+    seed_recents(
+        config.path(),
+        &[turbogit_app::recents::RecentProject {
+            path: ws.clone(),
+            name: "ws".into(),
+            last_opened: 1_755_000_000_000,
+            kind: turbogit_app::recents::RecentKind::Workspace,
+            repo_count: Some(2),
+        }],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = Harness::new_ui_state(
+        |ui, state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
+        },
+        AppState::launch_in(None, Some(cfg)),
+    );
+    harness.set_size(egui::vec2(1024.0, 768.0));
+    settle(&mut harness);
+
+    // The workspace row paints its indexed repo count.
+    assert_painted(&harness, "2 repos");
+
+    // Clicking the row restores the workspace: every repo is re-registered.
+    harness.get_by_label("ws").click();
+    settle(&mut harness);
+    let s = harness.state();
+    assert!(
+        !s.show_welcome(),
+        "clicking a workspace recent must re-enter the shell"
+    );
+    assert_eq!(
+        s.multi.roots.len(),
+        2,
+        "restoring the workspace re-indexes its repos"
+    );
+}
+
+#[test]
+fn header_paints_version_line_with_app_version_git_version_and_repo_count() {
+    let mut fx = bare_fixture();
+    settle(&mut fx.harness);
+
+    // App version + resolved git version + indexed count line.
+    assert_painted(&fx.harness, &format!("v{}", env!("CARGO_PKG_VERSION")));
+    assert_painted(&fx.harness, "git ");
+    assert_painted(&fx.harness, "repos indexed");
+    // No workspace open on a fresh Welcome → 0 indexed.
+    assert_painted(&fx.harness, "0 repos indexed");
+}
+
+#[test]
+fn whats_new_link_opens_and_closes_the_changelog_overlay() {
+    let mut fx = bare_fixture();
+    settle(&mut fx.harness);
+
+    assert_not_painted(&fx.harness, "What's New");
+
+    fx.harness.get_by_label("What's new").click();
+    settle(&mut fx.harness);
+    assert_painted(&fx.harness, "What's New");
+
+    fx.harness.get_by_label("Close").click();
+    settle(&mut fx.harness);
+    assert_not_painted(&fx.harness, "What's New");
 }

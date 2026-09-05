@@ -11,7 +11,7 @@ use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::RootId;
 use turbogit_ui::theme::{configure_style, install_fonts};
 
-const SNAPSHOT_DIR: &str = "../../../turbogit-screens/redesign";
+const SNAPSHOT_DIR: &str = "../../turbogit-screens/redesign";
 
 /// Run `git` in `repo`, asserting success.
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -90,6 +90,7 @@ fn seeded_repo() -> (tempfile::TempDir, PathBuf) {
 fn conflicted_repo() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("temp dir");
     let repo = tmp.path().join("conflict");
+    std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "test@example.com"]);
     git(&repo, &["config", "user.name", "Test"]);

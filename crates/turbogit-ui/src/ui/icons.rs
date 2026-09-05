@@ -87,11 +87,13 @@ impl Icon {
     pub const LAPTOP: Self = Self { name: "laptop" };
     pub const LAYERS: Self = Self { name: "layers" };
     pub const LAYOUT: Self = Self { name: "layout" };
+    pub const LOCK: Self = Self { name: "lock" };
     pub const MENU: Self = Self { name: "menu" };
     pub const MONITOR: Self = Self { name: "monitor" };
     pub const MORE_HORIZONTAL: Self = Self {
         name: "more-horizontal",
     };
+    pub const PENCIL: Self = Self { name: "pencil" };
     pub const PLAY: Self = Self { name: "play" };
     pub const PLUS: Self = Self { name: "plus" };
     pub const PLUS_CIRCLE: Self = Self {
@@ -150,9 +152,11 @@ impl Icon {
         Self::LAPTOP,
         Self::LAYERS,
         Self::LAYOUT,
+        Self::LOCK,
         Self::MENU,
         Self::MONITOR,
         Self::MORE_HORIZONTAL,
+        Self::PENCIL,
         Self::PLAY,
         Self::PLUS,
         Self::PLUS_CIRCLE,
@@ -227,9 +231,11 @@ static ICON_PATHS: &[(&str, &[&str])] = &[
     ("laptop", &["M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z", "M20.054 15.987H3.946"]),
     ("layers", &["M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z", "M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12", "M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"]),
     ("layout", &["M 5 3 H 19 A 2 2 0 0 1 21 5 V 19 A 2 2 0 0 1 19 21 H 5 A 2 2 0 0 1 3 19 V 5 A 2 2 0 0 1 5 3 Z", "M 3 9 L 21 9", "M 9 21 L 9 9"]),
+    ("lock", &["M18 8h1a4 4 0 0 1 0 8H5a4 4 0 0 1 0-8h1", "M13.75 10a.75.75 0 0 1 0 1.5h-3.5a.75.75 0 0 1 0-1.5z"]),
     ("menu", &["M4 5h16", "M4 12h16", "M4 19h16"]),
     ("monitor", &["M 4 3 H 20 A 2 2 0 0 1 22 5 V 15 A 2 2 0 0 1 20 17 H 4 A 2 2 0 0 1 2 15 V 5 A 2 2 0 0 1 4 3 Z", "M 8 21 L 16 21", "M 12 17 L 12 21"]),
     ("more-horizontal", &["M 11 12 A 1 1 0 1 0 13 12 A 1 1 0 1 0 11 12", "M 18 12 A 1 1 0 1 0 20 12 A 1 1 0 1 0 18 12", "M 4 12 A 1 1 0 1 0 6 12 A 1 1 0 1 0 4 12"]),
+    ("pencil", &["M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z", "m15 5 4 4"]),
     ("play", &["M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"]),
     ("plus", &["M5 12h14", "M12 5v14"]),
     ("plus-circle", &["M 2 12 A 10 10 0 1 0 22 12 A 10 10 0 1 0 2 12", "M8 12h8", "M12 8v8"]),

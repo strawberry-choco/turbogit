@@ -446,6 +446,9 @@ pub(super) fn ensure_diff(
     if stale && !state.ui.diff_loading {
         state.ui.diff_error = None;
         state.ui.diff_current_hunk = 0;
+        // Collapse state (issue 20) describes the outgoing diff's hunks; it
+        // dies with them, like the hunk navigation cursor above.
+        state.ui.diff_collapsed.clear();
         // The sub-hunk line selections refer to the outgoing content; the
         // granular module drops them with the rest of the per-diff
         // navigation state (spec R2, story 3) — the current hunk was reset

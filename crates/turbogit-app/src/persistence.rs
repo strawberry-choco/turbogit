@@ -81,6 +81,23 @@ pub struct UiPersist {
     pub tab: String,
     pub recent_repos: Vec<PathBuf>,
     pub draft_message: String,
+    /// User-defined smart group rules (issue #07). `serde(default)` keeps
+    /// files written before rules existed loading cleanly.
+    #[serde(default)]
+    pub smart_group_rules: Vec<crate::smart_rules::SmartGroupRule>,
+    /// Pinned multi-repo selections (issue #08). `serde(default)` keeps
+    /// files written before views existed loading cleanly.
+    #[serde(default)]
+    pub pinned_views: Vec<crate::pinned_views::PinnedView>,
+    /// Recent bulk operations history (issue #12). `serde(default)` keeps
+    /// files written before the history existed loading cleanly.
+    #[serde(default)]
+    pub bulk_history: Vec<crate::bulk_history::BulkRunRecord>,
+    /// Recent custom commands (issue 13), newest first, capped.
+    /// `serde(default)` keeps files written before the list existed loading
+    /// cleanly.
+    #[serde(default)]
+    pub recent_custom_commands: Vec<String>,
 }
 
 fn ui_path(project_dir: &Path) -> PathBuf {

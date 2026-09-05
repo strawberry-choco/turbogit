@@ -10,15 +10,15 @@
 //! - confirm cycle still executes (OK) and cancels (Cancel) destructive ops
 //! - VCS operations popup renders popup chrome with its EXACT action set
 //! - command palette retains every prior entry and gains Go to Log /
-//!   Open Welcome / Toggle Toolbar, each verified reachable
-
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+//!   Open Welcome, each verified reachable (Toggle Toolbar was removed
+//!   in issue #03 when the toolbar itself was retired)
 
 use egui::epaint::ColorMode;
 use egui::{Color32, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::Duration;
 use tempfile::TempDir;
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text,
@@ -245,6 +245,7 @@ fn each_toast_kind_paints_its_semantic_color_and_icon() {
             st.ui.toast = Some(Toast {
                 kind,
                 message: msg.into(),
+                retry: None,
             });
             st.ui.toast_shown_at = None; // fresh auto-dismiss window per case
         }
@@ -369,11 +370,10 @@ fn vcs_popup_renders_popup_chrome_with_exact_action_set() {
         "VCS Operations popup must contain exactly its documented action set"
     );
 }
-
-// --- Cycle 4: command palette retains prior entries + gains three new ones ---------
+// --- Cycle 4: command palette retains prior entries + gains two new ones ---
 
 #[test]
-fn palette_retains_every_prior_entry_plus_three_new_ones() {
+fn palette_retains_every_prior_entry_plus_two_new_ones() {
     let (_project, dir) = repo_project();
     let mut harness = feedback_harness(dir);
     harness.state_mut().ui.command_palette = true;
@@ -384,8 +384,7 @@ fn palette_retains_every_prior_entry_plus_three_new_ones() {
     for label in Action::all().iter().map(|a| a.label()) {
         assert_painted(&harness, label);
     }
-    // …and the three new shell-navigation entries are listed too.
-    for label in ["Go to Log", "Open Welcome", "Toggle Toolbar"] {
+    for label in ["Go to Log", "Open Welcome"] {
         assert_painted(&harness, label);
     }
 }
@@ -430,18 +429,4 @@ fn open_welcome_is_reachable_from_the_palette() {
         s.ui.welcome_visible,
         "Open Welcome must return to the Welcome page"
     );
-    assert_painted(&harness, "A fast, keyboard-friendly Git client");
-}
-
-#[test]
-fn toggle_toolbar_is_reachable_from_the_palette() {
-    let (_project, dir) = repo_project();
-    let mut harness = feedback_harness(dir);
-    assert!(harness.state().ui.show_toolbar);
-
-    run_palette_entry(&mut harness, "toolbar", "Toggle Toolbar");
-
-    let s = harness.state();
-    assert!(!s.ui.show_toolbar, "Toggle Toolbar must hide the toolbar");
-    assert_not_painted(&harness, "Run");
 }
