@@ -1,9 +1,9 @@
 //! Diff rendering: the virtualized entry point plus the unified and
 //! side-by-side row painters (spec §8.4, ADR-0014).
-
 use super::actions::{
-    commit_current_hunk, comparison_chips, hunk_gutter_actions, hunk_nav, line_selected,
-    paint_centered, paint_selection_bar, preview_status, segmented_control,
+    commit_current_hunk, comparison_chips, granularity_toggle, hunk_gutter_actions,
+    hunk_header_extras, hunk_nav, line_selected, paint_centered, paint_selection_bar,
+    preview_status, viewer_hunk_staged_state,
 };
 use super::model::{
     DiffModel, DisplayRow, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W, TEXT_X,
@@ -13,13 +13,14 @@ use super::panes::{
     binary_placeholder, ensure_diff, ensure_pane_bytes, pane_byte_lens, render_image_pane,
 };
 use crate::theme::Palette;
+use crate::ui::widgets;
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Response, ScrollArea, Sense, Ui,
-    Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Response, RichText, ScrollArea,
+    Sense, Ui, Vec2, WidgetInfo, WidgetType,
 };
 use std::ops::Range;
 use turbogit_app::granular::{self, comparison_triple, diff_key};
-use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_app::state::{AppState, DiffComparison, Granularity};
 use turbogit_domain::model::ChangeStatus;
 
 // --- entry point -------------------------------------------------------------
@@ -73,18 +74,37 @@ pub fn render_diff(
     // row instead of clipping it out of reach.
     ui.horizontal_wrapped(|ui| {
         let selected = if state.ui.diff_side_by_side { 0 } else { 1 };
-        if let Some(idx) = segmented_control(ui, &["Side-by-Side", "Unified"], selected) {
+        if let Some(idx) = widgets::segmented_control(ui, &["Side-by-Side", "Unified"], selected) {
             state.ui.diff_side_by_side = idx == 0;
         }
         if working_tree {
             ui.separator();
             comparison_chips(ui, state);
+            // Staging granularity (issue 19): only over working-tree
+            // comparisons — commit-to-commit diffs have no index to stage into.
+            ui.separator();
+            granularity_toggle(ui, state);
         }
         ui.separator();
         hunk_nav(ui, state, total_hunks);
         ui.separator();
         ui.checkbox(&mut state.ui.diff_ignore_whitespace, "Ignore whitespace");
     });
+
+    // Selection readout (issue 19, screen 06): armed lines/chars, active
+    // granularity, and the Enter/Esc hints while a char range is armed.
+    if let Some(readout) = granular::selection_readout(state) {
+        ui.horizontal(|ui| {
+            let (dot, _) = ui.allocate_exact_size(Vec2::new(8.0, 12.0), Sense::hover());
+            ui.painter()
+                .circle_filled(dot.center(), 2.5, Palette::BRAND);
+            ui.label(
+                RichText::new(readout)
+                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .color(Palette::INK_2),
+            );
+        });
+    }
 
     if let Some(err) = &state.ui.diff_error {
         ui.colored_label(Palette::STATE_ERROR, err);
@@ -163,12 +183,17 @@ pub fn render_diff(
     let status = preview_status(state, path.as_deref());
 
     let side_by_side = state.ui.diff_side_by_side;
-    // Paging total (ADR-0014): side-by-side walks the paired display rows,
-    // unified ignores pairing and pages one slot per underlying row.
+    // Per-frame paint plan (issue 20): collapsed hunks drop their body rows
+    // from the virtualized stream, so both modes page over filtered slot
+    // lists built in one O(model) walk. Side-by-side slots are display
+    // indices; unified slots are (display index, member) with a Pair member
+    // flattened into one slot per underlying row (ADR-0014 paging, now over
+    // the filtered stream).
+    let plan = paint_plan(state, &model);
     let total_rows = if side_by_side {
-        model.display.len()
+        plan.sbs.len()
     } else {
-        model.raw_count
+        plan.unified.len()
     };
 
     // Side-by-side pane header band (spec §8.4), pinned above the paged
@@ -196,18 +221,17 @@ pub fn render_diff(
         total_rows,
         |ui, visible| {
             // Hunk navigation (ADR-0014): index-based — aim the aimed hunk's
-            // first display row at the viewport center instead of relying on
+            // header slot at the viewport center instead of relying on
             // a realized widget (`resp.scroll_to_me` cannot reach rows this
             // window didn't build). Issued inside the closure because egui
             // consumes scroll targets set by an area's content; ones set
             // before the area begins are stashed for outer areas. At most
             // once per (diff, hunk) — re-issuing every frame would keep the
             // ScrollArea repainting forever.
-            if state.ui.diff_current_hunk > 0
-                && let Some(row_idx) =
-                    model.first_row_for_hunk(state.ui.diff_current_hunk, side_by_side)
+            if state.ui.diff_current_hunk < plan.hunk_first_slot.len()
                 && hunk_needs_scroll(ui, &key, state.ui.diff_current_hunk)
             {
+                let row_idx = plan.hunk_first_slot[state.ui.diff_current_hunk];
                 let pitch = ROW_H + ui.spacing().item_spacing.y;
                 let y = ui.max_rect().top() + (row_idx as f32 - visible.start as f32) * pitch;
                 let rect = Rect::from_min_size(
@@ -219,12 +243,90 @@ pub fn render_diff(
             // The match above guarantees the rendered diff is `key`, so hunk
             // scroll-dedup state can be namespaced per diff with it (issue #11).
             if side_by_side {
-                render_side_by_side(ui, state, &model, visible, &key, status, path);
+                render_side_by_side(ui, state, &model, &plan, visible, &key, status, path);
             } else {
-                render_unified(ui, state, &model, visible, &key, status, path);
+                render_unified(ui, state, &model, &plan, visible, &key, status, path);
             }
         },
     );
+}
+
+/// One frame's paint plan over the cached display model (issue 20): the
+/// filtered slot streams of both modes plus the per-hunk metadata the hunk
+/// header bands render (header slot for scroll aiming, hidden-row count
+/// while collapsed, changed-line count while expanded).
+struct PaintPlan {
+    /// Side-by-side slots: display indices, one band per entry.
+    sbs: Vec<usize>,
+    /// Unified slots: `(display index, member)` with member 0 = full row,
+    /// 1 = a Pair's deletion, 2 = a Pair's addition.
+    unified: Vec<(usize, u8)>,
+    /// Per hunk: slot index of its header band (identical in both modes —
+    /// headers are full rows).
+    hunk_first_slot: Vec<usize>,
+    /// Per hunk: body bands hidden by collapsing.
+    hunk_hidden: Vec<usize>,
+    /// Per hunk: changed-line count of its body.
+    hunk_lines: Vec<usize>,
+}
+
+/// Walk the display model once, filtering collapsed hunks' bodies out of
+/// both slot streams (issue 20). Meta rows between sections stay visible —
+/// they belong to no hunk body.
+fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
+    let hunk_count = model.hunk_count();
+    let mut plan = PaintPlan {
+        sbs: Vec::with_capacity(model.display.len()),
+        unified: Vec::new(),
+        hunk_first_slot: vec![0; hunk_count],
+        hunk_hidden: vec![0; hunk_count],
+        hunk_lines: vec![0; hunk_count],
+    };
+    let collapsed = &state.ui.diff_collapsed;
+    for (di, disp) in model.display.iter().enumerate() {
+        match disp {
+            DisplayRow::Full(row) => match row.kind {
+                RowKind::Meta | RowKind::RenameHeader => {
+                    plan.sbs.push(di);
+                    plan.unified.push((di, 0));
+                }
+                RowKind::Hunk => {
+                    if row.hunk < hunk_count {
+                        plan.hunk_first_slot[row.hunk] = plan.sbs.len();
+                    }
+                    plan.sbs.push(di);
+                    plan.unified.push((di, 0));
+                }
+                RowKind::Context => {
+                    if collapsed.contains(&row.hunk) {
+                        plan.hunk_hidden[row.hunk] += 1;
+                    } else {
+                        plan.sbs.push(di);
+                        plan.unified.push((di, 0));
+                    }
+                }
+                // Changed rows always live in pairs (build_model invariant).
+                RowKind::Del | RowKind::Add => {}
+            },
+            DisplayRow::Pair(d, a) => {
+                let rows = d.iter().chain(a.iter());
+                let hunk = rows.clone().next().map(|r| r.hunk).unwrap_or_default();
+                if collapsed.contains(&hunk) {
+                    plan.hunk_hidden[hunk] += 1;
+                } else {
+                    plan.sbs.push(di);
+                    if d.is_some() {
+                        plan.unified.push((di, 1));
+                    }
+                    if a.is_some() {
+                        plan.unified.push((di, 2));
+                    }
+                }
+                plan.hunk_lines[hunk] += rows.count();
+            }
+        }
+    }
+    plan
 }
 
 /// Issue the hunk scroll request at most once per (diff, hunk): re-issuing
@@ -266,6 +368,86 @@ fn paint_cell(
     );
 }
 
+// --- char-range drag protocol (issue 19) ---------------------------------------
+
+/// Char offset of the glyph boundary nearest `x`, in row-text coordinates
+/// (x relative to the text origin). Clamped into the line.
+fn char_at_x(ui: &Ui, text: &str, x: f32) -> usize {
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), mono_font(), Color32::WHITE);
+    galley.rows.first().map_or(0, |r| r.char_at(x.max(0.0)).0)
+}
+
+/// The char-range drag protocol on an addition row (issue 19): the press
+/// anchors the range, in-row pointer movement widens it around the anchor,
+/// release arms it for Enter. A collapsed range was a plain click — the
+/// line toggle below handles that and the range clears.
+fn handle_char_drag(
+    ui: &mut Ui,
+    state: &mut AppState,
+    resp: &Response,
+    text_origin_x: f32,
+    row: &Row,
+    path: &Option<std::path::PathBuf>,
+) {
+    if resp.drag_started()
+        && let Some(pos) = ui.input(|i| i.pointer.press_origin())
+    {
+        let anchor = char_at_x(ui, &row.text, pos.x - text_origin_x);
+        granular::begin_char_selection(state, path, row.hunk, row.line_ord, anchor);
+    }
+    // Not an else: the drag's first frame counts as both started and
+    // dragged, and the pointer is already at its moved position there.
+    if resp.dragged()
+        && let Some(pos) = resp.interact_pointer_pos()
+    {
+        let cur = char_at_x(ui, &row.text, pos.x - text_origin_x);
+        granular::update_char_selection(state, path, row.hunk, row.line_ord, cur);
+    }
+    if resp.drag_stopped() {
+        granular::end_char_selection(state, path, row.hunk, row.line_ord);
+    }
+}
+
+/// Translucent BRAND band over the armed char range of one addition row
+/// (issue 19, screen 06): the drag-selection highlight. No-op unless the
+/// active selection is this exact row.
+fn paint_char_highlight(
+    painter: &egui::Painter,
+    state: &AppState,
+    rect: &Rect,
+    text_origin_x: f32,
+    row: &Row,
+    path: &Option<std::path::PathBuf>,
+) {
+    let Some(p) = path else {
+        return;
+    };
+    let Some(sel) =
+        state.ui.char_selection.clone().filter(|s| {
+            s.path == *p && s.hunk == row.hunk && s.ord == row.line_ord && s.start < s.end
+        })
+    else {
+        return;
+    };
+    let galley = painter.layout_no_wrap(row.text.clone(), mono_font(), Color32::WHITE);
+    let Some(galley_row) = galley.rows.first() else {
+        return;
+    };
+    let len = row.text.chars().count();
+    let x0 = text_origin_x + galley_row.x_offset(egui::epaint::text::CharIndex(sel.start.min(len)));
+    let x1 = text_origin_x + galley_row.x_offset(egui::epaint::text::CharIndex(sel.end.min(len)));
+    painter.rect_filled(
+        Rect::from_min_max(
+            Pos2::new(x0, rect.top()),
+            Pos2::new(x1.max(x0), rect.bottom()),
+        ),
+        CornerRadius::same(2),
+        Palette::BRAND.gamma_multiply(0.35),
+    );
+}
+
 /// Unified-mode sign + line-number gutter cells (muted INK_3 numbers).
 fn paint_gutter(
     painter: &egui::Painter,
@@ -286,13 +468,15 @@ fn paint_gutter(
     );
 }
 /// Unified mode (spec §8.4): one full-width band per underlying row, paging
-/// only the visible window of the cached display model (ADR-0014). Pairs are
-/// flattened back into their constituent rows, so output is pixel-identical
-/// to the pre-virtualization loop.
+/// only the visible window of the filtered slot stream (ADR-0014, issue 20).
+/// Pair members arrive flattened as their own slots, so output is
+/// pixel-identical to the pre-virtualization loop.
+#[allow(clippy::too_many_arguments)]
 fn render_unified(
     ui: &mut Ui,
     state: &mut AppState,
     model: &DiffModel,
+    plan: &PaintPlan,
     visible: Range<usize>,
     diff_key: &str,
     status: ChangeStatus,
@@ -302,55 +486,65 @@ fn render_unified(
     let painter = ui.painter().clone();
     let font = mono_font();
 
-    let end = visible.end.min(model.raw_count);
+    let end = visible.end.min(plan.unified.len());
     let start = visible.start.min(end);
     if start < end {
         // Hover tracking (spec R2): which hunk sits under the pointer this
         // frame — visible rows only, which is correct under virtualization.
         let mut frame_hover: Option<usize> = None;
         let mut rows_rect: Option<Rect> = None;
-        // The underlying-row window may open or close mid-pair; visit every
-        // display element touching it and keep only the rows inside it.
-        let first = model.raw_to_display[start] as usize;
-        let last = model.raw_to_display[end - 1] as usize;
-        for disp in &model.display[first..=last] {
-            match disp {
-                DisplayRow::Full(row) => {
-                    if visible.contains(&row.ord) {
-                        unified_row(
-                            ui,
-                            state,
-                            row,
-                            width,
-                            &painter,
-                            &font,
-                            diff_key,
-                            status,
-                            path,
-                            &mut frame_hover,
-                            &mut rows_rect,
-                        );
-                    }
+        for &(di, member) in &plan.unified[start..end] {
+            match (&model.display[di], member) {
+                (DisplayRow::Full(row), 0) => {
+                    unified_row(
+                        ui,
+                        state,
+                        row,
+                        width,
+                        &painter,
+                        &font,
+                        diff_key,
+                        status,
+                        path,
+                        plan,
+                        &mut frame_hover,
+                        &mut rows_rect,
+                    );
                 }
-                DisplayRow::Pair(del, add) => {
-                    for row in [del.as_ref(), add.as_ref()].into_iter().flatten() {
-                        if visible.contains(&row.ord) {
-                            unified_row(
-                                ui,
-                                state,
-                                row,
-                                width,
-                                &painter,
-                                &font,
-                                diff_key,
-                                status,
-                                path,
-                                &mut frame_hover,
-                                &mut rows_rect,
-                            );
-                        }
-                    }
+                (DisplayRow::Pair(Some(row), _), 1) => {
+                    unified_row(
+                        ui,
+                        state,
+                        row,
+                        width,
+                        &painter,
+                        &font,
+                        diff_key,
+                        status,
+                        path,
+                        plan,
+                        &mut frame_hover,
+                        &mut rows_rect,
+                    );
                 }
+                (DisplayRow::Pair(_, Some(row)), 2) => {
+                    unified_row(
+                        ui,
+                        state,
+                        row,
+                        width,
+                        &painter,
+                        &font,
+                        diff_key,
+                        status,
+                        path,
+                        plan,
+                        &mut frame_hover,
+                        &mut rows_rect,
+                    );
+                }
+
+                _ => {}
             }
         }
         commit_current_hunk(state, ui, rows_rect, frame_hover);
@@ -371,15 +565,21 @@ fn unified_row(
     diff_key: &str,
     status: ChangeStatus,
     path: &Option<std::path::PathBuf>,
+    plan: &PaintPlan,
     frame_hover: &mut Option<usize>,
     rows_rect: &mut Option<Rect>,
 ) {
-    // Changed lines are clickable toggles (spec R2 story 3); everything
-    // else stays hover-only.
-    let toggleable = matches!(row.kind, RowKind::Del | RowKind::Add);
+    // Changed lines are clickable toggles in Line granularity (spec R2
+    // story 3, issue 19); additions additionally take char-range drags.
+    // Everything else stays hover-only.
+    let line_mode = state.ui.diff_granularity == Granularity::Line;
+    let toggleable = line_mode && matches!(row.kind, RowKind::Del | RowKind::Add);
+    let draggable = toggleable && row.kind == RowKind::Add;
     let (rect, resp) = ui.allocate_exact_size(
         Vec2::new(width, ROW_H),
-        if toggleable {
+        if draggable {
+            Sense::click_and_drag()
+        } else if toggleable {
             Sense::click()
         } else {
             Sense::hover()
@@ -396,6 +596,9 @@ fn unified_row(
         // Accessibility: the row is labeled by its content text so
         // tooling can target individual changed lines.
         resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, row.text.as_str()));
+        if draggable {
+            handle_char_drag(ui, state, &resp, rect.left() + TEXT_X, row, path);
+        }
         if resp.clicked() {
             granular::toggle_line_selection(state, path, row.hunk, row.line_ord);
         }
@@ -423,6 +626,18 @@ fn unified_row(
                 font,
             );
             hunk_gutter_actions(ui, state, rect, diff_key, row.hunk, status, path);
+            let staged_state = viewer_hunk_staged_state(state, path, &row.text);
+            hunk_header_extras(
+                ui,
+                state,
+                rect,
+                diff_key,
+                row.hunk,
+                plan.hunk_lines.get(row.hunk).copied().unwrap_or(0),
+                state.ui.diff_collapsed.contains(&row.hunk),
+                plan.hunk_hidden.get(row.hunk).copied().unwrap_or(0),
+                staged_state,
+            );
         }
         RowKind::Context => {
             paint_gutter(painter, &rect, " ", row.new_no, Palette::INK_3, font);
@@ -478,6 +693,7 @@ fn unified_row(
                 Palette::DIFF_ADD_TEXT,
                 font,
             );
+            paint_char_highlight(painter, state, &rect, rect.left() + TEXT_X, row, path);
         }
     }
 }
@@ -509,9 +725,10 @@ fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &
 }
 /// One side-by-side cell: optional token background band, muted gutter
 /// number, sign marker, and code text. Changed cells are clickable line
-/// toggles labeled by their content (spec R2 story 3); `selected` paints
-/// the BRAND edge bar. Returns the cell's response so the row loop can
-/// track hover and toggle clicks.
+/// toggles (Line granularity, spec R2 story 3); additions also take
+/// char-range drags (issue 19). `selected` paints the BRAND edge bar.
+/// Returns the cell's response so the row loop can track hover and
+/// toggle clicks.
 #[allow(clippy::too_many_arguments)]
 fn cell_band(
     ui: &mut Ui,
@@ -524,11 +741,14 @@ fn cell_band(
     painter: &egui::Painter,
     font: &FontId,
     toggleable: bool,
+    draggable: bool,
     selected: bool,
 ) -> Response {
     let (rect, resp) = ui.allocate_exact_size(
         Vec2::new(width, ROW_H),
-        if toggleable {
+        if toggleable && draggable {
+            Sense::click_and_drag()
+        } else if toggleable {
             Sense::click()
         } else {
             Sense::hover()
@@ -574,14 +794,16 @@ fn cell_band(
 }
 
 /// Side-by-side mode (spec §8.4): paired Del/Add bands plus full-width
-/// context/hunk/meta rows, paging only the visible window of the cached
-/// display model (ADR-0014). The pane header band is pinned by the caller.
-/// Hover tracking and toggles apply to visible rows only — correct under
-/// virtualization.
+/// context/hunk/meta rows, paging only the visible window of the filtered
+/// slot stream (ADR-0014, issue 20). The pane header band is pinned by the
+/// caller. Hover tracking and toggles apply to visible rows only — correct
+/// under virtualization.
+#[allow(clippy::too_many_arguments)]
 fn render_side_by_side(
     ui: &mut Ui,
     state: &mut AppState,
     model: &DiffModel,
+    plan: &PaintPlan,
     visible: Range<usize>,
     diff_key: &str,
     status: ChangeStatus,
@@ -597,10 +819,10 @@ fn render_side_by_side(
     let mut frame_hover: Option<usize> = None;
     let mut rows_rect: Option<Rect> = None;
 
-    let end = visible.end.min(model.display.len());
+    let end = visible.end.min(plan.sbs.len());
     let start = visible.start.min(end);
-    for disp in &model.display[start..end] {
-        match disp {
+    for &di in &plan.sbs[start..end] {
+        match &model.display[di] {
             DisplayRow::Full(row) => match row.kind {
                 RowKind::Meta => {
                     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
@@ -645,6 +867,18 @@ fn render_side_by_side(
                         &font,
                     );
                     hunk_gutter_actions(ui, state, rect, diff_key, row.hunk, status, path);
+                    let staged_state = viewer_hunk_staged_state(state, path, &row.text);
+                    hunk_header_extras(
+                        ui,
+                        state,
+                        rect,
+                        diff_key,
+                        row.hunk,
+                        plan.hunk_lines.get(row.hunk).copied().unwrap_or(0),
+                        state.ui.diff_collapsed.contains(&row.hunk),
+                        plan.hunk_hidden.get(row.hunk).copied().unwrap_or(0),
+                        staged_state,
+                    );
                 }
                 RowKind::Context => {
                     let hunk = row.hunk;
@@ -661,6 +895,7 @@ fn render_side_by_side(
                             &font,
                             false,
                             false,
+                            false,
                         );
                         let new_cell = cell_band(
                             ui,
@@ -674,6 +909,7 @@ fn render_side_by_side(
                             &font,
                             false,
                             false,
+                            false,
                         );
                         if old_cell.hovered() || new_cell.hovered() {
                             frame_hover = Some(hunk);
@@ -685,6 +921,7 @@ fn render_side_by_side(
             },
             DisplayRow::Pair(d, a) => {
                 let hunk = d.as_ref().map(|r| r.hunk).or(a.as_ref().map(|r| r.hunk));
+                let line_mode = state.ui.diff_granularity == Granularity::Line;
                 ui.horizontal(|ui| {
                     let del_cell = if let Some(d) = d {
                         let selected = line_selected(state, path, d.hunk, d.line_ord);
@@ -698,7 +935,8 @@ fn render_side_by_side(
                             Palette::DIFF_DEL_TEXT,
                             &painter,
                             &font,
-                            true,
+                            line_mode,
+                            false,
                             selected,
                         );
                         if cell.clicked() {
@@ -718,6 +956,7 @@ fn render_side_by_side(
                             &font,
                             false,
                             false,
+                            false,
                         )
                     };
                     let add_cell = if let Some(a) = a {
@@ -732,12 +971,18 @@ fn render_side_by_side(
                             Palette::DIFF_ADD_TEXT,
                             &painter,
                             &font,
-                            true,
+                            line_mode,
+                            line_mode,
                             selected,
                         );
+                        let text_origin = cell.rect.left() + NUM_W + 20.0;
+                        if line_mode {
+                            handle_char_drag(ui, state, &cell, text_origin, a, path);
+                        }
                         if cell.clicked() {
                             granular::toggle_line_selection(state, path, a.hunk, a.line_ord);
                         }
+                        paint_char_highlight(&painter, state, &cell.rect, text_origin, a, path);
                         cell
                     } else {
                         cell_band(
@@ -750,6 +995,7 @@ fn render_side_by_side(
                             Palette::INK,
                             &painter,
                             &font,
+                            false,
                             false,
                             false,
                         )

@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
     BlameLine, Branch, Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, MergeOpts,
-    RebaseOpts, RebasePlanEntry, Remote, RootStatus, Stash, Worktree,
+    RebaseOpts, RebasePlanEntry, Remote, RootStatus, Stash, Submodule, TagSpec, Worktree,
 };
 use turbogit_engine_api::GitExecutor;
 // `engine::fake` is unit-test-only (`#[cfg(test)]`), so integration tests
@@ -28,7 +28,6 @@ use turbogit_engine_api::GitExecutor;
 // wrapper: every call delegates to a real inner engine while push /
 // push-dry-run invocations are recorded verbatim (remote, branch, force).
 
-/// One recorded mutating call at the executor boundary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecordedCall {
     Push {
@@ -36,6 +35,16 @@ pub enum RecordedCall {
         remote: String,
         branch: String,
         force: bool,
+        /// Push tags (`--tags`) flag (issue #24).
+        tags: bool,
+        /// Skip pre-push hooks (`--no-verify`) flag (issue #24).
+        no_verify: bool,
+        /// Set upstream tracking ref (`--set-upstream`) flag (issue #24).
+        set_upstream: bool,
+        /// Oldest selected commit SHA, when the user pushed a subset
+        /// (issue #24). The full outgoing list is pushed when this is
+        /// `None`.
+        selected_oldest: Option<String>,
     },
     PushDryRun {
         root: PathBuf,
@@ -50,6 +59,71 @@ pub enum RecordedCall {
     Add(Vec<PathBuf>),
     CommitAll,
     CommitIndex,
+    /// A remote fetch (`root`, remote name or `None` for all remotes)
+    /// (issue #27).
+    Fetch {
+        root: PathBuf,
+        remote: Option<String>,
+    },
+    /// A merge invocation with its full options (issue 28).
+    Merge {
+        root: PathBuf,
+        target: String,
+        opts: MergeOpts,
+    },
+    /// A rebase invocation with its full options (issue 29).
+    Rebase {
+        root: PathBuf,
+        onto: String,
+        opts: RebaseOpts,
+    },
+    /// An interactive plan replay (issue 29).
+    RebaseInteractive {
+        root: PathBuf,
+        plan: Vec<RebasePlanEntry>,
+    },
+    /// A tag creation with its full spec (issue 31).
+    TagCreate {
+        root: PathBuf,
+        spec: TagSpec,
+    },
+    /// A tag push (`remote`, tag name or `None` for `--follow-tags`)
+    /// (issue 31).
+    TagPush {
+        root: PathBuf,
+        remote: String,
+        name: Option<String>,
+    },
+    /// Add a remote (issue 33).
+    AddRemote {
+        root: PathBuf,
+        name: String,
+        url: String,
+    },
+    /// Set a remote's fetch/push URL (issue 33).
+    SetRemoteUrl {
+        root: PathBuf,
+        name: String,
+        fetch_url: Option<String>,
+        push_url: Option<String>,
+    },
+    /// Rename a remote (issue 33).
+    RenameRemote {
+        root: PathBuf,
+        old: String,
+        new: String,
+    },
+    /// Remove a remote (issue 33).
+    RemoveRemote {
+        root: PathBuf,
+        name: String,
+    },
+    /// Set a branch's upstream tracking (issue 33).
+    SetBranchUpstream {
+        root: PathBuf,
+        branch: String,
+        upstream: String,
+    },
 }
 
 /// Delegating [`GitExecutor`] that records push / dry-run calls.
@@ -84,6 +158,33 @@ impl RecordingExecutor {
         })
     }
 
+    /// True once a `Push` with the given flag subset has been recorded
+    /// (issue #24). `selected_oldest` matches when equal to the recorded
+    /// value (use `None` to match a full-list push).
+    pub fn contains_push_selected(
+        &self,
+        remote: &str,
+        branch: &str,
+        force: bool,
+        selected_oldest: Option<&str>,
+    ) -> bool {
+        self.recorded().iter().any(|c| match c {
+            RecordedCall::Push {
+                remote: r,
+                branch: b,
+                force: f,
+                selected_oldest: sel,
+                ..
+            } => {
+                r == remote
+                    && b == branch
+                    && *f == force
+                    && *sel == selected_oldest.map(|s| s.to_string())
+            }
+            _ => false,
+        })
+    }
+
     /// True once a `PushDryRun` with exactly these fields has been recorded.
     pub fn contains_dry_run(&self, remote: &str, branch: &str, force: bool) -> bool {
         self.recorded().iter().any(|c| match c {
@@ -96,6 +197,17 @@ impl RecordingExecutor {
             _ => false,
         })
     }
+
+    /// Every recorded `fetch` invocation as `(root, remote)` (issue #27).
+    pub fn fetches(&self) -> Vec<(PathBuf, Option<String>)> {
+        self.recorded()
+            .iter()
+            .filter_map(|c| match c {
+                RecordedCall::Fetch { root, remote } => Some((root.clone(), remote.clone())),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 impl GitExecutor for RecordingExecutor {
@@ -107,14 +219,6 @@ impl GitExecutor for RecordingExecutor {
         self.inner.log(root, opts)
     }
 
-    fn ref_decorations(&self, root: &Path) -> TgResult<Vec<(CommitId, Vec<CommitRef>)>> {
-        self.inner.ref_decorations(root)
-    }
-
-    fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
-        self.inner.commit_files(root, commit)
-    }
-
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
         self.inner.branches(root)
     }
@@ -123,8 +227,52 @@ impl GitExecutor for RecordingExecutor {
         self.inner.current_branch(root)
     }
 
-    fn ahead_behind(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<(usize, usize)> {
-        self.inner.ahead_behind(root, branch, upstream)
+    fn ahead_behind(&self, root: &Path, local: &str, upstream: &str) -> TgResult<(usize, usize)> {
+        self.inner.ahead_behind(root, local, upstream)
+    }
+
+    fn ref_decorations(&self, root: &Path) -> TgResult<Vec<(CommitId, Vec<CommitRef>)>> {
+        self.inner.ref_decorations(root)
+    }
+
+    fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
+        self.inner.commit_files(root, commit)
+    }
+
+    fn push(
+        &self,
+        root: &Path,
+        remote: &str,
+        branch: &str,
+        force: bool,
+        tags: bool,
+        no_verify: bool,
+        set_upstream: bool,
+        selected_oldest: Option<&str>,
+    ) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::Push {
+                root: root.to_path_buf(),
+                remote: remote.to_string(),
+                branch: branch.to_string(),
+                force,
+                tags,
+                no_verify,
+                set_upstream,
+                selected_oldest: selected_oldest.map(|s| s.to_string()),
+            });
+        self.inner.push(
+            root,
+            remote,
+            branch,
+            force,
+            tags,
+            no_verify,
+            set_upstream,
+            selected_oldest,
+        )
     }
 
     fn outgoing_commits(
@@ -136,8 +284,66 @@ impl GitExecutor for RecordingExecutor {
         self.inner.outgoing_commits(root, branch, upstream)
     }
 
+    fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
+        self.inner.is_ancestor(root, upstream, branch)
+    }
+
     fn remotes(&self, root: &Path) -> TgResult<Vec<Remote>> {
         self.inner.remotes(root)
+    }
+
+    fn set_remote_url(
+        &self,
+        root: &Path,
+        name: &str,
+        fetch_url: Option<&str>,
+        push_url: Option<&str>,
+    ) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::SetRemoteUrl {
+                root: root.to_path_buf(),
+                name: name.to_string(),
+                fetch_url: fetch_url.map(str::to_string),
+                push_url: push_url.map(str::to_string),
+            });
+        self.inner.set_remote_url(root, name, fetch_url, push_url)
+    }
+
+    fn rename_remote(&self, root: &Path, old: &str, new: &str) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::RenameRemote {
+                root: root.to_path_buf(),
+                old: old.to_string(),
+                new: new.to_string(),
+            });
+        self.inner.rename_remote(root, old, new)
+    }
+
+    fn remove_remote(&self, root: &Path, name: &str) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::RemoveRemote {
+                root: root.to_path_buf(),
+                name: name.to_string(),
+            });
+        self.inner.remove_remote(root, name)
+    }
+
+    fn set_branch_upstream(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::SetBranchUpstream {
+                root: root.to_path_buf(),
+                branch: branch.to_string(),
+                upstream: upstream.to_string(),
+            });
+        self.inner.set_branch_upstream(root, branch, upstream)
     }
 
     fn stash_list(&self, root: &Path) -> TgResult<Vec<Stash>> {
@@ -166,28 +372,30 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn add_remote(&self, root: &Path, name: &str, url: &str) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::AddRemote {
+                root: root.to_path_buf(),
+                name: name.to_string(),
+                url: url.to_string(),
+            });
         self.inner.add_remote(root, name, url)
     }
 
     fn fetch(&self, root: &Path, remote: Option<&str>) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::Fetch {
+                root: root.to_path_buf(),
+                remote: remote.map(str::to_string),
+            });
         self.inner.fetch(root, remote)
     }
 
     fn pull(&self, root: &Path, rebase: bool) -> TgResult<()> {
         self.inner.pull(root, rebase)
-    }
-
-    fn push(&self, root: &Path, remote: &str, branch: &str, force: bool) -> TgResult<()> {
-        self.calls
-            .lock()
-            .expect("calls mutex")
-            .push(RecordedCall::Push {
-                root: root.to_path_buf(),
-                remote: remote.to_string(),
-                branch: branch.to_string(),
-                force,
-            });
-        self.inner.push(root, remote, branch, force)
     }
 
     fn push_dry_run(
@@ -226,10 +434,26 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn merge(&self, root: &Path, target: &str, opts: &MergeOpts) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::Merge {
+                root: root.to_path_buf(),
+                target: target.to_string(),
+                opts: opts.clone(),
+            });
         self.inner.merge(root, target, opts)
     }
 
     fn rebase(&self, root: &Path, onto: &str, opts: &RebaseOpts) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::Rebase {
+                root: root.to_path_buf(),
+                onto: onto.to_string(),
+                opts: opts.clone(),
+            });
         self.inner.rebase(root, onto, opts)
     }
 
@@ -245,7 +469,22 @@ impl GitExecutor for RecordingExecutor {
         self.inner.continue_op(root, op)
     }
 
+    fn merge_auto_merged_files(
+        &self,
+        root: &Path,
+        conflicted: &[PathBuf],
+    ) -> TgResult<Vec<PathBuf>> {
+        self.inner.merge_auto_merged_files(root, conflicted)
+    }
+
     fn rebase_interactive(&self, root: &Path, plan: &[RebasePlanEntry]) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::RebaseInteractive {
+                root: root.to_path_buf(),
+                plan: plan.to_vec(),
+            });
         self.inner.rebase_interactive(root, plan)
     }
 
@@ -261,8 +500,24 @@ impl GitExecutor for RecordingExecutor {
         self.inner.stash_drop(root, index)
     }
 
-    fn worktree_add(&self, root: &Path, path: &Path, branch: &str) -> TgResult<()> {
-        self.inner.worktree_add(root, path, branch)
+    fn worktree_add(&self, root: &Path, path: &Path, branch: &str, create: bool) -> TgResult<()> {
+        self.inner.worktree_add(root, path, branch, create)
+    }
+
+    fn worktree_remove(&self, root: &Path, path: &Path, force: bool) -> TgResult<()> {
+        self.inner.worktree_remove(root, path, force)
+    }
+
+    fn submodule_status(&self, root: &Path) -> TgResult<Vec<Submodule>> {
+        self.inner.submodule_status(root)
+    }
+
+    fn submodule_update(&self, root: &Path, path: &Path, init: bool) -> TgResult<()> {
+        self.inner.submodule_update(root, path, init)
+    }
+
+    fn submodule_deinit(&self, root: &Path, path: &Path, force: bool) -> TgResult<()> {
+        self.inner.submodule_deinit(root, path, force)
     }
 
     fn add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
@@ -332,8 +587,15 @@ impl GitExecutor for RecordingExecutor {
         self.inner.branch_rename(root, old, new)
     }
 
-    fn tag_create(&self, root: &Path, name: &str, message: Option<&str>) -> TgResult<()> {
-        self.inner.tag_create(root, name, message)
+    fn tag_create(&self, root: &Path, spec: &TagSpec) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::TagCreate {
+                root: root.to_path_buf(),
+                spec: spec.clone(),
+            });
+        self.inner.tag_create(root, spec)
     }
 
     fn tag_list(&self, root: &Path) -> TgResult<Vec<String>> {
@@ -345,6 +607,14 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn tag_push(&self, root: &Path, remote: &str, name: Option<&str>, all: bool) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::TagPush {
+                root: root.to_path_buf(),
+                remote: remote.to_string(),
+                name: name.map(str::to_string),
+            });
         self.inner.tag_push(root, remote, name, all)
     }
 
@@ -378,5 +648,11 @@ impl GitExecutor for RecordingExecutor {
 
     fn is_repo(&self, path: &Path) -> bool {
         self.inner.is_repo(path)
+    }
+
+    fn run_raw(&self, root: &Path, args: &[String]) -> TgResult<String> {
+        // Transparent wrapper: the merge preview (issue 28) reads its
+        // numstat through the raw path, and the wrapped engine must answer.
+        self.inner.run_raw(root, args)
     }
 }

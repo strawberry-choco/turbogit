@@ -109,13 +109,21 @@ fn app_state_with_recorder(
 
 /// Headless harness driving the full app UI with event draining per frame.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(1024).build_ui_state(
+    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
             state.drain_events();
             turbogit_ui::ui::render(ui, state);
         },
         state,
-    )
+    );
+    // Sized like the commit_window suite: the changelist column needs the
+    // full two-pane width once the workspace sidebar (issue #05) claims
+    // the left edge. The first frames also relayout (embedded fonts take
+    // effect at pass 2), so settle before any clicks (test-support
+    // `settle`'s rationale).
+    h.set_size(egui::vec2(1280.0, 800.0));
+    test_support::harness::settle(&mut h);
+    h
 }
 
 /// Poll `f` until it returns true or the deadline elapses (worker threads run
@@ -592,14 +600,18 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
     h.get_by_label("Stage hunk 1").click();
     h.run();
 
-    // Story 9: with no unstaged changes left, words.txt leaves the
-    // changelist and preview focus advances to the next changed file.
+    // Story 9, as reshaped by issue 20: with no unstaged changes left,
+    // words.txt is fully staged. The completion is recorded (it now only
+    // drives focus advancement — the staging sections keep fully staged
+    // files listed, under STAGED), and preview focus advances to the next
+    // changed file.
     assert!(
-        wait_until(15_000, || {
-            let text = painted_text(&h).join("\n");
-            !text.contains("M words.txt")
-        }),
-        "a fully staged file must leave the changelist"
+        wait_until(15_000, || !h.state().ui.granularly_completed.is_empty()),
+        "the granular completion must be recorded"
+    );
+    assert!(
+        h.query_by_label("M words.txt").is_some(),
+        "the staging view keeps fully staged files listed, under STAGED"
     );
     assert!(
         wait_until(15_000, || h.state().ui.preview_change

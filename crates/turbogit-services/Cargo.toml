@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 chrono = { workspace = true }
 ron = { workspace = true }
+serde = { workspace = true }
 similar = { workspace = true }
 turbogit-domain = { workspace = true }
 turbogit-engine-api = { workspace = true }

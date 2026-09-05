@@ -13,6 +13,8 @@ use turbogit_app::state::{AppState, Toast};
 use turbogit_services::conflict;
 use turbogit_services::diff_engine;
 
+use std::path::Path;
+
 /// Parse a file's conflict markers into alternating normal / conflict blocks.
 /// Returns (segments, conflict_count) where each segment is
 /// `(ours, theirs, is_conflict)`; for normal segments `theirs` is empty.
@@ -46,6 +48,23 @@ fn merge_editor_segments(
     parse_conflicts(content)
 }
 
+/// Open the structured 3-way merge editor for one conflicted file of
+/// `root` — the changelist's "Merge…" button and the cascade monitor's
+/// Resolve deep link (issue 10) both land here.
+pub(crate) fn open_conflict_editor(state: &mut AppState, root: &Path, path: &Path) {
+    let full = root.join(path);
+    if let Ok(content) = std::fs::read_to_string(&full) {
+        let (segs, _n) = merge_editor_segments(state, &Some(root.to_path_buf()), path, &content);
+        let res: Vec<Option<u8>> = segs.iter().filter(|(_, _, c)| *c).map(|_| None).collect();
+        state.ui.conflict_segs = segs;
+        state.ui.conflict_res = res.clone();
+        state.ui.conflict_text = compose_display(&state.ui.conflict_segs, &res);
+        state.ui.conflict_open = Some(path.to_path_buf());
+    } else {
+        state.ui.toast = Some(Toast::error("Could not read conflicted file."));
+    }
+}
+
 /// Compose the final file text from segments + per-conflict resolutions.
 ///
 /// Unresolved blocks fall back to our side; this is only reachable before
@@ -71,6 +90,13 @@ fn compose_impl(segs: &[(String, String, bool)], res: &[Option<u8>], placeholder
                 Some(2) => {
                     out.push_str(a);
                     out.push_str(b);
+                }
+                Some(3) => {
+                    // "Take both · theirs first" (issue #22): theirs before
+                    // ours. Distinct from `Some(2)` which is ours-first
+                    // (the existing "Ignore" choice).
+                    out.push_str(b);
+                    out.push_str(a);
                 }
                 Some(_) => out.push_str(a),
                 None => {
@@ -189,6 +215,7 @@ fn result_cell(ui: &mut Ui, chosen: Option<u8>, ours: &str, theirs: &str) {
     let (text, fill) = match chosen {
         Some(1) => (theirs.to_string(), Palette::SURFACE),
         Some(2) => (format!("{ours}{theirs}"), Palette::SURFACE),
+        Some(3) => (format!("{theirs}{ours}"), Palette::SURFACE),
         Some(_) => (ours.to_string(), Palette::SURFACE),
         None => ("<< unresolved >>".to_string(), marker_bg()),
     };
@@ -260,34 +287,30 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     },
                 );
             }
-            if ui.button("Merge…").clicked() {
-                // Open the structured 3-way editor (Epic E6 / issue #15).
+            if ui.button("Merge…").clicked()
+                && let Some(r) = &root
+            {
+                crate::ui::conflicts::open_conflict_editor(state, r, path);
+            }
+            if ui.button("Resolve…").clicked() {
+                // Open the redesigned Resolve Conflicts tool window (issue
+                // #22, screen 07): three EQUAL panes with editable Result,
+                // per-conflict undo / take-both / prev-next, auto-merged
+                // file list, and Abort/Continue merge header actions.
                 if let Some(r) = &root {
-                    let full = r.join(path);
-                    if let Ok(content) = std::fs::read_to_string(&full) {
-                        let (segs, _n) = merge_editor_segments(state, &root, path, &content);
-                        let res: Vec<Option<u8>> =
-                            segs.iter().filter(|(_, _, c)| *c).map(|_| None).collect();
-                        state.ui.conflict_segs = segs;
-                        state.ui.conflict_res = res.clone();
-                        state.ui.conflict_text = compose_display(&state.ui.conflict_segs, &res);
-                        state.ui.conflict_open = Some(path.clone());
-                    } else {
-                        state.ui.toast = Some(Toast::error("Could not read conflicted file."));
-                    }
+                    crate::ui::conflict_resolver::open_resolver(state, r, path);
                 }
             }
         });
     }
-    if ui.button("Resolve all simple").clicked() {
-        let r = root.clone();
-        let st = state.multi.by_id(&id).map(|r| r.status.clone());
-        if let (Some(r), Some(status)) = (r, st) {
-            let _ = conflict::resolve_all_simple(state.executor.as_ref(), &r, &status);
-            state.rescan();
-        }
+    let r = root.clone();
+    let st = state.multi.by_id(&id).map(|r| r.status.clone());
+    if ui.button("Resolve all simple").clicked()
+        && let (Some(r), Some(status)) = (r.clone(), st.clone())
+    {
+        let _ = conflict::resolve_all_simple(state.executor.as_ref(), &r, &status);
+        state.rescan();
     }
-
     // Structured 3-way merge editor window (issue #15 redesign): three equal
     // panes Local | Result | Incoming over discrete conflict blocks.
     if let Some(path) = state.ui.conflict_open.clone() {

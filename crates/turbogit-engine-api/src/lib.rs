@@ -67,6 +67,12 @@ pub trait GitExecutor: Send + Sync {
         upstream: &str,
     ) -> TgResult<Vec<CommitId>>;
 
+    /// Is `upstream` an ancestor of `branch`? Wraps
+    /// `git merge-base --is-ancestor <upstream> <branch>`. Used by the
+    /// delete-branch confirmation to warn when a local branch is ahead
+    /// of the canonical upstream and therefore unmerged (issue #02).
+    fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool>;
+
     /// Configured remotes.
     fn remotes(&self, root: &Path) -> TgResult<Vec<Remote>>;
 
@@ -78,6 +84,11 @@ pub trait GitExecutor: Send + Sync {
 
     /// Submodule paths registered at this root.
     fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>>;
+
+    /// Registered submodules with pinned vs recorded commits and lifecycle
+    /// state (parsed from `git submodule status` + the index gitlinks;
+    /// issue 14 Submodules tab).
+    fn submodule_status(&self, root: &Path) -> TgResult<Vec<Submodule>>;
 
     /// Read a git config value (e.g. `user.name`, `core.autocrlf`).
     fn config_get(&self, root: &Path, key: &str) -> TgResult<Option<String>>;
@@ -92,15 +103,48 @@ pub trait GitExecutor: Send + Sync {
     /// Add a remote (`git remote add`).
     fn add_remote(&self, root: &Path, name: &str, url: &str) -> TgResult<()>;
 
+    /// Set a remote's fetch and/or push URL (`git remote set-url [--push]`).
+    /// Every provided side is updated; at least one must be `Some`.
+    fn set_remote_url(
+        &self,
+        root: &Path,
+        name: &str,
+        fetch_url: Option<&str>,
+        push_url: Option<&str>,
+    ) -> TgResult<()>;
+
+    /// Rename a remote (`git remote rename <old> <new>`).
+    fn rename_remote(&self, root: &Path, old: &str, new: &str) -> TgResult<()>;
+
+    /// Remove a remote (`git remote remove <name>`).
+    fn remove_remote(&self, root: &Path, name: &str) -> TgResult<()>;
+
+    /// Set `branch`'s upstream tracking to `upstream`
+    /// (`git branch --set-upstream-to=<upstream> <branch>`).
+    fn set_branch_upstream(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<()>;
+
     /// `git fetch` (one remote or all).
     fn fetch(&self, root: &Path, remote: Option<&str>) -> TgResult<()>;
 
     /// `git pull` (merge or rebase).
     fn pull(&self, root: &Path, rebase: bool) -> TgResult<()>;
 
-    /// `git push` (optionally `--force-with-lease`).
-    fn push(&self, root: &Path, remote: &str, branch: &str, force: bool) -> TgResult<()>;
-
+    /// `git push` (optionally `--force-with-lease`, `--tags`, `--no-verify`,
+    /// `--set-upstream`). When `selected_oldest` is `Some(sha)`, only the
+    /// commits from `sha` (inclusive, oldest ahead) through the tip are
+    /// pushed via `git push <remote> <sha>:refs/heads/<branch>` (issue #24).
+    #[allow(clippy::too_many_arguments)]
+    fn push(
+        &self,
+        root: &Path,
+        remote: &str,
+        branch: &str,
+        force: bool,
+        tags: bool,
+        no_verify: bool,
+        set_upstream: bool,
+        selected_oldest: Option<&str>,
+    ) -> TgResult<()>;
     /// `git push --dry-run`: report what a push would do without mutating the
     /// remote. Returns the verbatim git report (captured from stderr) on
     /// success; a rejected push (e.g. non-fast-forward) surfaces as
@@ -137,6 +181,17 @@ pub trait GitExecutor: Send + Sync {
     /// (`git <op> --continue`).
     fn continue_op(&self, root: &Path, op: &str) -> TgResult<()>;
 
+    /// Files that git auto-resolved during an in-progress merge: every
+    /// path that changed between HEAD and MERGE_HEAD but is NOT in
+    /// `conflicted`. Returns an empty list when no merge is in progress.
+    /// Source of truth for the redesigned conflict resolver's auto-merged
+    /// section (issue #22).
+    fn merge_auto_merged_files(
+        &self,
+        root: &Path,
+        conflicted: &[PathBuf],
+    ) -> TgResult<Vec<PathBuf>>;
+
     /// Run an interactive rebase from a pre-built plan (`git rebase -i` with a
     /// synthetic sequence editor that materializes `plan` as the todo list).
     fn rebase_interactive(&self, root: &Path, plan: &[RebasePlanEntry]) -> TgResult<()>;
@@ -150,8 +205,19 @@ pub trait GitExecutor: Send + Sync {
     /// `git stash drop`.
     fn stash_drop(&self, root: &Path, index: usize) -> TgResult<()>;
 
-    /// `git worktree add`.
-    fn worktree_add(&self, root: &Path, path: &Path, branch: &str) -> TgResult<()>;
+    /// `git worktree add`. With `create` the branch is created at the
+    /// worktree (`-b`); otherwise `branch` must already exist.
+    fn worktree_add(&self, root: &Path, path: &Path, branch: &str, create: bool) -> TgResult<()>;
+
+    /// `git worktree remove` (`force` → `--force`; a dirty worktree needs
+    /// it). Issue 14 Worktrees tab remove action.
+    fn worktree_remove(&self, root: &Path, path: &Path, force: bool) -> TgResult<()>;
+
+    /// `git submodule update [--init] -- <path>` (issue 14 update action).
+    fn submodule_update(&self, root: &Path, path: &Path, init: bool) -> TgResult<()>;
+
+    /// `git submodule deinit [-f] -- <path>` (issue 14 deinit action).
+    fn submodule_deinit(&self, root: &Path, path: &Path, force: bool) -> TgResult<()>;
 
     // ---- staging / working tree ----
     /// Stage specific paths (`git add <paths>`).
@@ -181,6 +247,18 @@ pub trait GitExecutor: Send + Sync {
     /// to previously untracked files.
     fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()>;
 
+    /// Would `patch` apply cleanly? (`git apply --check`; issue 16 cherry-pick
+    /// across repositories.) Mutates nothing. A patch that does not apply
+    /// surfaces as [`turbogit_domain::error::TgError::Cli`] carrying the
+    /// verbatim stderr. The default rejects — engines that cannot run git
+    /// (the git2 adapter) cannot answer.
+    fn check_patch(&self, root: &Path, patch: &str) -> TgResult<()> {
+        let _ = (root, patch);
+        Err(turbogit_domain::error::TgError::Other(
+            "patch checks are not supported by this git engine".into(),
+        ))
+    }
+
     // ---- branches ----
     /// Create a branch (`git branch [<start>]`), optionally checking it out.
     fn branch_create(
@@ -204,8 +282,8 @@ pub trait GitExecutor: Send + Sync {
     fn branch_rename(&self, root: &Path, old: &str, new: &str) -> TgResult<()>;
 
     // ---- tags ----
-    /// Create a tag (`git tag [-a -m] <name>`).
-    fn tag_create(&self, root: &Path, name: &str, message: Option<&str>) -> TgResult<()>;
+    /// Create a tag (`git tag [-a -m] [-s] <name> [<commit>]`, issue 31).
+    fn tag_create(&self, root: &Path, spec: &TagSpec) -> TgResult<()>;
 
     /// List tags (`git tag -l`).
     fn tag_list(&self, root: &Path) -> TgResult<Vec<String>>;
@@ -241,6 +319,20 @@ pub trait GitExecutor: Send + Sync {
 
     /// `git stash apply <index>` (keeps the stash).
     fn stash_apply(&self, root: &Path, index: usize) -> TgResult<()>;
+
+    /// Run an arbitrary git command in `root` (`git <args>` verbatim, no
+    /// shell). The escape hatch behind the "Custom command…" bulk operation
+    /// (issue 13): the caller owns parsing and confirmation; the adapter only
+    /// executes and reports. Returns stdout on success; a non-zero exit
+    /// surfaces as [`turbogit_domain::error::TgError::Cli`] with the verbatim
+    /// stderr. The default rejects — engines that cannot exec git (the
+    /// git2 adapter) do not support custom commands.
+    fn run_raw(&self, root: &Path, args: &[String]) -> TgResult<String> {
+        let _ = root;
+        Err(turbogit_domain::error::TgError::Other(format!(
+            "custom commands are not supported by this git engine (asked to run {args:?})"
+        )))
+    }
 
     // ---- convenience helpers built on the above ----
     /// Is `path` inside a git work tree? (used by auto-detect / scanner).

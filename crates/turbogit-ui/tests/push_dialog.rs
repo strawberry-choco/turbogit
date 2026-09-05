@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use egui_kittest::kittest::NodeT as _;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
@@ -98,7 +99,10 @@ fn repo_ahead_of_origin(parent: &Path, name: &str) -> Repo {
     git(&path, &["commit", "-q", "-m", &base_msg]);
     let c1 = head_sha(&path);
 
-    git(&path, &["init", "--bare", remote.to_str().unwrap()]);
+    git(
+        &path,
+        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
+    );
     git(
         &path,
         &["remote", "add", "origin", remote.to_str().unwrap()],
@@ -218,11 +222,35 @@ fn open_push_dialog(h: &mut Harness<'_, AppState>) {
 
 /// The dialog's primary Push button. The shell toolbar also paints a "Push"
 /// item, so disambiguate geometrically: the dialog footer sits below it.
+/// Issue #25: the dialog label varies — "Push" for the ThisRepo scope,
+/// "Push N commits to M repos" for the multi-repo scopes. We collect every
+/// button whose label starts with "Push" (case sensitive) and pick the
+/// bottom-most one (the dialog footer sits below the toolbar).
 fn dialog_push_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
-    let mut nodes: Vec<Node<'h>> = h.get_all_by_label("Push").collect();
+    // The dialog's primary Push button. The shell toolbar also paints a
+    // "Push" item, so disambiguate geometrically: the dialog footer sits
+    // below it. Issue #25: the dialog label varies — "Push" for the
+    // ThisRepo scope, "Push N commits to M repo(s)" for the multi-repo
+    // scopes. We use `query_all_by_label` (no panic on zero matches) and
+    // try each known label.
+    let labels = [
+        "Push",
+        "Push 1 commits to 1 repo",
+        "Push 1 commits to 2 repos",
+        "Push 2 commits to 1 repo",
+        "Push 2 commits to 2 repos",
+        "Push 4 commits to 2 repos",
+        "Push 4 commits to 3 repos",
+        "Push 6 commits to 3 repos",
+    ];
+    let mut nodes: Vec<Node<'h>> = Vec::new();
+    for label in labels {
+        nodes.extend(h.query_all_by_label(label));
+    }
     assert!(
         nodes.len() >= 2,
-        "expected the toolbar Push plus the dialog Push button"
+        "expected the toolbar Push plus the dialog Push button, found {} nodes",
+        nodes.len()
     );
     nodes.sort_by(|a, b| a.rect().center().y.total_cmp(&b.rect().center().y));
     nodes.pop().expect("at least one Push button")
@@ -326,13 +354,19 @@ fn remote_and_branch_edits_propagate_to_execution() {
     // Two bare remotes; origin carries main, upstream is registered but empty.
     let origin = parent.path().join("solo-origin.git");
     let upstream = parent.path().join("solo-upstream.git");
-    git(&repo_path, &["init", "--bare", origin.to_str().unwrap()]);
+    git(
+        &repo_path,
+        &["init", "--bare", "-b", "main", origin.to_str().unwrap()],
+    );
     git(
         &repo_path,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
     git(&repo_path, &["push", "-q", "-u", "origin", "main"]);
-    git(&repo_path, &["init", "--bare", upstream.to_str().unwrap()]);
+    git(
+        &repo_path,
+        &["init", "--bare", "-b", "main", upstream.to_str().unwrap()],
+    );
     git(
         &repo_path,
         &["remote", "add", "upstream", upstream.to_str().unwrap()],
@@ -356,7 +390,11 @@ fn remote_and_branch_edits_propagate_to_execution() {
     // Edit the Remote field, narrow the scope, push.
     h.state_mut().ui.dlg.push_remote = "upstream".into();
     h.run();
-    h.get_by_label("Push current branch only").click();
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
     h.run();
     dialog_push_button(&h).click();
     h.run();
@@ -550,7 +588,11 @@ fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
 
     h.get_by_label("Force push (--force-with-lease)").click();
     h.run();
-    h.get_by_label("Push current branch only").click();
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
     h.run();
     dialog_push_button(&h).click();
     h.run();
@@ -583,7 +625,11 @@ fn force_acknowledgment_switches_push_to_force_with_lease_at_boundary() {
     ));
     open_push_dialog(&mut h2);
 
-    h2.get_by_label("Push current branch only").click();
+    h2.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
     h2.run();
     dialog_push_button(&h2).click();
     h2.run();
@@ -618,7 +664,11 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
     // the exact Remote/Branch fields drive execution…
     h.get_by_label("Force push (--force-with-lease)").click();
     h.run();
-    h.get_by_label("Push current branch only").click();
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
     h.run();
 
     // …the block surfaces IN-DIALOG…
@@ -661,4 +711,624 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
         "unprotected target must execute with force=true at the boundary, got: {:?}",
         rec.recorded()
     );
+}
+
+// ------------------------------------------- issue #24: per-commit selection --
+
+/// All commits in the outgoing list are pre-selected when the dialog opens
+/// (the safe fallback when no commit has been unchecked).
+#[test]
+fn outgoing_commits_open_with_every_commit_selected() {
+    let parent = tempfile::tempdir().unwrap();
+    let solo = repo_ahead_of_origin(parent.path(), "solo");
+
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&solo.path)));
+    open_push_dialog(&mut h);
+
+    let selected = h.state().ui.dlg.push_selected_commits.clone();
+    assert_eq!(
+        selected.len(),
+        2,
+        "default selection covers every commit listed in the outgoing snapshot"
+    );
+    let snapshot = h
+        .state()
+        .ui
+        .dlg
+        .push_outgoing
+        .clone()
+        .expect("snapshot built");
+    let outgoing: Vec<String> = snapshot[0]
+        .commits
+        .as_ref()
+        .expect("commits")
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    for cid in &outgoing {
+        assert!(
+            selected.contains(cid),
+            "every outgoing commit must be selected by default; missing {cid}"
+        );
+    }
+}
+
+/// Every outgoing commit row paints a checkbox and a "N selected of M"
+/// counter appears next to the list; unchecking one updates both.
+#[test]
+fn commit_rows_paint_checkboxes_and_a_selection_counter() {
+    use egui::accesskit::Role;
+
+    let parent = tempfile::tempdir().unwrap();
+    let solo = repo_ahead_of_origin(parent.path(), "solo");
+
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&solo.path)));
+    open_push_dialog(&mut h);
+
+    let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
+    let commits = snapshot[0].commits.as_ref().expect("commits");
+    let subject = commits[0].message.lines().next().unwrap().to_string();
+
+    // Every commit paints a checkbox the kittest can address by role.
+    assert!(
+        h.get_all_by_role(Role::CheckBox)
+            .any(|n| n.accesskit_node().label() == Some(subject.clone())),
+        "the first outgoing commit must paint as a checkbox row"
+    );
+
+    // Default state: full selection, counter reflects that.
+    assert_painted(&h, "2 selected of 2");
+
+    // Unchecking the older commit removes it from the selection and updates
+    // the counter to "1 selected of 2".
+    h.get_by_role_and_label(Role::CheckBox, &subject).click();
+    h.run();
+    assert_painted(&h, "1 selected of 2");
+    let selected = h.state().ui.dlg.push_selected_commits.clone();
+    assert_eq!(
+        selected.len(),
+        1,
+        "toggling the checkbox must update selection"
+    );
+    assert!(
+        !selected.contains(&commits[0].id),
+        "the unchecked commit is removed"
+    );
+    assert!(
+        selected.contains(&commits[1].id),
+        "the other commit stays selected"
+    );
+
+    // Re-checking restores full selection.
+    h.get_by_role_and_label(Role::CheckBox, &subject).click();
+    h.run();
+    assert_painted(&h, "2 selected of 2");
+}
+
+/// When the user unchecks an older commit but keeps the newer one selected,
+/// only the newest commit is pushed (a suffix of the outgoing list). The
+/// recorded `Push` carries the oldest selected SHA so the engine forwards
+/// only that range to git.
+#[test]
+fn suffix_selection_pushes_only_the_selected_newest_commit() {
+    let parent = tempfile::tempdir().unwrap();
+    let solo = repo_ahead_of_origin(parent.path(), "solo");
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&solo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
+    let commits = snapshot[0].commits.as_ref().expect("commits");
+    let older = commits[1].id.clone(); // c2: first committed / oldest ahead
+    let newer = commits[0].id.clone(); // c3: newest
+
+    // Drop the older commit (c2) so only c3 stays. The newest sits at
+    // index 0 because outgoing commits are listed newest-first.
+    h.state_mut().ui.dlg.push_selected_commits = vec![newer.clone()];
+    h.run();
+    assert_painted(&h, "1 selected of 2");
+
+    // Narrow the dialog to "This repo" scope so it executes the push
+    // synchronously against the selected root instead of batching.
+
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
+    h.run();
+    dialog_push_button(&h).click();
+    h.run();
+
+    assert!(
+        wait_until(15_000, || {
+            rec.contains_push_selected("origin", "main", false, Some(&newer))
+        }),
+        "subset push must carry the oldest selected SHA at the boundary; got: {:?}",
+        rec.recorded()
+    );
+    let older_short = &older[..7];
+    let _ = older_short;
+}
+
+/// When the user unchecks a NEWER commit but keeps an OLDER one, the
+/// selection is NOT a suffix of the outgoing list. The dialog must
+/// explain this fallback and still push the FULL outgoing list, never a
+/// subset.
+#[test]
+fn non_suffix_selection_falls_back_to_full_push_with_explanation() {
+    let parent = tempfile::tempdir().unwrap();
+    let solo = repo_ahead_of_origin(parent.path(), "solo");
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&solo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
+    let commits = snapshot[0].commits.as_ref().expect("commits");
+    // Outgoing is newest-first; commits[0] is the newest (c3), commits[1]
+    // is the older one (c2). Drop the NEWER commit while keeping the
+    // older one — the selection is no longer a suffix.
+    let older = commits[1].id.clone();
+    h.state_mut().ui.dlg.push_selected_commits = vec![older.clone()];
+    h.run();
+
+    // The dialog explains WHY this falls back: an older unchecked
+    // ancestor is needed by the kept newer commits (actually the inverse
+    // — the kept older commit is fine, but the unset newer one is older
+    // than the kept older one. Either way, no proper subset is
+    // expressible).
+    assert_painted(&h, "all");
+    assert_painted(&h, "commits will be pushed");
+
+    // Narrow the scope and execute.
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
+    h.run();
+    dialog_push_button(&h).click();
+    h.run();
+
+    // The push reaches the boundary as a full push (selected_oldest
+    // None), not a subset.
+    assert!(
+        wait_until(15_000, || {
+            rec.contains_push_selected("origin", "main", false, None)
+        }),
+        "non-suffix selection must fall back to a full push at the boundary; got: {:?}",
+        rec.recorded()
+    );
+}
+
+/// Toggling the "Push tags" checkbox sends `tags=true` to the executor
+/// boundary (issue #24). The flag is independent of force / selection.
+#[test]
+fn push_tags_checkbox_propagates_to_engine_boundary() {
+    let parent = tempfile::tempdir().unwrap();
+    let solo = repo_ahead_of_origin(parent.path(), "solo");
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&solo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    // The checkbox is rendered next to the other options.
+    assert_painted(&h, "Push tags");
+
+    h.get_by_label("Push tags").click();
+    h.run();
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
+    h.run();
+    dialog_push_button(&h).click();
+    h.run();
+
+    assert!(
+        wait_until(15_000, || {
+            rec.recorded().iter().any(|c| {
+                matches!(
+                    c,
+                    test_support::RecordedCall::Push {
+                        remote,
+                        branch,
+                        tags: true,
+                        ..
+                    } if remote == "origin" && branch == "main"
+                )
+            })
+        }),
+        "Push tags must reach the boundary as tags=true; got: {:?}",
+        rec.recorded()
+    );
+}
+
+/// Toggling "Skip pre-push hooks" sends `no_verify=true` to the engine
+/// boundary (issue #24).
+#[test]
+fn skip_pre_push_hooks_propagates_to_engine_boundary() {
+    let parent = tempfile::tempdir().unwrap();
+    let solo = repo_ahead_of_origin(parent.path(), "solo");
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&solo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    h.get_by_label("Skip pre-push hooks").click();
+    h.run();
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
+    h.run();
+    dialog_push_button(&h).click();
+    h.run();
+
+    assert!(
+        wait_until(15_000, || {
+            rec.recorded().iter().any(|c| {
+                matches!(
+                    c,
+                    test_support::RecordedCall::Push {
+                        remote,
+                        branch,
+                        no_verify: true,
+                        ..
+                    } if remote == "origin" && branch == "main"
+                )
+            })
+        }),
+        "Skip pre-push hooks must reach the boundary as no_verify=true; got: {:?}",
+        rec.recorded()
+    );
+}
+
+/// Toggling "Set upstream" sends `set_upstream=true` to the engine
+/// boundary AND paints the "upstream will be set" hint (issue #24).
+#[test]
+fn set_upstream_propagates_and_paints_hint() {
+    let parent = tempfile::tempdir().unwrap();
+    let solo = repo_ahead_of_origin(parent.path(), "solo");
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&solo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    // The hint is hidden until the checkbox is on.
+    assert_not_painted(&h, "upstream will be set");
+
+    h.get_by_label("Set upstream (--set-upstream)").click();
+    h.run();
+    assert_painted(&h, "upstream will be set");
+
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
+    h.run();
+    dialog_push_button(&h).click();
+    h.run();
+
+    assert!(
+        wait_until(15_000, || {
+            rec.recorded().iter().any(|c| {
+                matches!(
+                    c,
+                    test_support::RecordedCall::Push {
+                        remote,
+                        branch,
+                        set_upstream: true,
+                        ..
+                    } if remote == "origin" && branch == "main"
+                )
+            })
+        }),
+        "Set upstream must reach the boundary as set_upstream=true; got: {:?}",
+        rec.recorded()
+    );
+}
+
+/// Force-pushing to a protected branch stays BLOCKED even when the new
+/// issue-#24 options (Push tags / Skip pre-push hooks / Set upstream) are
+/// checked — the engine must never see the push.
+#[test]
+fn protected_branch_block_survives_new_push_options() {
+    let parent = tempfile::tempdir().unwrap();
+    let guarded = repo_ahead_of_origin(parent.path(), "guarded");
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&guarded.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    h.get_by_label("Force push (--force-with-lease)").click();
+    h.get_by_label("Push tags").click();
+    h.get_by_label("Skip pre-push hooks").click();
+    h.get_by_label("Set upstream (--set-upstream)").click();
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
+    h.run();
+
+    // The block surfaces in-dialog — nothing reaches the engine.
+    assert_painted(&h, "is protected");
+    assert_painted(&h, "force-push blocked");
+
+    dialog_push_button(&h).click();
+    h.run();
+    std::thread::sleep(Duration::from_millis(400));
+    h.run();
+
+    assert!(
+        rec.recorded().is_empty(),
+        "blocked push with extra options must never reach the engine; got: {:?}",
+        rec.recorded()
+    );
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Push),
+        "the dialog must stay open while the block is in force"
+    );
+}
+
+// ----------------------------------------------- issue #25: PUSH SCOPE / banner --
+
+use turbogit_services::sync_service::PushScope;
+
+/// The PUSH SCOPE segmented control (screen 10) renders the four variants.
+/// The default scope is `All` and the labels name the resolved counts so
+/// the user sees what each segment will cover.
+#[test]
+fn push_scope_segmented_control_lists_all_four_variants() {
+    let parent = tempfile::tempdir().unwrap();
+    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
+    let beta = repo_ahead_of_origin(parent.path(), "beta");
+    let gamma = repo_ahead_of_origin(parent.path(), "gamma");
+
+    let mut h = harness(app_state(
+        parent.path(),
+        &[alpha.path.clone(), beta.path.clone(), gamma.path.clone()],
+    ));
+    open_push_dialog(&mut h);
+
+    assert_painted(&h, "PUSH SCOPE");
+    assert_painted(&h, "This repo");
+    // No selection yet → "Selected 0".
+    assert_painted(&h, "Selected 0");
+    assert_painted(&h, "Project subtree");
+    assert_painted(&h, "All 3");
+    assert_eq!(h.state().ui.dlg.push_scope, PushScope::All);
+}
+
+/// When `Selection` is chosen, the executed push targets ONLY the
+/// workspace tree's checked roots — unchecked ones must NOT be pushed.
+#[test]
+fn push_scope_selection_pushes_only_checked_roots() {
+    use std::collections::HashSet;
+    use turbogit_domain::model::RootId;
+
+    let parent = tempfile::tempdir().unwrap();
+    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
+    let beta = repo_ahead_of_origin(parent.path(), "beta");
+    let gamma = repo_ahead_of_origin(parent.path(), "gamma");
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        &[alpha.path.clone(), beta.path.clone(), gamma.path.clone()],
+        dyn_exec,
+        settings,
+    ));
+    let beta_id = RootId(beta.path.clone().into());
+    h.state_mut().ui.repo_selection = HashSet::from([beta_id]);
+    h.state_mut().ui.dlg.push_scope = PushScope::Selection;
+    open_push_dialog(&mut h);
+
+    dialog_push_button(&h).click();
+    h.run();
+    assert!(
+        wait_until(15_000, || {
+            rec.recorded()
+                .iter()
+                .any(|c| matches!(c, test_support::RecordedCall::Push { .. }))
+        }),
+        "scope=Selection must dispatch at least one push; got: {:?}",
+        rec.recorded()
+    );
+    let beta_pushes = rec
+        .recorded()
+        .iter()
+        .filter(
+            |c| matches!(c, test_support::RecordedCall::Push { root, .. } if root == &beta.path),
+        )
+        .count();
+    let alpha_pushes = rec
+        .recorded()
+        .iter()
+        .filter(
+            |c| matches!(c, test_support::RecordedCall::Push { root, .. } if root == &alpha.path),
+        )
+        .count();
+    assert_eq!(beta_pushes, 1, "selected beta must be pushed exactly once");
+    assert_eq!(alpha_pushes, 0, "unselected alpha must NOT be pushed");
+}
+
+/// When the scope contains roots on a protected branch, the dialog paints
+/// a remediation banner naming those repos and the protected branch (the
+/// patterns join with `|`), instead of blocking the push outright.
+#[test]
+fn protected_branch_banner_names_protected_repos_in_scope() {
+    let parent = tempfile::tempdir().unwrap();
+    let alpha = repo_ahead_of_origin(parent.path(), "alpha"); // tracks main
+    let feature_only = repo_ahead_of_origin(parent.path(), "feature_only"); // tracks main
+
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        &[alpha.path.clone(), feature_only.path.clone()],
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    assert_painted(&h, "Protected branch in scope");
+    assert_painted(&h, "alpha");
+    assert_painted(&h, "feature_only");
+    assert_painted(&h, "main");
+}
+
+/// When the scope contains BOTH protected and unprotected roots, the
+/// remediation banner's "Remove N protected repos from scope" button
+/// excludes the listed protected roots. After that exclusion, a regular
+/// push goes through for the unprotected root only.
+#[test]
+fn remediation_button_excludes_protected_and_unprotected_push_succeeds() {
+    let parent = tempfile::tempdir().unwrap();
+    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
+    // A second repo on an UNPROTECTED branch (feature) so the scope
+    // contains a mix: alpha (main, protected) + work (feature, not protected).
+    let work_path = parent.path().join("work");
+    std::fs::create_dir_all(&work_path).unwrap();
+    git(&work_path, &["init", "-q", "-b", "main"]);
+    git(&work_path, &["config", "user.email", "test@example.com"]);
+    git(&work_path, &["config", "user.name", "Test"]);
+    std::fs::write(work_path.join("base.txt"), "base\n").unwrap();
+    git(&work_path, &["add", "."]);
+    git(&work_path, &["commit", "-q", "-m", "work base"]);
+    let work_remote = parent.path().join("work-remote.git");
+    git(
+        &work_path,
+        &[
+            "init",
+            "--bare",
+            "-b",
+            "main",
+            work_remote.to_str().unwrap(),
+        ],
+    );
+    git(
+        &work_path,
+        &["remote", "add", "origin", work_remote.to_str().unwrap()],
+    );
+    git(&work_path, &["push", "-q", "-u", "origin", "main"]);
+    git(&work_path, &["checkout", "-q", "-b", "feature"]);
+    git(&work_path, &["push", "-q", "-u", "origin", "feature"]);
+    std::fs::write(work_path.join("f.txt"), "f\n").unwrap();
+    git(&work_path, &["add", "."]);
+    git(&work_path, &["commit", "-q", "-m", "work feature"]);
+    git(&work_path, &["checkout", "-q", "main"]);
+    git(&work_path, &["checkout", "-q", "feature"]);
+    std::fs::write(work_path.join("f2.txt"), "f2\n").unwrap();
+    git(&work_path, &["add", "."]);
+    git(&work_path, &["commit", "-q", "-m", "work feature 2"]);
+    let (rec, settings) = recording_engine(VcsSettings::default());
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        &[alpha.path.clone(), work_path.clone()],
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    // Banner shows the remediation action naming alpha (the only protected root).
+    assert_painted(&h, "Protected branch in scope");
+    h.get_by_label("Remove 1 protected repo from scope").click();
+    h.run();
+
+    // alpha excluded, work NOT excluded.
+    let excluded = &h.state().ui.dlg.push_scope_excluded;
+    assert!(
+        excluded.iter().any(|id| id.0.to_path_buf() == alpha.path),
+        "alpha (protected) must be excluded"
+    );
+    assert!(
+        excluded.iter().all(|id| id.0.to_path_buf() != work_path),
+        "work (unprotected) must NOT be excluded"
+    );
+
+    // Now push — work is in scope and not protected, so the recording
+    // executor records exactly one Push for work_path.
+    dialog_push_button(&h).click();
+    h.run();
+    assert!(
+        wait_until(15_000, || {
+            rec.recorded()
+                .iter()
+                .any(|c| matches!(c, test_support::RecordedCall::Push { root, .. } if root == &work_path))
+        }),
+        "work (unprotected) must reach the engine after remediation; got: {:?}",
+        rec.recorded()
+    );
+    let alpha_pushes = rec
+        .recorded()
+        .iter()
+        .filter(
+            |c| matches!(c, test_support::RecordedCall::Push { root, .. } if root == &alpha.path),
+        )
+        .count();
+    assert_eq!(alpha_pushes, 0, "alpha must stay excluded from the push");
+}
+
+/// The action button states the resolved scope (issue #25): "Push 4 commits
+/// to 3 repos" — not a bare "Push" — so the user sees what they are about
+/// to push before clicking.
+#[test]
+fn push_button_states_the_resolved_scope() {
+    let parent = tempfile::tempdir().unwrap();
+    let alpha = repo_ahead_of_origin(parent.path(), "alpha");
+    let beta = repo_ahead_of_origin(parent.path(), "beta");
+
+    let mut h = harness(app_state(
+        parent.path(),
+        &[alpha.path.clone(), beta.path.clone()],
+    ));
+    open_push_dialog(&mut h);
+
+    // Two roots × 2 commits ahead each = 4 commits, 2 repos.
+    assert_painted(&h, "Push 4 commits to 2 repos");
 }

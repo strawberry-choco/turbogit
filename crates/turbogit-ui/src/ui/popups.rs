@@ -9,7 +9,7 @@ use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use turbogit_app::granular;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, Tab, Toast};
+use turbogit_app::state::{AppState, Dialog, Tab, TagType, Toast};
 
 /// Every globally-invokable action, reused by both the VCS popup and the
 /// command palette — and by the shell's Git menu (issue #9).
@@ -33,7 +33,6 @@ pub enum Action {
     // operations popup keeps its exact pre-existing action set.
     GoToLog,
     OpenWelcome,
-    ToggleToolbar,
     // Partial-staging verbs (spec R2): palette-only, operating on the diff
     // viewer's current hunk. The VCS operations popup set stays frozen.
     StageHunk,
@@ -62,7 +61,6 @@ impl Action {
             Action::Clone => "Clone…",
             Action::GoToLog => "Go to Log",
             Action::OpenWelcome => "Open Welcome",
-            Action::ToggleToolbar => "Toggle Toolbar",
             Action::StageHunk => "Stage Hunk",
             Action::UnstageHunk => "Unstage Hunk",
             Action::FilterFiles => "Filter files (/)",
@@ -110,7 +108,6 @@ impl Action {
             Action::Clone,
             Action::GoToLog,
             Action::OpenWelcome,
-            Action::ToggleToolbar,
             Action::StageHunk,
             Action::UnstageHunk,
             Action::FilterFiles,
@@ -161,7 +158,17 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::Rebase => state.ui.dialog = Some(Dialog::Rebase),
         Action::Stash => state.ui.dialog = Some(Dialog::Stash),
         Action::Shelve => state.ui.dialog = Some(Dialog::Shelve),
-        Action::Tag => state.ui.dialog = Some(Dialog::Tag),
+        // Screen 16: the tag dialog re-opens with Annotated selected and
+        // fresh caches; the typed name/message survive the round trip.
+        Action::Tag => {
+            state.ui.dlg.tag_type = TagType::Annotated;
+            state.ui.dlg.tag_target_picker_open = false;
+            state.ui.dlg.tag_candidates = None;
+            state.ui.dlg.tag_existing = None;
+            state.ui.dlg.tag_signing_key = None;
+            state.ui.dlg.tag_signing_key_fetched = false;
+            state.ui.dialog = Some(Dialog::Tag);
+        }
         Action::CommitTab => state.ui.tab = Tab::Commit,
         Action::Settings => state.ui.settings_open = true,
         Action::Clone => {
@@ -174,8 +181,7 @@ pub fn run_action(state: &mut AppState, action: Action) {
             state.ui.tab = Tab::Log;
         }
         Action::OpenWelcome => state.ui.welcome_visible = true,
-        Action::ToggleToolbar => state.ui.show_toolbar = !state.ui.show_toolbar,
-        // Partial-staging verbs (spec R2/R7): stage/unstage the whole
+        // Partial-staging verbs (spec R2/R7):
         // CURRENT hunk — the single selection buttons, hover, and keyboard
         // navigation all aim (CONTEXT.md "Current hunk"). The preview target
         // must exist, or the verb is a silent no-op; conflicted files are

@@ -37,6 +37,14 @@ impl App for TurbogitApp {
         // Dark-only design tokens (ADR-0003); idempotent per-frame application.
         theme::configure_style(ctx);
 
+        // Background incoming check (issue #27): tick the scheduler, then
+        // idle the frame loop until the next poll is due — egui sleeps
+        // between frames, so without the wake-up a poll could only fire
+        // when the user happened to move the mouse.
+        if let Some(wait) = self.state.tick_incoming_poll(std::time::Instant::now()) {
+            ctx.request_repaint_after(wait);
+        }
+
         // Drain worker-thread events and apply them to state, then repaint.
         // The pump itself lives on AppState so headless harnesses get
         // production parity (issue #13).

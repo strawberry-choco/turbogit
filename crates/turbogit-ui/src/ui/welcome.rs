@@ -14,8 +14,8 @@
 
 use crate::theme::Palette;
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke,
-    StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Frame, Id, Layout, Margin, Order,
+    Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::time::{Duration, Instant};
 use turbogit_app::state::{AppState, Toast};
@@ -31,6 +31,11 @@ const COLUMN_GAP: f32 = 16.0;
 const CARD_GAP: f32 = 12.0;
 const CARD_HEIGHT: f32 = 120.0;
 const CARD_PADDING: f32 = 18.0;
+/// Compact strip height for the Attach card in the narrow layout.
+const CARD_HEIGHT_COMPACT: f32 = 64.0;
+/// Left-column width at which the four cards switch to the 2×2 grid
+/// (narrower columns keep one row so the clone form stays high).
+const CARD_GRID_MIN_W: f32 = 560.0;
 const RECENT_ROW_HEIGHT: f32 = 64.0;
 const RADIUS_MD: u8 = 6;
 
@@ -49,7 +54,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             ui.vertical(|ui| {
                 ui.set_max_width(CONTENT_WIDTH.min(avail));
                 brand_header(ui);
-                ui.add_space(28.0);
+                ui.add_space(6.0);
+                what_new_link(ui, state);
+                ui.add_space(22.0);
                 columns(ui, state);
                 ui.add_space(28.0);
                 getting_started(ui);
@@ -57,6 +64,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             });
         });
     });
+    changelog_overlay(ui, state);
 }
 
 // --- Brand header ------------------------------------------------------------
@@ -102,6 +110,13 @@ fn columns(ui: &mut Ui, state: &mut AppState) {
             action_cards(ui, state, left_w);
             ui.add_space(20.0);
             clone_box(ui, state);
+            // Narrow layout: the fourth card renders below the clone form
+            // so the clone input keeps its height and the recents column
+            // stays reachable at small window sizes (r4_polish).
+            if left_w < CARD_GRID_MIN_W {
+                ui.add_space(12.0);
+                attach_compact_card(ui, state, left_w);
+            }
         });
         ui.add_space(COLUMN_GAP);
         ui.vertical(|ui| {
@@ -122,43 +137,131 @@ enum CardAction {
     OpenProject,
     /// Pick a folder, `git init` it, and enter it (end-to-end).
     InitRepo,
+    /// Pick a directory tree and register every repo in it as a workspace
+    /// (issue #34).
+    AttachWorkspace,
 }
 
 fn action_cards(ui: &mut Ui, state: &mut AppState, left_w: f32) {
-    // No hard floor: cards shrink with their column so three always fit
-    // (issue #23). At spec widths this equals the mockup's ~226px card.
+    // Wide column: a 2×2 grid of the four cards (issue #34) so the fourth
+    // "Attach workspace root" entry sits alongside the original three.
+    if left_w >= CARD_GRID_MIN_W {
+        let card_w = (left_w - CARD_GAP) / 2.0;
+        let mut row = |ui: &mut Ui, first: CardAction, second: CardAction| {
+            ui.horizontal(|ui| {
+                action_card_title(ui, state, first, card_w);
+                ui.add_space(CARD_GAP);
+                action_card_title(ui, state, second, card_w);
+            });
+            ui.add_space(CARD_GAP);
+        };
+        row(ui, CardAction::FocusClone, CardAction::OpenProject);
+        row(ui, CardAction::InitRepo, CardAction::AttachWorkspace);
+        return;
+    }
+    // Narrow column: the original three cards stay in one row and the
+    // fourth renders as a compact full-width strip BELOW the clone form
+    // (see `columns`), so the clone input keeps its height and the recents
+    // column stays reachable at small window sizes (r4_polish).
     let card_w = (left_w - 2.0 * CARD_GAP) / 3.0;
     ui.horizontal(|ui| {
-        action_card(
-            ui,
-            state,
-            Icon::BOOK_OPEN,
+        action_card_title(ui, state, CardAction::FocusClone, card_w);
+        ui.add_space(CARD_GAP);
+        action_card_title(ui, state, CardAction::OpenProject, card_w);
+        ui.add_space(CARD_GAP);
+        action_card_title(ui, state, CardAction::InitRepo, card_w);
+    });
+}
+
+/// Full-width compact card for the Attach action, used only when the narrow
+/// layout has already placed the three original cards in one row above the
+/// clone form (see [`action_cards`] / [`columns`]).
+fn attach_compact_card(ui: &mut Ui, state: &mut AppState, width: f32) {
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, CARD_HEIGHT_COMPACT), Sense::click());
+    let hovered = response.hovered();
+    let painter = ui.painter().clone();
+    let radius = CornerRadius::same(RADIUS_MD);
+    painter.rect_filled(
+        rect,
+        radius,
+        if hovered {
+            Palette::SURFACE_2
+        } else {
+            Palette::SURFACE
+        },
+    );
+    painter.rect_stroke(
+        rect,
+        radius,
+        Stroke::new(
+            1.0,
+            if hovered {
+                Palette::BRAND
+            } else {
+                Palette::LINE
+            },
+        ),
+        StrokeKind::Outside,
+    );
+    let pad = CARD_PADDING;
+    paint_icon_at(
+        ui,
+        Icon::FOLDER,
+        Pos2::new(rect.left() + pad, rect.top() + pad),
+        22.0,
+        Palette::BRAND,
+    );
+    let title_galley = painter.layout_no_wrap(
+        "Attach Workspace Root".to_owned(),
+        FontId::new(13.0, FontFamily::Proportional),
+        Palette::INK,
+    );
+    let body_galley = painter.layout(
+        "Scan a folder tree and index every repository in it as a workspace.".to_owned(),
+        FontId::new(12.0, FontFamily::Proportional),
+        Palette::INK_3,
+        width - 2.0 * pad - 22.0 - 10.0,
+    );
+    let x = rect.left() + pad + 22.0 + 10.0;
+    let title_y = rect.top() + pad - 12.0;
+    painter.galley(Pos2::new(x, title_y), title_galley, Palette::INK);
+    painter.galley(Pos2::new(x, title_y + 17.0), body_galley, Palette::INK_3);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Attach Workspace Root"));
+    widgets::focus_ring(ui, &response);
+    if response.clicked()
+        && let Some(dir) = pick_dir(state, "Attach Workspace Root")
+    {
+        state.attach_workspace(&dir);
+    }
+}
+
+/// Dispatch-layer wrapper: yields the card's title so the shared painter can
+/// stay single-purpose.
+fn action_card_title(ui: &mut Ui, state: &mut AppState, action: CardAction, width: f32) {
+    let (title, body, icon) = match action {
+        CardAction::FocusClone => (
             "Clone from URL",
             "Fetch an existing repository from a remote provider.",
-            card_w,
-            CardAction::FocusClone,
-        );
-        ui.add_space(CARD_GAP);
-        action_card(
-            ui,
-            state,
-            Icon::FOLDER_OPEN,
+            Icon::BOOK_OPEN,
+        ),
+        CardAction::OpenProject => (
             "Open Project",
             "Browse for a folder and open it as a TurboGit project.",
-            card_w,
-            CardAction::OpenProject,
-        );
-        ui.add_space(CARD_GAP);
-        action_card(
-            ui,
-            state,
-            Icon::FOLDER_GIT,
+            Icon::FOLDER_OPEN,
+        ),
+        CardAction::InitRepo => (
             "Initialize Repository",
             "Create a fresh Git repository in a chosen folder.",
-            card_w,
-            CardAction::InitRepo,
-        );
-    });
+            Icon::FOLDER_GIT,
+        ),
+        CardAction::AttachWorkspace => (
+            "Attach Workspace Root",
+            "Scan a folder tree and index every repository in it as a workspace.",
+            Icon::FOLDER,
+        ),
+    };
+    action_card(ui, state, icon, title, body, width, action);
 }
 
 /// One action card (spec §8.1): SURFACE bg, LINE border, radius-md, 18px
@@ -245,6 +348,11 @@ fn action_card(
         CardAction::InitRepo => {
             if let Some(dir) = pick_dir(state, "Initialize Repository") {
                 state.initialize_and_enter(&dir);
+            }
+        }
+        CardAction::AttachWorkspace => {
+            if let Some(dir) = pick_dir(state, "Attach Workspace Root") {
+                state.attach_workspace(&dir);
             }
         }
     }
@@ -425,12 +533,56 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
         );
     }
 
+    // Workspace rows (issue #34) additionally show their indexed repo count
+    // as a chip opposite the branch indicator, then restore via the attach
+    // flow instead of a single-project open.
+    if project.kind == turbogit_app::recents::RecentKind::Workspace
+        && let Some(count) = project.repo_count
+    {
+        let count_text = if count == 1 {
+            "1 repo".to_string()
+        } else {
+            format!("{count} repos")
+        };
+        let count_galley = painter.layout_no_wrap(
+            count_text,
+            FontId::new(11.0, FontFamily::Proportional),
+            Palette::BRAND,
+        );
+        let right_edge = rect.right() - pad_x;
+        // A branch chip would already own the right side; stack the count
+        // above it, or sit at the row's vertical middle when absent.
+        let cy = if rect.contains(Pos2::new(right_edge, rect.center().y)) {
+            rect.top() + 10.0
+        } else {
+            rect.center().y
+        };
+        let chip_w = count_galley.size().x + 12.0;
+        let count_rect = Rect::from_min_size(
+            Pos2::new(right_edge - chip_w, cy - 9.0),
+            Vec2::new(chip_w, 18.0),
+        );
+        painter.rect_filled(count_rect, CornerRadius::same(9), Palette::SURFACE_3);
+        painter.galley(
+            Pos2::new(
+                count_rect.left() + 6.0,
+                count_rect.center().y - count_galley.size().y / 2.0,
+            ),
+            count_galley,
+            Palette::BRAND,
+        );
+    }
+
     // Accessibility / headless-test queryability: rows are labelled by the
     // project name.
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, project.name.as_str()));
     widgets::focus_ring(ui, &response);
     if response.clicked() {
-        state.open_project(&project.path);
+        if project.kind == turbogit_app::recents::RecentKind::Workspace {
+            state.attach_workspace(&project.path);
+        } else {
+            state.open_project(&project.path);
+        }
     }
 }
 
@@ -475,6 +627,88 @@ fn getting_started(ui: &mut Ui) {
             ui.label(RichText::new(*hint).size(12.0).color(Palette::INK_2));
         });
     }
+}
+
+// --- What's new / changelog ------------------------------------------------------
+
+/// In-app changelog entries (issue #34), rendered by the "What's new" overlay.
+const CHANGELOG: &[(&str, &str)] = &[
+    (
+        "v0.9.0",
+        "• Attach a workspace root and index every repository in a folder tree.",
+    ),
+    (
+        "v0.9.0",
+        "• Recents now show workspace repo counts and restore a workspace on click.",
+    ),
+    (
+        "v0.9.0",
+        "• The header reports the app version, git version, and indexed repo count.",
+    ),
+    ("v0.9.0", "• A “What's new” link opens this changelog."),
+];
+
+/// Centered "What's new" link that opens the changelog overlay.
+fn what_new_link(ui: &mut Ui, state: &mut AppState) {
+    ui.with_layout(Layout::top_down(Align::Center), |ui| {
+        let resp = ui.button(RichText::new("What's new").size(12.0).color(Palette::BRAND));
+        widgets::focus_ring(ui, &resp);
+        if resp.clicked() {
+            state.ui.show_changelog = true;
+        }
+    });
+}
+
+/// Center-anchored changelog overlay (issue #34): a framed panel listing
+/// [`CHANGELOG`] entries with a Close button. Painted above the Welcome page
+/// content while [`UiState::show_changelog`] is set.
+fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
+    if !state.ui.show_changelog {
+        return;
+    }
+    egui::Area::new(Id::new("welcome_changelog_overlay"))
+        .order(Order::Tooltip)
+        .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+        .show(ui.ctx(), |ui| {
+            Frame::new()
+                .fill(Palette::SURFACE)
+                .stroke(Stroke::new(1.0, Palette::LINE))
+                .corner_radius(8)
+                .inner_margin(Margin::same(20))
+                .show(ui, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("What's New")
+                                .strong()
+                                .size(16.0)
+                                .color(Palette::INK),
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button("Close").clicked() {
+                                state.ui.show_changelog = false;
+                            }
+                        });
+                    });
+                    ui.add_space(10.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(400.0)
+                        .show(ui, |ui| {
+                            for (version, note) in CHANGELOG {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(*version)
+                                            .strong()
+                                            .size(12.0)
+                                            .color(Palette::BRAND),
+                                    );
+                                    ui.label(RichText::new(*note).size(12.0).color(Palette::INK_2));
+                                });
+                                ui.add_space(6.0);
+                            }
+                        });
+                });
+        });
 }
 
 // --- Small helpers ---------------------------------------------------------------------

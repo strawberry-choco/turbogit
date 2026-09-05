@@ -2,111 +2,170 @@
 //! registered root, fed by [`turbogit_services::sync_service::outgoing_per_root`]
 //! behind the executor seam (ADR-0001).
 //!
-//! Scope semantics follow ADR-0006: Push always executes the batch push across
-//! ALL roots with upstreams; clicking a root node filters the changed-files
-//! preview ONLY and never narrows what Push executes. "Push current branch
-//! only" is the sole scope-narrowing option; it targets the selected root via
-//! the explicit Remote/Branch fields, which stay editable above the options
-//! section (ADR-0007) because protected-branch force-push blocking keys off
-//! the branch name.
-//!
 //! Issue #21 adds the safety layer: a Preview button running a REAL
 //! `git push --dry-run` through the engine seam with the report shown
 //! VERBATIM in-dialog, and protected-branch force-push blocking keyed off the
 //! exact Remote/Branch fields — a blocked push never reaches the engine
-//! instead of being silently downgraded. Deferred: "Push tags".
+//! instead of being silently downgraded.
+//!
+//! Issue #24 layers per-commit selection on top of the aggregated list.
+//!
+//! Issue #25 adds the PUSH SCOPE segmented control (This repo / Selected N /
+//! Project subtree / All M). The control replaces the old "Push current branch
+//! only" checkbox — `ThisRepo` keeps the explicit Remote/Branch target fields
+//! for the per-repo path, the other variants push every root the scope covers
+//! through [`turbogit_services::sync_service::push_roots`]. The dry-run
+//! preview runs once per root in scope and aggregates into a single
+//! "N commits → R remotes · X refs · Y rejected" line above the verbatim
+//! per-root reports. Protected branches in scope render as a remediation
+//! banner naming the protected repos and matching pattern, with a one-click
+//! "Remove N protected repos from scope" action that excludes them so the
+//! push can proceed for the rest.
 
 use crate::theme::Palette;
 use egui::{Color32, RichText, Ui};
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, OutgoingRoot};
+use turbogit_app::state::{AppState, OutgoingRoot, PushPreview};
 use turbogit_domain::error::TgError;
-use turbogit_domain::model::{BranchKind, ChangeStatus, Commit, LogOpts, RootId, Signature};
-use turbogit_services::sync_service;
+use turbogit_domain::model::{
+    BranchKind, ChangeStatus, Commit, LogOpts, Root, RootId, Signature, SignatureState,
+};
+use turbogit_services::sync_service::{self, PushScope, SubsetPushState};
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     let mut open = true;
     egui::Window::new("Push")
         .open(&mut open)
-        .default_width(520.0)
+        .default_width(560.0)
         .show(&ctx, |ui| {
             ensure_outgoing(state);
             ensure_target_defaults(state);
+
+            // Resolved scope: roots covered by the segmented control minus any
+            // remediation exclusions (issue #25).
+            let scope = scope_roots(state);
+            let scope_commits = scope_outgoing(state, &scope);
+            let total = outgoing_total(&scope_commits);
+
+            // PUSH SCOPE control sits at the top (screen 10).
+            push_scope_control(ui, state);
+            ui.separator();
+
+            // Protected-branch remediation banner — names repos + pattern
+            // and offers a one-click exclusion (issue #25). The banner is
+            // skipped when the scope covers zero protected roots.
+            let _protected_count = remediation_banner(ui, state, &scope);
+
+            // The aggregated outgoing tree; root-node clicks filter the
+            // changed-files PREVIEW only (ADR-0006), never the batch push.
             outgoing_tree(ui, state);
             changed_files_preview(ui, state);
 
-            // Explicit target fields above the options section (ADR-0007).
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Remote:");
-                ui.text_edit_singleline(&mut state.ui.dlg.push_remote);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Branch:");
-                ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
-            });
+            // Subset-push banner (issue #24) — explains why the unchecked
+            // older commit forces a full push.
+            let outgoing_shas: Vec<String> = state
+                .ui
+                .dlg
+                .push_outgoing
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .flat_map(|r| match &r.commits {
+                    Ok(cs) => cs.iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
+                    Err(_) => Vec::new(),
+                })
+                .collect();
+            let subset = sync_service::subset_push_state(
+                &outgoing_shas,
+                &state.ui.dlg.push_selected_commits,
+            );
+            state.ui.dlg.push_subset = subset.clone();
+            if matches!(state.ui.dlg.push_subset, SubsetPushState::OlderUnchecked) {
+                ui.colored_label(
+                    Color32::YELLOW,
+                    "All commits will be pushed — an unchecked older ancestor forces a full push.",
+                );
+            }
 
-            // Options.
+            // Explicit target fields above the options section (ADR-0007).
+            // They only drive the `ThisRepo` scope path (issue #25).
+            let scope_is_this_repo = state.ui.dlg.push_scope == PushScope::ThisRepo;
+            if scope_is_this_repo {
+                ui.horizontal(|ui| {
+                    ui.label("Remote:");
+                    ui.text_edit_singleline(&mut state.ui.dlg.push_remote);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Branch:");
+                    ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
+                });
+            }
+
             ui.checkbox(
                 &mut state.ui.dlg.force_push,
                 "Force push (--force-with-lease)",
             );
+            ui.checkbox(&mut state.ui.dlg.push_tags, "Push tags");
+            ui.checkbox(&mut state.ui.dlg.push_no_verify, "Skip pre-push hooks");
             ui.checkbox(
-                &mut state.ui.dlg.push_current_branch_only,
-                "Push current branch only",
+                &mut state.ui.dlg.push_set_upstream,
+                "Set upstream (--set-upstream)",
             );
-
-            // Safety strips (issue #21): acknowledging force warns about
-            // history rewrite; naming a protected branch in the exact Branch
-            // field BLOCKS the push outright.
-            let branch = state.ui.dlg.push_branch.clone();
-            let force_blocked =
-                state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch);
-            if force_blocked {
-                ui.colored_label(
-                    Color32::RED,
-                    format!("⚠ '{branch}' is protected — force-push blocked."),
-                );
-                ui.colored_label(
-                    Color32::RED,
-                    "Uncheck force push or retarget the Branch field to continue.",
-                );
-            } else if state.ui.dlg.force_push {
-                ui.colored_label(
-                    Color32::YELLOW,
-                    "⚠ Force push rewrites the remote branch (--force-with-lease).",
-                );
+            if state.ui.dlg.push_set_upstream {
+                ui.colored_label(Color32::from_rgb(140, 200, 255), "upstream will be set");
             }
 
-            // Verbatim dry-run report pane (issue #21).
-            if let Some(preview) = state.ui.dlg.push_preview_output.as_ref() {
-                ui.separator();
-                match preview {
-                    Ok(report) => {
-                        ui.label("Dry-run report (verbatim):");
-                        egui::ScrollArea::vertical()
-                            .max_height(120.0)
-                            .show(ui, |ui| {
-                                ui.label(RichText::new(report).monospace().small());
-                            });
-                    }
-                    Err(stderr) => {
-                        ui.colored_label(Color32::RED, "Push rejected by git:");
-                        egui::ScrollArea::vertical()
-                            .max_height(120.0)
-                            .show(ui, |ui| {
-                                ui.label(
-                                    RichText::new(stderr)
-                                        .monospace()
-                                        .small()
-                                        .color(Color32::RED),
-                                );
-                            });
-                    }
+            // Safety strip (issue #21): acknowledging force warns about
+            // history rewrite; naming a protected branch in the exact Branch
+            // field BLOCKS the ThisRepo path outright.
+            if scope_is_this_repo {
+                let branch = state.ui.dlg.push_branch.clone();
+                let force_blocked =
+                    state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch);
+                if force_blocked {
+                    ui.colored_label(
+                        Color32::RED,
+                        format!("⚠ '{branch}' is protected — force-push blocked."),
+                    );
+                    ui.colored_label(
+                        Color32::RED,
+                        "Uncheck force push or retarget the Branch field to continue.",
+                    );
+                } else if state.ui.dlg.force_push {
+                    ui.colored_label(
+                        Color32::YELLOW,
+                        "⚠ Force push rewrites the remote branch (--force-with-lease).",
+                    );
                 }
             }
 
+            // Aggregated dry-run preview (issue #25): the summary line plus
+            // one verbatim report per root in scope.
+            if let Some(preview) = state.ui.dlg.push_preview_output.as_ref() {
+                ui.separator();
+                ui.label(
+                    RichText::new(format!(
+                        "{} commits → {} remotes · {} refs · {} rejected",
+                        preview.commits, preview.remotes, preview.refs, preview.rejected
+                    ))
+                    .small()
+                    .strong(),
+                );
+
+                preview_reports(ui, preview);
+            }
+
+            // Footer: Cancel / Preview / Push. The Push button names the
+            // resolved scope (issue #25).
+            let force_blocked_this_repo = scope_is_this_repo
+                && state.ui.dlg.force_push
+                && sync_service::is_protected(&state.settings, &state.ui.dlg.push_branch);
+            let label = if scope_is_this_repo {
+                "Push".to_string()
+            } else {
+                action_label(&scope, total)
+            };
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
                     close(state);
@@ -114,11 +173,8 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 if ui.button("Preview dry-run").clicked() {
                     run_preview(state);
                 }
-                // A blocked force-push never dispatches: the disabled button
-                // keeps the block visible in-dialog instead of silently
-                // downgrading to a regular (or refused) push.
                 if ui
-                    .add_enabled(!force_blocked, egui::Button::new("Push"))
+                    .add_enabled(!force_blocked_this_repo, egui::Button::new(&label))
                     .clicked()
                 {
                     execute_push(state);
@@ -135,33 +191,239 @@ fn close(state: &mut AppState) {
     state.ui.dialog = None;
     state.ui.dlg.push_outgoing = None;
     state.ui.dlg.push_preview_root = None;
-    state.ui.dlg.push_current_branch_only = false;
     state.ui.dlg.push_preview_output = None;
+    state.ui.dlg.push_scope_excluded.clear();
 }
 
-/// Run a REAL `git push --dry-run` for the explicit Remote/Branch target on
-/// the selected root (issue #21), honoring the force acknowledgment, and
-/// store the report VERBATIM. Synchronous like the outgoing snapshot builder
-/// (a local git subprocess); a rejected push surfaces through the same pane
-/// with git's verbatim stderr instead of a toast.
-fn run_preview(state: &mut AppState) {
-    let output = match state.selected_path() {
-        Some(root) => {
-            let remote = state.ui.dlg.push_remote.clone();
-            let branch = state.ui.dlg.push_branch.clone();
-            let force = state.ui.dlg.force_push;
-            match state.executor.push_dry_run(&root, &remote, &branch, force) {
-                Ok(report) => Ok(report),
-                Err(e) => Err(verbatim_stderr(&e)),
+/// Resolved roots in the dialog's current PUSH SCOPE, minus the user's
+/// remediation exclusions (issue #25).
+fn scope_roots(state: &AppState) -> Vec<Root> {
+    state.push_scope_roots()
+}
+
+/// Action button label (issue #25): "Push N commits to M repos", or bare
+/// "Push" when the scope is empty.
+fn action_label(scope: &[Root], total_commits: usize) -> String {
+    let n = scope.len();
+    if n == 0 {
+        return "Push".to_string();
+    }
+    let noun = if n == 1 { "repo" } else { "repos" };
+    format!("Push {total_commits} commits to {n} {noun}")
+}
+fn outgoing_total(scope_commits: &[(&Root, Vec<Commit>)]) -> usize {
+    scope_commits.iter().map(|(_, cs)| cs.len()).sum()
+}
+fn scope_outgoing<'a>(state: &'a AppState, scope: &'a [Root]) -> Vec<(&'a Root, Vec<Commit>)> {
+    let snapshot = state.ui.dlg.push_outgoing.as_deref().unwrap_or(&[]);
+    scope
+        .iter()
+        .filter_map(|r| {
+            let entry = snapshot.iter().find(|e| e.id == r.id)?;
+            let commits = entry.commits.as_ref().ok()?.clone();
+            Some((r, commits))
+        })
+        .collect()
+}
+
+/// Paint the PUSH SCOPE segmented control (issue #25, screen 10).
+fn push_scope_control(ui: &mut Ui, state: &mut AppState) {
+    let all = state.multi.roots.len();
+    let sel = state.ui.repo_selection.len();
+    let subtree = state
+        .multi
+        .roots
+        .iter()
+        .filter(|r| r.path.starts_with(&state.project_dir))
+        .count();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("PUSH SCOPE").small().strong());
+        let this_label = "This repo";
+        if ui
+            .selectable_label(state.ui.dlg.push_scope == PushScope::ThisRepo, this_label)
+            .clicked()
+        {
+            state.ui.dlg.push_scope = PushScope::ThisRepo;
+            state.ui.dlg.push_scope_excluded.clear();
+        }
+        let sel_label = format!("Selected {sel}");
+        if ui
+            .selectable_label(state.ui.dlg.push_scope == PushScope::Selection, &sel_label)
+            .clicked()
+        {
+            state.ui.dlg.push_scope = PushScope::Selection;
+            state.ui.dlg.push_scope_excluded.clear();
+        }
+        let sub_label = format!("Project subtree ({subtree})");
+        if ui
+            .selectable_label(state.ui.dlg.push_scope == PushScope::Subtree, &sub_label)
+            .clicked()
+        {
+            state.ui.dlg.push_scope = PushScope::Subtree;
+            state.ui.dlg.push_scope_excluded.clear();
+        }
+        let all_label = format!("All {all}");
+        if ui
+            .selectable_label(state.ui.dlg.push_scope == PushScope::All, &all_label)
+            .clicked()
+        {
+            state.ui.dlg.push_scope = PushScope::All;
+            state.ui.dlg.push_scope_excluded.clear();
+        }
+    });
+}
+
+/// Paint the protected-branch remediation banner (issue #25). Returns the
+/// number of in-scope protected roots after exclusions so callers can skip
+/// downstream handling. The banner names repos + matching pattern; the
+/// button excludes those repos and lets the push proceed for the rest.
+fn remediation_banner(ui: &mut Ui, state: &mut AppState, scope: &[Root]) -> usize {
+    let protected = sync_service::protected_roots(&state.settings, scope);
+    if protected.is_empty() {
+        return 0;
+    }
+    let mut names: Vec<&str> = protected.iter().map(|p| p.name.as_str()).collect();
+    names.sort();
+    let names_str = match names.len() {
+        1 => names[0].to_string(),
+        2 => format!("{} and {}", names[0], names[1]),
+        _ => {
+            let head = &names[..names.len() - 1];
+            let last = names.last().unwrap();
+            format!("{}, and {}", head.join(", "), last)
+        }
+    };
+    let mut seen_patterns: Vec<String> = Vec::new();
+    for p in &protected {
+        for pat in &p.patterns {
+            if !seen_patterns.contains(pat) {
+                seen_patterns.push(pat.clone());
             }
         }
-        None => Err("No repository selected.".to_string()),
+    }
+    let patterns = seen_patterns.join("|");
+    let branch_label = protected[0].branch.clone();
+    ui.colored_label(
+        Color32::YELLOW,
+        format!(
+            "Protected branch in scope — {names_str} track {branch_label}, which matches {patterns}"
+        ),
+    );
+    let label: String = if protected.len() == 1 {
+        "Remove 1 protected repo from scope".to_string()
+    } else {
+        format!("Remove {} protected repos from scope", protected.len())
     };
-    state.ui.dlg.push_preview_output = Some(output);
+    if ui.button(label).clicked() {
+        for p in &protected {
+            state.ui.dlg.push_scope_excluded.insert(p.id.clone());
+        }
+    }
+    protected.len()
 }
 
-/// Extract git's verbatim stderr from an engine error; anything that is not
-/// a CLI error falls back to its Display text.
+/// Paint the verbatim per-root dry-run reports under the aggregate line
+fn preview_reports(ui: &mut Ui, preview: &PushPreview) {
+    let has_ok = preview.reports.iter().any(|(_, r)| r.is_ok());
+    let has_err = preview.reports.iter().any(|(_, r)| r.is_err());
+    if has_ok {
+        ui.label("Dry-run report (verbatim):");
+    }
+    if has_err {
+        ui.colored_label(Color32::RED, "Push rejected by git:");
+    }
+    egui::ScrollArea::vertical()
+        .max_height(160.0)
+        .show(ui, |ui| {
+            for (name, report) in &preview.reports {
+                match report {
+                    Ok(text) => {
+                        ui.label(RichText::new(format!("[{name}]")).small().strong());
+                        ui.label(RichText::new(text).monospace().small());
+                    }
+                    Err(stderr) => {
+                        ui.colored_label(Color32::RED, format!("[{name}] rejected:"));
+                        ui.label(
+                            RichText::new(stderr)
+                                .monospace()
+                                .small()
+                                .color(Color32::RED),
+                        );
+                    }
+                }
+            }
+        });
+}
+
+/// Run a REAL `git push --dry-run` per root in the resolved scope and store
+/// the aggregated preview. Verbatim per-root reports and a `N commits → R
+/// remotes · X refs · Y rejected` summary (issue #25).
+fn run_preview(state: &mut AppState) {
+    let scope = scope_roots(state);
+    let exec = state.executor.clone();
+    let _settings = state.settings.clone();
+    let force = state.ui.dlg.force_push;
+    let subset = state.ui.dlg.push_subset.clone();
+    let narrowed_sha: Option<String> = match &subset {
+        SubsetPushState::Suffix { oldest } => Some(oldest.clone()),
+        _ => None,
+    };
+    let scope_commits = scope_outgoing(state, &scope);
+    let total: usize = scope_commits.iter().map(|(_, cs)| cs.len()).sum();
+
+    let results: Vec<(String, Result<String, String>)> =
+        if scope.len() == 1 && state.ui.dlg.push_scope == PushScope::ThisRepo {
+            // Single-root path: keep the old Remote/Branch field semantics.
+            let root = &scope[0];
+            let branch = state.ui.dlg.push_branch.clone();
+            let remote = state.ui.dlg.push_remote.clone();
+            let r = exec
+                .push_dry_run(&root.path, &remote, &branch, force)
+                .map_err(|e| verbatim_stderr(&e));
+            vec![(remote, r)]
+        } else {
+            let refs: Vec<&Root> = scope.iter().collect();
+            sync_service::push_dry_run_roots(exec.as_ref(), &refs, force, narrowed_sha.as_deref())
+                .into_iter()
+                .map(|(remote, res)| (remote, res.map_err(|e| verbatim_stderr(&e))))
+                .collect()
+        };
+
+    let summary = sync_service::summarize_dry_runs(&results);
+    let reports: Vec<(String, Result<String, String>)> = results
+        .into_iter()
+        .map(|(remote, res)| {
+            let name = scope
+                .iter()
+                .find(|r| {
+                    r.branches.iter().any(|b| {
+                        b.tracking
+                            .as_deref()
+                            .and_then(|t| t.split('/').next())
+                            .map(|rname| rname == remote.as_str())
+                            .unwrap_or(false)
+                    })
+                })
+                .map(|r| {
+                    r.path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| r.path.display().to_string())
+                })
+                .unwrap_or_else(|| remote.clone());
+            (name, res)
+        })
+        .collect();
+    state.ui.dlg.push_preview_output = Some(PushPreview {
+        commits: total,
+        remotes: summary.remotes,
+        refs: summary.refs,
+        rejected: summary.rejected,
+        reports,
+    });
+}
+
+/// Extract git's verbatim stderr from an engine error.
 fn verbatim_stderr(e: &TgError) -> String {
     match e {
         TgError::Cli { stderr, .. } => stderr.clone(),
@@ -169,8 +431,9 @@ fn verbatim_stderr(e: &TgError) -> String {
     }
 }
 
-/// Build the outgoing-commit snapshot once per dialog open (synchronous like
-/// the interactive-rebase plan builder precedent).
+/// Build the outgoing-commit snapshot once when the dialog opens. Seeds the
+/// commit-selection list with every outgoing SHA so an untouched dialog pushes
+/// everything ahead (issue #24).
 fn ensure_outgoing(state: &mut AppState) {
     if state.ui.dlg.push_outgoing.is_some() {
         return;
@@ -178,6 +441,7 @@ fn ensure_outgoing(state: &mut AppState) {
     let exec = state.executor.clone();
     let results = sync_service::outgoing_per_root(exec.as_ref(), &state.multi);
     let mut out = Vec::with_capacity(results.len());
+    let mut selected = Vec::new();
     for (id, res) in results {
         let name =
             id.0.file_name()
@@ -197,15 +461,20 @@ fn ensure_outgoing(state: &mut AppState) {
                             message: String::new(),
                             time: 0,
                             root: id.clone(),
+                            signature: SignatureState::Unsigned,
                         })
                     })
                     .collect::<Vec<_>>())
             }
             Err(e) => Err(e.to_string()),
         };
+        if let Ok(cs) = &commits {
+            selected.extend(cs.iter().map(|c| c.id.clone()));
+        }
         out.push(OutgoingRoot { id, name, commits });
     }
     state.ui.dlg.push_outgoing = Some(out);
+    state.ui.dlg.push_selected_commits = selected;
 }
 
 fn empty_signature() -> Signature {
@@ -216,9 +485,8 @@ fn empty_signature() -> Signature {
     }
 }
 
-/// Prefill Remote/Branch from the selected root's tracking config (kept from
-/// the pre-redesign dialog; only fills while the remote field is empty so
-/// user edits persist across redraws).
+/// Prefill Remote/Branch from the selected root's tracking config. Only
+/// fills while the remote field is empty so user edits persist across redraws.
 fn ensure_target_defaults(state: &mut AppState) {
     if !state.ui.dlg.push_remote.is_empty() {
         return;
@@ -245,15 +513,32 @@ fn ensure_target_defaults(state: &mut AppState) {
 }
 
 /// Project node → per-root nodes → commit rows. Root-node clicks set the
-/// PREVIEW filter only (ADR-0006); they never affect push scope. The
-/// snapshot is borrowed, not cloned (plan §1.5); node clicks are collected
-/// during the scroll pass and applied after it (defer pattern).
+/// PREVIEW filter only (ADR-0006); they never affect push scope. Issue #24
+/// adds per-commit checkboxes plus a live "N selected of M" counter.
 fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
     let mut select_root: Option<Option<RootId>> = None;
+    let snapshot = state
+        .ui
+        .dlg
+        .push_outgoing
+        .as_deref()
+        .unwrap_or(&[])
+        .to_vec();
+    let total: usize = snapshot
+        .iter()
+        .map(|r| r.commits.as_ref().map_or(0, |c| c.len()))
+        .sum();
+    let selected_count = state.ui.dlg.push_selected_commits.len();
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new(format!("{selected_count} selected of {total}"))
+                .small()
+                .weak(),
+        );
+    });
     egui::ScrollArea::vertical()
         .max_height(220.0)
         .show(ui, |ui| {
-            let snapshot = state.ui.dlg.push_outgoing.as_deref().unwrap_or(&[]);
             if snapshot.is_empty() {
                 ui.label("No repositories to push.");
                 return;
@@ -271,21 +556,16 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
                 select_root = Some(None);
             }
 
-            let total: usize = snapshot
-                .iter()
-                .map(|r| r.commits.as_ref().map_or(0, |c| c.len()))
-                .sum();
             if total == 0 {
                 ui.label("No outgoing commits.");
             }
 
-            for entry in snapshot {
+            for entry in &snapshot {
                 let n = entry.commits.as_ref().map_or(0, |c| c.len());
                 let node = format!("{} — {n} commits ahead", entry.name);
                 let selected = state.ui.dlg.push_preview_root.as_ref() == Some(&entry.id);
                 ui.indent(entry.id.0.as_os_str(), |ui| {
                     if ui.selectable_label(selected, &node).clicked() {
-                        // Toggle: clicking the selected root returns to all roots.
                         select_root = Some(if selected {
                             None
                         } else {
@@ -295,7 +575,7 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
                     if let Ok(commits) = &entry.commits {
                         ui.indent((entry.id.0.as_os_str(), "commits"), |ui| {
                             for c in commits {
-                                commit_row(ui, c);
+                                commit_row(ui, state, c);
                             }
                         });
                     }
@@ -307,12 +587,21 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-fn commit_row(ui: &mut Ui, c: &Commit) {
+fn commit_row(ui: &mut Ui, state: &mut AppState, c: &Commit) {
     let short = &c.id[..c.id.len().min(7)];
     let subject = c.message.lines().next().unwrap_or("");
+    let mut checked = state.ui.dlg.push_selected_commits.contains(&c.id);
     ui.horizontal(|ui| {
+        if ui.checkbox(&mut checked, subject).changed() {
+            if checked {
+                if !state.ui.dlg.push_selected_commits.contains(&c.id) {
+                    state.ui.dlg.push_selected_commits.push(c.id.clone());
+                }
+            } else {
+                state.ui.dlg.push_selected_commits.retain(|x| x != &c.id);
+            }
+        }
         ui.label(RichText::new(short).monospace().color(Palette::BRAND));
-        ui.label(subject);
         let meta = format!("{} · {}", c.author.name, rel_time(c.time));
         ui.label(RichText::new(meta).small().weak());
     });
@@ -337,9 +626,7 @@ fn rel_time(epoch_secs: i64) -> String {
 }
 
 /// Changed files across outgoing commits, filtered by the clicked root node
-/// ONLY (ADR-0006). Files are cached per (root, commit) behind
-/// `caches.ensure_files`. Snapshot and filter are borrowed (plan §1.5); the
-/// `dlg` borrow is disjoint from the `caches` fill, so no clone is needed.
+/// ONLY (ADR-0006).
 fn changed_files_preview(ui: &mut Ui, state: &mut AppState) {
     egui::CollapsingHeader::new("Changed files")
         .default_open(true)
@@ -385,30 +672,70 @@ fn change_letter(status: ChangeStatus) -> &'static str {
     }
 }
 
-/// Dispatch the push on a worker thread. Default = batch across ALL roots
-/// (ADR-0006); "Push current branch only" narrows to the selected root using
-/// the explicit Remote/Branch fields (ADR-0007). Batch failures are
-/// aggregated naming each failing root so they surface per-root in the toast.
+/// Dispatch the push on a worker thread. Issue #25: the resolved scope
+/// drives the engine call — `push_roots` for multi-repo scopes (with each
+/// root's per-call remote resolution and protected-branch gating), and
+/// `push` for the single-repo `ThisRepo` path with explicit Remote/Branch
+/// fields. Issue #24: subset selection narrows per root only when the
+/// selection is a suffix of the full outgoing list — non-suffix selections
+/// fall back to a full push (issue #24 fallback semantics).
 fn execute_push(state: &mut AppState) {
     let force = state.ui.dlg.force_push;
+    let tags = state.ui.dlg.push_tags;
+    let no_verify = state.ui.dlg.push_no_verify;
+    let set_upstream = state.ui.dlg.push_set_upstream;
     let settings = state.settings.clone();
-    if state.ui.dlg.push_current_branch_only {
+    let scope = scope_roots(state);
+    let subset = state.ui.dlg.push_subset.clone();
+    let narrowed_sha: Option<String> = match &subset {
+        SubsetPushState::Suffix { oldest } => Some(oldest.clone()),
+        _ => None,
+    };
+
+    if state.ui.dlg.push_scope == PushScope::ThisRepo {
         let root = state.selected_path();
         let remote = state.ui.dlg.push_remote.clone();
         let branch = state.ui.dlg.push_branch.clone();
+        let sha = narrowed_sha.clone();
         state.run_git(
             "Push".into(),
             Affected::from_optional_root(root.as_deref()),
             move |v| match root {
-                Some(r) => sync_service::push(v, &r, &remote, &branch, force, &settings),
+                Some(r) => sync_service::push(
+                    v,
+                    &r,
+                    &remote,
+                    &branch,
+                    force,
+                    tags,
+                    no_verify,
+                    set_upstream,
+                    sha.as_deref(),
+                    &settings,
+                ),
                 None => Ok(()),
             },
         );
     } else {
-        let mgr = state.multi.clone();
-        // Batch push (ADR-0006) touches every root with an upstream.
+        // Multi-repo push (issue #25): push every root in the resolved scope
+        // via `push_roots`; per-root remote resolution and protected-branch
+        // gating happen inside that service. The roots must outlive the
+        // worker thread, so they move into the closure as owned data.
+        let owned_roots: Vec<Root> = scope.clone();
+        let owned_settings = settings;
+        let owned_sha = narrowed_sha;
         state.run_git("Push".into(), Affected::All, move |v| {
-            let results = sync_service::push_all_forced(v, &mgr, &settings, force);
+            let roots_ref: Vec<&Root> = owned_roots.iter().collect();
+            let results = sync_service::push_roots(
+                v,
+                &roots_ref,
+                &owned_settings,
+                force,
+                tags,
+                no_verify,
+                set_upstream,
+                owned_sha.as_deref(),
+            );
             let failures: Vec<String> = results
                 .into_iter()
                 .filter_map(|(id, r)| {

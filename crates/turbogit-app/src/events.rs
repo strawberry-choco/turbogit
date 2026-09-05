@@ -5,7 +5,7 @@
 //! drains the channel each frame and calls `ctx.request_repaint()`.
 
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::{Branch, Commit, RootId, RootStatus};
+use turbogit_domain::model::{BlameLine, Branch, Commit, RootId, RootStatus, Submodule, Worktree};
 
 use crate::root_caches::Affected;
 
@@ -57,6 +57,10 @@ pub enum AppEvent {
         label: String,
         affected: Affected,
         result: TgResult<()>,
+        /// Optional replay handle attached when the op was dispatched via
+        /// [`crate::state::AppState::run_git_with_retry`]. On `Err` the
+        /// error toast carries it as a `Retry` button (issue #02).
+        retry: Option<crate::state::RetryAction>,
     },
     /// Fatal / unexpected error to surface in the UI.
     Error(String),
@@ -66,6 +70,13 @@ pub enum AppEvent {
     DiffReady {
         key: String,
         result: TgResult<String>,
+    },
+    /// Blame lines for the open blame target (issue 18) are ready — keyed
+    /// like [`AppEvent::DiffReady`] so a result for a since-changed target
+    /// is dropped instead of painted.
+    BlameReady {
+        key: String,
+        result: TgResult<Vec<BlameLine>>,
     },
     /// Raw bytes for the open non-text diff pane (image/binary, spec R8)
     /// are ready — fetched off the frame path and keyed like
@@ -82,5 +93,35 @@ pub enum AppEvent {
         root: RootId,
         ahead: usize,
         behind: usize,
+    },
+    /// One background incoming-check poll finished (issue #27): the fresh
+    /// ahead/behind counts after the fetch, or the error that failed it.
+    /// `Ok(None)` means the root has no upstream and was skipped.
+    IncomingPolled {
+        root: RootId,
+        result: TgResult<Option<(usize, usize)>>,
+    },
+    /// The linked-worktree list of a root was loaded (issue 14).
+    WorktreesLoaded {
+        root: RootId,
+        worktrees: TgResult<Vec<Worktree>>,
+    },
+    /// The submodule list of a root was loaded (issue 14).
+    SubmodulesLoaded {
+        root: RootId,
+        submodules: TgResult<Vec<Submodule>>,
+    },
+    /// A confirmed bulk operation (issue 09) finished: one result per
+    /// planned root. Drained into an aggregate toast + activity entry and
+    /// a full refresh (the op touched several roots).
+    BulkCompleted {
+        label: String,
+        results: Vec<(RootId, TgResult<()>)>,
+    },
+    /// A cascade-run monitor transition (issue 10): one row started,
+    /// finished (with duration), or was halted by a stop. Drained into the
+    /// live monitor rows in `ui.bulk_run`.
+    BulkRunProgress {
+        event: turbogit_services::bulk_run::RunEvent,
     },
 }

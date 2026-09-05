@@ -50,10 +50,6 @@ pub(super) struct Row {
     pub(super) old_no: usize,
     /// 1-based new-file line number (0 when not applicable).
     pub(super) new_no: usize,
-    /// Raw ordinal in the display model — parse order plus any leading
-    /// rename-header row — the unified-mode paging index (ADR-0014):
-    /// unified windows are ranges over these ordinals.
-    pub(super) ord: usize,
 }
 
 /// `@@ -a,b +c,d @@` → `(a, c)` (defaults to 1 when absent).
@@ -98,7 +94,6 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: 0,
                 old_no: 0,
                 new_no: 0,
-                ord: 0,
             });
             enclosing = hunk;
             hunk += 1;
@@ -117,7 +112,6 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: 0,
                 old_no: 0,
                 new_no: 0,
-                ord: 0,
             });
         } else if let Some(body) = line.strip_prefix('+') {
             rows.push(Row {
@@ -127,7 +121,6 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: changed,
                 old_no: 0,
                 new_no,
-                ord: 0,
             });
             changed += 1;
             new_no += 1;
@@ -139,7 +132,6 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: changed,
                 old_no,
                 new_no: 0,
-                ord: 0,
             });
             changed += 1;
             old_no += 1;
@@ -152,7 +144,6 @@ fn parse(text: &str) -> Vec<Row> {
                 line_ord: 0,
                 old_no,
                 new_no,
-                ord: 0,
             });
             old_no += 1;
             new_no += 1;
@@ -373,18 +364,11 @@ pub(super) enum DisplayRow {
 }
 
 /// Everything rendering needs from one diff, built once per diff text and
-/// memoized beside `diff_cache` (ADR-0014): the display-row vector plus the
-/// index maps hunk navigation — and R7 keyboard nav — scroll by, and the
+/// memoized beside `diff_cache` (ADR-0014): the display-row vector the
+/// per-frame paint plan filters into slot streams (issue 20), and the
 /// per-file section metadata R8 renders from.
 pub(super) struct DiffModel {
     pub(super) display: Vec<DisplayRow>,
-    /// Underlying parsed-row count: the unified-mode `show_rows` total
-    /// (pairing ignored, each underlying row = one paging slot). Includes
-    /// any leading rename-header row.
-    pub(super) raw_count: usize,
-    /// Underlying-row ordinal → display index, so a unified window over raw
-    /// ordinals finds the (possibly mid-pair) display elements covering it.
-    pub(super) raw_to_display: Vec<u32>,
     /// Hunk ordinal → first display index of its header row.
     pub(super) hunk_first_display: Vec<u32>,
     /// Per-file section metadata (spec R8), scanned once beside the rows.
@@ -410,45 +394,19 @@ impl DiffModel {
                 f.renamed && f.similarity == Some(100) && !f.new_file && !f.deleted_file
             })
     }
-
-    /// First display-row index aiming at `hunk`: the paired-model index in
-    /// side-by-side mode, otherwise the underlying-row ordinal of the header
-    /// (unified pages over underlying rows). This is the shared hunk→row map
-    /// ADR-0014 commits to — R7 keyboard nav (`F7`/`Shift+F7`) reuses it.
-    pub(super) fn first_row_for_hunk(&self, hunk: usize, side_by_side: bool) -> Option<usize> {
-        let disp = *self.hunk_first_display.get(hunk)? as usize;
-        Some(if side_by_side {
-            disp
-        } else {
-            match &self.display[disp] {
-                DisplayRow::Full(row) => row.ord,
-                // Changed rows are always paired; headers never are.
-                DisplayRow::Pair(..) => disp,
-            }
-        })
-    }
 }
 
-/// Fold a buffered run of consecutive Del/Add rows into paired display rows,
-/// recording each underlying row's display index in parse order.
-fn flush_changed_run(
-    pending: &mut Vec<Row>,
-    display: &mut Vec<DisplayRow>,
-    raw_to_display: &mut Vec<u32>,
-) {
+/// Fold a buffered run of consecutive Del/Add rows into paired display rows.
+fn flush_changed_run(pending: &mut Vec<Row>, display: &mut Vec<DisplayRow>) {
     if pending.is_empty() {
         return;
     }
-    let start = display.len() as u32;
     let mut dels: Vec<Row> = Vec::new();
     let mut adds: Vec<Row> = Vec::new();
-    let mut slots: Vec<u32> = Vec::with_capacity(pending.len());
     for row in pending.drain(..) {
         if row.kind == RowKind::Del {
-            slots.push(dels.len() as u32);
             dels.push(row);
         } else {
-            slots.push(adds.len() as u32);
             adds.push(row);
         }
     }
@@ -458,26 +416,22 @@ fn flush_changed_run(
     for _ in 0..pairs {
         display.push(DisplayRow::Pair(dels.next(), adds.next()));
     }
-    raw_to_display.extend(slots.iter().map(|p| start + p));
 }
 
 /// Fold parsed rows plus the per-file section scan (spec R8) into the
 /// cached display-row model (ADR-0014): consecutive Del/Add runs collapse
 /// into paired display rows while meta/hunk/context stay full-width, and a
 /// rename header — when the scan found one — leads as its own full-width
-/// row. Also records the index maps so per-frame work is O(visible rows).
-fn build_model(mut rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
+/// row. The per-frame paint plan (issue 20) filters this stream into the
+/// paged slot lists.
+fn build_model(rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
     let mut display = Vec::new();
-    let mut raw_to_display = Vec::with_capacity(rows.len() + 1);
     let mut hunk_first_display = Vec::new();
 
     // The rename header (CONTEXT.md) leads the content as its own display
-    // row, so every index below — raw ordinals, raw_to_display, and
-    // hunk_first_display — accounts for it and hunks still point at their
-    // own content rows (spec R8, ADR-0014).
+    // row, before every hunk (spec R8).
     let rename_header = files.iter().find_map(rename_header_text);
     if let Some(text) = &rename_header {
-        raw_to_display.push(display.len() as u32);
         display.push(DisplayRow::Full(Row {
             kind: RowKind::RenameHeader,
             text: text.clone(),
@@ -485,37 +439,27 @@ fn build_model(mut rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
             line_ord: 0,
             old_no: 0,
             new_no: 0,
-            ord: 0,
         }));
     }
-    let offset = usize::from(rename_header.is_some());
-    for (raw, row) in rows.iter_mut().enumerate() {
-        row.ord = raw + offset;
-    }
-    let raw_count = rows.len() + offset;
 
     let mut pending: Vec<Row> = Vec::new();
     for row in rows {
         match row.kind {
             RowKind::Del | RowKind::Add => pending.push(row),
             RowKind::Meta | RowKind::RenameHeader | RowKind::Context => {
-                flush_changed_run(&mut pending, &mut display, &mut raw_to_display);
-                raw_to_display.push(display.len() as u32);
+                flush_changed_run(&mut pending, &mut display);
                 display.push(DisplayRow::Full(row));
             }
             RowKind::Hunk => {
-                flush_changed_run(&mut pending, &mut display, &mut raw_to_display);
+                flush_changed_run(&mut pending, &mut display);
                 hunk_first_display.push(display.len() as u32);
-                raw_to_display.push(display.len() as u32);
                 display.push(DisplayRow::Full(row));
             }
         }
     }
-    flush_changed_run(&mut pending, &mut display, &mut raw_to_display);
+    flush_changed_run(&mut pending, &mut display);
     DiffModel {
         display,
-        raw_count,
-        raw_to_display,
         hunk_first_display,
         files,
         rename_header,
@@ -604,8 +548,8 @@ mod tests {
         assert!(model.pure_rename());
         assert_eq!(pane_kind(&scan_files(text)), PaneKind::Text);
         assert_eq!(model.hunk_count(), 0);
-        // The header is the sole leading display row; raw paging counts it.
-        assert_eq!(model.raw_count, 5);
+        // The rename header leads the section's meta rows.
+        assert_eq!(model.display.len(), 5);
         let DisplayRow::Full(row) = &model.display[0] else {
             panic!("rename header must be a full-width row");
         };
@@ -643,28 +587,10 @@ mod tests {
             scan_files(RENAME_WITH_SIMILARITY),
         );
         assert_eq!(model.hunk_count(), 1);
-        // The header occupies raw ordinal 0 and display row 0; the hunk
-        // header follows it in both index spaces.
-        assert_eq!(model.raw_to_display[0], 0);
+        // The rename header leads as display row 0; the hunk header follows
+        // it — the slot the per-frame paint plan aims hunk navigation at
+        // (issue 20).
         assert_eq!(model.hunk_first_display[0], 7);
-        assert_eq!(model.first_row_for_hunk(0, true), Some(7));
-        assert_eq!(model.first_row_for_hunk(0, false), Some(7));
-
-        // Every raw ordinal lands in the display model exactly once — the
-        // invariant unified-mode paging relies on (ADR-0014).
-        let mut ords = Vec::with_capacity(model.raw_count);
-        for disp in &model.display {
-            match disp {
-                DisplayRow::Full(row) => ords.push(row.ord),
-                DisplayRow::Pair(del, add) => {
-                    for row in del.iter().chain(add.iter()) {
-                        ords.push(row.ord);
-                    }
-                }
-            }
-        }
-        ords.sort_unstable();
-        assert_eq!(ords, (0..model.raw_count).collect::<Vec<_>>());
     }
 
     #[test]

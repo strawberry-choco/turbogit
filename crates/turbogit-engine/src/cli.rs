@@ -6,11 +6,24 @@
 
 #![allow(dead_code)]
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 use turbogit_engine_api::{ApplyDirection, GitExecutor};
+
+/// Git-for-Windows rejects Windows verbatim (`\\?\`) prefixed paths handed
+/// to `git worktree …`. Canonicalized roots carry that prefix (Rust
+/// `canonicalize` yields `\\?\`-prefixed absolute paths on Windows), so
+/// strip it before passing a worktree destination through to the CLI.
+fn portable_path(p: &Path) -> PathBuf {
+    #[cfg(windows)]
+    if let Some(rest) = p.to_string_lossy().strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    p.to_path_buf()
+}
 
 /// Executor that drives git through the command line.
 pub struct CliExecutor {
@@ -56,10 +69,44 @@ impl CliExecutor {
         }
         Ok(output.stdout)
     }
+
+    /// [`Self::run`] variant with extra environment overrides (issue 31: the
+    /// tag dialog's tagger identity rides on `GIT_COMMITTER_*`, which is how
+    /// `git tag -a` picks the tagger). Error mapping is identical.
+    fn run_env(
+        &self,
+        root: &Path,
+        args: &[&str],
+        envs: &[(&str, String)],
+    ) -> TgResult<(String, String, i32)> {
+        let bin = turbogit_domain::model::git_binary(&self.settings);
+        let mut cmd = Command::new(&bin);
+        cmd.args(args).current_dir(root).env("GIT_EDITOR", "true");
+        for (k, val) in envs {
+            cmd.env(k, val);
+        }
+        let output = cmd.output()?;
+        let code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if !output.status.success() {
+            return Err(TgError::Cli { code, stderr });
+        }
+        Ok((stdout, stderr, 0))
+    }
 }
 
 impl GitExecutor for CliExecutor {
     // ---------------------------------------------------------------- read ----
+
+    /// Run an arbitrary git command in `root` — the raw-args escape hatch
+    /// behind the "Custom command…" bulk operation (issue 13). Stdout is
+    /// returned; error mapping matches [`CliExecutor::run`].
+    fn run_raw(&self, root: &Path, args: &[String]) -> TgResult<String> {
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (out, _, _) = self.run(root, &arg_refs)?;
+        Ok(out)
+    }
 
     fn status(&self, root: &Path) -> TgResult<RootStatus> {
         let (out, _, _) = self.run(root, &["status", "--porcelain=v2", "-b"])?;
@@ -186,13 +233,20 @@ impl GitExecutor for CliExecutor {
             "log".to_string(),
             // %B carries the FULL raw message (subject + body); rows show its
             // first line while the details pane shows all of it (issue #12).
-            "--pretty=format:%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%B%x1e".to_string(),
+            // %G? carries the committer signature state (issue 17).
+            "--pretty=format:%H%x00%P%x00%an%x00%ae%x00%cn%x00%ce%x00%at%x00%G?%x00%B%x1e"
+                .to_string(),
         ];
         if let Some(n) = opts.max_count {
             a.push(format!("-n{}", n));
         }
         if let Some(b) = &opts.branch {
             a.push(b.clone());
+        }
+        // Pickaxe (issue 17): `git log -S<str>` keeps only commits where the
+        // occurrence count of the string changed — the code-change search.
+        if let Some(s) = &opts.pickaxe {
+            a.push(format!("-S{}", s));
         }
         if let Some(p) = &opts.path {
             a.push("--".to_string());
@@ -213,7 +267,7 @@ impl GitExecutor for CliExecutor {
                 continue;
             }
             let f: Vec<&str> = rec.split('\0').collect();
-            if f.len() < 8 {
+            if f.len() < 9 {
                 continue;
             }
             let id = f[0].to_string();
@@ -227,9 +281,10 @@ impl GitExecutor for CliExecutor {
             let cn = f[4].to_string();
             let ce = f[5].to_string();
             let time: i64 = f[6].trim().parse().unwrap_or(0);
+            let signature = parse_signature_state(f[7]);
             // %B ends with git's trailing newline; rows/labels expect the
             // message without it.
-            let message = f[7].trim_end().to_string();
+            let message = f[8].trim_end().to_string();
             commits.push(Commit {
                 id,
                 parents,
@@ -246,6 +301,7 @@ impl GitExecutor for CliExecutor {
                 message,
                 time,
                 root: root_id.clone(),
+                signature,
             });
         }
         Ok(commits)
@@ -263,6 +319,8 @@ impl GitExecutor for CliExecutor {
         let mut order: Vec<CommitId> = Vec::new();
         let mut by_sha: std::collections::HashMap<CommitId, Vec<CommitRef>> =
             std::collections::HashMap::new();
+        let mut has_tags = false;
+        let mut has_remote_refs = false;
         for line in out.lines() {
             let Some((sha, refname)) = line.split_once('\t') else {
                 continue;
@@ -270,14 +328,104 @@ impl GitExecutor for CliExecutor {
             if sha.len() < 40 {
                 continue;
             }
-            if let Some(r) = parse_ref_name(refname) {
-                let sha = sha.to_string();
-                if !by_sha.contains_key(&sha) {
-                    order.push(sha.clone());
+            let Some(r) = parse_ref_name(refname) else {
+                continue;
+            };
+            match r.kind {
+                GitRefKind::Tag => has_tags = true,
+                GitRefKind::Remote => has_remote_refs = true,
+                GitRefKind::Branch => {}
+            }
+            let sha = sha.to_string();
+            if !by_sha.contains_key(&sha) {
+                order.push(sha.clone());
+            }
+            by_sha.entry(sha).or_default().push(r);
+        }
+
+        // Sync states (issue 17): remote-tracking refs report Gone when
+        // their branch is missing from the remote, tags report pushed vs
+        // local-only. Everything comes from one `ls-remote` per remote;
+        // states are only assigned when every remote could be consulted —
+        // a failed ls-remote (offline) leaves refs unmarked rather than
+        // misreporting pushed tags as local-only or live refs as gone.
+        if has_tags || has_remote_refs {
+            let remotes: Vec<String> = self.run(root, &["remote"]).map(|(out, _, _)| {
+                out.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })?;
+            if remotes.is_empty() {
+                for refs in by_sha.values_mut() {
+                    for r in refs.iter_mut().filter(|r| r.kind == GitRefKind::Tag) {
+                        r.state = RefState::LocalOnly;
+                    }
                 }
-                by_sha.entry(sha).or_default().push(r);
+            } else {
+                // Per remote: the branch names and tag names it actually has.
+                let mut remote_refs: HashMap<String, (HashSet<String>, HashSet<String>)> =
+                    HashMap::new();
+                let mut all_ok = true;
+                for remote in &remotes {
+                    match self.run(root, &["ls-remote", remote]) {
+                        Ok((out, _, _)) => {
+                            let entry = remote_refs.entry(remote.clone()).or_default();
+                            for line in out.lines() {
+                                let Some((_, refname)) = line.split_once('\t') else {
+                                    continue;
+                                };
+                                let refname = refname.trim();
+                                if let Some(branch) = refname.strip_prefix("refs/heads/") {
+                                    entry.0.insert(branch.to_string());
+                                } else if let Some(tag) = refname.strip_prefix("refs/tags/") {
+                                    // Skip peeled `^{}` duplicates — the
+                                    // plain ref's presence is the answer.
+                                    if !tag.ends_with("^{}") {
+                                        entry.1.insert(tag.to_string());
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            all_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if all_ok {
+                    for refs in by_sha.values_mut() {
+                        for r in refs.iter_mut() {
+                            match r.kind {
+                                GitRefKind::Remote => {
+                                    // `<remote>/<branch…>` — gone when the
+                                    // remote no longer has that branch.
+                                    if let Some((remote, branch)) = r.name.split_once('/')
+                                        && let Some((heads, _)) = remote_refs.get(remote)
+                                        && !heads.contains(branch)
+                                    {
+                                        r.state = RefState::Gone;
+                                    }
+                                }
+                                GitRefKind::Tag => {
+                                    let pushed = remote_refs
+                                        .values()
+                                        .any(|(_, tags)| tags.contains(&r.name));
+                                    r.state = if pushed {
+                                        RefState::Pushed
+                                    } else {
+                                        RefState::LocalOnly
+                                    };
+                                }
+                                GitRefKind::Branch => {}
+                            }
+                        }
+                    }
+                }
             }
         }
+
         Ok(order
             .into_iter()
             .map(|id| {
@@ -308,6 +456,44 @@ impl GitExecutor for CliExecutor {
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
         let (out, _, _) = self.run(root, &["branch", "-a", "-vv"])?;
+        // Branch-tip committer dates, one `git for-each-ref` call: keyed by
+        // (kind, short name) so the popup's stale badge has data for every
+        // row without an N-call fan-out (issue 32).
+        let mut last_touched: HashMap<(BranchKind, String), chrono::DateTime<chrono::Utc>> =
+            HashMap::new();
+        if let Ok((refs, _, _)) = self.run(
+            root,
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)%00%(committerdate:iso-strict)",
+                "refs/heads",
+                "refs/remotes",
+            ],
+        ) {
+            for line in refs.lines() {
+                let mut it = line.split('\0');
+                let (Some(name), Some(date)) = (it.next(), it.next()) else {
+                    continue;
+                };
+                // `refs/remotes/<remote>/HEAD` is a symbolic ref the `-vv`
+                // listing skips; never invent a branch row for it.
+                if name.ends_with("/HEAD") {
+                    continue;
+                }
+                let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date) else {
+                    continue;
+                };
+                // `%(refname:short)` under refs/remotes is `origin/main`;
+                // strip the first component to match the -vv parser's short
+                // remote names (multi-remote safe).
+                let (kind, short) = match name.split_once('/') {
+                    Some((_, rest)) => (BranchKind::Remote, rest.to_string()),
+                    None => (BranchKind::Local, name.to_string()),
+                };
+                last_touched.insert((kind, short), dt.with_timezone(&chrono::Utc));
+            }
+        }
+
         let mut result = Vec::new();
         for line in out.lines() {
             let trimmed = line.trim();
@@ -321,26 +507,39 @@ impl GitExecutor for CliExecutor {
                 Some(n) => n,
                 None => continue,
             };
-            // Skip detached-HEAD / symbolic ref annotation lines.
-            if name.starts_with('(') || name.contains("->") {
+            // Skip detached-HEAD / symbolic ref annotation lines. The arrow lives
+            // outside the first token (`remotes/origin/HEAD -> origin/main`),
+            // so test the whole line, not just the name.
+            if name.starts_with('(') || trimmed.contains("->") {
                 continue;
             }
 
-            let tracking = if let (Some(s), Some(e)) = (content.find('['), content.find(']')) {
-                if s < e {
-                    let inner = &content[s + 1..e];
-                    let t = inner.split(':').next().unwrap_or("").trim();
-                    if t.is_empty() {
-                        None
-                    } else {
-                        Some(t.to_string())
-                    }
-                } else {
-                    None
+            // Bracket annotation: `[upstream]`, `[upstream: ahead 2, behind 1]`,
+            // or `[upstream: gone]`. The part after the first `:` carries the
+            // sync markers; `upstream` is the tracking ref.
+            let (mut tracking, mut ahead, mut behind, mut gone) = (None, 0, 0, false);
+            if let (Some(s), Some(e)) = (content.find('['), content.find(']'))
+                && s < e
+            {
+                let inner = &content[s + 1..e];
+                let (up, rest) = match inner.find(':') {
+                    Some(i) => (inner[..i].trim(), &inner[i + 1..]),
+                    None => (inner, ""),
+                };
+                if !up.is_empty() {
+                    tracking = Some(up.to_string());
                 }
-            } else {
-                None
-            };
+                for part in rest.split(',') {
+                    let p = part.trim();
+                    if p.contains("gone") {
+                        gone = true;
+                    } else if let Some(v) = p.strip_prefix("ahead ") {
+                        ahead = v.trim().parse().unwrap_or(0);
+                    } else if let Some(v) = p.strip_prefix("behind ") {
+                        behind = v.trim().parse().unwrap_or(0);
+                    }
+                }
+            }
 
             let (kind, disp_name) = if let Some(without) = name.strip_prefix("remotes/") {
                 let local = match without.find('/') {
@@ -353,7 +552,7 @@ impl GitExecutor for CliExecutor {
             };
 
             result.push(Branch {
-                name: disp_name,
+                name: disp_name.clone(),
                 kind,
                 tracking: if kind == BranchKind::Remote {
                     None
@@ -363,6 +562,10 @@ impl GitExecutor for CliExecutor {
                 favorite: false,
                 protected: false,
                 exists: true,
+                ahead: if kind == BranchKind::Local { ahead } else { 0 },
+                behind: if kind == BranchKind::Local { behind } else { 0 },
+                gone: kind == BranchKind::Local && gone,
+                last_touched: last_touched.get(&(kind, disp_name)).copied(),
             });
         }
         Ok(result)
@@ -410,6 +613,19 @@ impl GitExecutor for CliExecutor {
         Ok((ahead, behind))
     }
 
+    fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
+        // `git merge-base --is-ancestor` exits 0 when upstream IS an
+        // `git merge-base --is-ancestor` exits 0 when upstream IS an
+        // ancestor of branch (i.e. branch is fully merged into upstream
+        // — safe to delete), and 1 otherwise. Anything else is an
+        // unexpected error.
+        match self.run(root, &["merge-base", "--is-ancestor", upstream, branch]) {
+            Ok(_) => Ok(true),
+            Err(TgError::Cli { code: 1, .. }) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     fn outgoing_commits(
         &self,
         root: &Path,
@@ -430,30 +646,46 @@ impl GitExecutor for CliExecutor {
 
     fn remotes(&self, root: &Path) -> TgResult<Vec<Remote>> {
         let (out, _, _) = self.run(root, &["remote", "-v"])?;
-        let mut seen = std::collections::HashSet::new();
-        let mut result = Vec::new();
+        // `git remote -v` prints `name<TAB>url (fetch)` / `url (push)` lines,
+        // so a remote with divergent fetch/push URLs spans two lines. Collect
+        // per-name, preserving remote order (order of first sighting).
+        let mut order: Vec<String> = Vec::new();
+        let mut fetch: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut push: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         for line in out.lines() {
             let mut parts = line.splitn(2, '\t');
             let name = match parts.next() {
-                Some(n) if !n.is_empty() => n,
+                Some(n) if !n.is_empty() => n.trim().to_string(),
                 _ => continue,
             };
             let rest = match parts.next() {
                 Some(r) => r,
                 None => continue,
             };
-            let url = rest.split_whitespace().next().unwrap_or("").trim();
+            let mut words = rest.split_whitespace();
+            let Some(url) = words.next() else { continue };
+            let url = url.trim();
             if url.is_empty() {
                 continue;
             }
-            if seen.insert(name.to_string()) {
-                result.push(Remote {
-                    name: name.to_string(),
-                    url: url.to_string(),
-                });
+            let is_push = rest.contains("(push)");
+            if is_push {
+                push.insert(name.clone(), url.to_string());
+            } else {
+                if !fetch.contains_key(&name) {
+                    order.push(name.clone());
+                }
+                fetch.insert(name.clone(), url.to_string());
             }
         }
-        Ok(result)
+        Ok(order
+            .into_iter()
+            .map(|name| Remote {
+                name: name.clone(),
+                fetch_url: fetch.get(&name).cloned(),
+                push_url: push.get(&name).cloned(),
+            })
+            .collect())
     }
 
     fn stash_list(&self, root: &Path) -> TgResult<Vec<Stash>> {
@@ -484,23 +716,32 @@ impl GitExecutor for CliExecutor {
         let mut cur_path: Option<PathBuf> = None;
         let mut cur_branch = String::new();
 
-        let flush =
-            |path: Option<PathBuf>, branch: String, root: &Path, out: &mut Vec<Worktree>| {
-                if let Some(p) = path
-                    && p != root
-                {
-                    let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
-                        stripped.to_string()
-                    } else {
-                        branch
-                    };
-                    out.push(Worktree {
-                        path: p,
-                        branch: b,
-                        root: RootId(root.into()),
-                    });
-                }
-            };
+        let flush = |path: Option<PathBuf>,
+                     branch: String,
+                     root: &Path,
+                     out: &mut Vec<Worktree>| {
+            if let Some(p) = path
+                && p != root
+            {
+                let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
+                    stripped.to_string()
+                } else {
+                    branch
+                };
+                // Dirty state is a per-worktree status probe. A prunable
+                // (missing) worktree fails the probe and reads clean.
+                let dirty = self
+                    .status(&p)
+                    .map(|s| s.modified() > 0 || s.unversioned() > 0 || !s.conflicted.is_empty())
+                    .unwrap_or(false);
+                out.push(Worktree {
+                    path: p,
+                    branch: b,
+                    dirty,
+                    root: RootId(root.into()),
+                });
+            }
+        };
 
         for line in out.lines() {
             if let Some(rest) = line.strip_prefix("worktree ") {
@@ -510,7 +751,12 @@ impl GitExecutor for CliExecutor {
                     root,
                     &mut result,
                 );
-                cur_path = Some(PathBuf::from(rest.trim()));
+                // Normalize git's emitted path (on Windows `git` prints a
+                // forward-slash absolute path) to the canonical form rooted at
+                // `\\?\` so linked worktrees agree with the git2 backend and
+                // the main-worktree filtering below compares like-for-like.
+                let p = PathBuf::from(rest.trim());
+                cur_path = Some(p.canonicalize().unwrap_or(p));
             } else if let Some(rest) = line.strip_prefix("branch ") {
                 cur_branch = rest.trim().to_string();
             }
@@ -520,26 +766,79 @@ impl GitExecutor for CliExecutor {
     }
 
     fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>> {
+        Ok(self
+            .submodule_status(root)?
+            .into_iter()
+            .map(|s| s.path)
+            .collect())
+    }
+
+    fn submodule_status(&self, root: &Path) -> TgResult<Vec<Submodule>> {
+        // `git submodule status` lines: "<status><sha> <path> [(<describe>)]"
+        // with status ' ' in sync, '+' head off the record, '-' uninitialized,
+        // 'U' conflicted; the sha is the submodule's HEAD (the recorded one
+        // when uninitialized). The recorded gitlink per path comes from the
+        // index (`git ls-files -s`, mode 160000).
         let (out, _, _) = self.run(root, &["submodule", "status"])?;
+        let (recorded, _) = {
+            let (idx, _, _) = self.run(root, &["ls-files", "-s"])?;
+            let mut map = HashMap::new();
+            for line in idx.lines() {
+                // "160000 <sha> <stage>\t<path>"
+                let Some((meta, path)) = line.split_once('\t') else {
+                    continue;
+                };
+                let mut tokens = meta.split_whitespace();
+                let mode = tokens.next().unwrap_or("");
+                if mode != "160000" {
+                    continue;
+                }
+                if let Some(sha) = tokens.next() {
+                    map.insert(path.trim().to_string(), sha.to_string());
+                }
+            }
+            (map, ())
+        };
+
         let mut result = Vec::new();
         for line in out.lines() {
-            let line = line.trim();
-            if line.is_empty() {
+            if line.trim().is_empty() {
                 continue;
             }
-            // `git submodule status` format: "<status> <sha> <path> [(<sha-or-ref>)]"
-            // status = ' ' for clean, '+' ahead, '-' behind; then a 40-hex SHA,
-            // then the path; an optional parenthetical ref (`(heads/main)` / `(<sha>)`)
-            // follows the path when HEAD is non-trivial. Take the first non-paren
-            // token after the SHA (status char is a space, consumed by trim).
-            let path = line
-                .split_whitespace()
-                .skip(1)
-                .find(|t| !t.starts_with('('))
-                .unwrap_or("");
-            if !path.is_empty() {
-                result.push(PathBuf::from(path));
-            }
+            // The status char is always the first byte of the raw line (' '
+            // included) — never trim before slicing it off.
+            let status_char = line.chars().next().unwrap_or(' ');
+            let mut tokens = line[1..].split_whitespace();
+            let Some(sha) = tokens.next() else {
+                continue;
+            };
+            // The path is the first token that is not a parenthetical
+            // describe (`(heads/main)` / `(<sha>)`).
+            let Some(path) = tokens.find(|t| !t.starts_with('(')) else {
+                continue;
+            };
+            let state = match status_char {
+                '+' => SubmoduleState::NeedsUpdate,
+                '-' => SubmoduleState::Uninitialized,
+                'U' => SubmoduleState::Conflicted,
+                _ => SubmoduleState::UpToDate,
+            };
+            let head = if state == SubmoduleState::Uninitialized {
+                None
+            } else {
+                Some(sha.to_string())
+            };
+            result.push(Submodule {
+                path: PathBuf::from(path),
+                head,
+                recorded: recorded.get(path).cloned().or_else(|| {
+                    // Uninitialized lines carry the recorded sha in place of
+                    // a HEAD; `ls-files` agrees but belt-and-braces both.
+                    (state == SubmoduleState::Uninitialized).then(|| sha.to_string())
+                }),
+                state,
+                root: RootId(root.into()),
+            });
         }
         Ok(result)
     }
@@ -602,6 +901,50 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
+    fn set_remote_url(
+        &self,
+        root: &Path,
+        name: &str,
+        fetch_url: Option<&str>,
+        push_url: Option<&str>,
+    ) -> TgResult<()> {
+        let mut ran = false;
+        if let Some(url) = fetch_url {
+            let args = ["remote", "set-url", name, url];
+            self.run(root, &args)?;
+            ran = true;
+        }
+        if let Some(url) = push_url {
+            let args = ["remote", "set-url", "--push", name, url];
+            self.run(root, &args)?;
+            ran = true;
+        }
+        if !ran {
+            return Err(TgError::Other(
+                "set_remote_url needs at least one of fetch_url or push_url".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn rename_remote(&self, root: &Path, old: &str, new: &str) -> TgResult<()> {
+        let args = ["remote", "rename", old, new];
+        self.run(root, &args)?;
+        Ok(())
+    }
+
+    fn remove_remote(&self, root: &Path, name: &str) -> TgResult<()> {
+        let args = ["remote", "remove", name];
+        self.run(root, &args)?;
+        Ok(())
+    }
+
+    fn set_branch_upstream(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<()> {
+        let args = ["branch", &format!("--set-upstream-to={upstream}"), branch];
+        self.run(root, &args)?;
+        Ok(())
+    }
+
     fn fetch(&self, root: &Path, remote: Option<&str>) -> TgResult<()> {
         let mut a: Vec<String> = vec!["fetch".to_string()];
         match remote {
@@ -623,13 +966,39 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
-    fn push(&self, root: &Path, remote: &str, branch: &str, force: bool) -> TgResult<()> {
+    fn push(
+        &self,
+        root: &Path,
+        remote: &str,
+        branch: &str,
+        force: bool,
+        tags: bool,
+        no_verify: bool,
+        set_upstream: bool,
+        selected_oldest: Option<&str>,
+    ) -> TgResult<()> {
         let mut a: Vec<String> = vec!["push".to_string()];
         if force {
             a.push("--force-with-lease".to_string());
         }
+        if tags {
+            a.push("--tags".to_string());
+        }
+        if no_verify {
+            a.push("--no-verify".to_string());
+        }
+        if set_upstream {
+            a.push("--set-upstream".to_string());
+        }
         a.push(remote.to_string());
-        a.push(branch.to_string());
+        if let Some(sha) = selected_oldest {
+            // Subset push (issue #24): the user selected a suffix of the
+            // outgoing list, so the oldest selected commit (inclusive)
+            // becomes the refspec target.
+            a.push(format!("{sha}:refs/heads/{branch}"));
+        } else {
+            a.push(branch.to_string());
+        }
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         self.run(root, &args)?;
         Ok(())
@@ -683,6 +1052,9 @@ impl GitExecutor for CliExecutor {
         }
         if opts.no_verify {
             a.push("--no-verify".to_string());
+        }
+        if opts.verify_signatures {
+            a.push("--verify-signatures".to_string());
         }
         if opts.allow_unrelated {
             a.push("--allow-unrelated-histories".to_string());
@@ -755,6 +1127,44 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
+    fn merge_auto_merged_files(
+        &self,
+        root: &Path,
+        conflicted: &[PathBuf],
+    ) -> TgResult<Vec<PathBuf>> {
+        // No merge in progress → nothing to list.
+        if !root.join(".git").join("MERGE_HEAD").exists() {
+            return Ok(Vec::new());
+        }
+        // `git diff-tree --name-only --diff-filter=M HEAD MERGE_HEAD` lists
+        // every path that changed between the two tips. We then subtract the
+        // conflicted paths (those still unmerged in the index) to get the
+        // auto-merged set — git has already resolved them onto HEAD.
+        // `git diff-tree --name-only --diff-filter=M -r MERGE_HEAD^1
+        // MERGE_HEAD` lists every path the merge attempted to resolve
+        // (auto-merged + conflicted). Subtracting the conflicted paths
+        // leaves the auto-merged set — files git resolved by itself.
+        // We use the first parent of MERGE_HEAD (the side branch tip)
+        // instead of HEAD so identical changes still show up.
+        let (stdout, _, _) = self.run(
+            root,
+            &[
+                "diff-tree",
+                "--name-only",
+                "--diff-filter=M",
+                "-r",
+                "MERGE_HEAD^1",
+                "MERGE_HEAD",
+            ],
+        )?;
+        let conflicted: std::collections::HashSet<PathBuf> = conflicted.iter().cloned().collect();
+        Ok(stdout
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(PathBuf::from)
+            .filter(|p| !conflicted.contains(p))
+            .collect())
+    }
     fn rebase_interactive(&self, root: &Path, plan: &[RebasePlanEntry]) -> TgResult<()> {
         if plan.is_empty() {
             return Ok(());
@@ -820,10 +1230,52 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
-    fn worktree_add(&self, root: &Path, path: &Path, branch: &str) -> TgResult<()> {
+    fn worktree_add(&self, root: &Path, path: &Path, branch: &str, create: bool) -> TgResult<()> {
         let mut a: Vec<String> = vec!["worktree".to_string(), "add".to_string()];
+        if create {
+            // `-b` consumes the branch name: `git worktree add -b <branch> <path>`.
+            a.push("-b".to_string());
+            a.push(branch.to_string());
+        }
+        a.push(portable_path(path).to_string_lossy().to_string());
+        if !create {
+            a.push(branch.to_string());
+        }
+        let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+        self.run(root, &args)?;
+        Ok(())
+    }
+
+    fn worktree_remove(&self, root: &Path, path: &Path, force: bool) -> TgResult<()> {
+        let mut a: Vec<String> = vec!["worktree".to_string(), "remove".to_string()];
+        if force {
+            a.push("--force".to_string());
+        }
+        a.push(portable_path(path).to_string_lossy().to_string());
+        let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+        self.run(root, &args)?;
+        Ok(())
+    }
+
+    fn submodule_update(&self, root: &Path, path: &Path, init: bool) -> TgResult<()> {
+        let mut a: Vec<String> = vec!["submodule".to_string(), "update".to_string()];
+        if init {
+            a.push("--init".to_string());
+        }
+        a.push("--".to_string());
         a.push(path.to_string_lossy().to_string());
-        a.push(branch.to_string());
+        let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+        self.run(root, &args)?;
+        Ok(())
+    }
+
+    fn submodule_deinit(&self, root: &Path, path: &Path, force: bool) -> TgResult<()> {
+        let mut a: Vec<String> = vec!["submodule".to_string(), "deinit".to_string()];
+        if force {
+            a.push("-f".to_string());
+        }
+        a.push("--".to_string());
+        a.push(path.to_string_lossy().to_string());
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         self.run(root, &args)?;
         Ok(())
@@ -912,6 +1364,29 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
+    fn check_patch(&self, root: &Path, patch: &str) -> TgResult<()> {
+        let bin = turbogit_domain::model::git_binary(&self.settings);
+        let mut child = Command::new(&bin)
+            .args(["apply", "--check", "--recount"])
+            .current_dir(root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        use std::io::Write;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(patch.as_bytes())?;
+        }
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Err(TgError::Cli {
+                code: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+        Ok(())
+    }
+
     fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
         if paths.is_empty() {
             return Ok(());
@@ -981,18 +1456,41 @@ impl GitExecutor for CliExecutor {
 
     // --------------------------------------------------------------- tags ----
 
-    fn tag_create(&self, root: &Path, name: &str, message: Option<&str>) -> TgResult<()> {
+    fn tag_create(&self, root: &Path, spec: &TagSpec) -> TgResult<()> {
         let mut a: Vec<String> = vec!["tag".to_string()];
-        if let Some(m) = message {
+        if spec.message.is_some() {
             a.push("-a".to_string());
-            a.push(name.to_string());
-            a.push("-m".to_string());
-            a.push(m.to_string());
-        } else {
-            a.push(name.to_string());
         }
-        let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
-        self.run(root, &args)?;
+        if spec.sign {
+            a.push("-s".to_string());
+        }
+        a.push(spec.name.clone());
+        if let Some(m) = &spec.message {
+            a.push("-m".to_string());
+            a.push(m.clone());
+        }
+        if let Some(t) = &spec.target {
+            a.push(t.clone());
+        }
+        // The tag dialog's tagger identity override (issue 31): `git tag -a`
+        // takes the tagger from the committer identity, so override it with
+        // GIT_COMMITTER_* for this one invocation only.
+        let mut envs: Vec<(&str, String)> = Vec::new();
+        if let Some(id) = &spec.tagger {
+            let (name, email) = parse_identity(id);
+            if let Some(n) = name {
+                envs.push(("GIT_COMMITTER_NAME", n));
+            }
+            if let Some(e) = email {
+                envs.push(("GIT_COMMITTER_EMAIL", e));
+            }
+        }
+        let args: Vec<&str> = a.iter().map(String::as_str).collect();
+        if envs.is_empty() {
+            self.run(root, &args)?;
+        } else {
+            self.run_env(root, &args, &envs)?;
+        }
         Ok(())
     }
 
@@ -1169,11 +1667,20 @@ fn parse_ref_name(refname: &str) -> Option<CommitRef> {
     } else {
         (GitRefKind::Tag, refname.strip_prefix("refs/tags/")?)
     };
-    Some(CommitRef {
-        kind,
-        name: name.to_string(),
-    })
+    Some(CommitRef::new(kind, name))
 }
+
+/// `%G?` → [`SignatureState`] (issue 17): G verified good, B verified bad,
+/// U/E/X present but unverifiable, anything else (N) unsigned.
+fn parse_signature_state(code: &str) -> SignatureState {
+    match code {
+        "G" => SignatureState::Good,
+        "B" => SignatureState::Bad,
+        "U" | "E" | "X" => SignatureState::Unverified,
+        _ => SignatureState::Unsigned,
+    }
+}
+
 /// Parse one `git diff-tree --name-status` line into a [`Change`].
 ///
 /// Shapes: `X\tpath` and rename/copy `X<score>\told\tnew` (the new path wins;
@@ -1247,4 +1754,21 @@ fn parse_blame(s: &str) -> Vec<BlameLine> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use turbogit_domain::model::SignatureState;
+
+    #[test]
+    fn signature_state_maps_the_g_question_mark_codes() {
+        assert_eq!(parse_signature_state("N"), SignatureState::Unsigned);
+        assert_eq!(parse_signature_state("G"), SignatureState::Good);
+        assert_eq!(parse_signature_state("B"), SignatureState::Bad);
+        assert_eq!(parse_signature_state("U"), SignatureState::Unverified);
+        assert_eq!(parse_signature_state("E"), SignatureState::Unverified);
+        assert_eq!(parse_signature_state("X"), SignatureState::Unverified);
+        assert_eq!(parse_signature_state(""), SignatureState::Unsigned);
+    }
 }
