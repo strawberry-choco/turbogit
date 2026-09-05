@@ -12,8 +12,9 @@
 //!    `SELECTION_BG` row highlight that keeps lane colors readable.
 //! 3. **Changed files** (right-top, 320px): the selected commit's files with
 //!    status badges; clicking loads the diff.
-//! 4. **Commit details** (right-bottom, ~200px SURFACE): key-value hash /
-//!    author / date / parents plus the full message below.
+//! 4. **Commit details** (right-bottom, ~300px SURFACE): key-value hash /
+//!    author / date / parents, the Actions section (issue 15), and the full
+//!    message below.
 
 use crate::theme::Palette;
 use crate::ui::icons;
@@ -25,8 +26,12 @@ use egui::{
     Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::PathBuf;
-use turbogit_app::state::{AppState, DiffTarget};
-use turbogit_domain::model::{ChangeStatus, Commit, DateFormat, GitRefKind, RootId};
+use turbogit_app::state::{AppState, BlameTarget, Dialog, DiffTarget, PendingConfirm, Toast};
+use turbogit_domain::model::{
+    ChangeStatus, Commit, CommitId, CommitRef, DateFormat, GitRefKind, RefState, RootId,
+    SignatureState,
+};
+use turbogit_services::sync_service;
 
 // --- Pane metrics (spec §8.3) -------------------------------------------------
 
@@ -34,8 +39,11 @@ use turbogit_domain::model::{ChangeStatus, Commit, DateFormat, GitRefKind, RootI
 const BRANCHES_WIDTH: f32 = 210.0;
 /// Right column (changed files + details) width.
 const FILES_WIDTH: f32 = 320.0;
-/// Commit details pane height.
-const DETAILS_HEIGHT: f32 = 200.0;
+/// Commit details pane height (grew from the §8.3 200px in issue 15 to fit
+/// the Actions section, and to 340px in issue 17 for the committer/signature
+/// row plus the Copy-hash header): cherry-pick / revert / create branch here,
+/// plus the guardrail explanation when one is blocked.
+const DETAILS_HEIGHT: f32 = 340.0;
 /// Commit table row height.
 const ROW_HEIGHT: f32 = 24.0;
 /// Root stripe width on multi-root rows.
@@ -196,6 +204,18 @@ fn ensure_log_data(state: &mut AppState) {
             .caches
             .ensure_path_log(state.executor.as_ref(), &root, &path);
     }
+    // Code-change search (issue 17): a non-empty search box also fills the
+    // pickaxe cache per visible root — `git log -S` covers commits whose
+    // content changed the query string's count, which client-side filtering
+    // of message/hash/author cannot see.
+    let query = state.ui.log_filter.trim().to_string();
+    if !query.is_empty() {
+        for id in visible_root_ids(state) {
+            state
+                .caches
+                .ensure_search_log(state.executor.as_ref(), &id, &query);
+        }
+    }
 }
 
 /// Commits for `root` honoring the active path scope (issue #19): when a
@@ -263,6 +283,29 @@ fn visible_commits(state: &AppState) -> Vec<&Commit> {
             || c.id.to_lowercase().contains(&filter)
             || c.author.name.to_lowercase().contains(&filter)
     });
+    // Code-change hits (issue 17): union the cached pickaxe listing per
+    // visible root — a commit whose content changed the query's count shows
+    // even when message/hash/author do not match. Skipped inside a path
+    // scope: the scoped view must only ever list commits touching the
+    // scoped path, and the pickaxe cache is not path-scoped.
+    if state.ui.log_path_scope.is_none() {
+        let roots: Vec<&RootId> = match &state.ui.log_root_filter {
+            Some(id) => vec![id],
+            None => state.multi.roots.iter().map(|r| &r.id).collect(),
+        };
+        for id in roots {
+            // The cache is keyed by the trimmed raw query (what the engine
+            // received) — not the lowercased live-filter text.
+            if let Some(hits) = state.caches.search_log(id, state.ui.log_filter.trim()) {
+                for c in hits {
+                    if !commits.iter().any(|v| v.id == c.id) {
+                        commits.push(c);
+                    }
+                }
+            }
+        }
+        commits.sort_by(|a, b| b.time.cmp(&a.time).then(a.id.cmp(&b.id)));
+    }
     commits
 }
 
@@ -303,7 +346,7 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
         .resizable(false)
         .frame(Frame::new().fill(Palette::BG))
         .show(ui, |ui| {
-            // The 200px details pane yields to short windows so the changed-
+            // The 300px details pane yields to short windows so the changed-
             // files pane above it never collapses to zero height.
             let details_h = DETAILS_HEIGHT.min((ui.available_height() - 80.0).max(96.0));
             Panel::bottom("log_details_pane")
@@ -318,8 +361,13 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
             files_pane(ui, state);
         });
 
-    // Pane 2 — graph fills the remainder.
-    graph_pane(ui, state);
+    // Pane 2 — graph fills the remainder; the blame view (issue 18) takes
+    // its place while open, keeping the branches / files / details panes.
+    if state.ui.blame.is_some() {
+        super::blame_view::show_blame(ui, state);
+    } else {
+        graph_pane(ui, state);
+    }
 }
 
 // --- Pane 1: branches -------------------------------------------------------------
@@ -330,11 +378,12 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
     widgets::search_input(ui, "Search branches", &mut state.ui.log_branch_filter);
     ui.add_space(4.0);
 
-    // Union decorations across the visible roots, deduplicated by name+kind.
+    // Union decorations across the visible roots, deduplicated by name+kind
+    // (a name seen with a sync state keeps it — issue 17).
     let ids = visible_root_ids(state);
-    let mut local: Vec<String> = Vec::new();
-    let mut remote: Vec<String> = Vec::new();
-    let mut tags: Vec<String> = Vec::new();
+    let mut local: Vec<CommitRef> = Vec::new();
+    let mut remote: Vec<CommitRef> = Vec::new();
+    let mut tags: Vec<CommitRef> = Vec::new();
     for id in &ids {
         for refs in state.caches.ref_groups(id) {
             for r in refs {
@@ -343,8 +392,13 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
                     GitRefKind::Remote => &mut remote,
                     GitRefKind::Tag => &mut tags,
                 };
-                if !bucket.contains(&r.name) {
-                    bucket.push(r.name.clone());
+                match bucket.iter_mut().find(|b| b.name == r.name) {
+                    Some(b) => {
+                        if b.state == RefState::Default {
+                            b.state = r.state;
+                        }
+                    }
+                    None => bucket.push(r.clone()),
                 }
             }
         }
@@ -355,28 +409,28 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
 
     ScrollArea::vertical().show(ui, |ui| {
         widgets::group_title(ui, "Local");
-        for name in local.iter().filter(|n| matches(n)) {
+        for r in local.iter().filter(|r| matches(&r.name)) {
             let current = ids.iter().any(|id| {
                 state
                     .multi
                     .by_id(id)
                     .and_then(|r| r.current_branch.clone())
                     .as_deref()
-                    == Some(name.as_str())
+                    == Some(r.name.as_str())
             });
-            branch_row(ui, name, Icon::GIT_BRANCH, current);
+            branch_row(ui, &r.name, Icon::GIT_BRANCH, current, RefState::Default);
         }
 
         ui.add_space(6.0);
         widgets::group_title(ui, "Remote");
-        for name in remote.iter().filter(|n| matches(n)) {
-            branch_row(ui, name, Icon::FOLDER_GIT, false);
+        for r in remote.iter().filter(|r| matches(&r.name)) {
+            branch_row(ui, &r.name, Icon::FOLDER_GIT, false, r.state);
         }
 
         ui.add_space(6.0);
         widgets::group_title(ui, "Tags");
-        for name in tags.iter().filter(|n| matches(n)) {
-            branch_row(ui, name, Icon::TAG, false);
+        for r in tags.iter().filter(|r| matches(&r.name)) {
+            branch_row(ui, &r.name, Icon::TAG, false, r.state);
         }
 
         ui.add_space(8.0);
@@ -386,7 +440,9 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
 
 /// One row of the branches pane (LOCAL / REMOTE / TAGS). Live-filtered by the
 /// caller; the current branch gets a brand-tinted icon and emphasized ink.
-fn branch_row(ui: &mut Ui, name: &str, icon: Icon, current: bool) {
+/// `state` (issue 17) drives the right-aligned sync marker: remote rows may
+/// read "gone", tag rows "pushed" / "local only" (screen 09).
+fn branch_row(ui: &mut Ui, name: &str, icon: Icon, current: bool, state: RefState) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::hover());
     let mut child = ui.new_child(
@@ -406,9 +462,24 @@ fn branch_row(ui: &mut Ui, name: &str, icon: Icon, current: bool) {
             .font(micro_or_body_font(current))
             .color(ink),
     );
-    if current {
+    let marker = match state {
+        RefState::Default => None,
+        RefState::Gone => Some(("gone", Palette::STATE_ERROR)),
+        RefState::Pushed => Some(("pushed", Palette::STATE_SUCCESS)),
+        RefState::LocalOnly => Some(("local only", Palette::STATE_WARNING)),
+    };
+    if current || marker.is_some() {
         child.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            icons::icon(ui, Icon::CHECK, 13.0, Palette::BRAND);
+            if let Some((text, color)) = marker {
+                ui.label(
+                    RichText::new(text)
+                        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                        .color(color),
+                );
+            }
+            if current {
+                icons::icon(ui, Icon::CHECK, 13.0, Palette::BRAND);
+            }
         });
     }
 }
@@ -489,25 +560,32 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
 // --- Pane 2: graph ------------------------------------------------------------------
 
 fn graph_pane(ui: &mut Ui, state: &mut AppState) {
-    // Filter toolbar: live search over message / hash / author.
+    // Filter toolbar: live search over message / hash / author / code
+    // change, with the path scope (issue #19) rendered as a removable chip
+    // on the right (issue 17).
     ui.horizontal(|ui| {
         widgets::search_input(ui, "Search commits", &mut state.ui.log_filter);
+        if let Some(path) = state.ui.log_path_scope.clone() {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Painted as a compact ×; the accessibility label carries
+                // the full verb (kittest drives it by that label).
+                let remove = ui
+                    .small_button(RichText::new("×").size(13.0))
+                    .on_hover_text("Remove the path filter");
+                remove.widget_info(|| {
+                    WidgetInfo::labeled(WidgetType::Button, true, "Remove path filter")
+                });
+                if remove.clicked() {
+                    state.ui.log_path_scope = None;
+                }
+                ui.label(
+                    RichText::new(format!("Path filter: {}", path.display()))
+                        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                        .color(Palette::BRAND),
+                );
+            });
+        }
     });
-
-    // Path-scope banner (issue #19): what is filtered + one-click way out.
-    if let Some(path) = state.ui.log_path_scope.clone() {
-        ui.horizontal(|ui| {
-            icons::icon(ui, Icon::CLOCK, 13.0, Palette::BRAND);
-            ui.label(
-                RichText::new(format!("History for {}", path.display()))
-                    .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                    .color(Palette::INK_2),
-            );
-            if ui.small_button("Clear path history").clicked() {
-                state.ui.log_path_scope = None;
-            }
-        });
-    }
 
     let commits = visible_commits(state);
     let colors = assign_colors(&commits);
@@ -516,6 +594,17 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     let multi_root = state.multi.roots.len() > 1
         && state.ui.log_root_filter.is_none()
         && state.ui.log_path_scope.is_none();
+
+    // Pagination (issue 17): "Load more" is offered while a visible root's
+    // cached log fills its whole fetch window — and never in a scoped view,
+    // whose listing is fetched uncapped. The click is deferred like the row
+    // selections: `commits` borrows the caches until rendering ends.
+    let page_limit = (state.ui.log_page + 1) * turbogit_app::state::LOG_PAGE_SIZE;
+    let may_have_more = state.ui.log_path_scope.is_none()
+        && visible_root_ids(state)
+            .iter()
+            .any(|id| state.caches.log(id).is_some_and(|c| c.len() >= page_limit));
+    let mut load_more = false;
 
     // Root-stripe legend chip row (11px INK_3) for multi-root setups.
     if multi_root {
@@ -555,6 +644,25 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
             );
         }
     });
+
+    // Pagination status line (issue 17): what is shown + the Load more
+    // affordance while the fetched window may not cover the whole history.
+    ui.horizontal(|ui| {
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if may_have_more && ui.small_button("Load more").clicked() {
+                load_more = true;
+            }
+            ui.label(
+                RichText::new(format!("{} shown", commits.len()))
+                    .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                    .color(Palette::INK_3),
+            );
+        });
+    });
+
+    if load_more {
+        state.load_more_log();
+    }
     if let Some(id) = clicked {
         state.ui.selected_commit = Some(id);
         state.ui.log_selected_file = None;
@@ -759,6 +867,8 @@ enum FileAction {
     None,
     /// Row clicked: open its diff; the caller resolves root / commit / parent.
     OpenDiff(PathBuf),
+    /// Footer link / context menu: blame the file at the selected commit.
+    OpenBlame(PathBuf),
     /// Context menu: scope the whole workspace to this file's history.
     ScopeHistory(PathBuf),
 }
@@ -802,6 +912,26 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         }
     });
 
+    // Footer links (screen 09): Open diff · Blame · Full path history,
+    // acting on the selected changed file. Rendered only with a selection —
+    // without one none of the verbs has a subject.
+    if let Some(selected) = state.ui.log_selected_file.clone() {
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.link("Open diff").clicked() {
+                action = FileAction::OpenDiff(selected.clone());
+            }
+            ui.label(RichText::new("·").color(Palette::INK_3));
+            if ui.link("Blame").clicked() {
+                action = FileAction::OpenBlame(selected.clone());
+            }
+            ui.label(RichText::new("·").color(Palette::INK_3));
+            if ui.link("Full path history").clicked() {
+                action = FileAction::ScopeHistory(selected);
+            }
+        });
+    }
+
     match action {
         FileAction::None => {}
         FileAction::OpenDiff(path) => {
@@ -811,6 +941,13 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
                 left: parent,
                 right: Some(cid.to_owned()),
                 path: Some(path),
+            });
+        }
+        FileAction::OpenBlame(path) => {
+            state.ui.blame = Some(BlameTarget {
+                root: root_id.clone(),
+                path,
+                rev: cid.to_owned(),
             });
         }
         FileAction::ScopeHistory(path) => {
@@ -885,8 +1022,13 @@ fn file_row(ui: &mut Ui, state: &AppState, change: &turbogit_domain::model::Chan
     }
     // Path-scoped file history (issue #19): right-click a changed file to
     // narrow the whole Git Log workspace to the commits touching it.
+    // Blame (issue 18): annotate the same file at the selected commit.
     let mut action = FileAction::None;
     response.context_menu(|ui| {
+        if ui.button("Show blame").clicked() {
+            action = FileAction::OpenBlame(change.path.clone());
+            ui.close();
+        }
         if ui.button("Show history for file...").clicked() {
             action = FileAction::ScopeHistory(change.path.clone());
             ui.close();
@@ -897,9 +1039,43 @@ fn file_row(ui: &mut Ui, state: &AppState, change: &turbogit_domain::model::Chan
 
 // --- Pane 4: commit details -----------------------------------------------------------
 
+/// Deferred interaction from one details-pane action button (plan §1.3):
+/// the pane renders against the borrowed cached commit, and the mutation
+/// lands after rendering (mirrors [`FileAction`]).
+enum DetailAction {
+    None,
+    /// Open the cherry-pick target-branch picker for the selected commit.
+    CherryPick,
+    /// Open the cross-repo cherry-pick dialog (issue 16) for the source repo.
+    CherryPickAcross,
+    /// Ask to confirm reverting the selected commit.
+    Revert,
+    /// Open the new-branch dialog prefilled at the selected commit.
+    NewBranchHere,
+    /// Copy the selected commit's full hash to the clipboard (issue 17).
+    CopyHash,
+    /// Jump to a parent commit via its hash link (issue 17).
+    SelectParent(CommitId),
+}
+
 fn details_pane(ui: &mut Ui, state: &mut AppState) {
-    widgets::group_title(ui, "Commit details");
-    // Compact vertical rhythm so the full message fits the 200px pane.
+    // Every interaction defers (plan §1.3): the pane borrows the cached
+    // commit below, so clicks set `action` and mutations land at the end.
+    let mut action = DetailAction::None;
+    // Header row: the group title left, Copy hash (issue 17) right — the
+    // one detail-pane affordance the mockup pins to the header.
+    ui.horizontal(|ui| {
+        widgets::group_title(ui, "Commit details");
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .small_button(RichText::new("Copy hash").size(MICRO_TEXT))
+                .clicked()
+            {
+                action = DetailAction::CopyHash;
+            }
+        });
+    });
+    // Compact vertical rhythm so the full message fits the pane.
     ui.style_mut().spacing.item_spacing.y = 3.0;
 
     // Split-borrow the selection (plan §1.3): the commit is looked up over
@@ -921,7 +1097,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    // Key-value block (compact single rows — the pane is 200px tall).
+    // Key-value block (compact single rows — the pane is ~300px tall).
     ui.horizontal(|ui| {
         kv_label(ui, "Hash:");
         ui.label(
@@ -935,6 +1111,21 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         "Author:",
         format!("{} <{}>", commit.author.name, commit.author.email),
     );
+    // Committer + signature state (issue 17, screen 09).
+    let sig_suffix = match commit.signature {
+        SignatureState::Unsigned => String::new(),
+        SignatureState::Good => " · signed ✓".to_string(),
+        SignatureState::Bad => " · signature BAD".to_string(),
+        SignatureState::Unverified => " · signed (unverified)".to_string(),
+    };
+    kv_value(
+        ui,
+        "Committer:",
+        format!(
+            "{} <{}>{}",
+            commit.committer.name, commit.committer.email, sig_suffix
+        ),
+    );
     kv_value(ui, "Date:", fmt_time(commit.time));
 
     ui.horizontal(|ui| {
@@ -943,11 +1134,18 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
             ui.label(RichText::new("—").font(body_font()).color(Palette::INK_3));
         } else {
             for p in &commit.parents {
-                ui.label(
-                    RichText::new(short(p))
-                        .font(mono_font())
-                        .color(Palette::INK),
-                );
+                // Parent hashes are links (issue 17): clicking jumps to the
+                // parent — deferred like every other pane action.
+                if ui
+                    .link(
+                        RichText::new(short(p))
+                            .font(mono_font())
+                            .color(Palette::INK),
+                    )
+                    .clicked()
+                {
+                    action = DetailAction::SelectParent(p.clone());
+                }
             }
         }
     });
@@ -981,12 +1179,111 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         );
     }
 
-    // Full message below the key-value block.
-    ScrollArea::vertical().show(ui, |ui| {
-        for line in commit.message.lines().filter(|l| !l.trim().is_empty()) {
-            ui.label(RichText::new(line).font(body_font()).color(Palette::INK));
-        }
+    // Actions section (issue 15, screen 09): stacked full-width buttons —
+    // cherry-pick (primary), revert, create branch here. Guarded by the
+    // protected-branch and dirty-worktree guardrails: a blocked action is
+    // disabled and its reason is painted (visible without hover, so the
+    // explanation is always discoverable).
+    widgets::group_title(ui, "Actions");
+    let snapshot = state.multi.by_id(root_id);
+    let dirty = snapshot.is_some_and(|r| !r.status.changes.is_empty());
+    let current_protected = snapshot
+        .and_then(|r| r.current_branch.clone())
+        .is_some_and(|b| sync_service::is_protected(&state.settings, &b));
+    let mut reasons: Vec<String> = Vec::new();
+    if let Some(r) = snapshot
+        && let Some(branch) = &r.current_branch
+        && sync_service::is_protected(&state.settings, branch)
+    {
+        reasons.push(format!("'{branch}' is a protected branch — revert blocked"));
+    }
+    if dirty {
+        reasons.push("working tree is dirty — cherry-pick and revert blocked".into());
+    }
+    // Snapshot the id up front (plan §1.3): `commit` borrows the cache
+    // slice, and the click handlers below mutate `state.ui` — so clicks are
+    // reported and applied after the pane finishes rendering.
+    let commit_id = commit.id.clone();
+    let pick = widgets::action_button(ui, "Cherry-pick to…", true, !dirty)
+        .on_disabled_hover_text("Resolve the uncommitted changes first");
+    if pick.clicked() {
+        action = DetailAction::CherryPick;
+    }
+    // The two secondary git actions share a row: the pane is 200px tall and
+    // a fourth stacked button would push the full message below the fold.
+    let (across, revert) = ui.columns(2, |columns| {
+        let across = widgets::action_button(&mut columns[0], "Cherry-pick across…", false, !dirty);
+        let revert = widgets::action_button(
+            &mut columns[1],
+            "Revert commit",
+            false,
+            !dirty && !current_protected,
+        );
+        (across, revert)
     });
+    let revert = revert.on_disabled_hover_text("Resolve the guardrail below first");
+    if across.clicked() {
+        action = DetailAction::CherryPickAcross;
+    }
+    if revert.clicked() {
+        action = DetailAction::Revert;
+    }
+    if widgets::action_button(ui, "Create branch here", false, true).clicked() {
+        action = DetailAction::NewBranchHere;
+    }
+    if !reasons.is_empty() {
+        ui.label(
+            RichText::new(reasons.join(" · "))
+                .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                .color(Palette::STATE_WARNING),
+        );
+    }
+
+    // Full message below the key-value block. The viewport is capped to
+    // the remaining pane height — a `ScrollArea` would otherwise claim all
+    // of it and push past the fixed pane, clipping the message when the
+    // metadata block grows (issue 17 added the committer row).
+    let message_height = ui.available_height().max(40.0);
+    ScrollArea::vertical()
+        .max_height(message_height)
+        .show(ui, |ui| {
+            for line in commit.message.lines().filter(|l| !l.trim().is_empty()) {
+                ui.label(RichText::new(line).font(body_font()).color(Palette::INK));
+            }
+        });
+
+    // Deferred action application (plan §1.3): the borrow of the cached
+    // commit ended above, so `state.ui` is free to mutate here.
+    match action {
+        DetailAction::None => {}
+        DetailAction::CherryPick => {
+            state.ui.dlg.cherry_pick_commit = Some(commit_id);
+            state.ui.dialog = Some(Dialog::CherryPickTarget);
+        }
+        DetailAction::CherryPickAcross => {
+            state.open_cherry_across();
+            state.ui.dialog = Some(Dialog::CherryPickAcross);
+        }
+        DetailAction::Revert => {
+            state.ui.confirm = Some(PendingConfirm::RevertCommit { commit: commit_id });
+        }
+        DetailAction::NewBranchHere => {
+            state.ui.dlg.new_branch_name.clear();
+            state.ui.dlg.new_branch_start = commit_id;
+            state.ui.dlg.new_branch_checkout = false;
+            state.ui.dialog = Some(Dialog::NewBranch);
+        }
+        DetailAction::CopyHash => {
+            let id = state.ui.selected_commit.clone().unwrap_or_default();
+            ui.ctx().copy_text(id.clone());
+            state.ui.toast_shown_at = None;
+            state.ui.toast = Some(Toast::success(format!("Copied {}", short(&id))));
+        }
+        DetailAction::SelectParent(parent) => {
+            state.ui.selected_commit = Some(parent);
+            state.ui.log_selected_file = None;
+        }
+    }
 }
 
 fn kv_label(ui: &mut Ui, key: &str) {

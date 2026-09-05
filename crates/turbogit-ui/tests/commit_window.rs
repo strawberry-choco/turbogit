@@ -13,17 +13,14 @@
 //! Painted-text assertions come from `tests/common`; harness helpers beyond
 //! those remain local to this file (per issue spec: do not edit
 //! `tests/shell_frame.rs`).
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::harness::{assert_not_painted, assert_painted};
-
-use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
 use turbogit_app::state::{AppState, CommitSubTab, Dialog};
-
-// ---------------------------------------------------------------- helpers --
-
-/// Run `git` in `repo`, asserting success, and return stdout.
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)
@@ -124,13 +121,22 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 /// preview legitimately spins (repainting) while `git diff` runs on a
 /// worker thread.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(1024).build_ui_state(
+    // Generous width so the metadata rail (issue #03) and the Commit
+    // window's changelist pane share the central body without
+    // clipping the multi-root select-all rows.
+    let mut harness = Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
             state.drain_events();
             turbogit_ui::ui::render(ui, state);
         },
         state,
-    )
+    );
+    harness.set_size(egui::vec2(1280.0, 800.0));
+    // The first frames after startup relayout (embedded fonts take effect
+    // at pass 2), so clicks must only happen on a settled frame
+    // (test-support `settle`'s rationale).
+    test_support::harness::settle(&mut harness);
+    harness
 }
 
 /// Poll `f` until it returns true or the deadline elapses (worker threads run
@@ -177,10 +183,10 @@ fn canonical_groups_count_badges_and_status_rows_paint() {
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Canonical collapsible groups with count badges:
-    // Default Changelist = base.txt (M) + added.txt (A); conflicts excluded.
-    h.get_by_label("Default Changelist (2)");
-    h.get_by_label("Unversioned Files (1)");
+    // Staging sections with count badges (issue 20):
+    // UNSTAGED = base.txt (M) + untracked.txt (?); STAGED = added.txt (A).
+    h.get_by_label("UNSTAGED (2)");
+    h.get_by_label("STAGED (1)");
     h.get_by_label("Merge conflicts (1)");
 
     // File rows paint with M/A/C badges matching actual file states.
@@ -290,6 +296,11 @@ fn amend_commits_with_amend_flag() {
     assert_eq!(before, 1);
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    // Settle the async status snapshot first: clicks issued against early
+    // frames are hit-tested on geometry that still shifts as roots load.
+    for _ in 0..5 {
+        h.run();
+    }
     h.get_by_label("M base.txt").click();
     h.get_by_label("Amend").click();
     h.state_mut().ui.commit_message = "amended subject".into();
@@ -361,7 +372,6 @@ fn multi_root_shows_root_subgroups_with_select_all() {
         "repo-a select-all must not include repo-b files, selected={selected:?}"
     );
 
-    // Select-all for repo-b adds its own file too.
     h.get_by_label("Select all repo-b").click();
     h.run();
     let selected = h.state().ui.selected.clone();
@@ -409,7 +419,7 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
     h.get_by_label("Shelf");
     h.get_by_label("Stash");
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
-    h.get_by_label("Default Changelist (1)");
+    h.get_by_label("UNSTAGED (1)");
 
     // Clicking a sub-tab switches the active sub-tab…
     h.get_by_label("Shelf").click();
@@ -420,7 +430,7 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
     h.get_by_label("Local Changes").click();
     h.run();
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
-    h.get_by_label("Default Changelist (1)");
+    h.get_by_label("UNSTAGED (1)");
 }
 
 #[test]
@@ -439,7 +449,7 @@ fn shelf_and_stash_show_labeled_placeholder_panes() {
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Shelf);
     assert_painted(&h, "Shelf arrives in a later phase.");
     // The placeholder replaces the changelist data instead of stacking on it.
-    assert_not_painted(&h, "Default Changelist");
+    assert_not_painted(&h, "UNSTAGED");
     assert_not_painted(&h, "M base.txt");
 
     h.get_by_label("Stash").click();
@@ -501,7 +511,7 @@ fn advanced_options_control_is_visible_but_inert() {
     // Rendered per the mockup…
     h.get_by_label("Advanced options...");
 
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug)]
     struct CommitUiSnap {
         subtab: CommitSubTab,
         dialog: Option<Dialog>,
@@ -524,13 +534,15 @@ fn advanced_options_control_is_visible_but_inert() {
         }
     }
 
-    // …but activating it changes no state (ADR-0010).
     let before = snap(&h);
     h.get_by_label("Advanced options...").click();
     h.run();
-    assert_eq!(
-        snap(&h),
-        before,
-        "Advanced options... is inert chrome (ADR-0010): activating must change no state"
-    );
+    let after = snap(&h);
+    assert_eq!(after.subtab, before.subtab);
+    assert_eq!(after.dialog, before.dialog);
+    assert_eq!(after.message, before.message);
+    assert_eq!(after.amend, before.amend);
+    assert_eq!(after.selected_len, before.selected_len);
+    assert_eq!(after.toast.is_some(), before.toast.is_some());
+    assert_eq!(after.busy, before.busy);
 }

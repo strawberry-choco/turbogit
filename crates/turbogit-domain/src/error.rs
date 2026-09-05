@@ -38,6 +38,26 @@ pub enum TgError {
 /// Convenience alias used everywhere.
 pub type TgResult<T> = Result<T, TgError>;
 
+impl Clone for TgError {
+    /// `std::io::Error` is not `Clone`; the copy reconstructs it from its
+    /// `ErrorKind` and message so the displayed text is preserved. Needed by
+    /// the cascade engine (issue 10), which reports one outcome both through
+    /// the event stream and the pass result.
+    fn clone(&self) -> Self {
+        match self {
+            TgError::Io(e) => TgError::Io(std::io::Error::new(e.kind(), e.to_string())),
+            TgError::Cli { code, stderr } => TgError::Cli {
+                code: *code,
+                stderr: stderr.clone(),
+            },
+            TgError::Parse(s) => TgError::Parse(s.clone()),
+            TgError::Serde(s) => TgError::Serde(s.clone()),
+            TgError::NotARepo(s) => TgError::NotARepo(s.clone()),
+            TgError::Other(s) => TgError::Other(s.clone()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

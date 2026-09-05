@@ -59,7 +59,11 @@ pub fn show_at(vcs: &dyn GitExecutor, root: &Path, rev: &str, path: &Path) -> Tg
 /// Build a web URL for a commit on the hosting provider, if a known remote exists.
 pub fn open_on_web(root: &Root, rev: &str) -> Option<String> {
     for remote in &root.remotes {
-        let url = remote.url.trim();
+        // Prefer the fetch URL; fall back to push if only that is set.
+        let Some(url) = remote.fetch_url.as_deref().or(remote.push_url.as_deref()) else {
+            continue;
+        };
+        let url = url.trim();
         let (host, owner_repo) = if let Some(rest) = url.strip_prefix("git@") {
             // git@host:owner/repo.git
             let (host, repo) = rest.split_once(':')?;

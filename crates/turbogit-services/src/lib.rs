@@ -9,13 +9,21 @@
 //! suites under `tests/`.
 
 pub mod branch_service;
+pub mod bulk_ops;
+pub mod bulk_run;
 pub mod changes;
+pub mod cherry_across;
+pub mod commit_across;
 pub mod conflict;
+pub mod conflict_propagation;
 pub mod diff_engine;
 pub mod history_editor;
 pub mod history_service;
+pub mod hunk_stats;
 pub mod integrate_service;
 pub mod multi_root;
 pub mod partial;
+pub mod remote_service;
 pub mod shelve_stash;
 pub mod sync_service;
+pub mod tag_service;

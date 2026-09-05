@@ -15,6 +15,19 @@ use turbogit_domain::error::TgResult;
 /// Maximum number of recent projects kept in the store.
 pub const MAX_RECENTS: usize = 10;
 
+/// Kind of a recent entry: a single-project repository ([`RecentKind::Project`])
+/// or an attached multi-repo workspace root ([`RecentKind::Workspace`], issue
+/// #34). Workspace rows carry a [`RecentProject::repo_count`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RecentKind {
+    /// A single repository opened directly (clone / open / init).
+    #[default]
+    Project,
+    /// A workspace root whose subtree was deep-scanned and registered.
+    Workspace,
+}
+
 /// One recently-opened project row on the welcome screen.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct RecentProject {
@@ -23,6 +36,14 @@ pub struct RecentProject {
     /// Unix timestamp (milliseconds) of the last time this project was
     /// opened. Millisecond precision keeps same-second opens ordered.
     pub last_opened: i64,
+    /// Whether this row is a workspace root. `#[serde(default)]` keeps
+    /// pre-#34 recents.ron rows loading as single-repo projects.
+    #[serde(default)]
+    pub kind: RecentKind,
+    /// Repos registered under a workspace root, `None` for single-project
+    /// rows. `#[serde(default)]` degrades legacy rows gracefully.
+    #[serde(default)]
+    pub repo_count: Option<usize>,
 }
 
 /// The contents of the global recents file, newest-first.
@@ -93,11 +114,34 @@ pub fn record_into(recents: &mut Recents, path: &Path) {
         path: path.to_path_buf(),
         name: project_name(path),
         last_opened: now,
+        kind: RecentKind::Project,
+        repo_count: None,
     });
     recents
         .projects
         .sort_by_key(|p| std::cmp::Reverse(p.last_opened));
     recents.projects.truncate(MAX_RECENTS);
+}
+
+/// Record `path` as an attached workspace root (issue #34): same upsert /
+/// sort / cap policy as [`record`], but the row is marked
+/// [`RecentKind::Workspace`] and carries the number of repos indexed under it.
+pub fn record_workspace(config_dir: &Path, path: &Path, repo_count: usize) -> Recents {
+    let mut recents = load(config_dir);
+    record_workspace_into(&mut recents, path, repo_count);
+    // Best-effort persistence, mirroring [`record`].
+    let _ = save(config_dir, &recents);
+    recents
+}
+
+/// In-memory upsert for a workspace root (pure, unit-testable). Buffers on
+/// [`record_into`] then marks the row as a workspace with its repo count.
+pub fn record_workspace_into(recents: &mut Recents, path: &Path, repo_count: usize) {
+    record_into(recents, path);
+    if let Some(row) = recents.projects.iter_mut().find(|p| p.path == *path) {
+        row.kind = RecentKind::Workspace;
+        row.repo_count = Some(repo_count);
+    }
 }
 
 /// Display name for a project directory: its final component.
@@ -131,6 +175,8 @@ mod tests {
                 path: PathBuf::from("C:/projects/saturated"),
                 name: "saturated".into(),
                 last_opened: i64::MAX,
+                kind: RecentKind::Project,
+                repo_count: None,
             }],
         };
         record_into(&mut recents, Path::new("C:/projects/fresh"));
@@ -146,5 +192,55 @@ mod tests {
             i64::MAX,
             "the bump must saturate, not overflow"
         );
+    }
+
+    #[test]
+    fn recents_schema_roundtrips_project_and_workspace_entries() {
+        let config = tempfile::tempdir().unwrap();
+        let recents = Recents {
+            projects: vec![
+                RecentProject {
+                    path: PathBuf::from("C:/projects/alpha"),
+                    name: "alpha".into(),
+                    last_opened: 1,
+                    kind: RecentKind::Project,
+                    repo_count: None,
+                },
+                RecentProject {
+                    path: PathBuf::from("C:/workspaces/big"),
+                    name: "big".into(),
+                    last_opened: 2,
+                    kind: RecentKind::Workspace,
+                    repo_count: Some(41),
+                },
+            ],
+        };
+        save(config.path(), &recents).unwrap();
+        let loaded = load(config.path());
+        assert_eq!(loaded.projects, recents.projects);
+        assert_eq!(loaded.projects[0].kind, RecentKind::Project);
+        assert_eq!(loaded.projects[1].kind, RecentKind::Workspace);
+        assert_eq!(loaded.projects[1].repo_count, Some(41));
+    }
+
+    #[test]
+    fn old_short_recents_rows_deserialize_as_project_with_no_repo_count() {
+        // A pre-#34 recents.ron has neither `kind` nor `repo_count`; loading
+        // it must degrade to a single-repo Project (backward compatible).
+        let config = tempfile::tempdir().unwrap();
+        let file = recents_file(config.path());
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            "(\n    projects: [\n        (\n            path: \"C:/projects/alpha\",\n            name: \"alpha\",\n            last_opened: 1755000000000,\n        ),\n    ],\n)\n",
+        )
+        .unwrap();
+
+        let loaded = load(config.path());
+        assert_eq!(loaded.projects.len(), 1);
+        let row = &loaded.projects[0];
+        assert_eq!(row.name, "alpha");
+        assert_eq!(row.kind, RecentKind::Project);
+        assert_eq!(row.repo_count, None);
     }
 }

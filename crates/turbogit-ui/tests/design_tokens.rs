@@ -46,9 +46,8 @@ fn legacy_state_with_removed_theme_mode_still_loads() {
 }
 
 // --- Cycle 2: dark-only Visuals derive from the central token set (spec §2.5) ---
-
 use egui::Color32;
-use turbogit_ui::theme::configure_style;
+use turbogit_ui::theme::{self, Palette, configure_style};
 
 const BG: Color32 = Color32::from_rgb(0x1e, 0x1f, 0x22);
 const SURFACE: Color32 = Color32::from_rgb(0x2b, 0x2d, 0x30);
@@ -213,4 +212,48 @@ fn install_fonts_applies_the_embedded_stack_to_the_context() {
         let bold = egui::FontFamily::Name("jetbrains-mono-bold".into());
         assert!(defs.families.contains_key(&bold), "bold family available");
     });
+}
+
+// --- Cycle 5: accent, risk, and status semantics (issue #01) ---
+#[test]
+fn accent_accessor_returns_brand() {
+    assert_eq!(theme::accent(), Palette::BRAND, "accent() must alias BRAND");
+}
+
+#[test]
+fn risk_tokens_are_distinct_and_in_the_status_family() {
+    // Risk levels use the three state colors in increasing severity order.
+    assert_eq!(Palette::RISK_LOW, Palette::STATE_SUCCESS);
+    assert_eq!(Palette::RISK_MEDIUM, Palette::STATE_WARNING);
+    assert_eq!(Palette::RISK_HIGH, Palette::STATE_ERROR);
+
+    // All three risk tokens must be distinct — a status surface never
+    // collapses to a single color regardless of severity.
+    assert_ne!(Palette::RISK_LOW, Palette::RISK_MEDIUM);
+    assert_ne!(Palette::RISK_MEDIUM, Palette::RISK_HIGH);
+    assert_ne!(Palette::RISK_LOW, Palette::RISK_HIGH);
+}
+
+#[test]
+fn status_tokens_cover_clean_dirty_diverged_stale() {
+    // The four status semantics each pick a state token (clean = success,
+    // dirty = warning, diverged = error, stale = info) so a chip carrying
+    // any of them has a real color, never a fallback.
+    assert_eq!(Palette::STATUS_CLEAN, Palette::STATE_SUCCESS);
+    assert_eq!(Palette::STATUS_DIRTY, Palette::STATE_WARNING);
+    assert_eq!(Palette::STATUS_DIVERGED, Palette::STATE_ERROR);
+    assert_eq!(Palette::STATUS_STALE, Palette::STATE_INFO);
+
+    for pair in [
+        (Palette::STATUS_CLEAN, Palette::STATUS_DIRTY),
+        (Palette::STATUS_DIRTY, Palette::STATUS_DIVERGED),
+        (Palette::STATUS_DIVERGED, Palette::STATUS_STALE),
+        (Palette::STATUS_CLEAN, Palette::STATUS_DIVERGED),
+    ] {
+        assert_ne!(
+            pair.0, pair.1,
+            "status tokens {:?} and {:?} must differ",
+            pair.0, pair.1
+        );
+    }
 }

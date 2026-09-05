@@ -98,8 +98,9 @@ fn icon_tint_derives_from_central_palette_tokens() {
 
 // --- Cycle 2: the complete documented set renders ---
 
-/// The exact icon names from spec §5.2 — the contract this module implements.
-const SPEC_NAMES: [&str; 56] = [
+/// The icon names from spec §5.2 plus `pencil` (issue #07 rule rows) —
+/// the contract this module implements.
+const SPEC_NAMES: [&str; 58] = [
     "alert-circle",
     "alert-triangle",
     "align-justify",
@@ -141,9 +142,11 @@ const SPEC_NAMES: [&str; 56] = [
     "laptop",
     "layers",
     "layout",
+    "lock",
     "menu",
     "monitor",
     "more-horizontal",
+    "pencil",
     "play",
     "plus",
     "plus-circle",

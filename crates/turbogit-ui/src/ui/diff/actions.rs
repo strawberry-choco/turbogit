@@ -11,10 +11,32 @@ use egui::{
 };
 use std::collections::BTreeSet;
 use turbogit_app::granular::{self, comparison_triple, diff_key};
-use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_app::root_caches::StatsView;
+use turbogit_app::state::{AppState, DiffComparison, Granularity};
 use turbogit_domain::model::ChangeStatus;
 
 // --- partial staging (spec R2) ----------------------------------------------
+
+/// Staging granularity toggle (issue 19, screen 06): File | Hunk | Line —
+/// what one selection actuation on the diff surface addresses. Switching
+/// clears accumulated selections ([`granular::set_granularity`] lifetime
+/// rule), so a same-value re-click is filtered out. The push_id scope keeps
+/// the segmented control's inner widget ids distinct from the mode toggle's
+/// (same `("segment", i)` salts otherwise collide).
+pub(super) fn granularity_toggle(ui: &mut Ui, state: &mut AppState) {
+    const MODES: [Granularity; 3] = [Granularity::File, Granularity::Hunk, Granularity::Line];
+    ui.push_id("granularity", |ui| {
+        let selected = MODES
+            .iter()
+            .position(|m| *m == state.ui.diff_granularity)
+            .unwrap_or(2);
+        if let Some(idx) = widgets::segmented_control(ui, &["File", "Hunk", "Line"], selected)
+            && MODES[idx] != state.ui.diff_granularity
+        {
+            granular::set_granularity(state, MODES[idx]);
+        }
+    });
+}
 
 /// Resolve the previewed file's [`ChangeStatus`] from the selected root's
 /// cached changelists (read-only per frame). The commit window previews
@@ -126,55 +148,6 @@ fn dispatch_hunk_action(
 }
 // --- toolbar widgets ---------------------------------------------------------
 
-/// Compact segmented control (spec §8.4): SURFACE_2 track, the selected
-/// segment sits on SURFACE_3 with INK ink. Returns the clicked option index.
-pub(super) fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Option<usize> {
-    const SEGMENT_H: f32 = 24.0;
-    const PAD_X: f32 = 10.0;
-    let font_id = FontId::new(12.0, FontFamily::Proportional);
-
-    let widths: Vec<f32> = options
-        .iter()
-        .map(|o| {
-            let g = ui
-                .painter()
-                .layout_no_wrap((*o).to_owned(), font_id.clone(), Color32::WHITE);
-            g.size().x + PAD_X * 2.0
-        })
-        .collect();
-    let track_w: f32 = widths.iter().sum();
-
-    let (track, _) = ui.allocate_exact_size(Vec2::new(track_w, SEGMENT_H), Sense::hover());
-    ui.painter()
-        .rect_filled(track, CornerRadius::same(4), Palette::SURFACE_2);
-
-    let mut clicked = None;
-    let mut x = track.left();
-    for (i, option) in options.iter().enumerate() {
-        let seg = Rect::from_min_size(Pos2::new(x, track.top()), Vec2::new(widths[i], SEGMENT_H));
-        let id = ui.id().with(("diff-segment", i));
-        let resp = ui.interact(seg, id, Sense::click());
-        let is_selected = i == selected;
-        if is_selected {
-            ui.painter()
-                .rect_filled(seg, CornerRadius::same(3), Palette::SURFACE_3);
-        }
-        let ink = if is_selected || resp.hovered() {
-            Palette::INK
-        } else {
-            Palette::INK_2
-        };
-        paint_centered(ui.painter(), seg, option, font_id.clone(), ink);
-        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, *option));
-        widgets::focus_ring(ui, &resp);
-        if resp.clicked() {
-            clicked = Some(i);
-        }
-        x += widths[i];
-    }
-    clicked
-}
-
 /// Revision chips (spec §8.4): Repo/Staged/Local select the documented
 /// working-tree comparison pair.
 pub(super) fn comparison_chips(ui: &mut Ui, state: &mut AppState) {
@@ -191,8 +164,9 @@ pub(super) fn comparison_chips(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// Pill-shaped selectable chip: selected = solid BRAND with brand ink,
-/// unselected = SURFACE_3 with muted ink that brightens on hover.
-fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response {
+/// unselected = SURFACE_3 with muted ink that brightens on hover. Also
+/// serves the staged-hunk chip rail (issue 20).
+pub(crate) fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response {
     const CHIP_H: f32 = 18.0;
     const PAD_X: f32 = 10.0;
     let font_id = FontId::new(11.0, FontFamily::Proportional);
@@ -400,6 +374,134 @@ pub(super) fn hunk_gutter_actions(
     if unstage.clicked() {
         dispatch_hunk_action(state, hunk, false, path);
     }
+}
+
+/// Staged state of one viewer hunk (issue 20): the hunk's own `@@` header
+/// span classified against the selected root's cached staged (HEAD↔index)
+/// spans. Only the Repo comparison carries the information — staged and
+/// unstaged hunks coexist only there; `None` elsewhere or without stats.
+pub(super) fn viewer_hunk_staged_state(
+    state: &AppState,
+    path: &Option<std::path::PathBuf>,
+    hunk_header: &str,
+) -> Option<turbogit_services::hunk_stats::StagedState> {
+    use turbogit_services::hunk_stats::{self, HunkSpan};
+    if state.ui.diff_comparison != DiffComparison::Repo {
+        return None;
+    }
+    let path = path.as_ref()?;
+    let root_id = state.selected_root.as_ref()?;
+    // A tracked file with nothing staged is absent from the staged view —
+    // exactly the "not staged" case, so absent entries classify against an
+    // empty span list.
+    let staged = state
+        .caches
+        .hunk_stats(root_id)?
+        .file(StatsView::Staged, path)
+        .map(|f| f.hunks.clone())
+        .unwrap_or_default();
+    let span: HunkSpan = hunk_stats::parse_hunk_header(hunk_header)?;
+    Some(hunk_stats::hunk_staged_state(&span, &staged))
+}
+
+/// Hunk-header right side (issue 20, screen 06): the changed-line count with
+/// its staged-state annotation — "N hidden" while collapsed — plus a chevron
+/// toggle. Collapsing hides the hunk's body rows behind the count; expanding
+#[allow(clippy::too_many_arguments)]
+pub(super) fn hunk_header_extras(
+    ui: &mut Ui,
+    state: &mut AppState,
+    band: Rect,
+    diff_key: &str,
+    hunk: usize,
+    changed_lines: usize,
+    collapsed: bool,
+    hidden_rows: usize,
+    staged_state: Option<turbogit_services::hunk_stats::StagedState>,
+) {
+    const BTN: f32 = 18.0;
+    const PAD_X: f32 = 6.0;
+    const GAP: f32 = 4.0;
+    let n = hunk + 1;
+    let count_text = if collapsed {
+        format!("{hidden_rows} hidden")
+    } else {
+        let lines = if changed_lines == 1 {
+            "1 line".to_owned()
+        } else {
+            format!("{changed_lines} lines")
+        };
+        match staged_state {
+            Some(turbogit_services::hunk_stats::StagedState::Staged) => {
+                format!("{lines} · staged")
+            }
+            Some(turbogit_services::hunk_stats::StagedState::Partial) => {
+                format!("{lines} · part")
+            }
+            Some(turbogit_services::hunk_stats::StagedState::Unstaged) => {
+                format!("{lines} · not staged")
+            }
+            None => lines,
+        }
+    };
+    let (icon, label, tooltip) = if collapsed {
+        (
+            Icon::CHEVRON_DOWN,
+            format!("Expand hunk {n}"),
+            "Expand this hunk",
+        )
+    } else {
+        (
+            Icon::CHEVRON_RIGHT,
+            format!("Collapse hunk {n}"),
+            "Collapse this hunk",
+        )
+    };
+
+    let count_galley = ui
+        .painter()
+        .layout_no_wrap(count_text, mono_font(), Palette::INK_3);
+    let btn_rect = Rect::from_min_size(
+        Pos2::new(band.right() - PAD_X - BTN, band.center().y - BTN / 2.0),
+        Vec2::splat(BTN),
+    );
+    let count_rect = Rect::from_min_max(
+        Pos2::new(btn_rect.left() - GAP - count_galley.size().x, band.top()),
+        Pos2::new(btn_rect.left() - GAP, band.bottom()),
+    );
+    ui.painter().galley(
+        Pos2::new(
+            count_rect.left(),
+            band.center().y - count_galley.size().y / 2.0,
+        ),
+        count_galley,
+        Palette::INK_3,
+    );
+
+    let base_id = ui.id().with(("diff-gutter", diff_key));
+    let response = ui.interact(btn_rect, base_id.with(("collapse", hunk)), Sense::click());
+    let fill = if response.is_pointer_button_down_on() {
+        Palette::SURFACE_3
+    } else if response.hovered() {
+        Palette::SURFACE_2
+    } else {
+        Color32::TRANSPARENT
+    };
+    if fill != Color32::TRANSPARENT {
+        ui.painter()
+            .rect_filled(btn_rect, CornerRadius::same(4), fill);
+    }
+    paint_icon_at(ui, icon, btn_rect.center(), 12.0, Palette::INK_2);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));
+    widgets::focus_ring(ui, &response);
+    if response.clicked() {
+        if collapsed {
+            state.ui.diff_collapsed.remove(&hunk);
+        } else {
+            state.ui.diff_collapsed.insert(hunk);
+        }
+    }
+    response.on_hover_text(tooltip);
 }
 
 /// Paint one icon primitive centered at `origin` without disturbing layout.

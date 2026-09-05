@@ -152,7 +152,10 @@ fn seeded_project() -> Seed {
     run_git(&alpha, &["tag", "v1.0"]);
 
     let remote = tmp.path().join("origin.git");
-    run_git(&alpha, &["init", "--bare", remote.to_str().unwrap()]);
+    run_git(
+        &alpha,
+        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
+    );
     run_git(
         &alpha,
         &["remote", "add", "origin", remote.to_str().unwrap()],
@@ -240,7 +243,12 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
         },
         state,
     );
-    harness.set_size(egui::vec2(1280.0, 800.0));
+    // 1280px of log body plus the workspace sidebar (issue #05) on
+    // the left edge — the four-pane spec widths hold at this size.
+    harness.set_size(egui::vec2(
+        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
+        800.0,
+    ));
     settle(&mut harness);
     harness
 }
@@ -269,15 +277,29 @@ fn expect_chip(harness: &Harness<'_, AppState>, text: &str, what: &str) -> (Rect
         !positions.is_empty(),
         "{what}: chip text `{text}` was not painted"
     );
-    for pos in positions {
-        if let Some(found) = filled_rects(harness)
-            .into_iter()
-            .find(|(r, _)| r.height() >= 14.0 && r.height() <= 22.0 && r.contains(pos))
-        {
-            return found;
-        }
-    }
-    panic!("{what}: no pill rect behind `{text}`")
+    // The new shell frame (issue #03) paints a branch pill of its own in
+    // the repo header; the ref chip under test lives in the log graph, so
+    // prefer pills carrying one of the three ref-token colors and only
+    // fall back to the first pill-shaped rect behind any occurrence.
+    const REF_TOKENS: [Color32; 3] = [
+        Palette::BRAND,
+        Palette::STATE_SUCCESS,
+        Palette::STATE_WARNING,
+    ];
+    let pills: Vec<(Rect, Color32)> = positions
+        .iter()
+        .filter_map(|pos| {
+            filled_rects(harness)
+                .into_iter()
+                .find(|(r, _)| r.height() >= 14.0 && r.height() <= 22.0 && r.contains(*pos))
+        })
+        .collect();
+    pills
+        .iter()
+        .find(|(_, c)| REF_TOKENS.contains(c))
+        .or_else(|| pills.first())
+        .copied()
+        .unwrap_or_else(|| panic!("{what}: no pill rect behind `{text}`"))
 }
 
 // --- Cycle 1: four panes render in mockup layout with token styling ----------
@@ -303,28 +325,44 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
         .find(|(r, c)| *c == Palette::SURFACE && r.width() >= 200.0 && r.width() <= 220.0)
         .expect("branches pane band (~210px SURFACE) not painted");
     assert!(
-        branches.0.left() < 200.0,
-        "branches pane must hug the left edge of the body"
+        (branches.0.left() - turbogit_ui::ui::sidebar::SIDEBAR_WIDTH).abs() < 24.0,
+        "branches pane must hug the left edge of the log body (right of \
+         the workspace sidebar): left={:?}",
+        branches.0.left()
     );
 
-    // Right column: ~320px wide band reaching the right edge of the body
-    // (the central panel carries an 8px inner margin, hence the tolerance).
-    let max_right = filled_rects(&harness)
+    // Right column: ~320px wide band ending where the metadata rail
+    // begins (issue #03 puts a 260px rail at the body's right edge —
+    // the log's right column no longer reaches the window edge itself).
+    let body_right = filled_rects(&harness)
         .iter()
         .map(|(r, _)| r.right())
         .fold(f32::NEG_INFINITY, f32::max);
-    let right_col = filled_rects(&harness)
+    let rects = filled_rects(&harness);
+    let rail = rects
+        .iter()
+        .find(|(r, c)| {
+            *c == Palette::SURFACE
+                && r.width() >= 255.0
+                && r.width() <= 265.0
+                && (body_right - r.right()).abs() <= 12.0
+        })
+        .expect("metadata rail band (~260px SURFACE at right edge) not painted");
+    let rail_left = rail.0.left();
+    let right_col = rects
         .into_iter()
         .find(|(r, _)| {
-            r.width() >= 310.0 && r.width() <= 330.0 && (r.right() - max_right).abs() <= 12.0
+            r.width() >= 310.0 && r.width() <= 330.0 && (rail_left - r.right()).abs() <= 12.0
         })
         .expect("right column (~320px) not painted");
 
-    // Details pane: ~200px tall SURFACE band at the bottom of the right column.
+    // Details pane: ~340px tall SURFACE band at the bottom of the right
+    // column (grew from the §8.3 200px in issue 15 for the Actions section,
+    // and again in issue 17 for the committer row + Copy-hash header).
     let details = filled_rects(&harness)
         .into_iter()
-        .find(|(r, c)| *c == Palette::SURFACE && r.height() >= 190.0 && r.height() <= 210.0)
-        .expect("details pane band (~200px SURFACE) not painted");
+        .find(|(r, c)| *c == Palette::SURFACE && r.height() >= 330.0 && r.height() <= 350.0)
+        .expect("details pane band (~340px SURFACE) not painted");
     assert!(
         details.0.bottom() >= right_col.0.bottom() - 8.0,
         "details pane must sit at the bottom of the right column"
@@ -488,9 +526,15 @@ fn selection_uses_translucent_highlight_not_solid_brand() {
     );
 
     // …and nothing paints a solid BRAND row-sized highlight over the graph.
+    // (The details pane's primary "Cherry-pick to…" action legitimately
+    // paints a solid BRAND button — issue 15 — so the scan is scoped to the
+    // graph region, the left 70% of the window; the graph itself must stay
+    // translucent.)
+    let win_w = 1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH;
     let solid_brand_rows: Vec<Rect> = filled_rects(&harness)
         .into_iter()
         .filter(|(r, c)| *c == Palette::BRAND && r.width() > 200.0 && r.height() >= 20.0)
+        .filter(|(r, _)| r.center().x < win_w * 0.7)
         .map(|(r, _)| r)
         .collect();
     assert!(
@@ -687,7 +731,9 @@ fn clearing_the_path_scope_restores_the_full_log() {
     scope_log_to_file(&mut harness, &docs_label, "README.md");
     assert_not_painted(&harness, "beta: root commit");
 
-    harness.get_by_label("Clear path history").click();
+    // Issue 17: the scope renders as a chip with a removable × in the log
+    // toolbar (replacing the old "Clear path history" banner button).
+    harness.get_by_label("Remove path filter").click();
     settle(&mut harness);
 
     assert_eq!(

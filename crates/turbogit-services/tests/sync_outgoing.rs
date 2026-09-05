@@ -62,7 +62,10 @@ fn repo_ahead_of_origin() -> (tempfile::TempDir, PathBuf, Vec<String>) {
     run_git(&repo, &["config", "user.name", "Test"]);
     let c1 = commit(&repo, "c1");
 
-    run_git(&repo, &["init", "--bare", remote.to_str().unwrap()]);
+    run_git(
+        &repo,
+        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
+    );
     run_git(
         &repo,
         &["remote", "add", "origin", remote.to_str().unwrap()],

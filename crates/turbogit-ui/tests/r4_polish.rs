@@ -19,7 +19,7 @@
 //!   field holds focus, and never collide with plain typing or each other
 
 use egui::{Key, Modifiers, Pos2, Rect, Shape, Vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
 use tempfile::TempDir;
 use test_support::harness::{
     assert_painted, filled_rects, galley_origin, painted_text, settle, shell_harness,
@@ -264,11 +264,11 @@ fn vocabulary_button_paints_brand_focus_ring_when_focused() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("Update Project").focus();
+    harness.get_by_label("Fetch").focus();
     settle(&mut harness);
 
-    let center = harness.get_by_label("Update Project").rect().center();
-    assert_ring_covers(&harness, center, "focused toolbar button");
+    let center = harness.get_by_label("Fetch").rect().center();
+    assert_ring_covers(&harness, center, "focused topbar action button");
 }
 
 #[test]
@@ -290,7 +290,7 @@ fn only_one_focus_ring_is_visible_at_a_time() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("Update Project").focus();
+    harness.get_by_label("Fetch").focus();
     settle(&mut harness);
 
     let rings = brand_rings(&harness);
@@ -304,18 +304,20 @@ fn only_one_focus_ring_is_visible_at_a_time() {
 // --- Custom-drawn controls (this pass fixes them) ----------------------------
 
 #[test]
-fn rail_and_tab_widgets_paint_brand_focus_rings() {
+fn tab_items_paint_brand_focus_rings() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("Git Log").focus();
-    settle(&mut harness);
-    let rail_center = harness.get_by_label("Git Log").rect().center();
-    assert_ring_covers(&harness, rail_center, "focused sidebar rail button");
-
+    // The old sidebar rail retired with the IDE chrome (issue #03); the
+    // center tab strip's custom-drawn tab items are its focus-ring carriers.
     harness.get_by_label("Log").focus();
     settle(&mut harness);
     let tab_center = harness.get_by_label("Log").rect().center();
+    assert_ring_covers(&harness, tab_center, "focused shell tab item");
+
+    harness.get_by_label("Changes").focus();
+    settle(&mut harness);
+    let tab_center = harness.get_by_label("Changes").rect().center();
     assert_ring_covers(&harness, tab_center, "focused shell tab item");
 }
 
@@ -385,12 +387,27 @@ fn settings_category_row_paints_brand_focus_ring() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("settings").click();
+    // The gear left the chrome with the IDE toolbar (issue #03/#16); the
+    // modal opens through the settings flag (what the command palette's
+    // Settings action sets).
+    harness.state_mut().ui.settings_open = true;
     settle(&mut harness);
 
-    harness.get_by_label("Version Control").focus();
+    // The category row is the only *button* labeled "General" — the page
+    // heading (issue #26) renders the same word as a plain label.
+    use egui::accesskit::Role;
+    harness
+        .get_all_by_label("General")
+        .find(|n| n.accesskit_node().role() == Role::Button)
+        .unwrap()
+        .focus();
     settle(&mut harness);
-    let center = harness.get_by_label("Version Control").rect().center();
+    let center = harness
+        .get_all_by_label("General")
+        .find(|n| n.accesskit_node().role() == Role::Button)
+        .unwrap()
+        .rect()
+        .center();
     assert_ring_covers(&harness, center, "focused settings category row");
 }
 
@@ -406,11 +423,11 @@ fn shell_chrome_holds_at_small_window_sizes() {
 
     let vp = viewport(560.0, 420.0);
     // Every chrome band stays painted and the status bar pins to the bottom.
-    // Labels are chosen unique across the shell ("Commit" exists three times:
-    // toolbar button, rail button, tab item).
-    assert_visible(&harness, "File", vp, "topbar");
-    assert_visible(&harness, "Update Project", vp, "toolbar");
-    assert_visible(&harness, "Git Log", vp, "sidebar rail");
+    // Labels are chosen unique across the new shell frame (issue #03):
+    // topbar actions and center tab strip items.
+    assert_visible(&harness, "Pull", vp, "topbar actions");
+    assert_visible(&harness, "Fetch", vp, "topbar actions");
+    assert_visible(&harness, "Changes", vp, "tab strip");
     assert_visible(&harness, "Log", vp, "tab strip");
 
     let status_top = 420.0 - 24.0;
@@ -515,23 +532,26 @@ fn settings_modal_fits_small_heights() {
     harness.set_size(egui::vec2(900.0, 480.0));
     settle(&mut harness);
 
-    // The gear stays pinned to the toolbar's right edge at every window
-    // size, so it opens directly.
-    harness.get_by_label("settings").click();
+    // The modal opens through the settings flag — the gear left the chrome
+    // with the IDE toolbar (issue #03/#16); popups and the palette set it.
+    harness.state_mut().ui.settings_open = true;
     steps(&mut harness, 4);
     settle(&mut harness);
 
     let vp = viewport(900.0, 480.0);
     // The footer must survive short viewports instead of being clipped away.
-    for button in ["Apply", "Cancel", "Reset"] {
+    for button in ["Apply", "Cancel", "Restore defaults"] {
         assert_visible(&harness, button, vp, "settings footer");
     }
 
-    // The page body scrolls: content below the fold comes into view.
-    harness.get_by_label("Date format:").scroll_to_me();
+    // The page body scrolls: switch to Appearance and scroll a row into view.
+    harness.get_by_label("Appearance").click();
     steps(&mut harness, 4);
     settle(&mut harness);
-    assert_visible(&harness, "Date format:", vp, "scrolled-to setting row");
+    harness.get_by_label("Date format").scroll_to_me();
+    steps(&mut harness, 4);
+    settle(&mut harness);
+    assert_visible(&harness, "Date format", vp, "scrolled-to setting row");
 }
 
 // ===========================================================================
@@ -542,7 +562,7 @@ fn settings_modal_fits_small_heights() {
 fn ctrl_k_returns_to_the_commit_tool_window() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
-    harness.get_by_label("Git Log").click();
+    harness.get_by_label("Log").click();
     settle(&mut harness);
     assert_eq!(harness.state().ui.tab, Tab::Log);
 
@@ -560,12 +580,14 @@ fn ctrl_shift_k_opens_the_push_dialog() {
 
     harness.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::K);
     settle(&mut harness);
-
     assert_eq!(harness.state().ui.dialog, Some(Dialog::Push));
-    assert_painted(&harness, "Remote:");
+    // Issue #25: the PUSH SCOPE segmented control renders for any
+    // opened push dialog; Remote/Branch fields only paint when the
+    // user has selected the ThisRepo scope segment.
+    assert_painted(&harness, "PUSH SCOPE");
+    assert_painted(&harness, "This repo");
     assert_painted(&harness, "Force push (--force-with-lease)");
 }
-
 #[test]
 fn ctrl_t_rescans_without_disturbing_shell_state() {
     let (mut harness, _project) = shell_harness();

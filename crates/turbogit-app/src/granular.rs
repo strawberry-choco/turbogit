@@ -15,7 +15,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::root_caches::Affected;
-use crate::state::{AppState, DiffComparison};
+use crate::state::{AppState, CharSelection, DiffComparison, Granularity};
 use turbogit_domain::model::ChangeStatus;
 use turbogit_services::partial::{self, HunkSelection, Selection};
 
@@ -77,11 +77,15 @@ fn cached_preview_diff(state: &AppState, path: &std::path::Path) -> Option<Strin
 
 // --- dispatch ----------------------------------------------------------------
 
-/// What part of the diff a granular op addresses: one whole hunk, or an
-/// accumulated sub-hunk line selection (story 3).
+/// What part of the diff a granular op addresses: the whole file, one whole
+/// hunk, an accumulated sub-hunk line selection (story 3), or one line's
+/// character range (issue 19) — `(hunk, ord, start, end)` with the
+/// [`turbogit_services::partial::HunkSelection::Chars`] semantics.
 pub enum HunkTarget {
+    File,
     Whole(usize),
     Lines(usize, BTreeSet<usize>),
+    Chars(usize, usize, usize, usize),
 }
 
 /// Dispatch one granular stage/unstage op (spec R2): resolve the diff text,
@@ -96,7 +100,7 @@ pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: 
         return;
     };
     let status = change_status(state, &path);
-    let selection = selection_for(&target);
+    let selection = selection_for(&target, &diff_text);
     let label = if stage { "Stage hunk" } else { "Unstage hunk" };
     // Only staging reroutes for untracked files (intent-to-add + forward
     // apply using the repo-relative path — the only form git accepts there);
@@ -130,8 +134,9 @@ pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: 
     );
 }
 
-fn selection_for(target: &HunkTarget) -> Selection {
+fn selection_for(target: &HunkTarget, diff_text: &str) -> Selection {
     match target {
+        HunkTarget::File => file_selection(diff_text),
         HunkTarget::Whole(hunk) => Selection {
             hunks: [(*hunk, HunkSelection::Whole)].into_iter().collect(),
         },
@@ -140,6 +145,29 @@ fn selection_for(target: &HunkTarget) -> Selection {
                 .into_iter()
                 .collect(),
         },
+        HunkTarget::Chars(hunk, ord, start, end) => Selection {
+            hunks: [(
+                *hunk,
+                HunkSelection::Chars {
+                    ord: *ord,
+                    start: *start,
+                    end: *end,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        },
+    }
+}
+
+/// Every hunk of `diff_text`, whole (File granularity): the selection that
+/// stages the file's entire cached diff through the same patch pipeline as
+/// every other granular op.
+fn file_selection(diff_text: &str) -> Selection {
+    Selection {
+        hunks: (0..diff_text.lines().filter(|l| l.starts_with("@@")).count())
+            .map(|h| (h, HunkSelection::Whole))
+            .collect(),
     }
 }
 
@@ -269,7 +297,168 @@ fn next_preview_candidate(state: &AppState, just_finished: &Path) -> Option<Path
 pub fn on_diff_changed(state: &mut AppState, path: Option<&Path>) {
     if let Some(p) = path {
         state.ui.line_selections.remove(p);
+        if state
+            .ui
+            .char_selection
+            .as_ref()
+            .is_some_and(|s| s.path == p)
+        {
+            state.ui.char_selection = None;
+        }
     }
+}
+
+/// Switch the staging granularity (issue 19): accumulated line and char
+/// selections refer to the outgoing semantics' content, so both die with
+/// the switch — the same lifetime rule as a diff-cache change.
+pub fn set_granularity(state: &mut AppState, granularity: Granularity) {
+    state.ui.diff_granularity = granularity;
+    state.ui.line_selections.clear();
+    state.ui.char_selection = None;
+    state.ui.char_drag_anchor = None;
+}
+
+/// Esc (issue 19): the drag-selected character range clears without staging,
+/// along with any in-flight drag draft.
+pub fn clear_char_selection(state: &mut AppState) {
+    state.ui.char_selection = None;
+    state.ui.char_drag_anchor = None;
+}
+
+/// Enter (issue 19): stage the active char selection through the granular
+/// pipeline. A silent no-op without one. The selection is consumed before
+/// dispatch — the diff it referred to is about to be replaced by the post-op
+/// reload.
+pub fn stage_char_selection(state: &mut AppState) {
+    let Some(sel) = state.ui.char_selection.take() else {
+        return;
+    };
+    dispatch(
+        state,
+        sel.path,
+        HunkTarget::Chars(sel.hunk, sel.ord, sel.start, sel.end),
+        true,
+    );
+}
+
+// --- char-range drag protocol (issue 19) --------------------------------------
+
+/// Arm a fresh char-range drag on one changed line (UI computes the anchor
+/// char index from the pointer). The selection starts collapsed at the
+/// anchor; a collapsed selection at drag end is a click, not a range.
+pub fn begin_char_selection(
+    state: &mut AppState,
+    path: &Option<PathBuf>,
+    hunk: usize,
+    ord: usize,
+    anchor: usize,
+) {
+    let Some(p) = path else {
+        return;
+    };
+    state.ui.char_drag_anchor = Some((p.clone(), hunk, ord, anchor));
+    state.ui.char_selection = Some(CharSelection {
+        path: p.clone(),
+        hunk,
+        ord,
+        start: anchor,
+        end: anchor,
+    });
+}
+
+/// Extend the active drag with the pointer's current char index: the range
+/// normalizes around the anchor so dragging either way widens it. Drag
+/// events that left the anchor row are ignored (the UI only forwards
+/// in-row positions).
+pub fn update_char_selection(
+    state: &mut AppState,
+    path: &Option<PathBuf>,
+    hunk: usize,
+    ord: usize,
+    cur: usize,
+) {
+    let Some(p) = path else {
+        return;
+    };
+    let Some(anchor) = state
+        .ui
+        .char_drag_anchor
+        .clone()
+        .filter(|a| a.0 == *p && a.1 == hunk && a.2 == ord)
+        .map(|a| a.3)
+    else {
+        return;
+    };
+    let sel = CharSelection {
+        path: p.clone(),
+        hunk,
+        ord,
+        start: anchor.min(cur),
+        end: anchor.max(cur),
+    };
+    state.ui.char_selection = Some(sel);
+}
+
+/// Close the drag: a collapsed range was a plain click (the line toggle
+/// handles that), so it clears; a real range stays armed for Enter. The
+/// anchor draft dies either way.
+pub fn end_char_selection(state: &mut AppState, path: &Option<PathBuf>, hunk: usize, ord: usize) {
+    let Some(p) = path else {
+        return;
+    };
+    if !matches!(state.ui.char_drag_anchor, Some((ref a, ah, ao, _)) if *a == *p && ah == hunk && ao == ord)
+    {
+        return;
+    }
+    state.ui.char_drag_anchor = None;
+    if state
+        .ui
+        .char_selection
+        .as_ref()
+        .is_some_and(|s| s.start >= s.end)
+    {
+        state.ui.char_selection = None;
+    }
+}
+
+/// The selection readout (issue 19): how many lines and chars are selected
+/// and at what granularity, plus the Enter/Esc hints while a char range is
+/// armed. None while nothing is selected.
+pub fn selection_readout(state: &AppState) -> Option<String> {
+    let path = state.ui.preview_change.as_ref()?;
+    let mut lines = state
+        .ui
+        .line_selections
+        .get(path)
+        .map_or(0, |hunks| hunks.values().map(|s| s.len()).sum());
+    let mut chars = None;
+    if let Some(sel) = &state.ui.char_selection
+        && &sel.path == path
+    {
+        lines += 1;
+        chars = Some(sel.end.saturating_sub(sel.start));
+    }
+    if lines == 0 {
+        return None;
+    }
+    let granularity = match state.ui.diff_granularity {
+        Granularity::File => "file",
+        Granularity::Hunk => "hunk",
+        Granularity::Line => "line",
+    };
+    let mut out = if lines == 1 {
+        "1 line selection".to_owned()
+    } else {
+        format!("{lines} line selections")
+    };
+    if let Some(c) = chars {
+        out.push_str(&format!(" · {c} chars"));
+    }
+    out.push_str(&format!(" · granularity: {granularity}"));
+    if chars.is_some() {
+        out.push_str(" · ↵ stage · Esc clear");
+    }
+    Some(out)
 }
 
 /// Toggle one changed line's membership in the accumulated sub-hunk

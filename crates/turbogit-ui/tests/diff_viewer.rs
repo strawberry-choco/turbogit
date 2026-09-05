@@ -149,7 +149,10 @@ fn diff_harness(repo: &Path) -> Harness<'static, AppState> {
         },
         state,
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
+    // Tall enough that the new shell frame (issue #03: topbar + repo header
+    // + center tabs + status bar) leaves the preview column room for the
+    // tallest comparison diff plus the message editor below it.
+    harness.set_size(egui::vec2(1024.0, 900.0));
     harness
 }
 

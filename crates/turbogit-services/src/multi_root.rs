@@ -25,15 +25,38 @@ pub fn scan_for_roots(engine: &dyn GitExecutor, dir: &Path) -> Vec<PathBuf> {
     if engine.is_repo(dir) {
         found.push(dir.to_path_buf());
     }
-    scan_dir(engine, dir, 0, &mut found);
+    scan_dir(engine, dir, 0, SCAN_MAX_DEPTH, &mut found);
 
     found.sort();
     found.dedup();
     found
 }
 
-fn scan_dir(_engine: &dyn GitExecutor, dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
-    if depth >= SCAN_MAX_DEPTH {
+/// Discover candidate repo roots beneath `dir` at **any** depth (no depth
+/// cap). Used by the Welcome "Attach workspace root" flow (issue #34), which
+/// registers every repository in a chosen directory tree, unlike
+/// [`scan_for_roots`] which stops at [`SCAN_MAX_DEPTH`].
+pub fn scan_deep(engine: &dyn GitExecutor, dir: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+
+    if engine.is_repo(dir) {
+        found.push(dir.to_path_buf());
+    }
+    scan_dir(engine, dir, 0, usize::MAX, &mut found);
+
+    found.sort();
+    found.dedup();
+    found
+}
+
+fn scan_dir(
+    _engine: &dyn GitExecutor,
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    found: &mut Vec<PathBuf>,
+) {
+    if depth >= max_depth {
         return;
     }
     let entries = match std::fs::read_dir(dir) {
@@ -52,7 +75,7 @@ fn scan_dir(_engine: &dyn GitExecutor, dir: &Path, depth: usize, found: &mut Vec
         // A directory containing `.git` is a repo root. Recurse before pushing
         // so `path` can move; order is irrelevant because the caller sorts and
         // dedups the result.
-        scan_dir(_engine, &path, depth + 1, found);
+        scan_dir(_engine, &path, depth + 1, max_depth, found);
         if path.join(".git").exists() {
             found.push(path);
         }
@@ -129,6 +152,30 @@ mod tests {
     }
 
     #[test]
+    fn scan_deep_finds_repos_beyond_the_bounded_scan_depth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // Nest one repo strictly deeper than SCAN_MAX_DEPTH: the bounded
+        // scanner must skip it, the unbounded deep scan must find it.
+        let deep = base.join("a").join("b").join("c").join("d").join("deep");
+        repo_at(&deep);
+
+        let engine = FakeExecutor::new();
+        let bounded = scan_for_roots(&engine, base);
+        assert!(
+            !bounded.contains(&deep),
+            "bounded scan must NOT see the deep repo"
+        );
+
+        let mut deep_result = scan_deep(&engine, base);
+        deep_result.retain(|p| p != base);
+        assert!(
+            deep_result.contains(&deep),
+            "deep scan must find repos beyond SCAN_MAX_DEPTH; got {deep_result:?}"
+        );
+    }
+
+    #[test]
     fn scanner_finds_repos_within_depth_and_skips_deeper_ones() {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
@@ -168,6 +215,10 @@ mod tests {
                 favorite: false,
                 protected: false,
                 exists: true,
+                ahead: 0,
+                behind: 0,
+                gone: false,
+                last_touched: None,
             }],
         );
         engine
