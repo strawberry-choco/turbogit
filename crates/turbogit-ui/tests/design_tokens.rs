@@ -257,3 +257,197 @@ fn status_tokens_cover_clean_dirty_diverged_stale() {
         );
     }
 }
+
+// --- Cycle 6: Local Changes redesign token set (issue 01, ticket 01) ---
+//
+// Purely additive: every token below is new and nothing existing re-renders
+// differently — later tickets opt in by switching call sites. Sources:
+// `docs/ui-local-changes-visual-changes.md` §7–8 and the redesign mockup SVG.
+
+const SIDEBAR: Color32 = Color32::from_rgb(0x1b, 0x1c, 0x1e);
+
+#[test]
+fn sidebar_token_is_dedicated_and_distinct_from_shell_surfaces() {
+    // The redesign gives the sidebar rail its own surface (#1B1C1E), darker
+    // than both the window fill (BG) and panel fills (SURFACE*).
+    assert_eq!(
+        Palette::SIDEBAR,
+        SIDEBAR,
+        "sidebar surface must match the design"
+    );
+    for shell_surface in [
+        Palette::BG,
+        Palette::SURFACE,
+        Palette::SURFACE_2,
+        Palette::SURFACE_3,
+    ] {
+        assert_ne!(
+            Palette::SIDEBAR,
+            shell_surface,
+            "sidebar must be a distinct surface token, not an alias of {shell_surface:?}"
+        );
+    }
+    // The window/panel tokens themselves stay untouched by the redesign
+    // (they already matched the design doc §7 surfaces).
+    assert_eq!(Palette::BG, Color32::from_rgb(0x1e, 0x1f, 0x22));
+    assert_eq!(Palette::SURFACE, Color32::from_rgb(0x2b, 0x2d, 0x30));
+}
+
+const SELECTION_BG: Color32 = Color32::from_rgb(0x2e, 0x43, 0x6e);
+
+#[test]
+fn selection_background_token_is_solid_design_blue_and_add_only() {
+    // The redesign's row-selection background is the solid #2E436E the Local
+    // Changes file rows (ticket 05) opt into — a new token, not a mutation of
+    // the translucent selection_bg() the shell rows paint today.
+    assert_eq!(
+        Palette::SELECTION_BG,
+        SELECTION_BG,
+        "selection bg must match the design"
+    );
+    assert_eq!(
+        Palette::SELECTION_BG,
+        Color32::from_rgb(0x2e, 0x43, 0x6e),
+        "selection bg is fully opaque"
+    );
+
+    // Purely additive: the existing translucent selection fill is untouched,
+    // so no widget that renders selection today changes color.
+    let opaque = Palette::SELECTION_BG.is_opaque();
+    assert!(
+        opaque,
+        "redesign selection bg must be solid, not alpha-blended"
+    );
+    assert_ne!(
+        Palette::SELECTION_BG,
+        Palette::selection_bg(),
+        "new solid token must not alias the legacy translucent fill"
+    );
+    assert_eq!(
+        Palette::selection_bg(),
+        Color32::from_rgba_premultiplied(0x0d, 0x1d, 0x3c, 0x40),
+        "legacy selection_bg() must remain the translucent brand blend"
+    );
+}
+
+#[test]
+fn status_letter_tokens_match_the_mockup_modified_added_unversioned() {
+    // File rows (issue 05) colour the status letter and the filename by state:
+    // M modified blue, A added green, U unversioned olive — values straight
+    // from the redesign mockup.
+    assert_eq!(
+        Palette::STATUS_MODIFIED,
+        Color32::from_rgb(0xa8, 0xc0, 0xe8),
+        "M must render in the mockup's modified blue"
+    );
+    assert_eq!(
+        Palette::STATUS_ADDED,
+        Color32::from_rgb(0x57, 0x96, 0x5c),
+        "A must render in the mockup's added green"
+    );
+    assert_eq!(
+        Palette::STATUS_UNVERSIONED,
+        Color32::from_rgb(0xb5, 0xb3, 0x7e),
+        "U must render in the mockup's unversioned olive"
+    );
+
+    // The three states are pairwise distinct so a row is never ambiguous
+    // about which status letter it carries.
+    let letters = [
+        Palette::STATUS_MODIFIED,
+        Palette::STATUS_ADDED,
+        Palette::STATUS_UNVERSIONED,
+    ];
+    for (i, a) in letters.iter().enumerate() {
+        for b in letters.iter().skip(i + 1) {
+            assert_ne!(a, b, "status-letter tokens must be pairwise distinct");
+        }
+    }
+}
+
+#[test]
+fn redesign_diff_tokens_match_the_mockup_and_stay_distinct_from_legacy() {
+    // The diff preview (issue 06) paints added/deleted lines as accent color
+    // on a tinted block pair — values straight from the design doc §7.
+    assert_eq!(
+        Palette::DIFF_ADD_ACCENT,
+        Color32::from_rgb(0x57, 0x96, 0x5c),
+        "added accent"
+    );
+    assert_eq!(
+        Palette::DIFF_ADD_BLOCK,
+        Color32::from_rgb(0x2e, 0x43, 0x34),
+        "added block"
+    );
+    assert_eq!(
+        Palette::DIFF_DEL_ACCENT,
+        Color32::from_rgb(0xf7, 0x54, 0x64),
+        "removed accent"
+    );
+    assert_eq!(
+        Palette::DIFF_DEL_BLOCK,
+        Color32::from_rgb(0x43, 0x30, 0x34),
+        "removed block"
+    );
+
+    // Added shares its green with the added-file status letter — one hue for
+    // 'added' across rows and diff.
+    assert_eq!(Palette::DIFF_ADD_ACCENT, Palette::STATUS_ADDED);
+    // Accent and block of each pair are distinct; the two pairs never cross.
+    assert_ne!(Palette::DIFF_ADD_ACCENT, Palette::DIFF_ADD_BLOCK);
+    assert_ne!(Palette::DIFF_DEL_ACCENT, Palette::DIFF_DEL_BLOCK);
+    assert_ne!(Palette::DIFF_ADD_ACCENT, Palette::DIFF_DEL_ACCENT);
+    assert_ne!(Palette::DIFF_ADD_BLOCK, Palette::DIFF_DEL_BLOCK);
+
+    // Purely additive: the legacy diff view tokens are untouched — the
+    // redesign pair is a separate token set, not a re-paint of DIFF_*_BG/TEXT.
+    assert_ne!(Palette::DIFF_ADD_ACCENT, Palette::DIFF_ADD_BG);
+    assert_ne!(Palette::DIFF_ADD_ACCENT, Palette::DIFF_ADD_TEXT);
+    assert_ne!(Palette::DIFF_ADD_BLOCK, Palette::DIFF_ADD_BG);
+    assert_ne!(Palette::DIFF_DEL_ACCENT, Palette::DIFF_DEL_BG);
+    assert_ne!(Palette::DIFF_DEL_ACCENT, Palette::DIFF_DEL_TEXT);
+    assert_ne!(Palette::DIFF_DEL_BLOCK, Palette::DIFF_DEL_BG);
+}
+
+#[test]
+fn counter_token_is_reserved_orange_distinct_from_every_accent() {
+    // #E0883C paints dirt/unpulled counters only (design doc §7) — it is
+    // semantically reserved, never intended as a general accent or warning.
+    assert_eq!(
+        Palette::COUNTER,
+        Color32::from_rgb(0xe0, 0x88, 0x3c),
+        "counter orange must match the design"
+    );
+    assert!(
+        Palette::COUNTER.is_opaque(),
+        "counter orange is a solid fill"
+    );
+
+    // Reserved: it must not alias the brand accent, the generic warning
+    // orange, or the error red — so a counter can never be confused with an
+    // action, a warning state, or a diverged state.
+    assert_ne!(Palette::COUNTER, Palette::BRAND, "not the general accent");
+    assert_ne!(
+        Palette::COUNTER,
+        Palette::STATE_WARNING,
+        "not the generic warning"
+    );
+    assert_ne!(Palette::COUNTER, Palette::STATE_ERROR, "not the error red");
+}
+
+#[test]
+fn spacing_scale_tokens_match_the_redesign_spec() {
+    // Design doc §8: one consistent row height per row kind, gaps in
+    // multiples of 4, panel padding 12–14 px.
+    assert_eq!(theme::FILE_ROW_HEIGHT, 24.0, "file-row height");
+    assert_eq!(theme::GROUP_ROW_HEIGHT, 26.0, "group-row height");
+
+    assert_eq!(theme::GRID_GAP, 4.0, "grid gap base unit");
+    assert_eq!(theme::PANEL_PADDING, 12.0, "panel padding (12–14 px scale)");
+    // The padding is on the multiples-of-4 grid the design mandates.
+    assert_eq!(
+        theme::PANEL_PADDING as i32 % theme::GRID_GAP as i32,
+        0,
+        "panel padding sits on the 4 px grid"
+    );
+}

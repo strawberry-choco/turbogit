@@ -19,8 +19,11 @@ use egui_kittest::{
 };
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use test_support::harness::{assert_not_painted, assert_painted};
+use test_support::harness::{
+    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text,
+};
 use turbogit_app::state::{AppState, CommitSubTab, Dialog};
+use turbogit_ui::theme::Palette;
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)
@@ -121,9 +124,9 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 /// preview legitimately spins (repainting) while `git diff` runs on a
 /// worker thread.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    // Generous width so the metadata rail (issue #03) and the Commit
-    // window's changelist pane share the central body without
-    // clipping the multi-root select-all rows.
+    // Generous width so the Commit window's two zones (fixed-width commit
+    // panel + diff preview) fit without clipping the multi-root select-all
+    // rows; the shell's metadata rail was removed (redesign 03).
     let mut harness = Harness::builder().with_max_steps(1024).build_ui_state(
         |ui, state| {
             state.drain_events();
@@ -140,8 +143,9 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
 }
 
 /// Poll `f` until it returns true or the deadline elapses (worker threads run
-/// asynchronously, so completion is observed by polling).
-fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
+/// asynchronously, so completion is observed by polling). `FnMut` so pollers
+/// can repaint the harness while waiting (issue 06 stats load).
+fn wait_until<F: FnMut() -> bool>(ms: u64, mut f: F) -> bool {
     let start = Instant::now();
     loop {
         if f() {
@@ -154,17 +158,17 @@ fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
     }
 }
 
-/// The primary Commit action button lives on the same row as
-/// "Commit and Push..." — the shell rail/toolbar also contain items labeled
-/// "Commit", so disambiguate geometrically (same y-center).
+/// The primary Commit action's main part (issue 07: the `Commit ▾` split
+/// button). Labeled via `WidgetInfo` — the panel heading also says "Commit",
+/// so tests target the unambiguous accessible label "Commit changes".
 fn commit_action_button<'h>(h: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> {
-    let row_y = h.get_by_label("Commit and Push...").rect().center().y;
-    let mut on_row: Vec<_> = h
-        .get_all_by_label("Commit")
-        .filter(|n| (n.rect().center().y - row_y).abs() < 4.0)
-        .collect();
-    assert_eq!(on_row.len(), 1, "expected exactly one Commit action button");
-    on_row.remove(0)
+    h.get_by_label("Commit changes")
+}
+
+/// Open the split button's dropdown (the ▾ chevron) and return the harness,
+/// so the caller can click a menu item (e.g. "Commit and Push...") by label.
+fn open_commit_split_dropdown(h: &Harness<'_, AppState>) {
+    h.get_by_label("Commit split options").click();
 }
 
 fn commit_button_is_disabled(h: &Harness<'_, AppState>) -> bool {
@@ -183,17 +187,17 @@ fn canonical_groups_count_badges_and_status_rows_paint() {
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Staging sections with count badges (issue 20):
-    // UNSTAGED = base.txt (M) + untracked.txt (?); STAGED = added.txt (A).
-    h.get_by_label("UNSTAGED (2)");
-    h.get_by_label("STAGED (1)");
+    // Issue 07: the staging section headers are gone — file rows paint
+    // directly under the repo group; only the `Merge conflicts` group keeps
+    // its count-badged header. Row badges still match the file states.
+    h.get_by_label("base.txt");
+    h.get_by_label("added.txt");
     h.get_by_label("Merge conflicts (1)");
-
-    // File rows paint with M/A/C badges matching actual file states.
-    h.get_by_label("M base.txt");
-    h.get_by_label("A added.txt");
-    h.get_by_label("? untracked.txt");
     h.get_by_label("C conf.txt");
+
+    // Untracked rows live in the bottom group of the same tree.
+    h.get_by_label("Unversioned Files (1)");
+    h.get_by_label("untracked.txt");
 
     // Single-root project: no root sub-groups / select-all checkboxes.
     assert!(
@@ -203,7 +207,7 @@ fn canonical_groups_count_badges_and_status_rows_paint() {
 }
 
 #[test]
-fn file_row_checkboxes_toggle_commit_inclusion() {
+fn file_row_checkbox_toggles_commit_inclusion() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "toggle-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -213,14 +217,14 @@ fn file_row_checkboxes_toggle_commit_inclusion() {
 
     assert!(!h.state().ui.selected.contains(&p));
 
-    h.get_by_label("M base.txt").click();
+    h.get_by_label("Select base.txt").click();
     h.run();
     assert!(
         h.state().ui.selected.contains(&p),
         "checking a row includes the change"
     );
 
-    h.get_by_label("M base.txt").click();
+    h.get_by_label("Select base.txt").click();
     h.run();
     assert!(
         !h.state().ui.selected.contains(&p),
@@ -249,7 +253,7 @@ fn commit_stays_disabled_without_message_or_selection_and_enables_with_both() {
 
     // Selection made but message cleared → still disabled (asserted).
     h.state_mut().ui.commit_message.clear();
-    h.get_by_label("M base.txt").click();
+    h.get_by_label("base.txt").click();
     h.run();
     assert!(
         commit_button_is_disabled(&h),
@@ -272,7 +276,7 @@ fn commit_executes_for_valid_input() {
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("M base.txt").click();
+    h.get_by_label("base.txt").click();
     h.state_mut().ui.commit_message = "issue11: real commit".into();
     h.run();
     commit_action_button(&h).click();
@@ -301,8 +305,14 @@ fn amend_commits_with_amend_flag() {
     for _ in 0..5 {
         h.run();
     }
-    h.get_by_label("M base.txt").click();
+    // One click per frame: kittest delivers queued events only at the next
+    // run, so two clicks without an intervening run would land together and
+    // only the release target would register.
+    h.get_by_label("base.txt").click();
+    h.run();
     h.get_by_label("Amend").click();
+    h.run();
+    assert!(h.state().ui.amend, "the Amend checkbox must toggle");
     h.state_mut().ui.commit_message = "amended subject".into();
     h.run();
     commit_action_button(&h).click();
@@ -326,8 +336,12 @@ fn commit_and_push_chains_commit_then_opens_push_dialog() {
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("M base.txt").click();
+    h.get_by_label("base.txt").click();
     h.state_mut().ui.commit_message = "push chain subject".into();
+    h.run();
+    // Issue 07: "Commit and Push..." lives inside the split button's
+    // dropdown instead of as a sibling action.
+    open_commit_split_dropdown(&h);
     h.run();
     h.get_by_label("Commit and Push...").click();
     h.run();
@@ -345,38 +359,320 @@ fn commit_and_push_chains_commit_then_opens_push_dialog() {
     );
 }
 
+/// Track a new file in `repo` so it counts as a modified (M) change when
+/// its worktree content diverges afterwards — untracked files render as
+/// `? name` rows and would not exercise the modified-row assertions.
+fn seed_tracked(repo: &Path, name: &str) {
+    std::fs::write(repo.join(name), "tracked\n").unwrap();
+    git(repo, &["add", name]);
+    git(repo, &["commit", "-q", "-m", &format!("track {name}")]);
+    std::fs::write(repo.join(name), "modified\n").unwrap();
+}
+
 #[test]
-fn multi_root_shows_root_subgroups_with_select_all() {
+fn repo_groups_render_collapsible_one_tree_with_focus() {
+    // Issue 04: per-repo sections collapse into ONE tree — each repo renders
+    // as a collapsible group header. Non-focused repos are collapsed by
+    // default; the selected repo's files are the visual focus.
     let parent = tempfile::tempdir().unwrap();
     let a = temp_repo(parent.path(), "repo-a");
     let b = temp_repo(parent.path(), "repo-b");
-    std::fs::write(a.path.join("base.txt"), "modified a\n").unwrap();
-    std::fs::write(b.path.join("other.txt"), "modified b\n").unwrap();
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+
+    let h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+
+    // Every repo paints as a group header inside the tree.
+    h.get_by_label("Toggle repo-a");
+    h.get_by_label("Toggle repo-b");
+
+    // Focus = expand: the selected (first) root's file row is visible…
+    h.get_by_label("a.txt");
+    // …the non-focused repo is collapsed by default so its rows stay hidden.
+    assert!(
+        h.query_by_label("b.txt").is_none(),
+        "non-focused repo-b must be collapsed by default"
+    );
+}
+
+#[test]
+fn manual_toggle_expands_collapsed_repo_group_and_collapses_again() {
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "repo-a");
+    let b = temp_repo(parent.path(), "repo-b");
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+    let b_id = turbogit_domain::model::RootId(b.path.clone().into());
 
     let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
-
-    // Root sub-groups paint with count badges.
-    h.get_by_label("repo-a (1)");
-    h.get_by_label("repo-b (1)");
-
-    // Select-all for repo-a includes exactly its own files.
-    h.get_by_label("Select all repo-a").click();
-    h.run();
-    let selected = h.state().ui.selected.clone();
     assert!(
-        selected.contains(&a.path.join("base.txt")),
-        "repo-a select-all should include its file, selected={selected:?}"
+        h.query_by_label("b.txt").is_none(),
+        "repo-b starts collapsed"
     );
+    assert!(!h.state().ui.changes_expanded.contains(&b_id));
+
+    // Expand the collapsed group: its rows appear and the key is recorded.
+    h.get_by_label("Toggle repo-b").click();
+    h.run();
+    h.get_by_label("b.txt");
     assert!(
-        !selected.contains(&b.path.join("other.txt")),
-        "repo-a select-all must not include repo-b files, selected={selected:?}"
+        h.state().ui.changes_expanded.contains(&b_id),
+        "expanded group must be recorded in changes_expanded"
     );
 
-    h.get_by_label("Select all repo-b").click();
+    // Toggle again: collapsed, key cleared.
+    h.get_by_label("Toggle repo-b").click();
     h.run();
-    let selected = h.state().ui.selected.clone();
-    assert!(selected.contains(&a.path.join("base.txt")));
-    assert!(selected.contains(&b.path.join("other.txt")));
+    assert!(
+        h.query_by_label("b.txt").is_none(),
+        "toggling again must collapse the group"
+    );
+    assert!(!h.state().ui.changes_expanded.contains(&b_id));
+}
+
+#[test]
+fn sidebar_selection_refocuses_tree_collapsing_other_groups() {
+    let parent = tempfile::tempdir().unwrap();
+    // Both repos share one subfolder of the project dir, so the sidebar
+    // renders a single group ("shared") whose repo rows keep unambiguous
+    // labels — with repos as direct children, the sidebar's group header and
+    // its repo row would share the same name and collide on label queries.
+    let shared = parent.path().join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let a = temp_repo(&shared, "repo-a");
+    let b = temp_repo(&shared, "repo-b");
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+
+    let mut h = harness(AppState::for_roots(
+        parent.path(),
+        &[a.path.clone(), b.path.clone()],
+    ));
+    assert_eq!(
+        h.state().selected_root,
+        Some(turbogit_domain::model::RootId(a.path.clone().into())),
+        "first registered root starts focused"
+    );
+
+    // Manually expand repo-b, then select it via its sidebar repo row.
+    h.get_by_label("Toggle repo-b").click();
+    h.run();
+    h.get_by_label("b.txt");
+    h.get_by_label("repo-b").click();
+    h.run();
+
+    // Focus = expand: the newly selected repo's group is the only expanded
+    // one — the previously focused repo-a collapses.
+    assert_eq!(
+        h.state().selected_root,
+        Some(turbogit_domain::model::RootId(b.path.clone().into()))
+    );
+    h.get_by_label("b.txt");
+    assert!(
+        h.query_by_label("a.txt").is_none(),
+        "selecting repo-b must collapse repo-a's group"
+    );
+    assert!(
+        h.state().ui.changes_expanded.is_empty(),
+        "manual expansions reset when the focus moves"
+    );
+}
+
+#[test]
+fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
+    // Redesign 03: the Commit window is exactly two zones — a fixed-width
+    // Commit panel on the left and a flexible diff preview on the right.
+    // The diff zone is a permanent pane: it paints its heading by default
+    // (no Commit/Preview toggle to reveal it) and starts at the fixed
+    // panel's edge. With the 280px workspace sidebar visible in the 1280px
+    // harness, that edge is SIDEBAR_WIDTH + 340 (COMMIT_PANEL_WIDTH).
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "two-zone-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("base.txt");
+
+    let origin = galley_origin(&h, "Preview")
+        .expect("the diff preview zone must paint its heading without any toggle");
+    let expected_x = turbogit_ui::ui::sidebar::SIDEBAR_WIDTH + 340.0;
+    assert!(
+        (origin.x - expected_x).abs() < 40.0,
+        "the diff preview must start at the fixed commit panel's edge \
+         (x≈{expected_x}), got x={}",
+        origin.x
+    );
+}
+
+#[test]
+fn commit_message_box_and_amend_sit_at_the_top_of_the_commit_panel() {
+    // Issue 07: one set of commit controls for the whole view. The single
+    // commit message box + Amend option sit at the TOP of the fixed commit
+    // panel — above the tree toolbar, inside the panel's width — instead of
+    // at the bottom of the preview pane.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "msg-top-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    let panel_right = turbogit_ui::ui::sidebar::SIDEBAR_WIDTH
+        + turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH;
+    let changes_origin =
+        galley_origin(&h, "Changes (1)").expect("the tree toolbar label must paint");
+
+    let msg_origin =
+        galley_origin(&h, "Commit message:").expect("the commit message label must paint");
+    assert!(
+        msg_origin.x < panel_right && msg_origin.y < changes_origin.y,
+        "the message box must sit at the top of the fixed commit panel, \
+         inside the panel width (x<{panel_right}) and above the tree toolbar \
+         (y<{}), got x={} y={}",
+        changes_origin.y,
+        msg_origin.x,
+        msg_origin.y
+    );
+
+    // Exactly one subscriber: no per-repo commit controls anywhere.
+    let labels = painted_text(&h);
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|t| t.as_str() == "Commit message:")
+            .count(),
+        1,
+        "exactly one commit message box must paint"
+    );
+
+    // The Amend option travels with the message box, not at the bottom.
+    let amend_origin =
+        galley_origin(&h, "Amend").expect("the Amend option must paint with the message box");
+    assert!(
+        amend_origin.y < changes_origin.y,
+        "Amend must sit above the tree toolbar, got y={}",
+        amend_origin.y
+    );
+}
+
+#[test]
+fn staging_section_headers_and_stage_all_actions_are_removed() {
+    // Issue 07: staging lives in the per-file checkboxes (issue 05), so the
+    // per-repo `UNSTAGED (n)` / `STAGED (n)` header rows and their `Stage all`
+    // / `Unstage all` actions are gone. File rows still paint.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "sectionless-row");
+    seed_changes(&repo.path);
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // File rows (and the unversioned group) still paint…
+    h.get_by_label("base.txt");
+    h.get_by_label("added.txt");
+    h.get_by_label("untracked.txt");
+
+    // …but no per-repo staging section headers or stage-all actions anywhere.
+    let text = painted_text(&h).join("\n");
+    assert!(
+        !text.contains("UNSTAGED") && !text.contains("STAGED"),
+        "staging section headers must be removed, got:\n{text}"
+    );
+    assert!(
+        !text.contains("Stage all") && !text.contains("Unstage all"),
+        "stage-all / unstage-all actions must be removed, got:\n{text}"
+    );
+}
+
+#[test]
+fn merge_conflicts_group_survives_the_section_removal() {
+    // Issue 07 (seam decision): only the UNSTAGED/STAGED section headers and
+    // their Stage all actions are removed; the distinct `Merge conflicts`
+    // group with its C review row stays.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "conflict-kept");
+    let branch = repo.branch();
+    seed_changes(&repo.path);
+    seed_conflict(&repo.path, &branch);
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    h.get_by_label("Merge conflicts (1)");
+    h.get_by_label("C conf.txt");
+}
+
+#[test]
+fn single_primary_commit_split_button_with_grey_shelve_stash() {
+    // Issue 07: one primary action only. The panel bottom carries a single
+    // `Commit ▾` split button with small grey `Shelve…` / `Stash…` beside it —
+    // no more sibling `Commit and Push...` button or cascade queue in the row.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "split-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("base.txt").click();
+    h.state_mut().ui.commit_message = "split subject".into();
+    h.run();
+
+    // The one primary Commit action (main part of the split button).
+    let commit = commit_action_button(&h);
+    assert!(
+        !commit.accesskit_node().is_disabled(),
+        "the primary Commit action must be enabled with a message and selection"
+    );
+
+    // `Commit and Push...` is NOT a sibling button anymore — the alternatives
+    // live inside the split button's dropdown only.
+    assert_not_painted(&h, "Commit and Push");
+
+    // Grey Shelve…/Stash… small buttons sit beside the primary action on the
+    // same row (one primary action, secondary buttons grey).
+    let row_y = commit.rect().center().y;
+    for label in ["Shelve…", "Stash…"] {
+        let n = h.get_by_label(label);
+        assert!(
+            (n.rect().center().y - row_y).abs() < 14.0,
+            "{label} must sit beside the primary Commit action (y≈{row_y}), got {}",
+            n.rect().center().y
+        );
+        assert!(
+            n.rect().left() > commit.rect().right(),
+            "{label} to the right"
+        );
+    }
+}
+
+#[test]
+fn commit_split_dropdown_offers_commit_and_push_only_in_single_repo_scope() {
+    // Issue 07: the split button's dropdown holds the alternative commit
+    // surfaces — `Commit and Push...` always. The multi-repo cascade entry
+    // stays gated on an active multi-repo selection (the shell shows the
+    // selection summary instead of the commit panel while that is live), so
+    // in the normal single-scope view it must not appear.
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "dd-a");
+    let b = temp_repo(parent.path(), "dd-b");
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+
+    let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    // Select the focused repo's file via its checkbox, then arm the message
+    // (one click per frame — see the Amend test note).
+    h.get_by_label("Select a.txt").click();
+    h.run();
+    assert!(
+        !h.state().ui.selected.is_empty(),
+        "the clicked row must be in the commit selection"
+    );
+    h.state_mut().ui.commit_message = "dd subject".into();
+    h.run();
+
+    open_commit_split_dropdown(&h);
+    h.run();
+
+    // The dropdown offers commit-and-push…
+    h.get_by_label("Commit and Push...");
+    // …but no cascade entry without an active multi-repo selection.
+    assert_not_painted(&h, "Also commit on");
 }
 
 #[test]
@@ -387,11 +683,12 @@ fn diff_preview_reflects_selected_file() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Clicking a file row selects it for the preview pane.
+    // Clicking a file row selects it for the preview pane; the header
+    // paints the previewed path (issue 06).
     h.get_by_label("base.txt").click();
     h.run();
     assert_eq!(h.state().ui.preview_change, Some(PathBuf::from("base.txt")));
-    h.get_by_label("Preview: base.txt");
+    h.get_by_label("Previewing base.txt");
 
     // Selecting another row swaps the preview to that file.
     h.get_by_label("added.txt").click();
@@ -400,7 +697,93 @@ fn diff_preview_reflects_selected_file() {
         h.state().ui.preview_change,
         Some(PathBuf::from("added.txt"))
     );
-    h.get_by_label("Preview: added.txt");
+    h.get_by_label("Previewing added.txt");
+}
+
+#[test]
+fn diff_header_shows_path_status_chip_stats_and_nav_on_selection() {
+    // Issue 06 (design doc §5): selecting a changed file paints the preview
+    // header — the path, a `Modified` status chip, `+N −M` change-size
+    // stats, and prev/next change navigation over the changed files.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "header-repo");
+    // 1 removed / 2 added: a middle line becomes two (verified against git:
+    // `-b` then `+x`, `+y`).
+    std::fs::write(repo.path.join("base.txt"), "a\nb\nc\n").unwrap();
+    git(&repo.path, &["add", "base.txt"]);
+    git(&repo.path, &["commit", "-q", "-m", "three lines"]);
+    std::fs::write(repo.path.join("base.txt"), "a\nx\ny\nc\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // No selection: no header chrome paints, the hint text shows instead.
+    assert_not_painted(&h, "Modified");
+    assert!(h.query_by_label("Previewing base.txt").is_none());
+
+    h.get_by_label("base.txt").click();
+    h.run();
+
+    // Path, status chip, and nav paint immediately on selection.
+    h.get_by_label("Previewing base.txt");
+    assert_painted(&h, "Modified");
+    h.get_by_label("Previous change");
+    h.get_by_label("Next change");
+
+    // The `+2 −1` stats land once the async diff is computed.
+    assert!(
+        wait_until(15_000, || {
+            h.run();
+            let text = painted_text(&h).join("\n");
+            text.contains("+2") && text.contains("\u{2212}1")
+        }),
+        "the header must show the +2 −1 change-size stats once the diff is computed"
+    );
+}
+
+#[test]
+fn header_nav_buttons_walk_previous_and_next_changed_files() {
+    // Issue 06 (design doc §5): the header's prev/next navigation walks the
+    // active sub-tab's changed files — the same path a file-row click uses,
+    // so the new diff loads and the header follows. The buttons disable at
+    // the ends of the list.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "nav-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+    std::fs::write(repo.path.join("other.txt"), "edited\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("base.txt").click();
+    h.run();
+    assert_eq!(h.state().ui.preview_change, Some(PathBuf::from("base.txt")));
+
+    // First file: Previous is disabled, Next advances.
+    let prev = h.get_by_label("Previous change");
+    assert!(
+        prev.accesskit_node().is_disabled(),
+        "Previous must be disabled on the first changed file"
+    );
+    h.get_by_label("Next change").click();
+    h.run();
+    assert_eq!(
+        h.state().ui.preview_change,
+        Some(PathBuf::from("other.txt")),
+        "Next must walk to the second changed file"
+    );
+    h.get_by_label("Previewing other.txt");
+
+    // Last file: Next is disabled, Previous returns.
+    let next = h.get_by_label("Next change");
+    assert!(
+        next.accesskit_node().is_disabled(),
+        "Next must be disabled on the last changed file"
+    );
+    h.get_by_label("Previous change").click();
+    h.run();
+    assert_eq!(
+        h.state().ui.preview_change,
+        Some(PathBuf::from("base.txt")),
+        "Previous must walk back to the first changed file"
+    );
 }
 
 // ------------------------------------------------- issue #18 sub-tabs --
@@ -413,13 +796,18 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // All four sub-tabs render; Local Changes is the default active view.
+    // The strip is Local Changes / Shelf / Stash: the Unversioned Files
+    // sub-tab is gone (issue 04 merged it into the one tree as a bottom
+    // group — unversioned rows live in Local Changes now).
     h.get_by_label("Local Changes");
-    h.get_by_label("Unversioned Files");
     h.get_by_label("Shelf");
     h.get_by_label("Stash");
+    assert!(
+        h.query_by_label("Unversioned Files").is_none(),
+        "the Unversioned Files sub-tab must be removed (issue 04)"
+    );
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
-    h.get_by_label("UNSTAGED (1)");
+    h.get_by_label("base.txt");
 
     // Clicking a sub-tab switches the active sub-tab…
     h.get_by_label("Shelf").click();
@@ -430,7 +818,7 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
     h.get_by_label("Local Changes").click();
     h.run();
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
-    h.get_by_label("UNSTAGED (1)");
+    h.get_by_label("base.txt");
 }
 
 #[test]
@@ -450,33 +838,35 @@ fn shelf_and_stash_show_labeled_placeholder_panes() {
     assert_painted(&h, "Shelf arrives in a later phase.");
     // The placeholder replaces the changelist data instead of stacking on it.
     assert_not_painted(&h, "UNSTAGED");
-    assert_not_painted(&h, "M base.txt");
+    assert_not_painted(&h, "base.txt");
 
     h.get_by_label("Stash").click();
     h.run();
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Stash);
     assert_painted(&h, "Stash arrives in a later phase.");
-    assert_not_painted(&h, "M base.txt");
+    assert_not_painted(&h, "base.txt");
 }
 
 #[test]
-fn unversioned_sub_tab_lists_untracked_files_includable_in_commit() {
+fn unversioned_group_lists_untracked_in_one_tree_includable_in_commit() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "untracked-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
     std::fs::write(repo.path.join("untracked.txt"), "untracked\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("Unversioned Files").click();
-    h.run();
-    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::UnversionedFiles);
+    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
 
-    // Only untracked files are listed on this sub-tab…
-    h.get_by_label("? untracked.txt");
-    assert_not_painted(&h, "M base.txt");
+    // Issue 04: untracked files stop appearing under the repo's sections and
+    // render only in the `Unversioned Files` group at the bottom of the same
+    // tree (issue 07 removed the section headers entirely). The modified
+    // tracked file and the untracked one paint on the same surface now.
+    h.get_by_label("base.txt");
+    h.get_by_label("Unversioned Files (1)");
+    h.get_by_label("untracked.txt");
 
     // …and checking one includes it in the next commit.
-    h.get_by_label("? untracked.txt").click();
+    h.get_by_label("untracked.txt").click();
     h.state_mut().ui.commit_message = "issue18: include untracked".into();
     h.run();
     commit_action_button(&h).click();
@@ -501,15 +891,271 @@ fn unversioned_sub_tab_lists_untracked_files_includable_in_commit() {
 }
 
 #[test]
-fn advanced_options_control_is_visible_but_inert() {
+fn unversioned_group_collapses_and_expands_via_header() {
     let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "inert-repo");
+    let repo = temp_repo(parent.path(), "uv-toggle-repo");
+    std::fs::write(repo.path.join("untracked.txt"), "untracked\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("untracked.txt");
+
+    // Collapse the bottom group: its rows hide…
+    h.get_by_label("Unversioned Files (1)").click();
+    h.run();
+    assert!(
+        h.query_by_label("untracked.txt").is_none(),
+        "collapsed Unversioned Files hides its rows"
+    );
+
+    // …and expanding brings them back.
+    h.get_by_label("Unversioned Files (1)").click();
+    h.run();
+    h.get_by_label("untracked.txt");
+}
+
+// ------------------------------------------- issue 04 tree toolbar row --
+
+// ------------------------------------------- issue 05 file-row redesign --
+
+#[test]
+fn file_rows_paint_checkbox_letter_coloured_name_and_dim_location() {
+    // Issue 05 (design doc §4): every row reads
+    // `[checkbox] [status letter] [coloured filename] … [dim location]`.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "row-layout");
+    // A root-level modification, a modified file inside `src/`, and a new
+    // untracked file.
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+    std::fs::create_dir_all(repo.path.join("src")).unwrap();
+    std::fs::write(repo.path.join("src/app.rs"), "fn main() {}\n").unwrap();
+    git(&repo.path, &["add", "src/app.rs"]);
+    git(&repo.path, &["commit", "-q", "-m", "track app"]);
+    std::fs::write(repo.path.join("src/app.rs"), "fn main() { println!(); }\n").unwrap();
+    std::fs::write(repo.path.join("untracked.txt"), "new\n").unwrap();
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // Row bodies are addressable by filename (no more "M base.txt" label).
+    h.get_by_label("base.txt");
+    h.get_by_label("app.rs");
+    h.get_by_label("untracked.txt");
+    // Each row carries a checkbox for per-file staging.
+    h.get_by_label("Select base.txt");
+    h.get_by_label("Select app.rs");
+    h.get_by_label("Select untracked.txt");
+
+    // Status letters paint as their own colour-coded elements and the dim
+    // location renders after the filename.
+    let text = painted_text(&h).join("\n");
+    assert!(
+        text.contains("src/"),
+        "rows must paint the dim location, got:\n{text}"
+    );
+    // Hunk counts moved out of rows into the diff header (issue 05/06).
+    assert!(
+        !text.contains("hunk"),
+        "rows must not paint hunk counts, got:\n{text}"
+    );
+}
+
+#[test]
+fn row_selection_unifies_commit_inclusion_preview_and_selection_fill() {
+    // Issue 05 (design doc §4): selecting a row checks its checkbox AND
+    // previews the diff — "what I'm committing and what I'm looking at are
+    // the same thing" — and the selected row paints the solid #2E436E
+    // selection background.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "select-row");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+    std::fs::write(repo.path.join("other.txt"), "edit\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    let p = repo.path.join("base.txt");
+    assert!(!h.state().ui.selected.contains(&p));
+
+    // Clicking the row selects it for the commit AND previews its diff.
+    h.get_by_label("base.txt").click();
+    h.run();
+    assert!(
+        h.state().ui.selected.contains(&p),
+        "a clicked row must be in the commit selection"
+    );
+    assert_eq!(
+        h.state().ui.preview_change,
+        Some(PathBuf::from("base.txt")),
+        "a clicked row must drive the diff preview"
+    );
+
+    // The selected row paints the solid design-blue selection background.
+    let row_origin = galley_origin(&h, "base.txt").expect("row paints its filename");
+    assert!(
+        filled_rects(&h)
+            .iter()
+            .any(|(r, c)| *c == Palette::SELECTION_BG && r.contains(row_origin)),
+        "the selected row must paint the solid #2E436E selection background"
+    );
+
+    // Unchecking via the checkbox removes it from the commit…
+    h.get_by_label("Select base.txt").click();
+    h.run();
+    assert!(
+        !h.state().ui.selected.contains(&p),
+        "the checkbox must toggle commit inclusion"
+    );
+    assert!(
+        !filled_rects(&h)
+            .iter()
+            .any(|(r, c)| *c == Palette::SELECTION_BG && r.contains(row_origin)),
+        "an unchecked row must lose the selection background"
+    );
+    // …without moving the preview.
+    assert_eq!(
+        h.state().ui.preview_change,
+        Some(PathBuf::from("base.txt")),
+        "the checkbox must not change what is previewed"
+    );
+}
+
+#[test]
+fn tree_toolbar_shows_changes_label_total_and_icon_controls() {
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "repo-a");
+    let b = temp_repo(parent.path(), "repo-b");
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+
+    let h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+
+    // Label + total count (one change per repo = 2 files).
+    assert_painted(&h, "Changes (2)");
+    // Icon-only controls, all reachable by label (issue 04 checklist).
+    h.get_by_label("Expand all groups");
+    h.get_by_label("Group by");
+    h.get_by_label("Rollback");
+    h.get_by_label("Refresh changes");
+    // The old text buttons are gone (issue 05 removes them; issue 04 ships
+    // the icon-only row).
+    assert_not_painted(&h, "Stage selected");
+    assert_not_painted(&h, "Unstage selected");
+}
+
+#[test]
+fn expand_collapse_all_toggles_every_repo_group() {
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "repo-a");
+    let b = temp_repo(parent.path(), "repo-b");
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+    let b_id = turbogit_domain::model::RootId(b.path.clone().into());
+
+    let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    assert!(
+        h.query_by_label("b.txt").is_none(),
+        "repo-b starts collapsed"
+    );
+
+    // Expand all: every non-focused group opens.
+    h.get_by_label("Expand all groups").click();
+    h.run();
+    h.get_by_label("b.txt");
+    assert!(
+        h.state().ui.changes_expanded.contains(&b_id),
+        "expand-all must record every non-focused group"
+    );
+    // The control flips to its collapse action while groups are open.
+    h.get_by_label("Collapse all groups").click();
+    h.run();
+    assert!(
+        h.query_by_label("b.txt").is_none(),
+        "collapse-all closes every non-focused group"
+    );
+    assert!(h.state().ui.changes_expanded.is_empty());
+}
+
+#[test]
+fn rollback_icon_confirms_discard_and_toasts_when_empty() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "rollback-repo");
+    seed_tracked(&repo.path, "a.txt");
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // Nothing selected: rollback warns without opening the confirm.
+    h.get_by_label("Rollback").click();
+    h.run();
+    assert!(
+        h.state().ui.confirm.is_none(),
+        "rollback with an empty selection must not open the discard confirm"
+    );
+
+    // A selected file: rollback opens the destructive confirm.
+    h.get_by_label("a.txt").click();
+    h.run();
+    h.get_by_label("Rollback").click();
+    h.run();
+    match &h.state().ui.confirm {
+        Some(turbogit_app::state::PendingConfirm::Discard { changes }) => {
+            assert_eq!(changes.len(), 1, "one selected file enters the confirm");
+        }
+        None => panic!("expected a Discard confirm, got none"),
+        Some(_) => panic!("expected a Discard confirm, got a different confirm"),
+    }
+}
+
+#[test]
+fn group_by_icon_is_inert() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "groupby-repo");
+    seed_tracked(&repo.path, "a.txt");
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("Group by").click();
+    h.run();
+
+    // Clicking the group-by icon must change no observable state (ADR-0010
+    // inert-control pattern, same as "Advanced options...").
+    let s = h.state();
+    assert_eq!(s.ui.commit_subtab, CommitSubTab::LocalChanges);
+    assert!(s.ui.dialog.is_none());
+    assert!(s.ui.confirm.is_none());
+    assert!(s.ui.selected.is_empty());
+}
+
+#[test]
+fn refresh_icon_refreshes_changes() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "refresh-repo");
+    seed_tracked(&repo.path, "a.txt");
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    let gen_before = h.state().ui.pane_generation;
+
+    h.get_by_label("Refresh changes").click();
+    h.run();
+
+    assert!(
+        h.state().ui.pane_generation > gen_before,
+        "refresh must dispatch the full scoped refresh (pane generation bump)"
+    );
+}
+
+#[test]
+fn advanced_options_link_is_removed_into_the_tree_toolbar_gear() {
+    // Issue 07: the `advanced options…` link is gone; the panel's gear icon
+    // in the tree toolbar carries the options. Following the ADR-0010 inert
+    // pattern, clicking the gear must change no observable state (the options
+    // surface has no backing feature yet — same as Group by).
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "gear-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Rendered per the mockup…
-    h.get_by_label("Advanced options...");
+    // The link is removed from the commit controls…
+    assert_not_painted(&h, "Advanced options");
+
+    // …and the gear icon lives in the tree toolbar row.
+    let gear = h.get_by_label("Commit options");
 
     #[derive(Debug)]
     struct CommitUiSnap {
@@ -535,7 +1181,7 @@ fn advanced_options_control_is_visible_but_inert() {
     }
 
     let before = snap(&h);
-    h.get_by_label("Advanced options...").click();
+    gear.click();
     h.run();
     let after = snap(&h);
     assert_eq!(after.subtab, before.subtab);

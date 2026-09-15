@@ -234,14 +234,29 @@ fn smart_groups_paint_with_member_counts() {
     h.get_by_label("Refresh").click();
     settle(&mut h);
 
-    // The section header and every non-empty built-in group…
+    // The section header and every non-empty built-in group (the diverged
+    // alpha is also behind its upstream, so "unpulled commits" joins the
+    // row with its own member — issue 02)…
     assert_painted(&h, "SMART GROUPS");
     assert_painted(&h, "diverged");
     assert_painted(&h, "has conflicts");
     assert_painted(&h, "unpushed commits");
+    assert_painted(&h, "unpulled commits");
     assert_painted(&h, "dirty worktree");
-    // …each currently holding exactly one member (four count badges of 1).
+    // …each currently holding exactly one member (five count badges of 1).
     assert_galley(&h, "1");
+}
+
+/// Assert the sidebar no longer shows a repo row for `name`. Scoped through
+/// the sidebar's own "Select repo {name}" checkbox label, because the Commit
+/// window's one-tree (issue 04) also paints repo names — whole-window text
+/// absence would be a false positive there.
+#[track_caller]
+fn assert_sidebar_repo_dropped(h: &Harness<'_, AppState>, name: &str) {
+    assert!(
+        h.query_by_label(&format!("Select repo {name}")).is_none(),
+        "the sidebar repo row for `{name}` must drop out while filtered"
+    );
 }
 
 #[test]
@@ -262,18 +277,11 @@ fn clicking_a_smart_group_filters_the_tree_to_its_members() {
         Some("unpushed commits".into())
     );
     assert_painted(&h, "alpha");
-    let texts = painted_text(&h);
+    assert_sidebar_repo_dropped(&h, "lib");
+    assert_sidebar_repo_dropped(&h, "extra");
     assert!(
-        !texts.iter().any(|t| t == "lib"),
-        "non-member repo rows must drop out while filtered: {texts:?}"
-    );
-    assert!(
-        !texts.iter().any(|t| t == "extra"),
-        "non-member repo rows must drop out while filtered: {texts:?}"
-    );
-    assert!(
-        !texts.iter().any(|t| t == "oss"),
-        "the memberless oss group header must drop out: {texts:?}"
+        h.query_by_label("Select group oss").is_none(),
+        "the memberless oss group header must drop out"
     );
 
     // Switching to another group re-filters: dirty worktree keeps only lib
@@ -285,11 +293,10 @@ fn clicking_a_smart_group_filters_the_tree_to_its_members() {
         h.state().ui.sidebar_smart_group,
         Some("dirty worktree".into())
     );
-    assert_painted(&h, "lib");
-    let texts = painted_text(&h);
+    h.get_by_label("Select repo lib");
     assert!(
-        !texts.iter().any(|t| t == "frontend"),
-        "the memberless frontend group header must drop out: {texts:?}"
+        h.query_by_label("Select group frontend").is_none(),
+        "the memberless frontend group header must drop out"
     );
 
     // Clicking the active group again clears the filter: the whole tree
@@ -300,6 +307,33 @@ fn clicking_a_smart_group_filters_the_tree_to_its_members() {
     assert_painted(&h, "alpha");
     assert_painted(&h, "lib");
     assert_galley(&h, "oss");
+}
+
+#[test]
+fn clicking_unpulled_group_filters_to_repos_with_incoming_commits() {
+    // Issue 02: "unpulled commits" behaves like the other built-ins — a
+    // click narrows the tree to repos with behind > 0 (only the diverged
+    // alpha here; lib's untracked file and extra's unresolved conflict do
+    // not count as unpulled).
+    let (project, alpha, lib, extra) = smart_group_project("sg-unpulled");
+    let state = app_state(&project, &[alpha, lib, extra]);
+    let mut h = harness(state);
+    settle(&mut h);
+    h.get_by_label("Refresh").click();
+    settle(&mut h);
+
+    h.get_by_label("unpulled commits").click();
+    settle(&mut h);
+    assert_eq!(
+        h.state().ui.sidebar_smart_group.as_deref(),
+        Some("unpulled commits")
+    );
+    assert_painted(&h, "alpha");
+    assert_sidebar_repo_dropped(&h, "lib");
+    assert!(
+        h.query_by_label("Select group oss").is_none(),
+        "the memberless oss group header must drop out"
+    );
 }
 
 #[test]
@@ -505,14 +539,14 @@ fn rules_survive_an_app_restart() {
 // -- Cycle B — clicking a repo focuses it everywhere --
 
 #[test]
-fn clicking_repo_row_focuses_it_in_header_and_metadata_rail() {
+fn clicking_repo_row_focuses_it_in_header_and_breadcrumb() {
     let (project, alpha, lib) = two_group_project("focus");
     let state = app_state(&project, &[alpha.clone(), lib.clone()]);
     let mut h = harness(state);
     settle(&mut h);
 
-    // `for_roots` focuses the first registered root (alpha); its metadata
-    // rail paints alpha's path.
+    // `for_roots` focuses the first registered root (alpha); the repo
+    // header/breadcrumb show alpha's name.
     assert_eq!(
         h.state().selected_root,
         Some(turbogit_domain::model::RootId(alpha.clone().into()))
@@ -527,7 +561,8 @@ fn clicking_repo_row_focuses_it_in_header_and_metadata_rail() {
         Some(turbogit_domain::model::RootId(lib.clone().into()))
     );
     // The shell follows everywhere: breadcrumb/header repaint the focused
-    // repo name, and the metadata rail repaints its path.
+    // repo's path/name (the metadata rail that once carried the path was
+    // removed in the redesign; the topbar breadcrumb keeps it reachable).
     assert_painted(&h, "oss/lib");
 }
 

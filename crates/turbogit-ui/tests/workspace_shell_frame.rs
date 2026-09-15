@@ -11,9 +11,11 @@
 //! - Center tabs: Changes (count), Log, Branches, Worktrees (count),
 //!   Submodules. Branches/Worktrees/Submodules are empty-state
 //!   placeholders in v1.
-//! - Metadata rail: Path / Branch / Upstream for the focused root.
 //! - Status bar: aggregated workspace state (diverged · conflicts ·
-//!   unpulled · archived · dirty · total).
+//!   unpulled · archived · dirty · total) plus granularity and repo
+//!   scope. The far-right metadata column was removed (redesign 03);
+//!   its Path/Branch/Upstream info lives in the topbar breadcrumb, the
+//!   repo header branch pill, and the status-bar aggregates.
 //!
 //! Existing Commit and Log content renders inside the new Changes / Log
 //! tabs unchanged.
@@ -22,10 +24,15 @@
 //! `egui_kittest` over temporary git repositories (CONTEXT.md "Headless
 // harness") and assert only on public surfaces: painted labels and
 // public `AppState` transitions.
+use egui::{Pos2, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
-use test_support::harness::{assert_not_painted, assert_painted, settle};
+use test_support::harness::{
+    assert_not_painted, assert_painted, filled_rects, galley_origin, settle,
+};
 use turbogit_app::state::AppState;
+use turbogit_ui::theme::Palette;
+use turbogit_ui::ui::{shell, widgets};
 /// Run `git` in `repo`, asserting success, and return stdout.
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
@@ -165,39 +172,56 @@ fn repo_header_shows_branch_pill_and_refresh() {
 }
 
 #[test]
-fn repo_header_combined_badge_appears_when_root_is_ahead() {
-    // Seed two local commits ahead of upstream so the ahead count is
-    // non-zero: that drives the combined ↑/↓/X badge to paint the
-    // arrow with the count.
+fn repo_header_paints_orange_dirty_badge_with_uncommitted_count() {
+    // Issue 02 (design doc §6): the repo header collapses to a single row —
+    // name + branch chip + an orange dirty badge carrying the focused root's
+    // uncommitted count (modified + unversioned + conflicted paths).
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(3)
         .unwrap()
-        .join(".scratch/workspace-shell-frame-repoheader-ahead");
+        .join(".scratch/workspace-shell-frame-repoheader-dirtybadge");
     let _ = std::fs::remove_dir_all(&parent);
-    let parent = parent.parent().unwrap().join("wsf-repoheader-ahead");
+    let parent = parent.parent().unwrap().join("wsf-repoheader-dirtybadge");
     let _ = std::fs::remove_dir_all(&parent);
     std::fs::create_dir_all(&parent).unwrap();
     let project_dir = parent.clone();
     let repo = temp_repo(&parent, "alpha");
-    // Add two local commits with no push.
-    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "ahead 1"]);
-    std::fs::write(repo.join("b.txt"), "b\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "ahead 2"]);
+    // One uncommitted file → the focused root's dirty count is 1.
+    std::fs::write(repo.join("wip.txt"), "wip\n").unwrap();
 
     let state = app_state(&project_dir, &[repo]);
     let mut h = harness(state);
     settle(&mut h);
-    // Drive a manual refresh so the headless harness computes ahead/behind
-    // synchronously and the cache carries the (2, 0) we expect.
     h.get_by_label("Refresh").click();
     settle(&mut h);
 
-    // Combined badge: ahead count 2 → "↑2".
-    assert_painted(&h, "↑2");
+    // The orange dirty badge: the only COUNTER-tinted chip on the header row
+    // (its fill is the deterministic tint over the app background).
+    let badge_fill = widgets::tint_over_bg(Palette::COUNTER, 0.18);
+    let (badge, _) = filled_rects(&h)
+        .into_iter()
+        .find(|(_, c)| *c == badge_fill)
+        .unwrap_or_else(|| panic!("repo header must paint an orange dirty badge"));
+    // The badge sits on the header row, below the 38px topbar…
+    assert!(
+        badge.top() > 38.0,
+        "the dirty badge must live inside the repo header row"
+    );
+    // …and carries the uncommitted count as an exact galley inside it.
+    let count_origins: Vec<Pos2> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Text(shape) if shape.galley.text() == "1" => Some(shape.pos),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        count_origins.iter().any(|p| badge.contains(*p)),
+        "the dirty count galley sits inside the badge"
+    );
 }
 
 // -- Cycle C — center tabs: Changes, Log, Branches, Worktrees, Submodules
@@ -249,10 +273,69 @@ fn unimplemented_tabs_render_empty_state_placeholder() {
     assert_painted(&h, "Branches");
 }
 
-// -- Cycle D — metadata rail: Path / Branch / Upstream
+// -- Cycle C -- active tab renders as a filled pill (issue 02)
 
 #[test]
-fn metadata_rail_paints_path_branch_and_upstream_for_focused_root() {
+fn active_tab_renders_as_a_filled_pill_not_a_box() {
+    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap()
+        .join(".scratch/workspace-shell-frame-pill");
+    let _ = std::fs::remove_dir_all(&parent);
+    let parent = parent.parent().unwrap().join("wsf-pill");
+    let _ = std::fs::remove_dir_all(&parent);
+    std::fs::create_dir_all(&parent).unwrap();
+    let project_dir = parent.clone();
+    let repo = temp_repo(&parent, "alpha");
+    let state = app_state(&project_dir, &[repo]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    // The active shell tab is a filled pill: the lighter SURFACE_2 chip,
+    // inset from the full 32px strip, containing the "Changes" label.
+    // The old full-width box outline (a SURFACE chip spanning the strip
+    // height behind the label) must be gone.
+    let origin = galley_origin(&h, "Changes").expect("the active tab label paints");
+    let rects = filled_rects(&h);
+    let pill = rects
+        .iter()
+        .find(|(r, c)| {
+            *c == Palette::SURFACE_2
+                && r.height() > 0.0
+                && r.height() < shell::TAB_STRIP_HEIGHT - 4.0
+                && r.contains(origin)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "active tab must paint a filled pill (SURFACE_2, inset from {}px); rects: {rects:#?}",
+                shell::TAB_STRIP_HEIGHT
+            )
+        });
+    // The pill is inset on the 4px grid: 8px shorter than the 32px strip
+    // (24 px tall) so it reads as a chip, not a full-height box.
+    assert_eq!(
+        pill.0.height(),
+        shell::TAB_STRIP_HEIGHT - 8.0,
+        "the active-tab pill must be 8px shorter than the strip"
+    );
+    assert!(
+        !rects
+            .iter()
+            .any(|(r, c)| { *c == Palette::SURFACE && r.contains(origin) && r.height() > 28.0 }),
+        "active tab must not paint a full-width box outline behind its label"
+    );
+}
+
+// -- Cycle D — two-zone layout: no third metadata column (issue 03)
+
+#[test]
+fn shell_is_two_zones_without_metadata_rail() {
+    // Local-changes redesign issue 03: the far-right metadata column is
+    // gone — its information lives in the status bar (issue 02) and the
+    // repo header. The shell must no longer paint the rail's header or its
+    // upstream row, while the branch pill and the status-bar aggregates
+    // stay.
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(3)
@@ -264,20 +347,21 @@ fn metadata_rail_paints_path_branch_and_upstream_for_focused_root() {
     std::fs::create_dir_all(&parent).unwrap();
     let project_dir = parent.clone();
     let repo = temp_repo(&parent, "alpha");
-    let state = app_state(&project_dir, &[repo]);
+    let mut state = app_state(&project_dir, &[repo]);
+    state.ui.show_status_bar = true;
     let mut h = harness(state);
     settle(&mut h);
 
-    // Rail header.
-    assert_painted(&h, "METADATA");
-    // Field labels.
-    for label in ["Path", "Branch", "Upstream"] {
-        assert_painted(&h, label);
-    }
-    // Branch value mirrors the focused root's current branch.
+    // The third metadata column is removed: its header and upstream row
+    // must not paint anywhere on the frame.
+    assert_not_painted(&h, "METADATA");
+    assert_not_painted(&h, "Upstream");
+
+    // No regression: the metadata information stays reachable. The branch
+    // pill still paints the focused root's branch, and the status bar still
+    // aggregates the workspace counters (issue 02).
     assert_painted(&h, "main");
-    // Upstream value: origin/main (the temp_repo helper sets it up).
-    assert_painted(&h, "origin/main");
+    assert_painted(&h, "1 total");
 }
 
 // -- Cycle E — status bar: aggregated workspace state
@@ -330,4 +414,65 @@ fn status_bar_shows_diverged_count_when_root_is_ahead_of_upstream() {
     // 1 root ahead of its upstream counts as "diverged" in v1 (any
     // local work that hasn't reached the remote is loosely diverged).
     assert_painted(&h, "1 diverged");
+}
+
+// -- Cycle E -- unpulled + dirty counts, granularity, repo scope (issue 02)
+
+#[test]
+fn status_bar_paints_unpulled_dirty_granularity_and_scope_from_real_data() {
+    // Two roots: `dirty` carries an untracked file; `behind` has one
+    // remote-only commit fetched in — so the status bar aggregates
+    // `1 unpulled` and `1 dirty` from the real sync/status data, plus the
+    // granularity setting and the repo-scope count (issue 02 checkbox 1).
+    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .unwrap()
+        .join(".scratch/workspace-shell-frame-statusbar-unpulled");
+    let _ = std::fs::remove_dir_all(&parent);
+    let parent = parent.parent().unwrap().join("wsf-statusbar-unpulled");
+    let _ = std::fs::remove_dir_all(&parent);
+    std::fs::create_dir_all(&parent).unwrap();
+    let project_dir = parent.clone();
+    let dirty = temp_repo(&parent, "dirty");
+    let behind = temp_repo(&parent, "behind");
+    // behind: land a remote-only commit and fetch it locally (ahead 0,
+    // behind 1 — unpulled without diverging divergence).
+    let bare = parent.join("behind.origin");
+    let seed = parent.join("behind-seed");
+    let _ = std::fs::remove_dir_all(&seed);
+    git(
+        &parent,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            seed.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(seed.join("remote.txt"), "remote\n").unwrap();
+    git(&seed, &["add", "."]);
+    git(&seed, &["commit", "-q", "-m", "remote only"]);
+    git(&seed, &["push", "-q", "origin", "main"]);
+    git(&behind, &["fetch", "-q"]);
+    // dirty: an untracked file.
+    std::fs::write(dirty.join("wip.txt"), "wip\n").unwrap();
+
+    let mut state = app_state(&project_dir, &[dirty, behind]);
+    state.ui.show_status_bar = true;
+    let mut h = harness(state);
+    settle(&mut h);
+    h.get_by_label("Refresh").click();
+    settle(&mut h);
+
+    // Aggregated counters from the real root data (colors are asserted at
+    // the pure seam in `ui::shell::tests`); every chip only paints when
+    // non-zero.
+    assert_painted(&h, "1 unpulled");
+    assert_painted(&h, "1 dirty");
+    // Granularity readout (the app default: line) and the repo-scope count
+    // (no explicit multi-repo selection → the focused single root).
+    assert_painted(&h, "granularity: line");
+    assert_painted(&h, "1 repo in scope");
+    assert_painted(&h, "2 total");
 }
