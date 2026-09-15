@@ -331,30 +331,21 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
         branches.0.left()
     );
 
-    // Right column: ~320px wide band ending where the metadata rail
-    // begins (issue #03 puts a 260px rail at the body's right edge —
-    // the log's right column no longer reaches the window edge itself).
+    // Right column: ~320px wide band reaching the body's right edge. The
+    // metadata rail that once occupied the last 260px was removed in the
+    // local-changes redesign (issue 03), so the right column extends to
+    // the window edge like the pre-rail layout.
     let body_right = filled_rects(&harness)
         .iter()
         .map(|(r, _)| r.right())
         .fold(f32::NEG_INFINITY, f32::max);
     let rects = filled_rects(&harness);
-    let rail = rects
-        .iter()
-        .find(|(r, c)| {
-            *c == Palette::SURFACE
-                && r.width() >= 255.0
-                && r.width() <= 265.0
-                && (body_right - r.right()).abs() <= 12.0
-        })
-        .expect("metadata rail band (~260px SURFACE at right edge) not painted");
-    let rail_left = rail.0.left();
     let right_col = rects
-        .into_iter()
+        .iter()
         .find(|(r, _)| {
-            r.width() >= 310.0 && r.width() <= 330.0 && (rail_left - r.right()).abs() <= 12.0
+            r.width() >= 310.0 && r.width() <= 330.0 && (body_right - r.right()).abs() <= 12.0
         })
-        .expect("right column (~320px) not painted");
+        .expect("right column (~320px, reaching the body's right edge) not painted");
 
     // Details pane: ~340px tall SURFACE band at the bottom of the right
     // column (grew from the §8.3 200px in issue 15 for the Actions section,

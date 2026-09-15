@@ -25,6 +25,10 @@ impl Palette {
     pub const LINE: Color32 = Color32::from_rgb(0x4e, 0x51, 0x57);
     /// Subtle row separators (`--tg-line-subtle`).
     pub const LINE_SUBTLE: Color32 = Color32::from_rgb(0x36, 0x38, 0x3c);
+    /// Sidebar surface (`#1B1C1E`) — dedicated to the Local Changes redesign;
+    /// darker than every window/panel fill, kept out of the general surface
+    /// ladder so a sidebar can never be mistaken for content chrome.
+    pub const SIDEBAR: Color32 = Color32::from_rgb(0x1b, 0x1c, 0x1e);
 
     // Ink (text).
     /// Primary text (`--tg-ink`).
@@ -71,6 +75,21 @@ impl Palette {
     /// Cached state is older than the source it mirrors — issue #01.
     pub const STATUS_STALE: Color32 = Self::STATE_INFO;
 
+    // Reserved counter orange (redesign issue 01): `#E0883C` is reserved for
+    // dirt/unpulled count badges only. Never a general accent, action, or
+    // warning — keep it out of any non-counter call site.
+    /// Dirty/unpulled counter orange.
+    pub const COUNTER: Color32 = Color32::from_rgb(0xe0, 0x88, 0x3c);
+
+    // Local Changes status letters (redesign issue 01): M / A / U colour the
+    // status letter and the filename in a file row (mockup values).
+    /// Modified file letter (`M`) — light blue.
+    pub const STATUS_MODIFIED: Color32 = Color32::from_rgb(0xa8, 0xc0, 0xe8);
+    /// Added file letter (`A`) — the diff-added green.
+    pub const STATUS_ADDED: Color32 = Color32::from_rgb(0x57, 0x96, 0x5c);
+    /// Unversioned file letter (`U`) — olive.
+    pub const STATUS_UNVERSIONED: Color32 = Color32::from_rgb(0xb5, 0xb3, 0x7e);
+
     // Diff colors.
     /// Added-line background (`--tg-diff-add`).
     pub const DIFF_ADD_BG: Color32 = Color32::from_rgb(0x34, 0x4f, 0x3e);
@@ -81,11 +100,41 @@ impl Palette {
     /// Deleted-line text (`--tg-diff-del-text`).
     pub const DIFF_DEL_TEXT: Color32 = Color32::from_rgb(0xff, 0x9a, 0x9a);
 
+    // Redesign diff tokens (issue 01): accent (line text/markers) on a tinted
+    // block (line background) for the new diff preview — distinct from the
+    // legacy DIFF_*_BG/TEXT pair above, which the old diff view keeps using.
+    /// Added-line accent (`#57965C`) — shares the added-file green.
+    pub const DIFF_ADD_ACCENT: Color32 = Color32::from_rgb(0x57, 0x96, 0x5c);
+    /// Added-line block (`#2E4334`).
+    pub const DIFF_ADD_BLOCK: Color32 = Color32::from_rgb(0x2e, 0x43, 0x34);
+    /// Removed-line accent (`#F75464`).
+    pub const DIFF_DEL_ACCENT: Color32 = Color32::from_rgb(0xf7, 0x54, 0x64);
+    /// Removed-line block (`#433034`).
+    pub const DIFF_DEL_BLOCK: Color32 = Color32::from_rgb(0x43, 0x30, 0x34);
+
     /// Selected-row fill: BRAND at ~25% premultiplied alpha over BG.
     pub fn selection_bg() -> Color32 {
         Color32::from_rgba_premultiplied(0x0d, 0x1d, 0x3c, 0x40)
     }
+
+    /// Solid row-selection background (`#2E436E`) for the Local Changes
+    /// redesign. Distinct from the translucent [`Self::selection_bg`] the
+    /// shell rows paint today; later tickets opt in by switching call sites.
+    pub const SELECTION_BG: Color32 = Color32::from_rgb(0x2e, 0x43, 0x6e);
 }
+
+// --- Spacing scale (Local Changes redesign, design doc §8) ---
+// Dimension tokens, kept beside the color palette as part of the single
+// central token set. Rows keep one consistent height per kind; gaps and
+// padding sit on the 4 px grid.
+/// File-row height in the changes tree (24 px).
+pub const FILE_ROW_HEIGHT: f32 = 24.0;
+/// Group-row height in the changes tree (26 px).
+pub const GROUP_ROW_HEIGHT: f32 = 26.0;
+/// Grid-gap base unit; all gaps are multiples of 4 px.
+pub const GRID_GAP: f32 = 4.0;
+/// Panel padding (12 px; the spec allows 12–14 px).
+pub const PANEL_PADDING: f32 = 12.0;
 
 /// Accent (selection / primary action) color — the brand token.
 pub fn accent() -> Color32 {

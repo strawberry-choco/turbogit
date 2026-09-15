@@ -59,16 +59,21 @@ pub enum SmartGroup {
     Conflicted,
     /// Has local commits the upstream lacks (ahead > 0).
     Unpushed,
+    /// Has incoming commits not yet pulled (behind > 0) — the status bar's
+    /// `unpulled` counter as a sidebar group (issue 02).
+    Unpulled,
     /// Has uncommitted work (modified or unversioned paths).
     Dirty,
 }
 
 impl SmartGroup {
-    /// Built-ins in their fixed display order (screens 01/04).
+    /// Built-ins in their fixed display order (screens 01/04; issue 02 adds
+    /// `unpulled commits` after `unpushed commits`).
     pub const BUILTINS: &'static [SmartGroup] = &[
         SmartGroup::Diverged,
         SmartGroup::Conflicted,
         SmartGroup::Unpushed,
+        SmartGroup::Unpulled,
         SmartGroup::Dirty,
     ];
 
@@ -78,17 +83,20 @@ impl SmartGroup {
             SmartGroup::Diverged => "diverged",
             SmartGroup::Conflicted => "has conflicts",
             SmartGroup::Unpushed => "unpushed commits",
+            SmartGroup::Unpulled => "unpulled commits",
             SmartGroup::Dirty => "dirty worktree",
         }
     }
 
     /// The group's predicate over one repo row. Membership overlaps: a
-    /// diverged repo (ahead + behind) also matches "unpushed commits".
+    /// diverged repo (ahead + behind) also matches "unpushed commits" and
+    /// "unpulled commits".
     pub fn matches(&self, repo: &SidebarRepo) -> bool {
         match self {
             SmartGroup::Diverged => repo.ahead > 0 && repo.behind > 0,
             SmartGroup::Conflicted => repo.conflicts > 0,
             SmartGroup::Unpushed => repo.ahead > 0,
+            SmartGroup::Unpulled => repo.behind > 0,
             SmartGroup::Dirty => repo.dirty_count > 0,
         }
     }
@@ -212,9 +220,13 @@ mod tests {
                 ("diverged", 1),
                 ("has conflicts", 1),
                 ("unpushed commits", 1),
+                // The diverged root is also behind its upstream, so it joins
+                // the unpulled group as well (issue 02, mirroring the status
+                // bar's unpulled counter: behind > 0).
+                ("unpulled commits", 1),
                 ("dirty worktree", 1),
             ],
-            "the four built-ins with their member counts, in display order"
+            "the five built-ins with their member counts, in display order"
         );
     }
 
@@ -261,6 +273,41 @@ mod tests {
             ["unpushed commits"],
             "ahead-only is unpushed, not diverged"
         );
+    }
+
+    #[test]
+    fn unpulled_matches_repos_with_incoming_commits() {
+        // Issue 02: the `unpulled commits` group mirrors the status bar's
+        // unpulled counter — behind > 0. Ahead-only repos are unpushed (not
+        // unpulled), and a diverged repo (ahead + behind) belongs to both.
+        let project = Path::new("/w");
+        let unpulled = root("/w/g/unpulled", Some("main")); // (0, 2)
+        let unpushed = root("/w/g/unpushed", Some("main")); // (1, 0)
+        let diverged = root("/w/g/diverged", Some("main")); // (1, 1)
+        let tree = build_tree(project, &[unpulled, unpushed, diverged], &|id| {
+            let p = id.0.as_os_str();
+            if p == "/w/g/unpulled" {
+                Some((0, 2))
+            } else if p == "/w/g/unpushed" {
+                Some((1, 0))
+            } else {
+                Some((1, 1))
+            }
+        });
+        let all: Vec<&crate::ui::sidebar::SidebarRepo> =
+            tree.groups.iter().flat_map(|g| &g.repos).collect();
+        let members_of = |group: SmartGroup| {
+            let mut names: Vec<&str> = all
+                .iter()
+                .filter(|r| group.matches(r))
+                .map(|r| r.name.as_str())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(members_of(SmartGroup::Unpulled), ["diverged", "unpulled"]);
+        assert_eq!(members_of(SmartGroup::Unpushed), ["diverged", "unpushed"]);
+        assert_eq!(members_of(SmartGroup::Diverged), ["diverged"]);
     }
 
     #[test]

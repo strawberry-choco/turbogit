@@ -396,6 +396,33 @@ impl DiffModel {
     }
 }
 
+/// (added, removed) changed-line counts of the display model — the diff
+/// preview header's `+N −M` change-size stats (design doc §5). Changed rows
+/// always live in pairs (build_model invariant), but full-width Add/Del rows
+/// are counted too for robustness.
+pub(super) fn line_counts(model: &DiffModel) -> (usize, usize) {
+    let mut added = 0usize;
+    let mut removed = 0usize;
+    for disp in &model.display {
+        match disp {
+            DisplayRow::Full(row) => match row.kind {
+                RowKind::Add => added += 1,
+                RowKind::Del => removed += 1,
+                _ => {}
+            },
+            DisplayRow::Pair(d, a) => {
+                if d.is_some() {
+                    removed += 1;
+                }
+                if a.is_some() {
+                    added += 1;
+                }
+            }
+        }
+    }
+    (added, removed)
+}
+
 /// Fold a buffered run of consecutive Del/Add rows into paired display rows.
 fn flush_changed_run(pending: &mut Vec<Row>, display: &mut Vec<DisplayRow>) {
     if pending.is_empty() {

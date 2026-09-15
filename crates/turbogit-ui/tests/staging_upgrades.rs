@@ -3,16 +3,16 @@
 //!
 //! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` over
 //! temporary repositories, asserting painted labels and public `AppState`
-//! transitions: the Commit window's UNSTAGED/STAGED sections with per-file
-//! hunk counts and per-section Stage all / Unstage all, the diff viewer's
-//! hunk collapsing, per-hunk staged state in the hunk header, and the
-//! staged-hunk chip rail.
+//! transitions: the Commit window's flat staging file list (per-repo section
+//! headers and Stage all / Unstage all removed by issue 07 — staging lives in
+//! the per-file checkboxes), the diff viewer's hunk collapsing, per-hunk
+//! staged state in the hunk header, and the staged-hunk chip rail.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui_kittest::{Harness, kittest::Queryable};
-use test_support::harness::{assert_not_painted, assert_painted, painted_text};
+use test_support::harness::{assert_painted, galley_origin, painted_text};
 use turbogit_app::state::AppState;
 
 // ---------------------------------------------------------------- helpers --
@@ -104,7 +104,7 @@ fn wait_until_painted(h: &mut Harness<'_, AppState>, ms: u64, needle: &str) -> b
 // ------------------------------------------- UNSTAGED / STAGED sections ----
 
 #[test]
-fn file_list_splits_into_unstaged_and_staged_sections_with_hunk_counts() {
+fn file_list_paints_flat_rows_without_section_headers_or_hunk_counts() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "sections");
 
@@ -116,64 +116,32 @@ fn file_list_splits_into_unstaged_and_staged_sections_with_hunk_counts() {
 
     let h = harness(std::slice::from_ref(&repo.path));
 
-    // The file list splits into count-badged staging sections.
-    h.get_by_label("UNSTAGED (2)");
-    h.get_by_label("STAGED (1)");
-    // Untracked files join UNSTAGED; fully staged files land in STAGED.
-    h.get_by_label("? untracked.txt");
-    h.get_by_label("A other.txt");
-
-    // Per-file hunk counts: unstaged rows show their hunk count, fully
-    // staged rows show the staged/total ratio.
+    // Issue 07: the per-repo staging section headers are gone — rows paint
+    // flat under the repo group (issue 20's hunk-rail still counts staged
+    // hunks separately). Untracked files live in the bottom group (issue 04).
     let text = painted_text(&h).join("\n");
     assert!(
-        text.contains("1 hunk"),
-        "unstaged rows must show their hunk count, got:\n{text}"
+        !text.contains("UNSTAGED") && !text.contains("STAGED"),
+        "staging section headers must be removed, got:\n{text}"
     );
-    assert!(
-        text.contains("1/1"),
-        "fully staged rows must show staged/total, got:\n{text}"
-    );
-}
+    for row in ["base.txt", "other.txt", "untracked.txt"] {
+        h.get_by_label(row);
+    }
+    h.get_by_label("Unversioned Files (1)");
 
-#[test]
-fn stage_all_and_unstage_all_act_per_section() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "stage-all");
-    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
-    std::fs::write(repo.path.join("second.txt"), "also modified\n").unwrap();
-
-    let mut h = harness(std::slice::from_ref(&repo.path));
-    h.get_by_label("UNSTAGED (2)");
-
-    // Stage all stages every file of the UNSTAGED section…
-    h.get_by_label("Stage all").click();
-    h.run();
+    // Issue 05: hunk counts moved out of file rows into the diff header —
+    // the old per-row badges ("1 hunk" galley, staged "1/1" ratio) no longer
+    // paint. (The staged-hunks rail still legitimately paints "1 hunk
+    // staged" for other.txt, so assert on the exact badge galleys.)
     assert!(
-        wait_until(15_000, || staged_contains(&repo, "base.txt")
-            && staged_contains(&repo, "second.txt")),
-        "Stage all must stage the section's files"
+        galley_origin(&h, "1 hunk").is_none(),
+        "the unstaged row badge must be gone"
     );
+    let text = painted_text(&h).join("\n");
     assert!(
-        wait_until_painted(&mut h, 15_000, "STAGED (2)"),
-        "staged files must appear in the STAGED section"
+        !text.contains("1/1"),
+        "staged rows must not paint the staged/total ratio, got:\n{text}"
     );
-
-    // …and Unstage all removes the STAGED section's files from the index.
-    h.get_by_label("Unstage all").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || {
-            git(&repo.path, &["diff", "--cached", "--name-only"])
-                .trim()
-                .is_empty()
-        }),
-        "Unstage all must unstage the section's files"
-    );
-    assert!(wait_until_painted(&mut h, 15_000, "UNSTAGED (2)"));
-    // "STAGED (2)" is a substring of "UNSTAGED (2)", so assert on a staged
-    // row label instead: the files are back under UNSTAGED.
-    assert_not_painted(&h, "A base.txt");
 }
 
 // ------------------------------------------------- hunk collapsing ---------
@@ -214,7 +182,7 @@ fn hunks_collapse_and_expand_on_demand() {
     seed_two_hunk_edit(&repo);
 
     let mut h = harness(std::slice::from_ref(&repo.path));
-    h.get_by_label("M code.rs").click();
+    h.get_by_label("code.rs").click();
     open_preview(&mut h);
 
     // Both hunks start expanded.
@@ -250,7 +218,7 @@ fn hunk_headers_show_staged_state_and_rail_counts_staged_hunks() {
     seed_two_hunk_edit(&repo);
 
     let mut h = harness(std::slice::from_ref(&repo.path));
-    h.get_by_label("M code.rs").click();
+    h.get_by_label("code.rs").click();
     open_preview(&mut h);
 
     // The staged-state annotation lives on the Repo comparison (HEAD↔worktree),
@@ -313,7 +281,7 @@ fn partially_staged_hunk_gets_a_part_chip() {
     .unwrap();
 
     let mut h = harness(std::slice::from_ref(&repo.path));
-    h.get_by_label("M code.rs").click();
+    h.get_by_label("code.rs").click();
     open_preview(&mut h);
 
     // Select one changed line (Line granularity is the default) and stage it.

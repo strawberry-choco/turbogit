@@ -328,16 +328,10 @@ fn palette_unstage_verb_dispatches_reverse_apply_for_current_hunk() {
 
 // ------------------------------------------ commit-with-partial-selection --
 
-/// The primary Commit action button lives on the same row as
-/// "Commit and Push..." — disambiguate geometrically (`commit_window.rs`).
+/// The primary Commit action's main part (issue 07: the `Commit ▾` split
+/// button, labeled "Commit changes" via `WidgetInfo`).
 fn commit_action_button<'h>(h: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> {
-    let row_y = h.get_by_label("Commit and Push...").rect().center().y;
-    let mut on_row: Vec<_> = h
-        .get_all_by_label("Commit")
-        .filter(|n| (n.rect().center().y - row_y).abs() < 4.0)
-        .collect();
-    assert_eq!(on_row.len(), 1, "expected exactly one Commit action button");
-    on_row.remove(0)
+    h.get_by_label("Commit changes")
 }
 
 #[test]
@@ -378,9 +372,16 @@ fn commit_with_partially_staged_file_commits_index_without_restaging() {
     let (state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
+    // The staged-hunks rail (this file has one staged hunk) plus the loaded
+    // diff preview push the action row below the 800 px fold; grow the window
+    // so the commit controls stay reachable.
+    h.set_size(egui::vec2(1280.0, 1000.0));
+    for _ in 0..3 {
+        h.run();
+    }
 
     // Include the partially staged file and commit.
-    h.get_by_label("M words.txt").click();
+    h.get_by_label("words.txt").click();
     h.state_mut().ui.commit_message = "partial: index as-is".into();
     h.run();
     commit_action_button(&h).click();
@@ -421,9 +422,8 @@ fn gutter_stage_on_untracked_file_intents_to_add_then_applies_forward() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    // Untracked files live on their own sub-tab; select one for preview.
-    h.get_by_label("Unversioned Files").click();
-    h.run();
+    // Untracked files live in the bottom `Unversioned Files` group of the
+    // one tree (issue 04) — no sub-tab switch needed; select one for preview.
     h.get_by_label("new.txt").click();
     h.run();
 
@@ -610,7 +610,7 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
         "the granular completion must be recorded"
     );
     assert!(
-        h.query_by_label("M words.txt").is_some(),
+        h.query_by_label("words.txt").is_some(),
         "the staging view keeps fully staged files listed, under STAGED"
     );
     assert!(
@@ -665,7 +665,7 @@ fn partially_staged_file_shows_a_coarse_indicator() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let h = harness(state);
 
-    h.get_by_label("M words.txt");
+    h.get_by_label("words.txt");
 
     // Exactly one coarse indicator: on the partially staged file only —
     // never on the plainly modified one.

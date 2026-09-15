@@ -304,10 +304,10 @@ pub enum Tab {
 
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CommitSubTab {
-    /// Tracked modifications + merge conflicts (the classic commit surface).
+    /// Tracked modifications + merge conflicts + the Unversioned Files group
+    /// (issue 04 merged the old Unversioned Files sub-tab into the one tree).
     #[default]
     LocalChanges,
-    UnversionedFiles,
     Shelf,
     Stash,
 }
@@ -578,6 +578,16 @@ pub struct UiState {
     pub recent_messages: Vec<String>,
     /// Active sub-tab inside the Commit tool window (issue #18).
     pub commit_subtab: CommitSubTab,
+    /// Repo groups the user has manually expanded beyond the focus rule
+    /// (issue 04): the selected root is always expanded; non-selected roots
+    /// show their file rows only while they are in this set. Cleared
+    /// whenever the focused root changes, so a sidebar selection collapses
+    /// every other group ("focus = expand").
+    pub changes_expanded: HashSet<RootId>,
+    /// The root the collapse state was last normalized for (issue 04): when
+    /// it diverges from [`Self::selected_root`], `changes_expanded` resets
+    /// to the empty set and this marker follows the focus.
+    pub changes_focus: Option<RootId>,
     /// Inline filter over the changed-file list (spec R7, CONTEXT.md "File
     /// filter"): shared by both active Commit sub-tabs, matched
     /// case-insensitively against file paths. Persists across root switches

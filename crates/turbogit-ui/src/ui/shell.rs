@@ -36,8 +36,6 @@ pub const TAB_STRIP_HEIGHT: f32 = 32.0;
 pub const TAB_ITEM_HEIGHT: f32 = 31.0;
 /// Status bar height.
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
-/// Metadata rail width (issue #03, screen 01).
-pub const METADATA_RAIL_WIDTH: f32 = 260.0;
 /// Minimum work-area width at which the workspace sidebar renders
 /// (issue #05): below it the log's minimum pane sizes cannot hold.
 pub const MIN_SIDEBAR_WINDOW_WIDTH: f32 = 1000.0;
@@ -46,9 +44,11 @@ const TAB_ICON_SIZE: f32 = 14.0; // §6.2 tab icons
 const TAB_TEXT: f32 = 12.0;
 
 /// Compose the whole shell: frozen shortcuts, the new shell frame
-/// regions (topbar / repo header / center tabs / metadata rail / status
-/// bar), then the central body (Welcome placeholder or active tool
-/// window).
+/// regions (topbar / repo header / center tabs / status bar), then the
+/// central body (Welcome placeholder or active tool window). The tool
+/// window spans the full content width — the third metadata column was
+/// removed in the local-changes redesign (its information moved to the
+/// status bar and the repo header).
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     handle_shortcuts(ui, state);
 
@@ -61,8 +61,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     // Panel order fixes the geometry: top strips claim full width first,
     // the status bar claims the bottom, and the central body takes
-    // what remains — the metadata rail sits inside the central body
-    // (issue #03, screen 01) alongside the active tool window.
+    // what remains — the tool window spans the whole content width
+    // (the metadata rail that once split it was removed, issue 03).
     render_topbar(ui, state);
     if state.ui.show_status_bar {
         render_status_bar(ui, state);
@@ -73,15 +73,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             render_tab_strip(ui, state);
             super::welcome::show(ui, state);
         } else {
-            // The tool window, the metadata rail, the activity log panel
-            // (issue #04), and the workspace sidebar (issue #05) share the
-            // central body with the repo header and tab strip. Reserve
-            // explicit rects: a `ui.horizontal` would size its children to
-            // one interact row, collapsing every ScrollArea inside the tool
-            // window, and an unsized tool window would consume the rail's
-            // width. The sidebar claims the left edge of the work area; the
-            // repo header and tab strip start to its right; the activity
-            // log keeps its full-width strip at the bottom (screen 01).
+            // The tool window, the activity log panel (issue #04), and the
+            // workspace sidebar (issue #05) share the central body with the
+            // repo header and tab strip. Reserve explicit rects: a
+            // `ui.horizontal` would size its children to one interact row,
+            // collapsing every ScrollArea inside the tool window. The
+            // sidebar claims the left edge of the work area; the repo
+            // header and tab strip start to its right; the activity log
+            // keeps its full-width strip at the bottom (screen 01).
             let body = ui.available_rect_before_wrap();
             let activity_h = if state.ui.activity.expanded {
                 super::activity_panel::ACTIVITY_HEIGHT
@@ -120,14 +119,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             );
             let content_rect =
                 Rect::from_min_max(Pos2::new(right_rect.min.x, tabs_rect.max.y), right_rect.max);
-            let tool_rect = Rect::from_min_max(
-                content_rect.min,
-                Pos2::new(content_rect.max.x - METADATA_RAIL_WIDTH, content_rect.max.y),
-            );
-            let rail_rect = Rect::from_min_max(
-                Pos2::new(tool_rect.max.x, content_rect.min.y),
-                content_rect.max,
-            );
+            // The tool window takes the full content width — there is no
+            // third metadata column beside it (local-changes redesign 03).
+            let tool_rect = content_rect;
 
             let mut sidebar_ui = ui.new_child(
                 UiBuilder::new()
@@ -159,13 +153,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             );
             show_tool_window(&mut tool_ui, state);
             ui.advance_cursor_after_rect(tool_rect);
-            let mut rail_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(rail_rect)
-                    .layout(Layout::top_down(Align::Min)),
-            );
-            render_metadata_rail(&mut rail_ui, state);
-            ui.advance_cursor_after_rect(rail_rect);
             let mut activity_ui = ui.new_child(
                 UiBuilder::new()
                     .max_rect(activity_rect)
@@ -645,8 +632,9 @@ fn breadcrumb_root_name(state: &AppState, root: &turbogit_domain::model::Root) -
 // --- Repo header -------------------------------------------------------------
 
 /// Repo header bar (issue #03, screen 01): focused root folder + name +
-/// chevron, branch pill, and the combined ahead/behind/conflict badge,
-/// plus a Refresh button. Sits on BG with a LINE bottom stroke; renders
+/// chevron, branch pill, and the orange dirty badge (issue 02, design doc
+/// §6) carrying the focused root's uncommitted count — all on one row.
+/// Plus a Refresh button. Sits on BG with a LINE bottom stroke; renders
 /// into the shell's reserved header strip to the right of the workspace
 /// sidebar (issue #05).
 fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
@@ -669,12 +657,7 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
         .current_branch
         .clone()
         .unwrap_or_else(|| "<detached>".to_owned());
-    let ahead_behind = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.caches.ahead_behind(id))
-        .unwrap_or((0, 0));
-    let conflicts = root.status.conflicted.len();
+    let dirty = root.status.modified() + root.status.unversioned() + root.status.conflicted.len();
 
     ui.painter()
         .rect_filled(rect, CornerRadius::same(0), Palette::BG);
@@ -706,8 +689,9 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
 
                 ui.add_space(12.0);
 
-                // Combined ahead/behind/conflict badge.
-                combined_branch_badge(ui, ahead_behind, conflicts);
+                // Orange dirty badge (issue 02): the focused root's
+                // uncommitted count in the reserved counter orange.
+                dirty_badge(ui, dirty);
 
                 // Right-aligned Refresh (screen 01). Sharing the header
                 // row keeps the chrome to its spec height — a sibling top
@@ -760,36 +744,17 @@ fn branch_pill(ui: &mut Ui, branch: &str) {
     );
 }
 
-/// Combined ahead/behind/conflict badge (issue #03): a single chip
-/// carrying the union of the focused root's outgoing count, incoming
-/// count, and merge-conflict count. Hidden when every count is zero.
-fn combined_branch_badge(ui: &mut Ui, ahead_behind: (usize, usize), conflicts: usize) {
-    let ahead = ahead_behind.0;
-    let behind = ahead_behind.1;
-    if ahead == 0 && behind == 0 && conflicts == 0 {
+/// Orange dirty badge (issue 02, design doc §6): a chip carrying the
+/// focused root's uncommitted count in the reserved counter orange (tinted
+/// fill + orange ink). Hidden when the tree is clean.
+fn dirty_badge(ui: &mut Ui, dirty_count: usize) {
+    if dirty_count == 0 {
         return;
     }
-    let mut pieces = Vec::new();
-    if ahead > 0 {
-        pieces.push(format!("↑{ahead}"));
-    }
-    if behind > 0 {
-        pieces.push(format!("↓{behind}"));
-    }
-    if conflicts > 0 {
-        pieces.push(format!("⊗{conflicts}"));
-    }
-    let text = pieces.join(" ");
-    let fg = if conflicts > 0 {
-        Palette::STATE_ERROR
-    } else if behind > 0 {
-        Palette::STATE_WARNING
-    } else {
-        Palette::STATE_SUCCESS
-    };
+    let fg = Palette::COUNTER;
     let bg = widgets::tint_over_bg(fg, 0.18);
     let galley = ui.painter().layout_no_wrap(
-        text.clone(),
+        dirty_count.to_string(),
         FontId::new(11.0, FontFamily::Proportional),
         fg,
     );
@@ -870,39 +835,21 @@ fn tab_item(
     let response = ui.interact(rect, id, Sense::click());
     let active = state.ui.tab == tab;
     let painter = ui.painter().clone();
-    let radius = CornerRadius {
-        nw: 4,
-        ne: 4,
-        sw: 0,
-        se: 0,
-    };
+    // Issue 02 (design doc §6): the active tool-window tab renders as a
+    // filled pill — a fully rounded SURFACE_2 chip inset from the strip's
+    // top/bottom edges — instead of a full-width box outline. The pill is
+    // 8px shorter than the 32px strip (4px grid) and floats within it, so
+    // the active tab reads as a chip rather than an open box.
+    let pill = Rect::from_center_size(
+        rect.center(),
+        Vec2::new(rect.width() - 6.0, TAB_STRIP_HEIGHT - 8.0),
+    );
+    let pill_radius = CornerRadius::same(12);
     if active {
-        painter.rect_filled(rect, radius, Palette::SURFACE);
-        let s = Stroke::new(1.0, Palette::LINE);
-        // Border on top/left/right only (bottom edge stays open into body).
-        painter.line_segment(
-            [
-                Pos2::new(rect.left() + 3.0, rect.top() + 0.5),
-                Pos2::new(rect.right() - 3.0, rect.top() + 0.5),
-            ],
-            s,
-        );
-        painter.line_segment(
-            [
-                Pos2::new(rect.left() + 0.5, rect.top() + 3.0),
-                Pos2::new(rect.left() + 0.5, rect.bottom()),
-            ],
-            s,
-        );
-        painter.line_segment(
-            [
-                Pos2::new(rect.right() - 0.5, rect.top() + 3.0),
-                Pos2::new(rect.right() - 0.5, rect.bottom()),
-            ],
-            s,
-        );
+        painter.rect_filled(pill, pill_radius, Palette::SURFACE_2);
     } else if response.hovered() {
-        painter.rect_filled(rect, radius, Palette::SURFACE_2);
+        // Subtle hover chip distinct from the active pill.
+        painter.rect_filled(pill, pill_radius, widgets::tint_over_bg(Palette::INK, 0.08));
     }
 
     let ink = if active { Palette::INK } else { Palette::INK_3 };
@@ -932,7 +879,7 @@ fn tab_item(
 /// dirty totals on the left; total root count on the right; busy
 /// spinner at the far right.
 fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
-    let agg = AggregatedStatus::compute(state);
+    let agg = AggregatedStatus::compute(&state.multi.roots, &|id| state.caches.ahead_behind(id));
 
     Panel::bottom("status_bar")
         .exact_size(STATUS_BAR_HEIGHT)
@@ -994,6 +941,27 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
     );
 }
 
+/// The three aggregated counters the status bar surfaces (issue #03) with
+/// their reserved colors (issue 02, design doc §6-7): diverged paints the
+/// error red, unpulled and dirty paint the counter orange — the orange is
+/// reserved for dirty/unpulled counters and no other chip on this surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CounterChip {
+    Diverged,
+    Unpulled,
+    Dirty,
+}
+
+impl CounterChip {
+    fn color(self) -> Color32 {
+        match self {
+            CounterChip::Diverged => Palette::STATUS_DIVERGED,
+            CounterChip::Unpulled => Palette::COUNTER,
+            CounterChip::Dirty => Palette::COUNTER,
+        }
+    }
+}
+
 /// Workspace aggregates used by the status bar (issue #03).
 #[derive(Default)]
 struct AggregatedStatus {
@@ -1006,12 +974,18 @@ struct AggregatedStatus {
 }
 
 impl AggregatedStatus {
-    fn compute(state: &AppState) -> Self {
+    /// Aggregate across the registered roots; `ahead_behind` reads the root
+    /// caches (absent entries → `(0, 0)`). Pure over its inputs so the
+    /// counting semantics are unit-testable (issue 02).
+    fn compute(
+        roots: &[turbogit_domain::model::Root],
+        ahead_behind: &dyn Fn(&turbogit_domain::model::RootId) -> Option<(usize, usize)>,
+    ) -> Self {
         let mut agg = AggregatedStatus {
-            total: state.multi.roots.len(),
+            total: roots.len(),
             ..Default::default()
         };
-        for root in &state.multi.roots {
+        for root in roots {
             if !root.status.conflicted.is_empty() {
                 agg.conflicts += 1;
                 agg.dirty += 1;
@@ -1022,7 +996,7 @@ impl AggregatedStatus {
             // Archived roots: spec definition is "frozen / excluded from
             // cascades" — v1 has no archived concept yet, so the count
             // stays at zero (the chip appears once a real signal lands).
-            if let Some((ahead, behind)) = state.caches.ahead_behind(&root.id) {
+            if let Some((ahead, behind)) = ahead_behind(&root.id) {
                 // Loose "diverged" in v1: any root whose branch has moved
                 // relative to its upstream counts.
                 if ahead > 0 || behind > 0 {
@@ -1056,7 +1030,7 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
     if agg.diverged > 0 {
         chip(
             ui,
-            Palette::STATE_ERROR,
+            CounterChip::Diverged.color(),
             format!("{} diverged", agg.diverged),
         );
     }
@@ -1070,7 +1044,7 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
     if agg.unpulled > 0 {
         chip(
             ui,
-            Palette::STATE_WARNING,
+            CounterChip::Unpulled.color(),
             format!("{} unpulled", agg.unpulled),
         );
     }
@@ -1082,7 +1056,11 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
         );
     }
     if agg.dirty > 0 {
-        chip(ui, Palette::STATE_WARNING, format!("{} dirty", agg.dirty));
+        chip(
+            ui,
+            CounterChip::Dirty.color(),
+            format!("{} dirty", agg.dirty),
+        );
     }
 }
 
@@ -1095,101 +1073,6 @@ fn status_total(agg: &AggregatedStatus, ui: &mut Ui) {
     );
 }
 
-// --- Metadata rail ---------------------------------------------------------------
-
-/// Metadata rail (issue #03, screen 01): a right-side vertical pane
-/// showing the focused root's Path, Branch, and Upstream. Sits inside
-/// the central body alongside the active tool window.
-fn render_metadata_rail(ui: &mut Ui, state: &mut AppState) {
-    let Some(root) = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-    else {
-        return;
-    };
-    let width = METADATA_RAIL_WIDTH;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ui.available_height()), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(0), Palette::SURFACE);
-    ui.painter().rect_stroke(
-        rect,
-        CornerRadius::same(0),
-        Stroke::new(1.0, Palette::LINE),
-        egui::StrokeKind::Inside,
-    );
-
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::top_down(Align::Min)),
-    );
-    child.add_space(12.0);
-
-    // Header.
-    child.label(
-        RichText::new("METADATA")
-            .strong()
-            .font(FontId::new(11.0, FontFamily::Proportional))
-            .color(Palette::INK_3),
-    );
-    child.add_space(12.0);
-
-    // Path row.
-    metadata_row(&mut child, "Path", &root.path.display().to_string());
-    child.add_space(10.0);
-
-    // Branch row.
-    let branch = root
-        .current_branch
-        .clone()
-        .unwrap_or_else(|| "<detached>".to_owned());
-    metadata_row(&mut child, "Branch", &branch);
-    child.add_space(10.0);
-
-    // Upstream row: look up the focused branch's tracking field.
-    let upstream = root
-        .branches
-        .iter()
-        .find(|b| Some(&b.name) == root.current_branch.as_ref())
-        .and_then(|b| b.tracking.clone())
-        .unwrap_or_else(|| "—".to_owned());
-    metadata_row(&mut child, "Upstream", &upstream);
-}
-
-/// One metadata rail row: small INK_3 label on the left, the value on
-/// the right (top-down layout with absolute `x` offset for the value).
-fn metadata_row(ui: &mut Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        let label_galley = ui.painter().layout_no_wrap(
-            label.to_owned(),
-            FontId::new(12.0, FontFamily::Proportional),
-            Palette::INK_3,
-        );
-        let label_w = label_galley.size().x + 8.0;
-        ui.allocate_exact_size(Vec2::new(label_w, label_galley.size().y), Sense::hover());
-        ui.painter().galley_with_override_text_color(
-            ui.cursor().left_top(),
-            label_galley,
-            Palette::INK_3,
-        );
-        ui.add_space(label_w + 4.0);
-        let value_galley = ui.painter().layout_no_wrap(
-            value.to_owned(),
-            FontId::new(12.0, FontFamily::Proportional),
-            Palette::INK,
-        );
-        ui.painter().galley_with_override_text_color(
-            ui.cursor().left_top(),
-            value_galley.clone(),
-            Palette::INK,
-        );
-        ui.advance_cursor_after_rect(Rect::from_min_size(
-            ui.cursor().min,
-            Vec2::new(value_galley.size().x, value_galley.size().y),
-        ));
-    });
-}
 // --- Tool window body --------------------------------------------------------------------
 
 /// Dispatch the active tool window inside the central panel. Log data is
@@ -1244,4 +1127,105 @@ fn placeholder_tab_body(ui: &mut Ui, state: &AppState) {
                 .color(Palette::INK_3),
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use turbogit_domain::model::{Change, ChangeStatus, Root, RootId, RootStatus};
+
+    fn root(path: &str, branch: Option<&str>) -> Root {
+        Root {
+            id: RootId(PathBuf::from(path).into()),
+            path: PathBuf::from(path),
+            remotes: vec![],
+            branches: vec![],
+            current_branch: branch.map(str::to_string),
+            head: None,
+            status: RootStatus::default(),
+        }
+    }
+
+    fn change(path: &str, status: ChangeStatus) -> Change {
+        Change {
+            path: PathBuf::from(path),
+            status,
+            chunks: vec![],
+            staged: false,
+            unstaged: false,
+            orig_path: None,
+        }
+    }
+
+    #[test]
+    fn counter_chip_reserves_orange_for_unpulled_and_dirty() {
+        // Issue 02 (design doc §6-7): the three status-bar counters paint
+        // diverged in the error red and unpulled/dirty in the reserved
+        // counter orange — the orange is never any other counter or chip.
+        assert_eq!(CounterChip::Diverged.color(), Palette::STATUS_DIVERGED);
+        assert_eq!(CounterChip::Unpulled.color(), Palette::COUNTER);
+        assert_eq!(CounterChip::Dirty.color(), Palette::COUNTER);
+    }
+
+    #[test]
+    fn counter_orange_only_colors_the_unpulled_and_dirty_surfaces() {
+        // Orange is reserved for dirty/unpulled counters in this surface and
+        // no general accent usage — for every counter chip, COUNTER is used
+        // exactly when the chip is Unpulled or Dirty.
+        for kind in [
+            CounterChip::Diverged,
+            CounterChip::Unpulled,
+            CounterChip::Dirty,
+        ] {
+            let is_counter = matches!(kind, CounterChip::Unpulled | CounterChip::Dirty);
+            assert_eq!(
+                kind.color() == Palette::COUNTER,
+                is_counter,
+                "{kind:?} must use COUNTER exactly when it is a dirty/unpulled counter"
+            );
+        }
+    }
+
+    #[test]
+    fn computes_diverged_unpulled_and_dirty_counts_from_root_state() {
+        // The three counter chips read the real status + ahead/behind data:
+        // diverged = any upstream drift, unpulled = behind, dirty = conflicted
+        // or modified/unversioned work. Archived stays zero in v1.
+        let mut dirty = root("/w/dirty", Some("main"));
+        dirty.status.changes = vec![change("a.txt", ChangeStatus::Modified)];
+        let mut conflicted = root("/w/conflicted", Some("main"));
+        conflicted.status.conflicted = vec![PathBuf::from("c.txt")];
+        let diverged = root("/w/diverged", Some("main")); // ahead 1, behind 1
+        let unpulled = root("/w/unpulled", Some("main")); // behind 2 only
+        let clean = root("/w/clean", Some("main"));
+        let roots = vec![dirty, conflicted, diverged, unpulled, clean];
+
+        let agg = AggregatedStatus::compute(&roots, &|id| {
+            let p = id.0.as_os_str();
+            if p == "/w/diverged" {
+                Some((1, 1))
+            } else if p == "/w/unpulled" {
+                Some((0, 2))
+            } else {
+                Some((0, 0))
+            }
+        });
+
+        assert_eq!(agg.total, 5);
+        assert_eq!(
+            agg.dirty, 2,
+            "modified and conflicted roots both count as dirty"
+        );
+        assert_eq!(agg.conflicts, 1);
+        assert_eq!(
+            agg.diverged, 2,
+            "any ahead/behind drift is loosely diverged"
+        );
+        assert_eq!(
+            agg.unpulled, 2,
+            "behind roots count as unpulled whether or not also diverged"
+        );
+        assert_eq!(agg.archived, 0);
+    }
 }
