@@ -1,7 +1,7 @@
 //! Diff actions and toolbar widgets: hunk/line staging dispatch,
 //! the mode/chips/nav toolbar, and the gutter stage buttons (spec R2).
 
-use super::model::{diff_model, mono_font};
+use super::model::{diff_model, line_counts, mono_font};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
@@ -86,6 +86,35 @@ pub(crate) fn preview_hunk_count(state: &AppState) -> usize {
         .filter(|(_, t)| !t.trim().is_empty())
         .map(|(_, t)| diff_model(t).hunk_count())
         .unwrap_or(0)
+}
+
+/// (added, removed) changed-line counts of the diff the Commit window's
+/// preview would render right now — the header's `+N −M` change-size stats
+/// (issue 06, design doc §5). `(0, 0)` while nothing is selected, still
+/// loading, errored, or the text parses to no rows (binary). Reads the
+/// memoized display model beside the cache (ADR-0014), so the header never
+/// reparses the patch text per frame.
+pub(crate) fn preview_line_counts(state: &AppState, path: &std::path::Path) -> (usize, usize) {
+    let Some(root) = state.selected_path() else {
+        return (0, 0);
+    };
+    let (eff_left, eff_right, staged) = comparison_triple(&None, &None, state.ui.diff_comparison);
+    let key = diff_key(
+        &root,
+        &eff_left,
+        &eff_right,
+        staged,
+        state.ui.diff_ignore_whitespace,
+        &Some(path.to_path_buf()),
+    );
+    state
+        .ui
+        .diff_cache
+        .as_ref()
+        .filter(|(k, _)| k == &key)
+        .filter(|(_, t)| !t.trim().is_empty())
+        .map(|(_, t)| line_counts(&diff_model(t)))
+        .unwrap_or((0, 0))
 }
 
 /// Whether one changed line currently sits in the accumulated sub-hunk

@@ -40,7 +40,7 @@ mod model;
 mod panes;
 mod view;
 
-pub(crate) use actions::{chip_button, preview_hunk_count};
+pub(crate) use actions::{chip_button, preview_hunk_count, preview_line_counts, preview_status};
 pub use model::{RowSummary, parsed_rows};
 pub use view::render_diff;
 

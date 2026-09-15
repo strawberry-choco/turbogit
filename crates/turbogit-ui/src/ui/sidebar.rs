@@ -565,15 +565,16 @@ fn render_smart_group_row(
     );
 }
 
-/// The semantic token a group's dot paints with (matching the repo rows:
-/// diverged and conflicts share the error red family, unpushed the success
-/// green, dirty the warning amber).
+/// The semantic token a group's dot paints with (issue 02): diverged and
+/// conflicts keep the error red, unpushed the success green, while the
+/// unpulled and dirty counters use the reserved counter orange.
 fn smart_group_color(group: smart_groups::SmartGroup) -> Color32 {
     match group {
         smart_groups::SmartGroup::Diverged => Palette::STATUS_DIVERGED,
         smart_groups::SmartGroup::Conflicted => Palette::STATE_ERROR,
         smart_groups::SmartGroup::Unpushed => Palette::STATE_SUCCESS,
-        smart_groups::SmartGroup::Dirty => Palette::STATUS_DIRTY,
+        smart_groups::SmartGroup::Unpulled => Palette::COUNTER,
+        smart_groups::SmartGroup::Dirty => Palette::COUNTER,
     }
 }
 
@@ -1199,5 +1200,48 @@ mod tests {
 
         let repo = &tree.groups[0].repos[0];
         assert_eq!((repo.ahead, repo.behind), (3, 2));
+    }
+
+    #[test]
+    fn smart_group_color_reserves_orange_for_unpulled_and_dirty() {
+        // Issue 02 (design doc §6-7): the reserved counter orange paints the
+        // unpulled + dirty smart-group dots exactly; every other group keeps
+        // its semantic token — orange is never a general accent here.
+        for group in smart_groups::SmartGroup::BUILTINS {
+            let is_counter = matches!(
+                group,
+                smart_groups::SmartGroup::Unpulled | smart_groups::SmartGroup::Dirty
+            );
+            assert_eq!(
+                smart_group_color(*group) == Palette::COUNTER,
+                is_counter,
+                "{group:?} must use COUNTER exactly when it is a dirty/unpulled counter"
+            );
+        }
+        assert_eq!(
+            smart_group_color(smart_groups::SmartGroup::Unpulled),
+            Palette::COUNTER,
+            "unpulled dot is the counter orange"
+        );
+        assert_eq!(
+            smart_group_color(smart_groups::SmartGroup::Dirty),
+            Palette::COUNTER,
+            "dirty dot is the counter orange"
+        );
+        assert_eq!(
+            smart_group_color(smart_groups::SmartGroup::Diverged),
+            Palette::STATUS_DIVERGED,
+            "diverged dot keeps the error red"
+        );
+        assert_eq!(
+            smart_group_color(smart_groups::SmartGroup::Unpushed),
+            Palette::STATE_SUCCESS,
+            "unpushed dot keeps the success green"
+        );
+        assert_eq!(
+            smart_group_color(smart_groups::SmartGroup::Conflicted),
+            Palette::STATE_ERROR,
+            "has-conflicts dot keeps the error red"
+        );
     }
 }
