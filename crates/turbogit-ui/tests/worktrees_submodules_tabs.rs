@@ -52,7 +52,7 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
 fn scratch(tag: &str) -> PathBuf {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(format!(".scratch/{tag}"));
     let _ = std::fs::remove_dir_all(&parent);

@@ -62,7 +62,7 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
 fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(format!(".scratch/cascade-branch-{tag}"));
     let _ = std::fs::remove_dir_all(&base);

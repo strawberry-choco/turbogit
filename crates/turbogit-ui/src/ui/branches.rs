@@ -19,9 +19,14 @@ use turbogit_app::state::{AppState, Dialog, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId};
 
 use crate::theme::{
-    Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_DETAIL_TITLE, chrome_font, data_font,
+    Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_DETAIL_TITLE, TYPE_SECTION, chrome_font,
+    data_font,
 };
 use crate::ui::branch_widget::stale_badge;
+use crate::ui::branches_tree;
+use crate::ui::branches_tree::{
+    BranchNode, BranchView, DirNode, RemoteGroup, RepoSection, RepoStatus,
+};
 use crate::ui::components::{
     BRANCH_ROW_H, DETAIL_W, KIT_ICON, KitButton, PAD_LIST, PAD_STRIP, RowState, SyncKind,
     TOOLBAR_H, kit_button, middle_truncate, overflow_button, row_fill, row_ink, section_header,
@@ -197,13 +202,22 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     if state.multi.roots.is_empty() {
         return;
     }
-    // Ensure tags are cached for every in-scope root (issue 14 aggregation).
+    // Warm the per-root tag cache for every in-scope root (redesign issue 02:
+    // tags are a per-repo group, so each section needs its own list).
     for r in &state.multi.roots {
-        if state.ui.branches_tags_root.as_ref() != Some(&r.id) {
-            state.ui.branches_tags = state.executor.tag_list(&r.id.0).unwrap_or_default();
-            state.ui.branches_tags_root = Some(r.id.clone());
+        if !state.ui.branches_tags.contains_key(&r.id) {
+            let tags = state.executor.tag_list(&r.id.0).unwrap_or_default();
+            state.ui.branches_tags.insert(r.id.clone(), tags);
         }
     }
+    // Build the repo-grouped view model once (pure; issue 01). The keyboard
+    // path still runs over the flat aggregate so arrows move through branches.
+    let tags_by_root = state.ui.branches_tags.clone();
+    let view = branches_tree::build_branch_view(
+        &state.multi.roots,
+        &tags_by_root,
+        state.ui.branches_show_remotes,
+    );
     let rows = aggregate_rows(state);
     // The keyboard path (design §9/§15, issue 15): read the raw events at the
     // very top of the frame, before the toolbar's search input renders and
@@ -218,7 +232,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             .max_rect(toolbar_rect)
             .layout(Layout::left_to_right(Align::Center)),
     );
-    toolbar(&mut toolbar_ui, state);
+    toolbar(&mut toolbar_ui, state, &view);
     ui.advance_cursor_after_rect(toolbar_rect);
 
     let content_rect = Rect::from_min_max(Pos2::new(body.min.x, toolbar_rect.max.y), body.max);
@@ -245,16 +259,24 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             .max_rect(list_rect)
             .layout(Layout::top_down(Align::Min)),
     );
-    list_area(&mut list_ui, state, &rows);
+    list_area(&mut list_ui, state, &view);
     ui.advance_cursor_after_rect(list_rect);
 }
 
-/// One aggregated row (issue 14): the owning repo id + display name, the
-/// branch itself, and its own repo's current branch (for the marker). Two
-/// `master`s in different repos are never identical anonymous rows.
+/// One aggregated row (issue 14): the owning repo id, the branch itself, and
+/// its own repo's current branch (for the marker). Two `master`s in different
+/// repos are never interchangeable — the id pins which one a row means.
 struct Row {
     root: RootId,
+    /// The owning repo's display name. No longer painted on the row (the
+    /// section header states it); it rides along only so a row-level action can
+    /// name its scope — "Checkout in beta" — and multi-repo aggregates can
+    /// order deterministically.
     repo: String,
+    /// The display label for the row. For a local branch this is the branch
+    /// name; for a remote leaf it is the already-prefix-stripped leaf label, so
+    /// the remote name never re-prints inside its own group (issue 03).
+    label: String,
     branch: Branch,
     current: Option<String>,
 }
@@ -277,6 +299,7 @@ fn aggregate_rows(state: &AppState) -> Vec<Row> {
             out.push(Row {
                 root: r.id.clone(),
                 repo: repo.clone(),
+                label: b.name.clone(),
                 branch: b.clone(),
                 current: current.clone(),
             });
@@ -360,17 +383,19 @@ fn handle_keys(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
     }
 }
 
-/// Toolbar (44px, §12): search input + the primary New Branch action, plus —
-/// in multi-repo projects — a repo filter that narrows the aggregated list
-/// and a visible "filtered" indicator (issue 14).
-fn toolbar(ui: &mut Ui, state: &mut AppState) {
+/// Toolbar (44px, §12): composes left → right as scope chip, remotes toggle,
+/// New Branch (issue 04). The search input takes the remaining left space; the
+/// three controls sit right-aligned so the layout never starves the search box.
+/// The remotes toggle is one view-wide switch (issue 03) that also shows the
+/// hidden remote-branch count while off.
+fn toolbar(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     ui.add_space(PAD_STRIP);
-    // Right-aligned actions first (New Branch, then the repo scope control,
-    // then the search input taking the rest of the strip). The scope control
-    // is neighbours with the actions so its "all N repos" / "filtered to X"
-    // header always paints — never starved for width by the search box.
+    // Right-aligned cluster, painted right→left so the first child is the
+    // rightmost: New Branch (rightmost), then the remotes toggle, then the
+    // scope chip (multi-repo only).
     let _ = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.add_space(PAD_STRIP);
+        // Primary action: New Branch (issue 04 — blue).
         if kit_button(ui, KitButton::Primary, "New Branch").clicked() {
             state.ui.dlg.new_branch_name.clear();
             state.ui.dlg.new_branch_start.clear();
@@ -379,59 +404,14 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
             state.ui.dlg.new_branch_checkout = true;
             state.ui.dialog = Some(Dialog::NewBranch);
         }
-        // Repo scope control (issue 14): only shown when several repos are in
-        // scope. The header names the scope so nobody acts on a partial list
-        // thinking it is everything.
+        // Remotes toggle (issue 03/04): one view-wide switch; shows the hidden
+        // remote-branch count while off.
+        ui.add_space(PAD_STRIP);
+        remotes_toggle(ui, state, view);
+        // Scope chip (issue 04): only when several repos are in scope.
         if state.multi.roots.len() > 1 {
             ui.add_space(PAD_STRIP);
-            let filtered = state.ui.branches_repo_filter.is_some();
-            let label = match &state.ui.branches_repo_filter {
-                Some(id) => format!("filtered to {}", id.name()),
-                None => format!("all {} repos", state.multi.roots.len()),
-            };
-            ui.label(
-                RichText::new(label)
-                    .font(chrome_font(TYPE_CONTROL))
-                    .color(if filtered {
-                        Palette::STATE_WARNING
-                    } else {
-                        Palette::T_MUTED
-                    }),
-            );
-            if kit_button(ui, KitButton::Quiet, "Scope…").clicked() {
-                state.ui.branches_scope_picker_open = !state.ui.branches_scope_picker_open;
-            }
-            if state.ui.branches_scope_picker_open {
-                let roots: Vec<(RootId, String)> = state
-                    .multi
-                    .roots
-                    .iter()
-                    .map(|r| (r.id.clone(), r.id.name()))
-                    .collect();
-                egui::Area::new(ui.id().with("repo_scope"))
-                    .current_pos(ui.min_rect().left_bottom())
-                    .show(ui.ctx(), |ui| {
-                        egui::Frame::popup(ui.style()).show(ui, |ui| {
-                            if ui
-                                .selectable_label(
-                                    state.ui.branches_repo_filter.is_none(),
-                                    "All repos",
-                                )
-                                .clicked()
-                            {
-                                state.ui.branches_repo_filter = None;
-                                state.ui.branches_scope_picker_open = false;
-                            }
-                            for (id, name) in &roots {
-                                let on = state.ui.branches_repo_filter.as_ref() == Some(id);
-                                if ui.selectable_label(on, format!("Show {name}")).clicked() {
-                                    state.ui.branches_repo_filter = Some(id.clone());
-                                    state.ui.branches_scope_picker_open = false;
-                                }
-                            }
-                        });
-                    });
-            }
+            scope_chip(ui, state);
         }
     });
     let search = widgets::search_input(ui, "Search branches", &mut state.ui.branches_filter);
@@ -442,23 +422,106 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(PAD_STRIP);
 }
 
+/// The remotes toggle (issue 03/04): a single view-wide switch. While remotes
+/// are hidden it also prints the concealed remote-branch count (e.g. "41") so
+/// nobody acts on a partial list guessing what is missing. The settled label is
+/// "Show remotes" (action-oriented; the count is the hidden total) / "Hide
+/// remotes" when on — consistent with the hidden-count display, which follows
+/// the label the way every other count in the view does ("LOCAL 4",
+/// "feature/ 3", "origin 2").
+fn remotes_toggle(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
+    let hidden: usize = view.repos.iter().map(|s| s.remote_branch_count).sum();
+    let show = state.ui.branches_show_remotes;
+    // Allocated before the control so the right-to-left toolbar paints it to
+    // the toggle's right: "Show remotes  2".
+    if !show && hidden > 0 {
+        ui.label(
+            RichText::new(hidden.to_string())
+                .font(chrome_font(TYPE_CONTROL))
+                .color(Palette::T_MUTED),
+        );
+        ui.add_space(4.0);
+    }
+    let label = if show { "Hide remotes" } else { "Show remotes" };
+    if kit_button(ui, KitButton::Quiet, label).clicked() {
+        state.ui.branches_show_remotes = !show;
+    }
+}
+
+/// The scope chip (issue 04): "all N repos" when nothing is narrowed, or
+/// "filtered to X" when a single repo is selected. The chip opens a picker that
+/// narrows the list to one repo using today's filter semantics.
+fn scope_chip(ui: &mut Ui, state: &mut AppState) {
+    let filtered = state.ui.branches_repo_filter.is_some();
+    let label = match &state.ui.branches_repo_filter {
+        Some(id) => format!("filtered to {}", id.name()),
+        None => format!("all {} repos", state.multi.roots.len()),
+    };
+    ui.label(
+        RichText::new(label)
+            .font(chrome_font(TYPE_CONTROL))
+            .color(if filtered {
+                Palette::STATE_WARNING
+            } else {
+                Palette::T_MUTED
+            }),
+    );
+    if kit_button(ui, KitButton::Quiet, "Scope…").clicked() {
+        state.ui.branches_scope_picker_open = !state.ui.branches_scope_picker_open;
+    }
+    if state.ui.branches_scope_picker_open {
+        let roots: Vec<(RootId, String)> = state
+            .multi
+            .roots
+            .iter()
+            .map(|r| (r.id.clone(), r.id.name()))
+            .collect();
+        egui::Area::new(ui.id().with("repo_scope"))
+            .current_pos(ui.min_rect().left_bottom())
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    if ui
+                        .selectable_label(state.ui.branches_repo_filter.is_none(), "All repos")
+                        .clicked()
+                    {
+                        state.ui.branches_repo_filter = None;
+                        state.ui.branches_scope_picker_open = false;
+                    }
+                    for (id, name) in &roots {
+                        let on = state.ui.branches_repo_filter.as_ref() == Some(id);
+                        if ui.selectable_label(on, format!("Show {name}")).clicked() {
+                            state.ui.branches_repo_filter = Some(id.clone());
+                            state.ui.branches_scope_picker_open = false;
+                        }
+                    }
+                });
+            });
+    }
+}
+
 /// The grouped list (issue 03): Local expanded, Remote expanded, Tags
 /// collapsed — filtered live by the search (issue 06) — or the reading/empty
 /// states instead of a blank panel. Rows come from every in-scope root
 /// (issue 14) unless the repo filter narrows them.
-fn list_area(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
-    let locals_all: Vec<&Row> = rows
-        .iter()
-        .filter(|r| r.branch.kind == BranchKind::Local)
-        .collect();
-    let remotes_all: Vec<&Row> = rows
-        .iter()
-        .filter(|r| r.branch.kind == BranchKind::Remote)
-        .collect();
-    let tags_all: Vec<String> = state.ui.branches_tags.clone();
+/// Indentation per directory-nesting level inside a repo section.
+const BRANCH_INDENT: f32 = 16.0;
+/// Height of one repo section header (status dot + repo name + current chip).
+const REPO_HEADER_H: f32 = 30.0;
 
-    // No rows and no HEAD anywhere: reading or the one-sentence empty state.
-    if rows.is_empty() && !state.multi.roots.iter().any(|r| r.head.is_some()) {
+/// The Branches list area, driven by the repo-grouped [`BranchView`] (redesign
+/// issues 02–04). Each in-scope repo paints a section: a header, a Local group
+/// (directory subgroups, stripped prefixes), the Remote area (collapsed rollup
+/// or expanded per-remote groups), and a Tags group. Row-level treatment is
+/// unchanged; the redesign only re-layers the grouping above the rows.
+fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
+    // No branch data anywhere and no HEAD: reading or the one-sentence empty
+    // state (the redesign still never paints a blank panel).
+    let any_data = state
+        .multi
+        .roots
+        .iter()
+        .any(|r| !r.branches.is_empty() || r.head.is_some());
+    if !any_data {
         if state.ui.busy {
             reading_state(ui);
         } else {
@@ -467,27 +530,11 @@ fn list_area(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
         return;
     }
 
-    // Live filter from the toolbar: the match set narrows the rows, while
-    // group headers stay visible with match-set counts.
     let filter = state.ui.branches_filter.clone();
     let filtering = !filter.trim().is_empty();
-    let locals: Vec<&Row> = locals_all
-        .into_iter()
-        .filter(|r| branch_matches(&r.branch, &filter))
-        .collect();
-    let remotes: Vec<&Row> = remotes_all
-        .into_iter()
-        .filter(|r| branch_matches(&r.branch, &filter))
-        .collect();
-    let tags: Vec<String> = tags_all
-        .iter()
-        .filter(|t| matches_query(t, &filter))
-        .cloned()
-        .collect();
-    let total = locals.len() + remotes.len() + tags.len();
 
-    // Search is for jumping, not browsing: save the scroll position the
-    // moment filtering begins and restore it when it clears.
+    // Search is for jumping, not browsing: save the scroll position the moment
+    // filtering begins and restore it when it clears.
     if filtering && state.ui.branches_scroll_saved.is_none() {
         state.ui.branches_scroll_saved = Some(state.ui.branches_scroll);
     }
@@ -510,10 +557,11 @@ fn list_area(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
     let scroll_target = state.ui.branches_scroll_to.clone();
     let mut target_y: Option<f32> = None;
     let mut y_cursor = 0.0;
+
     // Issue 15: an operation in flight shows in place — a muted "working…"
     // line above the list, never a silent wait. The busy flag is shell-global,
     // so the mid-operation state survives switching tabs.
-    if state.ui.busy && !rows.is_empty() {
+    if state.ui.busy && any_data {
         ui.horizontal(|ui| {
             ui.add_space(PAD_LIST);
             ui.label(
@@ -526,130 +574,45 @@ fn list_area(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
     // Deleted-branch undo lives at the top of the list for a short window
     // (issue 12).
     undo_banner(ui, state);
+
+    // Only the in-scope repos paint: the scope chip narrows the tree to one
+    // repo (issue 04), and a lone in-scope repo renders its section invisibly
+    // (issue 02 — the grouping adds no chrome).
+    let in_scope: Vec<&RepoSection> = view
+        .repos
+        .iter()
+        .filter(|s| match &state.ui.branches_repo_filter {
+            Some(f) => &s.root_id == f,
+            None => true,
+        })
+        .collect();
+    let invisible = in_scope.len() == 1;
+
     let out = ScrollArea::vertical()
         .id_salt("branches_list")
         .auto_shrink([false, false])
         .vertical_scroll_offset(scroll)
         .show(ui, |ui| {
-            if total == 0 && filtering {
-                // A dead end turns into the likely next intent.
+            // A dead end turns into the likely next intent.
+            if filtering
+                && in_scope
+                    .iter()
+                    .all(|s| section_match_count(s, &filter, state.ui.branches_show_remotes) == 0)
+            {
                 no_match_state(ui, state, filter.trim());
                 return;
             }
-            let ordered = ordered_rows(&locals);
-            let local_header = section_header(
-                ui,
-                "Local",
-                ordered.len(),
-                state.ui.branches_groups.local,
-                |_| {},
-            );
-            if local_header.clicked() {
-                state.ui.branches_groups.local = !state.ui.branches_groups.local;
-            }
-            y_cursor += crate::ui::components::SECTION_H;
-            if state.ui.branches_groups.local {
-                for r in &ordered {
-                    if Some(r.branch.name.as_str()) == scroll_target.as_deref() {
-                        target_y = Some(y_cursor);
-                    }
-                    y_cursor += BRANCH_ROW_H;
-                    branch_row(ui, state, r);
-                }
-            }
-
-            let remote_header = section_header(
-                ui,
-                "Remote",
-                remotes.len(),
-                state.ui.branches_groups.remote,
-                |ui| {
-                    // Fetch lives with the remote group (issue 13); after it
-                    // the report says what changed. With several repos in
-                    // scope every repo is fetched and reports per repo
-                    // (issue 14) — never one flat "done".
-                    ui.add_space(4.0);
-                    if kit_button(ui, KitButton::Quiet, "Fetch").clicked() {
-                        let targets: Vec<RootId> = match &state.ui.branches_repo_filter {
-                            Some(id) => vec![id.clone()],
-                            None => state.multi.roots.iter().map(|r| r.id.clone()).collect(),
-                        };
-                        for rid in targets {
-                            let before: Vec<String> = rows
-                                .iter()
-                                .filter(|r| r.root == rid && r.branch.kind == BranchKind::Remote)
-                                .map(|r| r.branch.name.clone())
-                                .collect();
-                            state.ui.branches_fetch_before.push((rid.clone(), before));
-                            let exec_rid = rid.clone();
-                            state.run_git("Fetch".to_string(), Affected::Root(rid), move |v| {
-                                v.fetch(&exec_rid.0, None)
-                            });
-                        }
-                    }
-                },
-            );
-            if remote_header.clicked() {
-                state.ui.branches_groups.remote = !state.ui.branches_groups.remote;
-            }
-            y_cursor += crate::ui::components::SECTION_H;
-            if state.ui.branches_groups.remote {
-                let mut sorted = remotes.clone();
-                sorted.sort_by(|a, b| {
-                    a.branch
-                        .remote
-                        .cmp(&b.branch.remote)
-                        .then_with(|| a.branch.name.cmp(&b.branch.name))
-                        .then_with(|| a.repo.cmp(&b.repo))
-                });
-                for r in &sorted {
-                    if Some(r.branch.name.as_str()) == scroll_target.as_deref() {
-                        target_y = Some(y_cursor);
-                    }
-                    y_cursor += BRANCH_ROW_H;
-                    branch_row(ui, state, r);
-                }
-                // The app is honest about when the last fetch happened
-                // (issue 13) — silent success and a no-op must not be
-                // indistinguishable.
-                if let Some(last) = state.ui.branches_last_fetch {
-                    let age = chrono::Utc::now()
-                        .signed_duration_since(last)
-                        .to_std()
-                        .unwrap_or_default();
-                    ui.horizontal(|ui| {
-                        ui.add_space(PAD_LIST + KIT_ICON + 8.0);
-                        ui.label(
-                            RichText::new(format!("last fetched {}", stale_badge(age)))
-                                .font(data_font(TYPE_CONTROL))
-                                .color(Palette::T_MUTED),
-                        );
-                    });
-                    y_cursor += BRANCH_ROW_H;
-                }
-            }
-
-            let tags_header = section_header(
-                ui,
-                "Tags",
-                tags.len(),
-                state.ui.branches_groups.tags,
-                |_| {},
-            );
-            if tags_header.clicked() {
-                state.ui.branches_groups.tags = !state.ui.branches_groups.tags;
-            }
-            y_cursor += crate::ui::components::SECTION_H;
-            if state.ui.branches_groups.tags {
-                let mut sorted = tags.clone();
-                sorted.sort();
-                for t in &sorted {
-                    if Some(t.as_str()) == scroll_target.as_deref() {
-                        target_y = Some(y_cursor);
-                    }
-                    y_cursor += BRANCH_ROW_H;
-                    tag_row(ui, t);
-                }
+            for section in &in_scope {
+                paint_repo_section(
+                    ui,
+                    state,
+                    section,
+                    &filter,
+                    invisible,
+                    &scroll_target,
+                    &mut y_cursor,
+                    &mut target_y,
+                );
             }
         });
     state.ui.branches_scroll = out.state.offset.y;
@@ -661,11 +624,9 @@ fn list_area(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
         state.ui.branches_scroll = ty;
     }
 
-    // Enter-on-selected-row checkout moved to `handle_keys` (issue 15) so the
-    // key path also works while the filter box owns the keyboard.
-
     // The ⋯ overflow menu floats over the list with the same actions as the
-    // detail panel (issue 05).
+    // detail panel (issue 05). It resolves the target row from the flat
+    // aggregate (the view model only carries display structure).
     if let Some((root_id, name)) = state.ui.branches_overflow.clone() {
         let anchor = ui.ctx().memory(|m| {
             m.data
@@ -677,6 +638,7 @@ fn list_area(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(160.0);
+                        let rows = aggregate_rows(state);
                         if let Some(row) = rows
                             .iter()
                             .find(|r| r.root == root_id && r.branch.name == name)
@@ -688,6 +650,478 @@ fn list_area(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
                     });
                 });
         }
+    }
+}
+
+/// Total visible branches/tags in a section under the current filter — used to
+/// decide the no-match state and to size group headers.
+fn section_match_count(section: &RepoSection, filter: &str, show_remotes: bool) -> usize {
+    let locals = branches_tree::leaf_count(&filter_nodes(&section.locals, filter, false));
+    let remotes = if show_remotes {
+        section
+            .remote_groups
+            .iter()
+            .map(|g| branches_tree::leaf_count(&filter_nodes(&g.children, filter, true)))
+            .sum()
+    } else {
+        0
+    };
+    let tags = section
+        .tags
+        .iter()
+        .filter(|t| matches_query(t, filter))
+        .count();
+    locals + remotes + tags
+}
+
+/// Recursively keep nodes whose branch (or descendant) matches the query,
+/// preserving the directory structure. Counts on surviving directory nodes are
+/// recomputed from the surviving children.
+fn filter_nodes(nodes: &[BranchNode], filter: &str, _is_remote: bool) -> Vec<BranchNode> {
+    if filter.trim().is_empty() {
+        return nodes.to_vec();
+    }
+    let mut out = Vec::new();
+    for n in nodes {
+        match n {
+            BranchNode::Leaf(l) => {
+                if branch_matches(&l.branch, filter) {
+                    out.push(n.clone());
+                }
+            }
+            BranchNode::Dir(d) => {
+                let children = filter_nodes(&d.children, filter, _is_remote);
+                if !children.is_empty() {
+                    out.push(BranchNode::Dir(DirNode {
+                        label: d.label.clone(),
+                        count: branches_tree::leaf_count(&children),
+                        children,
+                    }));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Paint one repo's section: header (unless invisible for single-repo), Local
+/// group, Remote area, and Tags group.
+#[allow(clippy::too_many_arguments)]
+fn paint_repo_section(
+    ui: &mut Ui,
+    state: &mut AppState,
+    section: &RepoSection,
+    filter: &str,
+    invisible: bool,
+    scroll_target: &Option<String>,
+    y_cursor: &mut f32,
+    target_y: &mut Option<f32>,
+) {
+    // The header always paints so the repo-level Fetch stays one click away
+    // (issue 03); its identity chrome is suppressed for a single-repo project
+    // whose grouping must stay invisible (issue 02).
+    repo_header(ui, state, section, !invisible);
+    *y_cursor += REPO_HEADER_H;
+
+    // --- Local group ---
+    let locals = filter_nodes(&section.locals, filter, false);
+    let local_count = branches_tree::leaf_count(&locals);
+    let local_header = section_header(
+        ui,
+        "Local",
+        local_count,
+        state.ui.branches_groups.local,
+        |_| {},
+    );
+    if local_header.clicked() {
+        state.ui.branches_groups.local = !state.ui.branches_groups.local;
+    }
+    *y_cursor += crate::ui::components::SECTION_H;
+    if state.ui.branches_groups.local {
+        paint_nodes(
+            ui,
+            state,
+            section,
+            &locals,
+            0,
+            scroll_target,
+            y_cursor,
+            target_y,
+        );
+    }
+
+    // --- Remote area ---
+    if state.ui.branches_show_remotes {
+        for rg in &section.remote_groups {
+            let children = filter_nodes(&rg.children, filter, true);
+            if branches_tree::leaf_count(&children) == 0 && !filter.trim().is_empty() {
+                continue;
+            }
+            remote_group_header(ui, state, section, rg, &children);
+            *y_cursor += crate::ui::components::SECTION_H;
+            if !state
+                .ui
+                .branches_collapsed_remotes
+                .contains(&(section.root_id.clone(), rg.remote.clone()))
+            {
+                paint_nodes(
+                    ui,
+                    state,
+                    section,
+                    &children,
+                    1,
+                    scroll_target,
+                    y_cursor,
+                    target_y,
+                );
+            }
+        }
+    } else {
+        // Collapsed rollup row — one per repo, toggles remotes on when clicked.
+        remote_rollup_row(ui, state, section);
+        *y_cursor += BRANCH_ROW_H;
+    }
+
+    // --- Tags group ---
+    let mut tags: Vec<String> = section
+        .tags
+        .iter()
+        .filter(|t| matches_query(t, filter))
+        .cloned()
+        .collect();
+    tags.sort();
+    let tags_header = section_header(
+        ui,
+        "Tags",
+        tags.len(),
+        state.ui.branches_groups.tags,
+        |_| {},
+    );
+    if tags_header.clicked() {
+        state.ui.branches_groups.tags = !state.ui.branches_groups.tags;
+    }
+    *y_cursor += crate::ui::components::SECTION_H;
+    if state.ui.branches_groups.tags {
+        for t in &tags {
+            if Some(t.as_str()) == scroll_target.as_deref() {
+                *target_y = Some(*y_cursor);
+            }
+            *y_cursor += BRANCH_ROW_H;
+            tag_row(ui, t);
+        }
+    }
+}
+
+/// Paint a forest of branch nodes (local or remote) with directory headers at
+/// `depth` indentation.
+#[allow(clippy::too_many_arguments)]
+fn paint_nodes(
+    ui: &mut Ui,
+    state: &mut AppState,
+    section: &RepoSection,
+    nodes: &[BranchNode],
+    depth: usize,
+    scroll_target: &Option<String>,
+    y_cursor: &mut f32,
+    target_y: &mut Option<f32>,
+) {
+    let repo_label = if state.multi.roots.len() > 1 {
+        section.repo_name.clone()
+    } else {
+        String::new()
+    };
+    for n in nodes {
+        match n {
+            BranchNode::Leaf(l) => {
+                if Some(l.branch.name.as_str()) == scroll_target.as_deref() {
+                    *target_y = Some(*y_cursor);
+                }
+                *y_cursor += BRANCH_ROW_H;
+                let row = Row {
+                    root: section.root_id.clone(),
+                    repo: repo_label.clone(),
+                    label: l.label.clone(),
+                    branch: l.branch.clone(),
+                    current: section.current_branch.clone(),
+                };
+                branch_row(ui, state, &row, depth as f32 * BRANCH_INDENT);
+            }
+            BranchNode::Dir(d) => {
+                dir_header(ui, &d.label, d.count, depth);
+                *y_cursor += BRANCH_ROW_H;
+                paint_nodes(
+                    ui,
+                    state,
+                    section,
+                    &d.children,
+                    depth + 1,
+                    scroll_target,
+                    y_cursor,
+                    target_y,
+                );
+            }
+        }
+    }
+}
+
+/// One repo section header: a status dot, the repo name (sans), a repo-level
+/// Fetch (issue 03 — one click away even with remotes hidden), and a chip
+/// showing the repo's current branch (mono). `show_identity` is false for a
+/// single-repo project, where the grouping is invisible: the identity chrome
+/// (dot, name, chip) is suppressed so no redundant repo header appears, but the
+/// Fetch control stays so primary actions remain one click away.
+fn repo_header(ui: &mut Ui, state: &mut AppState, section: &RepoSection, show_identity: bool) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, REPO_HEADER_H), Sense::hover());
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    child.add_space(PAD_LIST);
+    if show_identity {
+        // Status dot.
+        let (dot_rect, _) = child.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+        child
+            .painter()
+            .circle_filled(dot_rect.center(), 4.0, repo_status_color(section.status));
+        child.add_space(8.0);
+        // Repo name (UI sans, section-ish weight).
+        child.add(
+            egui::Label::new(
+                RichText::new(section.repo_name.clone())
+                    .font(chrome_font(TYPE_CONTROL))
+                    .color(Palette::T_PRIMARY),
+            )
+            .truncate(),
+        );
+    }
+    // Right-aligned cluster: current-branch chip (rightmost), then Fetch.
+    child.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.add_space(PAD_LIST);
+        if show_identity && let Some(cur) = &section.current_branch {
+            let _ = egui::Frame::new()
+                .fill(Palette::selection_bg())
+                .corner_radius(Palette::RADIUS_CHIP)
+                .inner_margin(egui::Margin::symmetric(6, 2))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(cur.clone())
+                                .font(data_font(TYPE_CONTROL))
+                                .color(Palette::STATE_INFO),
+                        )
+                        .truncate(),
+                    );
+                });
+        }
+        ui.add_space(PAD_LIST);
+        // Repo-level Fetch (issue 03): one click away even with remotes hidden,
+        // because the old Remote group header is gone.
+        if kit_button(ui, KitButton::Quiet, "Fetch").clicked() {
+            fetch_scope(state);
+        }
+    });
+}
+
+/// The view-wide Fetch (issue 03). Reachable from every repo header, it covers
+/// the narrowed repo's scope — or all in-scope repos when nothing is narrowed —
+/// so primary actions never leave reach. Each target records its pre-fetch
+/// remote snapshot so the report can say what *that* repo changed.
+fn fetch_scope(state: &mut AppState) {
+    let targets: Vec<RootId> = match &state.ui.branches_repo_filter {
+        Some(id) => vec![id.clone()],
+        None => state.multi.roots.iter().map(|r| r.id.clone()).collect(),
+    };
+    for rid in targets {
+        let before: Vec<String> = state
+            .multi
+            .by_id(&rid)
+            .map(|r| {
+                r.branches
+                    .iter()
+                    .filter(|b| b.kind == BranchKind::Remote)
+                    .map(|b| b.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        state.ui.branches_fetch_before.push((rid.clone(), before));
+        let exec_rid = rid.clone();
+        state.run_git("Fetch".to_string(), Affected::Root(rid), move |v| {
+            v.fetch(&exec_rid.0, None)
+        });
+    }
+}
+
+/// Map a repo's derived status to its dot color (dark-only palette): clean =
+/// success green, unpushed = soft blue, unpulled/dirty = amber.
+fn repo_status_color(status: RepoStatus) -> Color32 {
+    match status {
+        RepoStatus::Clean => Palette::STATE_SUCCESS,
+        RepoStatus::Unpushed => Palette::STATE_INFO,
+        RepoStatus::Unpulled | RepoStatus::Dirty => Palette::STATE_WARNING,
+    }
+}
+
+/// One directory group header inside a repo section: the directory segment
+/// (sans) and its branch count, indented by nesting depth.
+fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    child.add_space(PAD_LIST + depth as f32 * BRANCH_INDENT);
+    child.add(
+        egui::Label::new(
+            RichText::new(format!("{label}/"))
+                .font(chrome_font(TYPE_CONTROL))
+                .color(Palette::T_SECONDARY),
+        )
+        .truncate(),
+    );
+    child.add_space(6.0);
+    child.add(egui::Label::new(
+        RichText::new(count.to_string())
+            .font(chrome_font(TYPE_CONTROL))
+            .color(Palette::T_MUTED),
+    ));
+}
+
+/// One expanded remote group header: the remote name, its branch count, and a
+/// "fetched Nm ago" freshness hint from the last-fetch timestamp. Clicking the
+/// header collapses that remote's group.
+fn remote_group_header(
+    ui: &mut Ui,
+    state: &mut AppState,
+    section: &RepoSection,
+    rg: &RemoteGroup,
+    _children: &[BranchNode],
+) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(width, crate::ui::components::SECTION_H),
+        Sense::hover(),
+    );
+    let id = ui.auto_id_with(("remote_group", &section.root_id, &rg.remote));
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &rg.remote));
+
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    child.add_space(PAD_LIST);
+    let collapsed = state
+        .ui
+        .branches_collapsed_remotes
+        .contains(&(section.root_id.clone(), rg.remote.clone()));
+    let chevron = if collapsed {
+        Icon::CHEVRON_RIGHT
+    } else {
+        Icon::CHEVRON_DOWN
+    };
+    icons::icon(&mut child, chevron, KIT_ICON, Palette::T_MUTED);
+    child.add_space(6.0);
+    // A remote's name is data, like a branch name (spec §19) — monospace, so
+    // `origin` and `upstream-fork` line up the same way branch paths do.
+    child.add(
+        egui::Label::new(
+            RichText::new(rg.remote.clone())
+                .font(data_font(TYPE_SECTION))
+                .color(Palette::T_SECONDARY),
+        )
+        .truncate(),
+    );
+    // Branch count.
+    child.add_space(6.0);
+    child.add(egui::Label::new(
+        RichText::new(rg.count.to_string())
+            .font(chrome_font(TYPE_CONTROL))
+            .color(Palette::T_MUTED),
+    ));
+    if response.clicked() {
+        if collapsed {
+            state
+                .ui
+                .branches_collapsed_remotes
+                .remove(&(section.root_id.clone(), rg.remote.clone()));
+        } else {
+            state
+                .ui
+                .branches_collapsed_remotes
+                .insert((section.root_id.clone(), rg.remote.clone()));
+        }
+    }
+
+    // Freshness hint: the last fetch, reused from the single view-wide
+    // timestamp (spec: "fetched Nm ago").
+    if let Some(last) = state.ui.branches_last_fetch {
+        let age = chrono::Utc::now()
+            .signed_duration_since(last)
+            .to_std()
+            .unwrap_or_default();
+        child.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.add_space(PAD_LIST);
+            ui.add(egui::Label::new(
+                RichText::new(format!("fetched {}", stale_badge(age)))
+                    .font(data_font(TYPE_CONTROL))
+                    .color(Palette::T_MUTED),
+            ));
+        });
+    }
+}
+
+/// The collapsed per-repo "Remote" rollup row: a chevron, the word "Remote",
+/// and a count like "3 remotes · 41 branches". Clicking it reveals the remote
+/// groups for the whole view (issue 03).
+fn remote_rollup_row(ui: &mut Ui, state: &mut AppState, section: &RepoSection) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::click());
+    let id = ui.auto_id_with(("remote_rollup", &section.root_id));
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Remote"));
+
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    child.add_space(PAD_LIST);
+    let chevron = if state.ui.branches_show_remotes {
+        Icon::CHEVRON_DOWN
+    } else {
+        Icon::CHEVRON_RIGHT
+    };
+    icons::icon(&mut child, chevron, KIT_ICON, Palette::T_MUTED);
+    child.add_space(6.0);
+    child.add(
+        egui::Label::new(
+            RichText::new("Remote")
+                .font(chrome_font(TYPE_SECTION))
+                .color(Palette::T_SECONDARY),
+        )
+        .truncate(),
+    );
+    // The derived rollup count — never a separate estimate. Labels and counts
+    // are chrome, so it reads in the UI sans (spec §19): only the branch and
+    // remote *names* are monospace.
+    if let Some(rollup) = section.remote_rollup() {
+        child.add_space(8.0);
+        child.add(
+            egui::Label::new(
+                RichText::new(rollup)
+                    .font(chrome_font(TYPE_CONTROL))
+                    .color(Palette::T_MUTED),
+            )
+            .truncate(),
+        );
+    }
+    if response.clicked() {
+        state.ui.branches_show_remotes = true;
     }
 }
 
@@ -771,7 +1205,7 @@ fn empty_state(ui: &mut Ui, state: &mut AppState) {
 /// gone), relative last-activity time. Hover and selection fills come from
 /// the §14.1 row states; clicking selects (never checks out — issue 05
 /// wires the detail).
-fn branch_row(ui: &mut Ui, state: &mut AppState, row: &Row) {
+fn branch_row(ui: &mut Ui, state: &mut AppState, row: &Row, indent: f32) {
     let branch = &row.branch;
     let id = &row.root;
     // Issue 11: the branch being renamed edits inline on its own row. Rename
@@ -892,7 +1326,7 @@ fn branch_row(ui: &mut Ui, state: &mut AppState, row: &Row) {
             .max_rect(rect)
             .layout(Layout::left_to_right(Align::Center)),
     );
-    child.add_space(PAD_LIST);
+    child.add_space(PAD_LIST + indent);
     // Remote rows are reference material (issue 13): quieter, labelled with
     // their remote's name, and never carrying the current marker.
     let is_remote = branch.kind == BranchKind::Remote;
@@ -903,35 +1337,30 @@ fn branch_row(ui: &mut Ui, state: &mut AppState, row: &Row) {
         child.add_space(KIT_ICON + 6.0);
     }
     let budget = name_budget(rect.width() - PAD_LIST - KIT_ICON - 6.0 - 130.0);
-    let label = if is_remote {
-        middle_truncate(
-            &format!(
-                "{}/{}",
-                branch.remote.as_deref().unwrap_or("origin"),
-                branch.name
-            ),
-            budget,
-        )
-    } else {
-        middle_truncate(&branch.name, budget)
-    };
+    // Display the leaf's own label: remote leaves carry the prefix-stripped
+    // name because their group header already names the remote (issue 03), so
+    // "origin/" is never re-printed here.
+    let label = middle_truncate(&row.label, budget);
     let ink = if is_remote {
+        // Remote rows are reference material: quiet by design.
         Palette::T_SECONDARY
+    } else if is_current {
+        // Active/current branch reads in soft blue (issue 04).
+        Palette::STATE_INFO
+    } else if branch.ahead > 0 && branch.behind > 0 {
+        // Diverged from upstream: red (issue 04).
+        Palette::STATUS_DIVERGED
+    } else if branch.ahead > 0 || branch.behind > 0 {
+        // Ahead (unpushed) or behind (unpulled): amber (issue 04).
+        Palette::STATE_WARNING
     } else {
+        // Plain local branch: stale-aware primary (preserves §14.1 dimming).
         row_ink(meta.stale)
     };
-    // Issue 14: every row names its owning repo in multi-repo projects — two
-    // `main`s are never identical anonymous rows.
-    if !row.repo.is_empty() {
-        child.add(
-            egui::Label::new(
-                RichText::new(format!("{} · ", row.repo))
-                    .font(data_font(TYPE_CONTROL))
-                    .color(Palette::T_MUTED),
-            )
-            .truncate(),
-        );
-    }
+    // No repo prefix on the row: the section header directly above already
+    // names the repo, so repeating it on every row under that header is noise
+    // (and it would push the branch name past its truncation budget). Rows stay
+    // distinguishable because each one lives inside exactly one repo's section.
     child.add(
         egui::Label::new(RichText::new(label).font(data_font(TYPE_BODY)).color(ink)).truncate(),
     );
