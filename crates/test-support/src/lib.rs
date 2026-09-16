@@ -354,6 +354,10 @@ impl GitExecutor for RecordingExecutor {
         self.inner.worktree_list(root)
     }
 
+    fn worktree_dirty(&self, path: &Path) -> TgResult<bool> {
+        self.inner.worktree_dirty(path)
+    }
+
     fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>> {
         self.inner.submodule_paths(root)
     }

@@ -79,8 +79,20 @@ pub trait GitExecutor: Send + Sync {
     /// `git stash list`.
     fn stash_list(&self, root: &Path) -> TgResult<Vec<Stash>>;
 
-    /// `git worktree list` (excluding the main worktree).
+    /// `git worktree list` (excluding the main worktree). Cheap: answers
+    /// path + checked-out branch without any working-tree scan; the returned
+    /// entries carry an unset dirty flag (ticket 01). Probe one worktree's
+    /// dirtiness on demand via [`GitExecutor::worktree_dirty`].
     fn worktree_list(&self, root: &Path) -> TgResult<Vec<Worktree>>;
+
+    /// Dirty probe for one linked worktree (ticket 01): does `path` — a
+    /// linked worktree's directory, as listed by [`GitExecutor::worktree_list`]
+    /// — hold any tracked change, any non-ignored untracked file, or any
+    /// conflict? Strictly cheaper than a full `git status`: a tracked diff
+    /// that stops at the first change, plus a bounded untracked enumeration;
+    /// never a whole-working-tree porcelain scan. A prunable (missing) work
+    /// tree answers clean.
+    fn worktree_dirty(&self, path: &Path) -> TgResult<bool>;
 
     /// Submodule paths registered at this root.
     fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>>;

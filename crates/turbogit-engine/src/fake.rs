@@ -180,6 +180,10 @@ impl GitExecutor for FakeExecutor {
         Ok(Vec::new())
     }
 
+    fn worktree_dirty(&self, _path: &Path) -> TgResult<bool> {
+        Ok(false)
+    }
+
     fn submodule_paths(&self, _root: &Path) -> TgResult<Vec<PathBuf>> {
         Ok(Vec::new())
     }
