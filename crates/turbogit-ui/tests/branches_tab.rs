@@ -16,7 +16,10 @@ use std::time::Duration;
 use chrono::Datelike;
 use egui_kittest::{Harness, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
-use test_support::harness::{assert_not_painted, assert_painted, galley_origin, painted_text};
+use test_support::harness::{
+    PaintedGalley, assert_not_painted, assert_painted, filled_circles, galley_origin,
+    painted_galleys, painted_text,
+};
 use turbogit_app::state::{AppState, Tab};
 
 // --- git fixture -------------------------------------------------------------
@@ -111,6 +114,13 @@ fn open_branches_tab(harness: &mut Harness<'_, AppState>) {
     settle_quiet(harness);
 }
 
+/// Turn the view-wide remotes on (issue 03): the toggle ships labelled
+/// "Show remotes", with the hidden remote-branch count beside it while off.
+fn show_remotes(harness: &mut Harness<'_, AppState>) {
+    harness.get_by_label("Show remotes").click();
+    settle_quiet(harness);
+}
+
 fn settle_quiet(harness: &mut Harness<'_, AppState>) {
     let mut stable = 0;
     let mut prev = String::new();
@@ -139,17 +149,27 @@ fn tab_opens_with_groups_counts_and_nothing_selected() {
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    // Group headers carry live counts: 4 locals, 2 remotes (origin carries
-    // main + remote-only), 1 tag.
+    // Group headers carry live counts: 4 locals, the Remote area collapsed
+    // into a per-repo rollup (remotes are hidden by default, issue 03), 1 tag.
     assert_painted(&harness, "LOCAL 4");
-    assert_painted(&harness, "REMOTE 2");
+    assert_painted(&harness, "1 remotes · 2 branches");
     assert_painted(&harness, "TAGS 1");
 
-    // Members paint (tags are collapsed by default, so v1.0 stays hidden —
-    // covered by the expand/collapse test).
-    for member in ["feature-a", "feature-b", "zebra", "remote-only"] {
+    // Local members paint. Remote members stay hidden while remotes are off,
+    // and the toggle advertises the concealed remote-branch count ("2") so
+    // nobody acts on a partial list guessing what is missing.
+    for member in ["feature-a", "feature-b", "zebra"] {
         assert_painted(&harness, member);
     }
+    assert_not_painted(&harness, "remote-only");
+    assert_painted(&harness, "Show remotes");
+    assert!(
+        galley_origin(&harness, "2").is_some(),
+        "the hidden remote-branch count paints as its own label"
+    );
+
+    // Tags are collapsed by default, so v1.0 stays hidden (covered by the
+    // expand/collapse test).
 
     // Nothing selected yet → the detail panel shows the quiet prompt.
     assert_painted(&harness, "Select a branch");
@@ -169,7 +189,9 @@ fn current_branch_is_first_row_and_visible_without_scrolling() {
     open_branches_tab(&mut harness);
 
     let current = galley_origin(&harness, "main").expect("current row painted");
-    for other in ["feature-a", "feature-b", "zebra", "origin/remote-only"] {
+    // Only local rows are visible while remotes are off (issue 03), so the
+    // comparison is against the locals the user actually sees.
+    for other in ["feature-a", "feature-b", "zebra"] {
         let o = galley_origin(&harness, other).expect("branch row painted");
         assert!(
             current.y < o.y,
@@ -193,9 +215,11 @@ fn tags_group_starts_collapsed_and_headers_keep_counts() {
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    // Local and Remote are expanded: their rows paint.
+    // Local paints; the Remote area paints its collapsed rollup (remotes are
+    // hidden by default), so the remote member does not.
     assert_painted(&harness, "zebra");
-    assert_painted(&harness, "remote-only");
+    assert_painted(&harness, "1 remotes · 2 branches");
+    assert_not_painted(&harness, "remote-only");
     // Tags is collapsed: the header with its count paints, the member does not.
     assert_painted(&harness, "TAGS 1");
     assert_not_painted(&harness, "v1.0");
@@ -303,15 +327,17 @@ fn long_branch_names_truncate_in_the_middle_on_the_row() {
     }
     open_branches_tab(&mut harness);
 
-    // The painted label keeps both identifying ends and never ends with a
-    // bare ellipsis.
+    // The shared "feature/" prefix groups into its own directory header; the
+    // leaf keeps its own name, middle-truncated so both identifying ends
+    // survive (issue 02: directory subgroups + stripped labels).
+    assert_painted(&harness, "feature/");
     let texts: Vec<String> = painted_text(&harness);
     let row = texts
         .iter()
-        .find(|t| t.contains("feature/multi") && t.contains("rewrite"))
+        .find(|t| t.contains("multi") && t.contains("rewrite"))
         .expect("long name truncated in the middle");
     assert!(
-        row.starts_with("feature/") && row.ends_with("rewrite"),
+        row.starts_with("multi") && row.ends_with("rewrite"),
         "middle truncation keeps both ends, got {row:?}"
     );
 }
@@ -622,13 +648,16 @@ fn fuzzy_query_matches_prefix_dots_and_multiword() {
     }
     open_branches_tab(&mut harness);
 
-    // `mre` surfaces feature/multi-root-executor (subsequence match)…
+    // `mre` surfaces feature/multi-root-executor (subsequence match): the
+    // shared "feature/" prefix groups into its directory header and the leaf
+    // shows the stripped name (issue 02)…
     type_search(&mut harness, "mre");
-    assert_painted(&harness, "feature/multi-root-executor");
+    assert_painted(&harness, "feature/");
+    assert_painted(&harness, "multi-root-executor");
     // …and a multi-word query like `multi root` matches too.
     harness.state_mut().ui.branches_filter.clear();
     type_search(&mut harness, "multi root");
-    assert_painted(&harness, "feature/multi-root-executor");
+    assert_painted(&harness, "multi-root-executor");
 }
 
 #[test]
@@ -663,9 +692,12 @@ fn query_matches_the_tip_commit_message() {
     }
     open_branches_tab(&mut harness);
 
-    // Remembering what a branch contains, not its name.
+    // Remembering what a branch contains, not its name. The shared "fix/"
+    // prefix groups into its directory header; the leaf keeps the stripped
+    // name (issue 02).
     type_search(&mut harness, "worktree");
-    assert_painted(&harness, "fix/dirty-worktree");
+    assert_painted(&harness, "fix/");
+    assert_painted(&harness, "dirty-worktree");
     assert_not_painted(&harness, "feature-a");
 }
 
@@ -1389,9 +1421,22 @@ fn remote_rows_group_under_their_remote_and_are_quiet() {
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    // Remote rows are labelled with their remote's name and rendered quieter.
-    assert_painted(&harness, "origin/remote-only");
-    assert_painted(&harness, "origin/main");
+    // Remotes are hidden by default; one toolbar toggle reveals them for the
+    // whole view (issue 03). Before the toggle nothing remote paints.
+    assert_not_painted(&harness, "remote-only");
+    show_remotes(&mut harness);
+
+    // The rows nest under the remote group header, whose name is not printed
+    // again on the leaves (issue 03): "remote-only", never "origin/remote-only".
+    assert!(
+        galley_origin(&harness, "origin").is_some(),
+        "the remote group header names the remote"
+    );
+    assert!(
+        galley_origin(&harness, "remote-only").is_some(),
+        "the leaf shows the prefix-stripped name"
+    );
+    assert_not_painted(&harness, "origin/remote-only");
     // A quiet-ink decision, unit-tested against the palette.
     use turbogit_domain::model::BranchKind;
     let remote = harness.state().multi.roots[0]
@@ -1406,14 +1451,16 @@ fn remote_rows_group_under_their_remote_and_are_quiet() {
     );
 }
 
-/// Click the remote group's Fetch (the topbar also has a Fetch button; pick
-/// the one inside the Branches area).
+/// Click the repo-level Fetch inside the Branches list (issue 03). The app
+/// topbar carries its own "Fetch" button, so the search is bounded to the list
+/// area: below the toolbar strip and left of the §12 detail panel.
 fn click_fetch(harness: &mut Harness<'_, AppState>) {
+    let list_x = 1024.0 - 280.0; // harness width minus the §12 detail panel
     let nodes: Vec<_> = harness.get_all_by_label("Fetch").collect();
     let node = nodes
         .iter()
-        .find(|n| n.rect().top() > 80.0)
-        .unwrap_or_else(|| panic!("remote-header Fetch not found"));
+        .find(|n| n.rect().top() > 80.0 && n.rect().min.x < list_x)
+        .unwrap_or_else(|| panic!("repo-level Fetch not found"));
     node.click();
 }
 
@@ -1458,6 +1505,8 @@ fn switching_to_a_remote_branch_creates_a_tracking_local_in_one_intent() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
+    // Remote rows are hidden by default (issue 03): reveal them first.
+    show_remotes(&mut harness);
 
     // Select the remote row and press Enter: "I want to work on this" becomes
     // a matching local branch that tracks it, checked out.
@@ -1706,17 +1755,36 @@ fn two_current_branches_are_distinct_rows_owned_by_their_repo() {
     let mut harness = two_repo_harness(dir);
     open_branches_tab(&mut harness);
 
-    // Both repos contribute; the two `main`s are separate rows, never one
-    // anonymous row.
-    assert_painted(&harness, "LOCAL 4");
+    // Both repos contribute their own grouped section; the two `main`s are
+    // separate rows, never one anonymous row. Each section carries its own
+    // Local count.
+    assert_painted(&harness, "LOCAL 2");
 
-    // Clicking one local main then the other switches the selected repo — the
-    // selection records which repo owns the row, so the two `main`s are
-    // never interchangeable. `row_nodes` sorts top-to-bottom; the Local
-    // group renders above Remote, so the first two mains are the locals.
+    // What tells the two `main`s apart is the section each one sits in, not a
+    // name repeated on the row. The section headers' status dots anchor that:
+    // the first main falls between alpha's header and beta's, the second below
+    // beta's.
+    let mut header_y: Vec<f32> = filled_circles(&harness)
+        .into_iter()
+        .filter(|(_, r, _)| *r == 4.0)
+        .map(|(c, _, _)| c.y)
+        .collect();
+    header_y.sort_by(f32::total_cmp);
+    assert_eq!(header_y.len(), 2, "one repo header per section");
     {
+        // Remotes are hidden by default, so exactly the two local mains paint
+        // as buttons; `row_nodes` sorts top-to-bottom.
         let mains = row_nodes(&harness, "main");
-        assert_eq!(mains.len(), 3, "two local mains + origin/main's remote row");
+        assert_eq!(mains.len(), 2, "one local main per repo section");
+        let ys: Vec<f32> = mains.iter().map(|n| n.rect().center().y).collect();
+        assert!(
+            ys[0] > header_y[0] && ys[0] < header_y[1],
+            "the first main sits inside alpha's section: {ys:?} vs headers {header_y:?}"
+        );
+        assert!(
+            ys[1] > header_y[1],
+            "the second main sits inside beta's section: {ys:?} vs headers {header_y:?}"
+        );
         mains[0].click();
     }
     settle_quiet(&mut harness);
@@ -1735,6 +1803,28 @@ fn two_current_branches_are_distinct_rows_owned_by_their_repo() {
         harness.state().ui.branches_selected.as_deref(),
         Some("main")
     );
+}
+
+#[test]
+fn rows_never_repeat_the_repo_name_their_section_already_states() {
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    open_branches_tab(&mut harness);
+
+    // The section header names the repo, so every row beneath it would be
+    // repeating it. Scoped to each row's own surface: the header (and the app
+    // chrome) legitimately paint the repo's name — the *row* must not.
+    for (branch, repo) in [("clever", "beta"), ("feature-a", "alpha")] {
+        let row = row_node(&harness, branch).rect();
+        let painted: Vec<String> = galleys_in(&harness, row)
+            .into_iter()
+            .map(|g| g.text)
+            .collect();
+        assert!(
+            !painted.iter().any(|t| t.contains(repo)),
+            "the `{branch}` row must not repeat its repo name; painted {painted:?}"
+        );
+    }
 }
 
 #[test]
@@ -1949,6 +2039,401 @@ fn mid_operation_marker_shows_in_place_and_survives_tab_switches() {
     harness.step();
     settle_quiet(&mut harness);
     assert_not_painted(&harness, "working…");
+}
+
+// --- Cycle 20: remotes toggle, expanded groups & freshness (issue 03) --------------
+
+/// Every galley painted inside `rect`.
+///
+/// The same string usually paints more than once — the current branch names
+/// both a topbar button and the list row — so matching on text alone would
+/// happily return the wrong occurrence. Scoping to a widget's own rectangle
+/// ties the answer to the widget under test.
+fn galleys_in(harness: &Harness<'_, AppState>, rect: egui::Rect) -> Vec<PaintedGalley> {
+    painted_galleys(harness)
+        .into_iter()
+        .filter(|g| rect.contains(g.pos))
+        .collect()
+}
+
+/// The ink a *row's own* name paints in.
+fn row_name_color(harness: &Harness<'_, AppState>, name: &str) -> Option<egui::Color32> {
+    let row = row_nodes(harness, name).into_iter().next()?.rect();
+    galleys_in(harness, row)
+        .into_iter()
+        .find(|g| g.text == name)
+        .map(|g| g.color)
+}
+
+#[test]
+fn remotes_toggle_advertises_the_hidden_count_and_reveals_remote_groups() {
+    let (_project, dir) = single_repo_project();
+    let mut harness = branches_harness(dir);
+    open_branches_tab(&mut harness);
+
+    // Off: the settled label reads "Show remotes" and the concealed
+    // remote-branch count (origin carries main + remote-only) rides beside it,
+    // so nobody acts on a partial list guessing what is missing.
+    let toggle = harness.get_by_label("Show remotes").rect();
+    let count = galley_origin(&harness, "2").expect("the hidden-count chip paints");
+    assert!(
+        count.x > toggle.max.x,
+        "the hidden count follows the toggle it belongs to: count {count:?} vs toggle {toggle:?}"
+    );
+
+    // On: each repo expands to per-remote groups. The remote name becomes the
+    // group header, and the leaf never re-prints the "origin/" the header
+    // already states.
+    show_remotes(&mut harness);
+    let texts = painted_text(&harness);
+    assert!(
+        texts.iter().any(|t| t == "origin"),
+        "the remote group header names its remote: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "remote-only"),
+        "the remote leaf paints under its group: {texts:?}"
+    );
+    assert_not_painted(&harness, "origin/remote-only");
+    // The control is settled: it now offers the reverse action, and the count
+    // it was advertising is gone with the state it described.
+    assert_not_painted(&harness, "Show remotes");
+    assert_painted(&harness, "Hide remotes");
+}
+
+#[test]
+fn expanded_remote_group_header_shows_its_count_and_freshness_hint() {
+    let (_project, dir) = single_repo_project();
+    let mut harness = branches_harness(dir);
+    open_branches_tab(&mut harness);
+
+    // Nothing has been fetched yet, so there is no freshness to report.
+    show_remotes(&mut harness);
+    assert_not_painted(&harness, "fetched ");
+
+    // Fetch is one click away even with remotes hidden (issue 03): it moved up
+    // to the repo level, and running it stamps the timestamp the hint reads.
+    click_fetch(&mut harness);
+    pump_until(&mut harness, "fetch stamped the last-fetch time", |s| {
+        s.ui.branches_last_fetch.is_some()
+    });
+    assert!(
+        harness.state().ui.branches_show_remotes,
+        "fetching never turns the remotes view off"
+    );
+
+    // Pin a known age so the rendered hint is deterministic.
+    harness.state_mut().ui.branches_last_fetch =
+        Some(chrono::Utc::now() - chrono::Duration::minutes(5));
+    settle_quiet(&mut harness);
+    assert_painted(&harness, "fetched 5m");
+
+    // The same header carries this remote's branch count.
+    let texts = painted_text(&harness);
+    assert!(
+        texts.iter().any(|t| t == "2"),
+        "the expanded remote group counts its branches: {texts:?}"
+    );
+}
+
+#[test]
+fn fetch_sits_at_the_repo_level_while_remotes_are_hidden() {
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    open_branches_tab(&mut harness);
+
+    // Remotes are off, so no Remote group header exists to hang Fetch on — yet
+    // every repo's section still offers it, one control per repo.
+    assert!(!harness.state().ui.branches_show_remotes);
+    assert_not_painted(&harness, "remote-only");
+    let list_x = 1024.0 - 280.0;
+    let fetches: Vec<_> = harness
+        .get_all_by_label("Fetch")
+        .filter(|n| n.rect().top() > 80.0 && n.rect().min.x < list_x)
+        .collect();
+    assert_eq!(
+        fetches.len(),
+        2,
+        "one repo-level Fetch paints per repo section"
+    );
+}
+
+// --- Cycle 21: toolbar composition & visual pass (issue 04) -------------------------
+
+#[test]
+fn repo_section_headers_name_their_repo_inside_the_list() {
+    use turbogit_ui::theme::Palette;
+
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    open_branches_tab(&mut harness);
+
+    // The header's three parts hang together, so the status dots anchor the
+    // assertions: the repo name paints beside its own dot, and that same header
+    // line carries the repo's current branch as a chip. (Only section dots are
+    // 4px; the sidebar's are 3.5px.)
+    let mut dots: Vec<egui::Pos2> = filled_circles(&harness)
+        .into_iter()
+        .filter(|(_, r, _)| *r == 4.0)
+        .map(|(center, _, _)| center)
+        .collect();
+    dots.sort_by(|a, b| a.y.total_cmp(&b.y));
+    assert_eq!(dots.len(), 2, "one status dot per repo section: {dots:?}");
+
+    let galleys = painted_galleys(&harness);
+    for (repo, dot) in ["alpha", "beta"].iter().zip(&dots) {
+        let named = galleys
+            .iter()
+            .any(|g| g.text == *repo && (g.pos.y - dot.y).abs() < 20.0 && g.pos.x > dot.x);
+        assert!(
+            named,
+            "`{repo}` names the section header its status dot belongs to (dot at {dot:?})"
+        );
+    }
+
+    // The chip rides the same header line, in the active-branch treatment.
+    let chip = galleys
+        .iter()
+        .find(|g| g.text == "main" && dots.iter().any(|d| (g.pos.y - d.y).abs() < 20.0))
+        .expect("a current-branch chip paints on a header line");
+    assert_eq!(
+        chip.color,
+        Palette::STATE_INFO,
+        "the header's current-branch chip reads in soft blue"
+    );
+    assert_eq!(
+        chip.family,
+        egui::FontFamily::Monospace,
+        "the chip shows a branch name, so it is set in the data face"
+    );
+}
+
+#[test]
+fn names_are_monospace_and_labels_and_counts_are_sans() {
+    use egui::FontFamily;
+
+    let (_project, dir) = single_repo_project();
+    let mut harness = branches_harness(dir);
+    open_branches_tab(&mut harness);
+    let galleys = painted_galleys(&harness);
+    let family_of = |text: &str| {
+        galleys
+            .iter()
+            .find(|g| g.text == text)
+            .unwrap_or_else(|| panic!("`{text}` was never painted"))
+            .family
+            .clone()
+    };
+
+    // Data — branch names — is monospace, so `feature/` paths line up (spec §19).
+    // Read each name out of its own row: the same string also labels a topbar
+    // button and the header chip, and those are chrome.
+    for name in ["main", "feature-a", "zebra"] {
+        let row = row_nodes(&harness, name)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no `{name}` row"))
+            .rect();
+        let galley = galleys_in(&harness, row)
+            .into_iter()
+            .find(|g| g.text == name)
+            .unwrap_or_else(|| panic!("`{name}` never painted on its own row"));
+        assert_eq!(
+            galley.family,
+            FontFamily::Monospace,
+            "the `{name}` row name is data"
+        );
+    }
+    // Chrome — group labels and their counts — is the UI sans.
+    assert_eq!(family_of("LOCAL 4"), FontFamily::Proportional);
+    assert_eq!(family_of("TAGS 1"), FontFamily::Proportional);
+    assert_eq!(
+        family_of("1 remotes · 2 branches"),
+        FontFamily::Proportional,
+        "the rollup is a label+count phrase, not a name"
+    );
+
+    // With remotes on, a remote's *name* joins the data face (mono) while the
+    // per-remote count it carries stays chrome (sans).
+    show_remotes(&mut harness);
+    let galleys = painted_galleys(&harness);
+    let family_of = |text: &str| {
+        galleys
+            .iter()
+            .find(|g| g.text == text)
+            .unwrap_or_else(|| panic!("`{text}` was never painted with remotes on"))
+            .family
+            .clone()
+    };
+    assert_eq!(
+        family_of("origin"),
+        FontFamily::Monospace,
+        "a remote's name is data"
+    );
+    assert_eq!(
+        family_of("2"),
+        FontFamily::Proportional,
+        "the expanded remote group's count is chrome"
+    );
+}
+
+#[test]
+fn toolbar_composes_scope_remotes_and_new_branch_left_to_right() {
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    open_branches_tab(&mut harness);
+
+    // The spec's toolbar order: scope chip, remotes toggle, New Branch.
+    let scope = harness.get_by_label("Scope…").rect();
+    let toggle = harness.get_by_label("Show remotes").rect();
+    let new_branch = harness.get_by_label("New Branch").rect();
+    assert!(
+        scope.max.x <= toggle.min.x,
+        "the scope chip precedes the remotes toggle: {scope:?} vs {toggle:?}"
+    );
+    assert!(
+        toggle.max.x <= new_branch.min.x,
+        "the remotes toggle precedes New Branch: {toggle:?} vs {new_branch:?}"
+    );
+
+    // Before any narrowing the chip names the whole scope.
+    assert_painted(&harness, "all 2 repos");
+
+    // New Branch carries the primary-action blue: its own fill is the accent
+    // token, so the one action that creates something reads as the primary one.
+    let brand = test_support::harness::filled_rects(&harness)
+        .into_iter()
+        .any(|(r, f)| f == turbogit_ui::theme::Palette::ACCENT && r.intersects(new_branch));
+    assert!(brand, "New Branch paints on an accent-filled surface");
+}
+
+#[test]
+fn pull_and_push_stay_one_click_away_on_the_branches_tab() {
+    let (_project, dir) = single_repo_project();
+    let mut harness = branches_harness(dir);
+    open_branches_tab(&mut harness);
+
+    // The redesign is a view-level change: the app-level sync actions are
+    // unchanged and still one click away while Branches is the active tab.
+    for action in ["Pull", "Push"] {
+        let rect = harness.get_by_label(action).rect();
+        assert!(
+            rect.top() < 80.0,
+            "{action} rides the app topbar, outside the 88px toolbar strip: {rect:?}"
+        );
+    }
+}
+
+#[test]
+fn branch_names_render_in_their_state_colors() {
+    use turbogit_ui::theme::Palette;
+
+    // Current branch → soft blue; an untracked, un-stale local branch → the
+    // primary ink every plain row uses.
+    let (_project, dir) = single_repo_project();
+    let mut harness = branches_harness(dir);
+    open_branches_tab(&mut harness);
+    assert_eq!(
+        row_name_color(&harness, "main"),
+        Some(Palette::STATE_INFO),
+        "the active branch reads in soft blue"
+    );
+    assert_eq!(
+        row_name_color(&harness, "zebra"),
+        Some(Palette::T_PRIMARY),
+        "a plain local branch reads at primary ink"
+    );
+
+    // Diverged (ahead *and* behind its upstream) → red.
+    let (_project, dir) = sync_repo_project();
+    let mut harness = branches_harness(dir);
+    open_branches_tab(&mut harness);
+    assert_eq!(
+        row_name_color(&harness, "feat"),
+        Some(Palette::STATUS_DIVERGED),
+        "a branch diverged from its upstream reads red"
+    );
+}
+
+#[test]
+fn unpulled_branch_names_read_amber() {
+    use turbogit_ui::theme::Palette;
+
+    let (_project, dir) = single_repo_project();
+    let mut harness = branches_harness(dir);
+    {
+        let st = harness.state_mut();
+        let id = st.selected_root.clone().expect("selected root");
+        if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
+            r.branches.push(turbogit_domain::model::Branch {
+                name: "unpulled".into(),
+                kind: turbogit_domain::model::BranchKind::Local,
+                tracking: Some("origin/main".into()),
+                favorite: false,
+                protected: false,
+                exists: true,
+                ahead: 0,
+                behind: 3,
+                gone: false,
+                last_touched: None,
+                tip: None,
+                remote: None,
+            });
+        }
+    }
+    open_branches_tab(&mut harness);
+
+    // Behind-only is "unpulled": amber. Red is reserved for a branch that has
+    // genuinely diverged (ahead *and* behind), so the two are never conflated.
+    assert_eq!(
+        row_name_color(&harness, "unpulled"),
+        Some(Palette::STATE_WARNING),
+        "an unpulled branch reads amber"
+    );
+}
+
+#[test]
+fn repo_status_dots_paint_their_status_color() {
+    use turbogit_ui::theme::Palette;
+
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    // beta's current branch is 3 commits behind its upstream → the repo reads
+    // "unpulled", while alpha stays clean.
+    {
+        let st = harness.state_mut();
+        let beta = st
+            .multi
+            .roots
+            .iter_mut()
+            .find(|r| r.id.name() == "beta")
+            .expect("beta root");
+        let main = beta
+            .branches
+            .iter_mut()
+            .find(|b| b.kind == turbogit_domain::model::BranchKind::Local && b.name == "main")
+            .expect("beta main");
+        main.tracking = Some("origin/main".into());
+        main.ahead = 0;
+        main.behind = 3;
+    }
+    open_branches_tab(&mut harness);
+
+    // One status dot per repo section (a 4px dot — the sidebar's are 3.5px).
+    let list_x = 1024.0 - 280.0;
+    let dots: Vec<_> = filled_circles(&harness)
+        .into_iter()
+        .filter(|(c, r, _)| c.y > 80.0 && c.x < list_x && *r == 4.0)
+        .collect();
+    assert_eq!(dots.len(), 2, "one status dot per repo header: {dots:?}");
+    assert!(
+        dots.iter().any(|(_, _, f)| *f == Palette::STATE_WARNING),
+        "the unpulled repo's dot is amber: {dots:?}"
+    );
+    assert!(
+        dots.iter().any(|(_, _, f)| *f == Palette::STATE_SUCCESS),
+        "the clean repo's dot is green: {dots:?}"
+    );
 }
 
 #[test]
