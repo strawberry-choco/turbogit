@@ -659,6 +659,8 @@ mod tests {
                 behind: 0,
                 gone: false,
                 last_touched: None,
+                tip: None,
+                remote: None,
             }],
             (Some(b), None) => vec![Branch {
                 name: b.to_string(),
@@ -671,6 +673,8 @@ mod tests {
                 behind: 0,
                 gone: false,
                 last_touched: None,
+                tip: None,
+                remote: None,
             }],
             _ => vec![],
         };
@@ -847,6 +851,8 @@ mod tests {
             behind: 0,
             gone: false,
             last_touched: None,
+            tip: None,
+            remote: None,
         });
         roots
     }

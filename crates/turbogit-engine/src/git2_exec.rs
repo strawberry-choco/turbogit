@@ -67,6 +67,23 @@ fn merged_into(
     Ok(base == tip || repo.graph_descendant_of(base, tip)?)
 }
 
+/// The branch tip as the model carries it (issue 02): short hash, subject,
+/// author, committer time — read from a commit already peeled by the listing.
+fn branch_tip_from_commit(c: &git2::Commit<'_>) -> BranchTip {
+    let full = c.id().to_string();
+    let short_hash = full.chars().take(7).collect();
+    let message = c.summary().ok().flatten().unwrap_or_default().to_string();
+    let author = c.author().name().unwrap_or_default().to_string();
+    let time = chrono::DateTime::from_timestamp(c.time().seconds(), 0)
+        .expect("git commits are post-epoch");
+    BranchTip {
+        short_hash,
+        message,
+        author,
+        time,
+    }
+}
+
 /// A local branch's tracking ref and whether it is gone (issue 32), read
 /// from the branch config. git keeps `branch.<name>.remote`/`.merge` after
 /// the upstream ref is pruned, which is exactly what `git branch -vv`
@@ -437,10 +454,12 @@ impl GitExecutor for Git2Executor {
                 }
             };
 
-            let last_touched = branch.get().peel_to_commit().ok().map(|c| {
-                chrono::DateTime::from_timestamp(c.time().seconds(), 0)
-                    .expect("git commits are post-epoch")
-            });
+            let tip = branch
+                .get()
+                .peel_to_commit()
+                .ok()
+                .map(|c| branch_tip_from_commit(&c));
+            let last_touched = tip.as_ref().map(|t| t.time);
 
             result.push(Branch {
                 name,
@@ -453,6 +472,8 @@ impl GitExecutor for Git2Executor {
                 behind,
                 gone,
                 last_touched,
+                tip,
+                remote: None,
             });
         }
 
@@ -476,16 +497,19 @@ impl GitExecutor for Git2Executor {
             }
             // libgit2 returns full short names like `origin/main`.
             // Strip the `remote/` prefix to match the CLI's parser,
-            // which yields `main` from `remotes/origin/main`.
-            let short = name
-                .split_once('/')
-                .map(|(_, rest)| rest.to_string())
-                .unwrap_or(name);
+            // which yields `main` from `remotes/origin/main`; keep the
+            // remote name for the Branches tab's remote grouping.
+            let (remote, short) = match name.split_once('/') {
+                Some((r, rest)) => (Some(r.to_string()), rest.to_string()),
+                None => (None, name),
+            };
 
-            let last_touched = branch.get().peel_to_commit().ok().map(|c| {
-                chrono::DateTime::from_timestamp(c.time().seconds(), 0)
-                    .expect("git commits are post-epoch")
-            });
+            let tip = branch
+                .get()
+                .peel_to_commit()
+                .ok()
+                .map(|c| branch_tip_from_commit(&c));
+            let last_touched = tip.as_ref().map(|t| t.time);
 
             result.push(Branch {
                 name: short,
@@ -498,6 +522,8 @@ impl GitExecutor for Git2Executor {
                 behind: 0,
                 gone: false,
                 last_touched,
+                tip,
+                remote,
             });
         }
 

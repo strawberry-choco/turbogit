@@ -383,6 +383,10 @@ fn ensure_worktree_data(state: &mut AppState) {
 
 fn switch_tab(state: &mut AppState, tab: Tab) {
     state.ui.tab = tab;
+    if tab == Tab::Branches {
+        // Focus lands in the Branches search box when the tab opens (issue 06).
+        state.ui.branches_focus_search = true;
+    }
     state.persist_ui();
 }
 
@@ -1093,40 +1097,12 @@ fn show_tool_window(ui: &mut Ui, state: &mut AppState) {
     match state.ui.tab {
         Tab::Commit => super::commit_window::show(ui, state),
         Tab::Log => super::log_window::show_log(ui, state),
-        // Phase-J placeholder (ADR-0008): a not-yet-implemented center tab
-        // (Branches) renders a labeled placeholder pane rather than a
-        // hidden or disabled tab. Worktrees / Submodules are real browsers
-        // since issue 14.
-        Tab::Branches => placeholder_tab_body(ui, state),
+        // Branches (issues 03+): the grouped list + detail panel spine. No
+        // longer a placeholder since issue 03.
+        Tab::Branches => super::branches::show(ui, state),
         Tab::Worktrees => super::worktrees::show(ui, state),
         Tab::Submodules => super::submodules::show(ui, state),
     }
-}
-
-/// Labeled placeholder for an unimplemented center tab (ADR-0008):
-/// a centered explanatory pane rather than a hidden or disabled tab.
-fn placeholder_tab_body(ui: &mut Ui, state: &AppState) {
-    let label = match state.ui.tab {
-        Tab::Branches => "Branches",
-        Tab::Worktrees => "Worktrees",
-        Tab::Submodules => "Submodules",
-        _ => "Coming later",
-    };
-    ui.vertical_centered(|ui| {
-        ui.add_space(120.0);
-        ui.label(
-            RichText::new(label)
-                .strong()
-                .font(FontId::new(18.0, FontFamily::Proportional))
-                .color(Palette::INK),
-        );
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("Arrives in a later release.")
-                .font(FontId::new(13.0, FontFamily::Proportional))
-                .color(Palette::INK_3),
-        );
-    });
 }
 
 #[cfg(test)]
