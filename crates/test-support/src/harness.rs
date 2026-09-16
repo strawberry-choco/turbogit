@@ -59,7 +59,7 @@ pub fn shell_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
 }
 
 /// All text painted by the last completed frame.
-pub fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
+pub fn painted_text<S>(harness: &Harness<'_, S>) -> Vec<String> {
     harness
         .output()
         .shapes
@@ -73,7 +73,7 @@ pub fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
 
 /// Assert `needle` appears in some painted text galley.
 #[track_caller]
-pub fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
+pub fn assert_painted<S>(harness: &Harness<'_, S>, needle: &str) {
     let texts = painted_text(harness);
     assert!(
         texts.iter().any(|t| t.contains(needle)),
@@ -83,7 +83,7 @@ pub fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
 
 /// Assert `needle` appears in no painted text galley.
 #[track_caller]
-pub fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
+pub fn assert_not_painted<S>(harness: &Harness<'_, S>, needle: &str) {
     let texts = painted_text(harness);
     assert!(
         !texts.iter().any(|t| t.contains(needle)),
@@ -96,7 +96,7 @@ pub fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
 /// Exact matching keeps distinct labels unambiguous ("Log" vs "Git Log").
 /// Used to relate a label to the region that visually contains it (e.g. the
 /// active tab's surface rect).
-pub fn galley_origin(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
+pub fn galley_origin<S>(harness: &Harness<'_, S>, text: &str) -> Option<Pos2> {
     harness
         .output()
         .shapes
@@ -132,7 +132,7 @@ pub struct PaintedGalley {
 /// the galley's layout job, so a token-colored, face-correct label (the active
 /// branch's soft blue monospace, a diverged branch's red) is assertable from
 /// painted output alone — no reach into widget internals.
-pub fn painted_galleys(harness: &Harness<'_, AppState>) -> Vec<PaintedGalley> {
+pub fn painted_galleys<S>(harness: &Harness<'_, S>) -> Vec<PaintedGalley> {
     harness
         .output()
         .shapes
@@ -161,7 +161,7 @@ pub fn painted_galleys(harness: &Harness<'_, AppState>) -> Vec<PaintedGalley> {
 /// Panel frames, toolbars, rails, tabs, and buttons all emit `Shape::Rect`
 /// fills, which makes spec-dimension assertions possible without reaching
 /// into egui internals.
-pub fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
+pub fn filled_rects<S>(harness: &Harness<'_, S>) -> Vec<(Rect, Color32)> {
     harness
         .output()
         .shapes
@@ -179,7 +179,7 @@ pub fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
 ///
 /// Status dots are painted as circles rather than rects, so [`filled_rects`]
 /// cannot see them; this is the sibling that can.
-pub fn filled_circles(harness: &Harness<'_, AppState>) -> Vec<(Pos2, f32, Color32)> {
+pub fn filled_circles<S>(harness: &Harness<'_, S>) -> Vec<(Pos2, f32, Color32)> {
     harness
         .output()
         .shapes
@@ -193,12 +193,37 @@ pub fn filled_circles(harness: &Harness<'_, AppState>) -> Vec<(Pos2, f32, Color3
         .collect()
 }
 
+/// Every stroked path painted by the last frame as `(visual rect, color)`.
+///
+/// Icons (the Lucide primitives) and focus rings paint as `Shape::Path`,
+/// which neither the text queries nor [`filled_rects`] can see. The rect is
+/// the shape's visual bounding box (points + half the stroke width), i.e.
+/// where the glyph actually appears on screen — which is what "does the
+/// interactive widget contain its own glyph" contracts need. Only solid
+/// strokes are reported; gradient (`ColorMode::UV`) strokes are skipped.
+pub fn painted_paths(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Path(path) => match &path.stroke.color {
+                egui::epaint::ColorMode::Solid(color) => {
+                    Some((path.visual_bounding_rect(), *color))
+                }
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 /// Step frames until the painted output stabilizes.
 ///
 /// The first frames after startup relayout (embedded fonts take effect at
 /// pass 2), so queries and clicks must only happen on a settled frame —
 /// mirroring a user clicking an already-rendered shell.
-pub fn settle(harness: &mut Harness<'_, AppState>) {
+pub fn settle<S>(harness: &mut Harness<'_, S>) {
     let mut prev = String::new();
     for _ in 0..10 {
         harness.step();

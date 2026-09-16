@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 
-use turbogit_domain::model::{Branch, BranchKind, Root, RootId};
+use turbogit_domain::model::{Branch, BranchKind, RefState, Root, RootId};
 
 /// One branch row in the grouped tree, after prefix stripping.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,6 +56,16 @@ pub struct DirNode {
 pub enum BranchNode {
     Leaf(BranchLeaf),
     Dir(DirNode),
+}
+
+/// One tag row in the grouped tree: the tag's name and its per-ref state
+/// (plan D8) — pushed / local-only, read from the ref decorations. The
+/// pure `RefState` comes from the domain, so the view model carries it
+/// without crossing a layer boundary.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TagLeaf {
+    pub name: String,
+    pub state: RefState,
 }
 
 /// One remote's group of branches (only emitted when `show_remotes`).
@@ -97,8 +107,9 @@ pub struct RepoSection {
     pub remote_count: usize,
     /// Per-remote groups — present only when `show_remotes` is on.
     pub remote_groups: Vec<RemoteGroup>,
-    /// Tags for this repo (still sorted by the caller), each a 1-item label.
-    pub tags: Vec<String>,
+    /// Tags for this repo (still sorted by the caller), each carrying its
+    /// per-ref state.
+    pub tags: Vec<TagLeaf>,
 }
 
 impl RepoSection {
@@ -295,7 +306,7 @@ pub fn leaf_count(nodes: &[BranchNode]) -> usize {
 /// (`false`, the default).
 pub fn build_branch_view(
     roots: &[Root],
-    tags_by_root: &HashMap<RootId, Vec<String>>,
+    tags_by_root: &HashMap<RootId, Vec<(String, RefState)>>,
     show_remotes: bool,
 ) -> BranchView {
     let single_repo = roots.len() == 1;
@@ -358,7 +369,13 @@ pub fn build_branch_view(
             Vec::new()
         };
 
-        let tags = tags_by_root.get(&root.id).cloned().unwrap_or_default();
+        let tags = tags_by_root
+            .get(&root.id)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, state)| TagLeaf { name, state })
+            .collect();
 
         repos.push(RepoSection {
             root_id: root.id.clone(),
@@ -663,7 +680,7 @@ mod tests {
         let mut tags = HashMap::new();
         tags.insert(
             RootId(Arc::from(PathBuf::from("/alpha"))),
-            vec!["v1.0".to_string()],
+            vec![("v1.0".to_string(), RefState::Default)],
         );
         let view = build_branch_view(&[repo], &tags, true);
         let section = &view.repos[0];
@@ -859,10 +876,25 @@ mod tests {
         let mut tags = HashMap::new();
         tags.insert(
             RootId(Arc::from(PathBuf::from("/alpha"))),
-            vec!["v1.0".to_string(), "v2.0".to_string()],
+            vec![
+                ("v1.0".to_string(), RefState::Pushed),
+                ("v2.0".to_string(), RefState::LocalOnly),
+            ],
         );
         let view = build_branch_view(&[repo], &tags, false);
-        assert_eq!(view.repos[0].tags, vec!["v1.0", "v2.0"]);
+        assert_eq!(
+            view.repos[0].tags,
+            vec![
+                TagLeaf {
+                    name: "v1.0".to_string(),
+                    state: RefState::Pushed
+                },
+                TagLeaf {
+                    name: "v2.0".to_string(),
+                    state: RefState::LocalOnly
+                },
+            ]
+        );
     }
 
     // --- BranchTip still carried on the leaf (renderer uses it) --------------

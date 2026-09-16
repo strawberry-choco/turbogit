@@ -174,7 +174,7 @@ fn tab_opens_with_groups_counts_and_nothing_selected() {
     // Nothing selected yet → the detail panel shows the quiet prompt.
     assert_painted(&harness, "Select a branch");
     assert_eq!(
-        harness.state().ui.branches_selected,
+        harness.state().ui.branches_tree.selected,
         None,
         "the tab opens with nothing selected"
     );
@@ -460,7 +460,7 @@ fn click_selects_and_fills_detail_and_never_checks_out() {
     // Selection fills the detail panel: full name, relationship, latest
     // commit block, and the action list in spec order, naming the target.
     assert_eq!(
-        harness.state().ui.branches_selected.as_deref(),
+        harness.state().ui.branches_tree.selected.as_deref(),
         Some("feature-a")
     );
     assert_painted(&harness, "feature-a");
@@ -569,7 +569,7 @@ fn hover_reveals_row_actions() {
     settle_quiet(&mut harness);
     assert_painted(&harness, "Checkout");
     assert_eq!(
-        harness.state().ui.branches_selected,
+        harness.state().ui.branches_tree.selected,
         None,
         "hovering must not select"
     );
@@ -725,7 +725,7 @@ fn clearing_restores_selection_and_the_full_list() {
     type_search(&mut harness, "zebra");
     assert_painted(&harness, "zebra");
     assert_eq!(
-        harness.state().ui.branches_selected.as_deref(),
+        harness.state().ui.branches_tree.selected.as_deref(),
         Some("feature-a"),
         "filtering never drops the selection"
     );
@@ -737,7 +737,7 @@ fn clearing_restores_selection_and_the_full_list() {
     assert_painted(&harness, "LOCAL 4");
     assert_painted(&harness, "feature-a");
     assert_eq!(
-        harness.state().ui.branches_selected.as_deref(),
+        harness.state().ui.branches_tree.selected.as_deref(),
         Some("feature-a"),
         "clearing search restores the prior selection"
     );
@@ -997,7 +997,7 @@ fn create_and_switch_appears_marked_current_and_scrolled() {
             })
             .unwrap_or(false)
     });
-    assert!(harness.state().ui.branches_scroll_to.is_none());
+    assert!(harness.state().ui.branches_tree.scroll_to.is_none());
     assert_painted(&harness, "issue08-x");
 }
 
@@ -1173,7 +1173,7 @@ fn compare_from_detail_opens_read_only_and_closes_back_to_the_same_place() {
     // Select a branch and note the scroll position.
     row_node(&harness, "feature-a").click();
     settle_quiet(&mut harness);
-    let scroll_before = harness.state().ui.branches_scroll;
+    let scroll_before = harness.state().ui.branches_tree.scroll;
     harness.get_by_label("Compare with main").click();
     settle_quiet(&mut harness);
 
@@ -1197,12 +1197,12 @@ fn compare_from_detail_opens_read_only_and_closes_back_to_the_same_place() {
     harness.get_by_label("Close").click();
     settle_quiet(&mut harness);
     assert_eq!(
-        harness.state().ui.branches_selected.as_deref(),
+        harness.state().ui.branches_tree.selected.as_deref(),
         Some("feature-a"),
         "selection survives compare"
     );
     assert_eq!(
-        harness.state().ui.branches_scroll,
+        harness.state().ui.branches_tree.scroll,
         scroll_before,
         "scroll position survives compare"
     );
@@ -1225,11 +1225,11 @@ fn rename_is_inline_on_the_row_and_resorts_correctly() {
     // Inline on the row — not a separate form screen.
     assert!(harness.state().ui.dialog.is_none());
     assert_eq!(
-        harness.state().ui.branches_renaming.as_deref(),
+        harness.state().ui.branches_tree.renaming.as_deref(),
         Some("feature-a")
     );
 
-    harness.state_mut().ui.branches_rename_draft = "aaa-renamed".into();
+    harness.state_mut().ui.branches_tree.rename_draft = "aaa-renamed".into();
     harness.get_by_label("Apply rename").click();
     pump_until(&mut harness, "inline rename applied", |s| {
         s.multi.roots[0]
@@ -1289,7 +1289,7 @@ fn rename_current_branch_keeps_the_marker_and_leaves_the_tree_untouched() {
     settle_quiet(&mut harness);
     harness.get_by_label("Rename").click();
     settle_quiet(&mut harness);
-    harness.state_mut().ui.branches_rename_draft = "main2".into();
+    harness.state_mut().ui.branches_tree.rename_draft = "main2".into();
     harness.get_by_label("Apply rename").click();
 
     // Renaming the current branch updates the marker everywhere and never
@@ -1788,19 +1788,19 @@ fn two_current_branches_are_distinct_rows_owned_by_their_repo() {
         mains[0].click();
     }
     settle_quiet(&mut harness);
-    let first = harness.state().ui.branches_selected_root.clone();
+    let first = harness.state().ui.branches_tree.selected_root.clone();
     {
         let mains = row_nodes(&harness, "main");
         mains[1].click();
     }
     settle_quiet(&mut harness);
-    let second = harness.state().ui.branches_selected_root.clone();
+    let second = harness.state().ui.branches_tree.selected_root.clone();
     assert!(
         first.is_some() && second.is_some() && first != second,
         "same-named rows resolve to different owners: {first:?} vs {second:?}"
     );
     assert_eq!(
-        harness.state().ui.branches_selected.as_deref(),
+        harness.state().ui.branches_tree.selected.as_deref(),
         Some("main")
     );
 }
@@ -1935,7 +1935,7 @@ fn keyboard_path_filter_arrow_enter_checks_out() {
     harness.key_press(egui::Key::ArrowDown);
     settle_quiet(&mut harness);
     assert_eq!(
-        harness.state().ui.branches_selected.as_deref(),
+        harness.state().ui.branches_tree.selected.as_deref(),
         Some("zebra"),
         "the arrow selects the surviving row"
     );
@@ -1960,19 +1960,19 @@ fn arrow_keys_move_the_selection_through_branches() {
     harness.key_press(egui::Key::ArrowDown);
     settle_quiet(&mut harness);
     assert_eq!(
-        harness.state().ui.branches_selected.as_deref(),
+        harness.state().ui.branches_tree.selected.as_deref(),
         Some("main")
     );
     harness.key_press(egui::Key::ArrowDown);
     settle_quiet(&mut harness);
-    let first = harness.state().ui.branches_selected.clone().unwrap();
+    let first = harness.state().ui.branches_tree.selected.clone().unwrap();
     harness.key_press(egui::Key::ArrowDown);
     settle_quiet(&mut harness);
-    let second = harness.state().ui.branches_selected.clone().unwrap();
+    let second = harness.state().ui.branches_tree.selected.clone().unwrap();
     harness.key_press(egui::Key::ArrowUp);
     settle_quiet(&mut harness);
     assert_eq!(
-        harness.state().ui.branches_selected.as_deref(),
+        harness.state().ui.branches_tree.selected.as_deref(),
         Some(first.as_str()),
         "Up returns to the previous row"
     );
@@ -2118,7 +2118,7 @@ fn expanded_remote_group_header_shows_its_count_and_freshness_hint() {
         s.ui.branches_last_fetch.is_some()
     });
     assert!(
-        harness.state().ui.branches_show_remotes,
+        harness.state().ui.branches_tree.show_remotes,
         "fetching never turns the remotes view off"
     );
 
@@ -2144,7 +2144,7 @@ fn fetch_sits_at_the_repo_level_while_remotes_are_hidden() {
 
     // Remotes are off, so no Remote group header exists to hang Fetch on — yet
     // every repo's section still offers it, one control per repo.
-    assert!(!harness.state().ui.branches_show_remotes);
+    assert!(!harness.state().ui.branches_tree.show_remotes);
     assert_not_painted(&harness, "remote-only");
     let list_x = 1024.0 - 280.0;
     let fetches: Vec<_> = harness

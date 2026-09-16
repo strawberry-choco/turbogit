@@ -11,7 +11,10 @@
 use std::path::{Path, PathBuf};
 
 use egui::Shape;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT as _, Queryable},
+};
 use tempfile::TempDir;
 use turbogit_app::state::{AppState, LOG_PAGE_SIZE};
 use turbogit_ui::theme::{configure_style, install_fonts};
@@ -457,14 +460,137 @@ fn branches_pane_marks_remote_gone_and_tag_push_states() {
     let mut state = AppState::for_roots(&project, &[repo]);
     state.fetch_log(state.multi.roots[0].id.clone());
     state.ui.tab = turbogit_app::state::Tab::Log;
-    let harness = harness_over(state);
+    let mut harness = harness_over(state);
 
-    // The REMOTE row carries the gone marker; the TAGS rows carry their
-    // push state (screen 09).
-    assert_painted(&harness, "origin/main");
+    // The pane is now the shared repo-grouped tree (branch-tree extraction,
+    // plan step 4): remote branches group under their `origin` header with
+    // the prefix stripped, still carrying the gone marker; the TAGS rows
+    // carry their push state (screen 09) via the view model's TagLeaf.
+    // Tags start collapsed like in the Branches window — open the group.
+    harness.get_by_label("Tags").click();
+    settle(&mut harness);
+    assert_painted(&harness, "origin");
     assert_painted(&harness, "gone");
     assert_painted(&harness, "v1.0");
     assert_painted(&harness, "pushed");
     assert_painted(&harness, "v2.0");
     assert_painted(&harness, "local only");
+}
+
+// --- Branch-tree extraction (plan step 4): ref-scoped graph filtering --------
+
+/// Click the `Role::Button` labelled exactly `label`. Branch rows carry their
+/// name twice in the a11y tree (the row's label and the inner text's value),
+/// so a bare `get_by_label` would be ambiguous.
+#[track_caller]
+fn click_button(harness: &mut Harness<'_, AppState>, label: &str) {
+    let node = harness
+        .query_all_by_label_contains(label)
+        .find(|n| {
+            n.accesskit_node().role() == egui::accesskit::Role::Button
+                && n.accesskit_node().label().is_some_and(|l| l == label)
+        })
+        .unwrap_or_else(|| panic!("no button labelled {label:?}"));
+    node.click();
+}
+
+/// Extend [`ref_project`] with a second branch: `topic` carries one commit
+/// `main` does not, so scoping the graph to `main` must hide it.
+fn ref_project_with_topic() -> (TempDir, PathBuf, PathBuf, String) {
+    let (tmp, project, repo) = ref_project();
+    git(&repo, &["checkout", "-q", "-b", "topic"]);
+    let c2 = commit_file(&repo, "g.txt", "two\n", "topic: side commit");
+    git(&repo, &["checkout", "-q", "main"]);
+    (tmp, project, repo, c2)
+}
+
+#[test]
+fn activating_a_ref_scopes_the_graph_to_its_history() {
+    let (_tmp, project, repo, topic_commit) = ref_project_with_topic();
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&repo));
+    let root_id = state.multi.roots[0].id.clone();
+    state.fetch_log(root_id.clone());
+    state.ui.tab = turbogit_app::state::Tab::Log;
+    let mut harness = harness_over(state);
+
+    // Unscoped: main's fetched page — the side commit lives only on topic.
+    settle_until(&mut harness, "c1");
+    assert_not_painted(&harness, "topic: side commit");
+
+    // Activating the `topic` row in the branches pane scopes the graph.
+    click_button(&mut harness, "topic");
+    settle(&mut harness);
+
+    assert_eq!(
+        harness.state().ui.log_ref_scope,
+        Some((root_id.clone(), "topic".to_string())),
+        "row activation sets the ref scope"
+    );
+    // The scope renders as a removable chip, same gesture as the path scope.
+    assert_painted(&harness, "Ref filter:");
+    // The graph narrows to the ref's history: the scoped listing fetches
+    // through the engine seam and surfaces the side commit.
+    settle_until(&mut harness, "topic: side commit");
+    let _ = topic_commit;
+
+    // The chip's × clears the scope; the main page returns.
+    harness.get_by_label("Remove ref filter").click();
+    settle(&mut harness);
+    assert_eq!(harness.state().ui.log_ref_scope, None);
+    assert_not_painted(&harness, "Ref filter:");
+    assert_painted(&harness, "c1");
+}
+
+#[test]
+fn switching_repository_drops_the_ref_scope() {
+    // Two repos: activating beta's `topic` scopes the graph, then switching
+    // the selected repository to alpha must clear it (plan D9).
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("project");
+    let alpha = project.join("alpha");
+    let beta = project.join("beta");
+    std::fs::create_dir_all(&alpha).unwrap();
+    std::fs::create_dir_all(&beta).unwrap();
+    for dir in [&alpha, &beta] {
+        git(dir, &["init", "-q", "-b", "main"]);
+        git(dir, &["config", "user.email", "t@t"]);
+        git(dir, &["config", "user.name", "t"]);
+    }
+    commit_file(&alpha, "a.txt", "a\n", "alpha commit");
+    commit_file(&beta, "b0.txt", "x\n", "beta root commit");
+    git(&beta, &["checkout", "-q", "-b", "topic"]);
+    commit_file(&beta, "b.txt", "b\n", "topic commit");
+    let _beta_id = git(&beta, &["rev-parse", "HEAD"]).trim().to_string();
+
+    let mut state = AppState::for_roots(&project, &[alpha, beta]);
+    let alpha_root = state.multi.roots[0].id.clone();
+    let beta_root = state.multi.roots[1].id.clone();
+    for r in &state.multi.roots.clone() {
+        state.fetch_log(r.id.clone());
+    }
+    state.ui.tab = turbogit_app::state::Tab::Log;
+    let mut harness = harness_over(state);
+    settle_until(&mut harness, "beta root commit");
+
+    // Activate beta's `topic` row: the scope sets and follows the repo.
+    click_button(&mut harness, "topic");
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().ui.log_ref_scope,
+        Some((beta_root.clone(), "topic".to_string()))
+    );
+    assert_eq!(
+        harness.state().selected_root.as_ref(),
+        Some(&beta_root),
+        "the selection follows the scoped ref's repository"
+    );
+
+    // Switching the selected repository drops the scope.
+    harness.state_mut().selected_root = Some(alpha_root);
+    settle(&mut harness);
+    assert_eq!(
+        harness.state().ui.log_ref_scope,
+        None,
+        "the scope must never outlive its repository"
+    );
 }

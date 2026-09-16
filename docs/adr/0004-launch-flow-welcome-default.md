@@ -6,7 +6,9 @@ repository-list sidebar to fall back on, so we decided the welcome screen is
 what you land on unless a project directory is supplied at launch
 (`turbogit.exe path\to\project`, or an OS file-manager "open with" handoff).
 Choosing a recent project or opening one from the welcome screen enters the
-shell; File → Welcome returns to it.
+shell; the command palette's **Open Welcome** action returns to it (the IDE
+menubar the original "File → Welcome" wording referred to was retired with
+the old chrome).
 
 This removes the implicit CWD dependency: double-clicked exe lands on welcome,
 CLI invocation stays scriptable, and the old behavior of silently scanning

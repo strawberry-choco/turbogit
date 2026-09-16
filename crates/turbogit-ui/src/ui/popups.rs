@@ -4,10 +4,12 @@
 //! opens the command palette: a fuzzy-searchable list of every action, the
 //! IntelliJ "Find Action" hallmark.
 
-use egui::Ui;
+use crate::theme::Palette;
+use egui::{Pos2, RichText, Ui};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use turbogit_app::granular;
+use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, Tab, TagType, Toast};
 
@@ -33,6 +35,10 @@ pub enum Action {
     // operations popup keeps its exact pre-existing action set.
     GoToLog,
     OpenWelcome,
+    // Topbar workspace picker (issue #34): palette-only like its siblings —
+    // the VCS operations popup set stays frozen (pinned by
+    // `feedback_chrome.rs`, which fails loudly if it changes).
+    SwitchWorkspace,
     // Partial-staging verbs (spec R2): palette-only, operating on the diff
     // viewer's current hunk. The VCS operations popup set stays frozen.
     StageHunk,
@@ -61,6 +67,7 @@ impl Action {
             Action::Clone => "Clone…",
             Action::GoToLog => "Go to Log",
             Action::OpenWelcome => "Open Welcome",
+            Action::SwitchWorkspace => "Switch Workspace…",
             Action::StageHunk => "Stage Hunk",
             Action::UnstageHunk => "Unstage Hunk",
             Action::FilterFiles => "Filter files (/)",
@@ -108,6 +115,7 @@ impl Action {
             Action::Clone,
             Action::GoToLog,
             Action::OpenWelcome,
+            Action::SwitchWorkspace,
             Action::StageHunk,
             Action::UnstageHunk,
             Action::FilterFiles,
@@ -181,6 +189,12 @@ pub fn run_action(state: &mut AppState, action: Action) {
             state.ui.tab = Tab::Log;
         }
         Action::OpenWelcome => state.ui.welcome_visible = true,
+        // Topbar workspace picker (issue #34): the same surface the selector
+        // opens. No anchor on this route — the fallback position is used.
+        Action::SwitchWorkspace => {
+            state.ui.workspace_picker_open = true;
+            state.ui.workspace_picker_anchor = None;
+        }
         // Partial-staging verbs (spec R2/R7):
         // CURRENT hunk — the single selection buttons, hover, and keyboard
         // navigation all aim (CONTEXT.md "Current hunk"). The preview target
@@ -317,5 +331,146 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
         });
     if !open {
         state.ui.command_palette = false;
+    }
+}
+
+// ------------------------------------------------------ workspace picker ---
+
+/// One row of the workspace picker: a recents entry — or the synthesized
+/// current workspace — with its inert/active state.
+struct WorkspaceRow {
+    recent: RecentProject,
+    is_current: bool,
+}
+
+/// Current workspace first (synthesized — `launch_in` registers roots but
+/// does not record a recent, so a workspace opened from the CLI would
+/// otherwise be missing from its own picker), then the recents, deduped by
+/// path.
+fn workspace_rows(state: &AppState) -> Vec<WorkspaceRow> {
+    let current = RecentProject {
+        path: state.project_dir.clone(),
+        name: turbogit_app::recents::project_name(&state.project_dir),
+        last_opened: i64::MAX,
+        kind: if state.multi.roots.len() > 1 {
+            RecentKind::Workspace
+        } else {
+            RecentKind::Project
+        },
+        repo_count: Some(state.multi.roots.len()),
+    };
+    let mut rows: Vec<WorkspaceRow> = vec![WorkspaceRow {
+        recent: current,
+        is_current: true,
+    }];
+    rows.extend(
+        state
+            .ui
+            .recent_projects
+            .iter()
+            .filter(|r| r.path != state.project_dir)
+            .cloned()
+            .map(|recent| WorkspaceRow {
+                recent,
+                is_current: false,
+            }),
+    );
+    rows
+}
+
+/// Topbar workspace picker (issue #34): the recents list, plus the two
+/// folder-picker flows the Welcome screen offers. Reachable from the topbar
+/// workspace selector and from the palette's [`Action::SwitchWorkspace`].
+///
+/// A state-driven [`egui::Window`] rather than a response-bound
+/// `Popup::menu` (ADR-0017): `Popup::menu` derives its open state from a
+/// click on a response that only exists during the topbar's own render, so
+/// the palette could never open it.
+pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
+    let ctx = ui.ctx().clone();
+    // egui's own dropdown idiom (containers/popup.rs): a click outside only
+    // dismisses once the surface was visible on the PREVIOUS frame, so the
+    // selector click that opens the picker cannot also close it this frame.
+    let was_open_id = egui::Id::new("turbogit_workspace_picker_was_open");
+    if !state.ui.workspace_picker_open {
+        ctx.memory_mut(|m| m.data.insert_temp(was_open_id, false));
+        return;
+    }
+    let was_open_last_frame = ctx.memory(|m| m.data.get_temp::<bool>(was_open_id) == Some(true));
+    ctx.memory_mut(|m| m.data.insert_temp(was_open_id, true));
+
+    // The Welcome page's own four cards already own these flows.
+    if state.show_welcome() {
+        state.ui.workspace_picker_open = false;
+        return;
+    }
+
+    let pos = state
+        .ui
+        .workspace_picker_anchor
+        .map(|(x, y)| Pos2::new(x, y))
+        .unwrap_or_else(|| Pos2::new(160.0, super::shell::TOPBAR_HEIGHT + 4.0));
+    let rows = workspace_rows(state);
+
+    let mut open = true;
+    let window = egui::Window::new("Switch Workspace")
+        .open(&mut open)
+        .fixed_pos(pos)
+        .title_bar(false)
+        .resizable(false)
+        .min_width(260.0)
+        .show(&ctx, |ui| {
+            if rows.is_empty() {
+                ui.label(RichText::new("No recent workspaces").color(Palette::INK_3));
+            }
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for row in &rows {
+                let mut label = row.recent.name.clone();
+                if row.recent.kind == RecentKind::Workspace
+                    && let Some(n) = row.recent.repo_count
+                {
+                    label.push_str(&format!("  ·  {n} repos"));
+                }
+                if row.is_current {
+                    label.push_str("  ·  current");
+                }
+                let resp = ui
+                    .button(label)
+                    .on_hover_text(row.recent.path.display().to_string());
+                if resp.clicked() {
+                    // The current row is inert: re-dispatching would reset
+                    // `selected_root` and drop every cache for no
+                    // user-visible gain.
+                    if !row.is_current {
+                        state.open_recent(&row.recent);
+                    }
+                    state.ui.workspace_picker_open = false;
+                }
+            }
+            ui.separator();
+            if ui.button("Open Project…").clicked() {
+                state.ui.workspace_picker_open = false;
+                if let Some(dir) = super::welcome::pick_dir_public(state, "Open Project") {
+                    state.open_project(&dir);
+                }
+            }
+            if ui.button("Attach Workspace Root…").clicked() {
+                state.ui.workspace_picker_open = false;
+                if let Some(dir) = super::welcome::pick_dir_public(state, "Attach Workspace Root") {
+                    state.attach_workspace(&dir);
+                }
+            }
+        });
+    if !open {
+        state.ui.workspace_picker_open = false;
+    }
+    let Some(window) = window else {
+        return;
+    };
+    // Dismissal: Esc, or a click outside the dropdown (see the idiom above —
+    // only after the picker has been visible for a frame).
+    let escaped = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    if escaped || (was_open_last_frame && window.response.clicked_elsewhere()) {
+        state.ui.workspace_picker_open = false;
     }
 }

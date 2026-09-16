@@ -374,8 +374,8 @@ fn pick_dir(state: &mut AppState, purpose: &str) -> Option<std::path::PathBuf> {
     picked
 }
 
-/// Folder-picker entry for the shell's File menu (same seam as the Welcome
-/// Open card).
+/// Folder-picker entry for the workspace picker (issue #34) and the Welcome
+/// Open card — one shared seam for both folder-picker flows.
 pub fn pick_dir_public(state: &mut AppState, purpose: &str) -> Option<std::path::PathBuf> {
     pick_dir(state, purpose)
 }
@@ -578,11 +578,10 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, project.name.as_str()));
     widgets::focus_ring(ui, &response);
     if response.clicked() {
-        if project.kind == turbogit_app::recents::RecentKind::Workspace {
-            state.attach_workspace(&project.path);
-        } else {
-            state.open_project(&project.path);
-        }
+        // Shared dispatch (issue #34): the topbar workspace picker routes
+        // through the same helper, so the kind semantics — a Workspace row
+        // deep-scans, a Project row bounded-scans — live in one place.
+        state.open_recent(project);
     }
 }
 
