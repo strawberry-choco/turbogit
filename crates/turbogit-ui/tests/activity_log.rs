@@ -307,6 +307,58 @@ fn time_window_filter_hides_old_entries() {
     assert_not_painted(&harness, "old fetch");
 }
 
+/// Contract: the header's title chip is one interactive rect that *contains*
+/// its own painted chevron, and clicking the glyph toggles the panel.
+///
+/// Regression guard: the old toggle allocated the 16px click target and let
+/// `icons::icon` allocate its slot beside it, so the visible chevron was
+/// painted ~24px right of the hit rect — the control a user aims at was dead,
+/// and only an invisible box to its left answered. kittest clicks the a11y
+/// rect's centre, which sat in that invisible box, so the suite never
+/// noticed. Both halves of this test would fail on that layout: the glyph's
+/// bbox no longer intersects the hit rect, and the raw click at the glyph
+/// centre no longer toggles.
+#[test]
+fn toggle_hit_target_contains_the_painted_chevron() {
+    let (_tmp, project, _alpha) = repo_project();
+    let mut harness = activity_harness(project);
+    settle_quiet(&mut harness);
+
+    let hit = harness.get_by_label("Expand activity").rect();
+
+    // The chevron is the only INK_2-stroked glyph near the toggle; require
+    // its painted bbox to sit inside the interactive rect, not beside it.
+    let ink2 = turbogit_ui::theme::Palette::INK_2;
+    let inside: Vec<_> = test_support::harness::painted_paths(&harness)
+        .into_iter()
+        .filter(|(rect, color)| *color == ink2 && hit.contains(rect.center()))
+        .collect();
+    assert_eq!(
+        inside.len(),
+        1,
+        "exactly one chevron glyph must be painted inside the toggle's hit \
+         rect {hit:?}; INK_2 paths inside: {inside:?}"
+    );
+
+    // Click where a human would — on the visible chevron — and the panel
+    // must open.
+    let glyph = inside[0].0.center();
+    harness.event(egui::Event::PointerMoved(glyph));
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: glyph,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        });
+    }
+    settle_quiet(&mut harness);
+    assert!(
+        harness.state().ui.activity.expanded,
+        "clicking the painted chevron must expand the panel"
+    );
+}
+
 /// Contract (end to end): a real fetch dispatched from the topbar lands in
 /// the activity panel — the OpCompleted → entry → paint pipeline.
 #[test]

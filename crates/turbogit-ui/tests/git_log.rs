@@ -581,15 +581,23 @@ fn branches_search_filters_live_as_text_is_typed() {
     harness.get_by_label("Search branches").type_text("feature");
     settle(&mut harness);
 
+    // After the branch-tree swap (branch-tree extraction, plan step 4) the
+    // pane's repo headers always paint the current branch as a chip, so
+    // absence is asserted on the *row* nodes (a11y buttons), not on painted
+    // text. Repo header chips paint as plain labels, never buttons.
+    assert!(
+        harness
+            .query_by_role_and_label(egui::accesskit::Role::Button, "main")
+            .is_none(),
+        "unmatched branch rows must disappear while typing"
+    );
+    assert!(
+        harness
+            .query_by_role_and_label(egui::accesskit::Role::Button, "v1.0")
+            .is_none(),
+        "unmatched tag rows must disappear while typing"
+    );
     let texts = in_pane(&harness);
-    assert!(
-        !texts.iter().any(|t| t.contains("main")),
-        "unmatched LOCAL/REMOTE branches must disappear while typing: {texts:?}"
-    );
-    assert!(
-        !texts.iter().any(|t| t.contains("v1.0")),
-        "unmatched tags must disappear while typing: {texts:?}"
-    );
     assert!(
         texts.iter().any(|t| t.contains("feature")),
         "matching branch must remain: {texts:?}"

@@ -1192,3 +1192,155 @@ fn advanced_options_link_is_removed_into_the_tree_toolbar_gear() {
     assert_eq!(after.toast.is_some(), before.toast.is_some());
     assert_eq!(after.busy, before.busy);
 }
+
+// ------------------------------------ long file names wrap onto a new line --
+
+/// `(origin, size, line count)` of the painted galley carrying exactly
+/// `text`.
+///
+/// The shared painted-text helpers expose a galley's text and origin only,
+/// and egui keeps the *input* string on a wrapped galley
+/// (`Galley::text` is documented as "the full, non-elided text of the input
+/// job"), so a wrap is only observable from the galley's geometry: several
+/// laid-out rows, none wider than the sheet's name column.
+fn galley_metrics(h: &Harness<'_, AppState>, text: &str) -> (egui::Pos2, egui::Vec2, usize) {
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(shape) if shape.galley.text() == text => {
+                Some((shape.pos, shape.galley.size(), shape.galley.rows.len()))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no painted galley carries {text:?}"))
+}
+
+/// Height of the selection fill painted under `origin` — the selected row's
+/// own rect, so a row that wrapped a name is measurably taller than the
+/// single-line file row.
+fn selected_row_height(h: &Harness<'_, AppState>, origin: egui::Pos2) -> f32 {
+    filled_rects(h)
+        .into_iter()
+        .find(|(r, c)| *c == Palette::SELECTION_BG && r.contains(origin))
+        .expect("the selected row paints the solid #2E436E selection fill")
+        .0
+        .height()
+}
+
+#[test]
+fn long_file_names_wrap_onto_a_continuation_line_and_grow_the_row() {
+    // A filename wider than the commit panel's name column wraps onto the
+    // next line — the row grows with it — instead of running past the pane
+    // edge or painting over the dim location column.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "wrap-long-name");
+    std::fs::create_dir_all(repo.path.join("src")).unwrap();
+    let long = "an_extremely_long_file_name_that_cannot_fit_the_commit_panel_column.rs";
+    let path = repo.path.join("src").join(long);
+    std::fs::write(&path, "one\n").unwrap();
+    git(&repo.path, &["add", "-A"]);
+    git(&repo.path, &["commit", "-q", "-m", "track long name"]);
+    std::fs::write(&path, "two\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // The row is still addressable by its file name…
+    h.get_by_label(long);
+
+    // …and the name is laid out across several lines inside its column.
+    let (name_pos, name_size, name_lines) = galley_metrics(&h, long);
+    assert!(
+        name_lines >= 2,
+        "a name too wide for its column must wrap onto the next line, \
+         got {name_lines} line(s)"
+    );
+
+    // The dim location keeps its right-aligned first-line seat: it paints to
+    // the right of the name, on the name's first line.
+    let (loc_pos, ..) = galley_metrics(&h, "src/");
+    assert!(
+        loc_pos.x > name_pos.x,
+        "the location column must stay right of the name (name x={}, location x={})",
+        name_pos.x,
+        loc_pos.x
+    );
+    assert!(
+        (loc_pos.y - name_pos.y).abs() < 1.0,
+        "the location must ride the name's first line (name y={}, location y={})",
+        name_pos.y,
+        loc_pos.y
+    );
+    assert!(
+        name_size.x <= loc_pos.x - name_pos.x,
+        "every wrapped line must stay inside the name column, left of the \
+         location (name width={}, column={})",
+        name_size.x,
+        loc_pos.x - name_pos.x
+    );
+
+    // Selecting the row shows the grown row: the selection fill is taller
+    // than the single-line file-row height.
+    h.get_by_label(&format!("Select {long}")).click();
+    h.run();
+    let height = selected_row_height(&h, name_pos);
+    assert!(
+        height > turbogit_ui::theme::FILE_ROW_HEIGHT,
+        "a wrapped row must grow past {} px, got {height}",
+        turbogit_ui::theme::FILE_ROW_HEIGHT
+    );
+}
+
+#[test]
+fn renamed_rows_move_the_old_path_below_a_wrapped_new_name() {
+    // Spec R8 keeps the muted arrow + old path on the row. When the new name
+    // wraps, that marker moves onto its own line under the name instead of
+    // colliding with the continuations (or with the location column).
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "wrap-rename");
+    let long = "a_renamed_file_whose_new_name_cannot_fit_the_commit_panel_column.rs";
+    std::fs::write(repo.path.join("old.txt"), "content\n").unwrap();
+    git(&repo.path, &["add", "-A"]);
+    git(&repo.path, &["commit", "-q", "-m", "track old name"]);
+    git(&repo.path, &["mv", "old.txt", long]);
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    let (name_pos, name_size, name_lines) = galley_metrics(&h, long);
+    assert!(
+        name_lines >= 2,
+        "the renamed-to name must wrap, got {name_lines} line(s)"
+    );
+    // The old path paints on the line after the name's last line.
+    let (orig_pos, ..) = galley_metrics(&h, "old.txt");
+    assert!(
+        orig_pos.y >= name_pos.y + name_size.y - 1.0,
+        "the renamed-from path must follow the wrapped name on its own line \
+         (name {}..{}, old path y={})",
+        name_pos.y,
+        name_pos.y + name_size.y,
+        orig_pos.y
+    );
+}
+
+#[test]
+fn short_file_names_keep_the_single_line_row_height() {
+    // The wrap must not disturb the common case: a name that fits stays on
+    // one line, on exactly the design's 24 px row.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "wrap-short-name");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    let (origin, _, lines) = galley_metrics(&h, "base.txt");
+    assert_eq!(lines, 1, "a short name must stay on one line");
+
+    h.get_by_label("Select base.txt").click();
+    h.run();
+    assert_eq!(
+        selected_row_height(&h, origin),
+        turbogit_ui::theme::FILE_ROW_HEIGHT,
+        "a single-line row keeps the 24 px file-row height"
+    );
+}

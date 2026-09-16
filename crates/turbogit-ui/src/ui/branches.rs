@@ -8,31 +8,25 @@
 //! the list. All geometry maps onto the §12 constants in
 //! [`crate::ui::components`]; every git mutation crosses the
 //! [`turbogit_engine_api::GitExecutor`] seam via [`AppState::run_git`].
+//!
+//! Since the branch-tree-view extraction the grouped list itself is the shared
+//! [`branch_tree_view::branch_tree`] component: this surface builds the props,
+//! applies the returned events, and keeps the toolbar, the detail panel, the
+//! keyboard path and the actions.
 
-use egui::{
-    Align, Color32, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Sense, Ui, UiBuilder,
-    Vec2, WidgetInfo, WidgetType,
-};
+use egui::{Align, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Ui, UiBuilder};
 
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId};
 
-use crate::theme::{
-    Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_DETAIL_TITLE, TYPE_SECTION, chrome_font,
-    data_font,
-};
+use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, TYPE_DETAIL_TITLE, chrome_font, data_font};
+use crate::ui::branch_tree_view::{self, LocalRow, TreeEvent, TreeGroup, TreeProps};
 use crate::ui::branch_widget::stale_badge;
-use crate::ui::branches_tree;
-use crate::ui::branches_tree::{
-    BranchNode, BranchView, DirNode, RemoteGroup, RepoSection, RepoStatus,
-};
+use crate::ui::branches_tree::{self, BranchNode, BranchView};
 use crate::ui::components::{
-    BRANCH_ROW_H, DETAIL_W, KIT_ICON, KitButton, PAD_LIST, PAD_STRIP, RowState, SyncKind,
-    TOOLBAR_H, kit_button, middle_truncate, overflow_button, row_fill, row_ink, section_header,
-    sync_badge, sync_bg, sync_ink,
+    DETAIL_W, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button,
 };
-use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 
 /// One branch action, shared by the detail panel and the ⋯ overflow menu
@@ -135,6 +129,8 @@ pub fn row_meta(branch: &Branch, now: chrono::DateTime<chrono::Utc>) -> RowMeta 
     }
 }
 
+use crate::ui::components::sync_badge;
+
 /// Per-direction chips for a tracked row (issue 04): icon+count pairs, a quiet
 /// "in sync" confirmation when there is nothing to say, or the gone marker —
 /// never the bare arrow, never silence.
@@ -202,28 +198,35 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     if state.multi.roots.is_empty() {
         return;
     }
-    // Warm the per-root tag cache for every in-scope root (redesign issue 02:
-    // tags are a per-repo group, so each section needs its own list).
-    for r in &state.multi.roots {
-        if !state.ui.branches_tags.contains_key(&r.id) {
-            let tags = state.executor.tag_list(&r.id.0).unwrap_or_default();
-            state.ui.branches_tags.insert(r.id.clone(), tags);
-        }
-    }
-    // Build the repo-grouped view model once (pure; issue 01). The keyboard
-    // path still runs over the flat aggregate so arrows move through branches.
+    // Warm the per-root tag cache for every in-scope root (plan D10: one
+    // shared step, keyed by repository, so whichever surface renders first
+    // warms the cache for both).
+    branch_tree_view::warm_tags(state);
+    // Build the repo-grouped view model once (pure; issue 01).
     let tags_by_root = state.ui.branches_tags.clone();
     let view = branches_tree::build_branch_view(
         &state.multi.roots,
         &tags_by_root,
-        state.ui.branches_show_remotes,
+        state.ui.branches_tree.show_remotes,
     );
-    let rows = aggregate_rows(state);
+
+    // Esc clears the filter first, then closes the detail area (§9). Read at
+    // the very top of the frame, before any widget could consume it.
+    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if !state.ui.branches_filter.trim().is_empty() {
+            state.ui.branches_filter.clear();
+        } else {
+            state.ui.branches_tree.selected = None;
+            state.ui.branches_tree.selected_root = None;
+            state.ui.branches_tree.overflow = None;
+        }
+    }
+
     // The keyboard path (design §9/§15, issue 15): read the raw events at the
     // very top of the frame, before the toolbar's search input renders and
     // could consume them, so focus → filter → arrows → Enter works with the
     // cursor still in the filter box.
-    handle_keys(ui, state, &rows);
+    handle_keys(ui, state, &view);
 
     let body = ui.available_rect_before_wrap();
     let toolbar_rect = Rect::from_min_max(body.min, Pos2::new(body.max.x, body.min.y + TOOLBAR_H));
@@ -263,94 +266,90 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     ui.advance_cursor_after_rect(list_rect);
 }
 
-/// One aggregated row (issue 14): the owning repo id, the branch itself, and
-/// its own repo's current branch (for the marker). Two `master`s in different
-/// repos are never interchangeable — the id pins which one a row means.
-struct Row {
-    root: RootId,
-    /// The owning repo's display name. No longer painted on the row (the
-    /// section header states it); it rides along only so a row-level action can
-    /// name its scope — "Checkout in beta" — and multi-repo aggregates can
-    /// order deterministically.
-    repo: String,
-    /// The display label for the row. For a local branch this is the branch
-    /// name; for a remote leaf it is the already-prefix-stripped leaf label, so
-    /// the remote name never re-prints inside its own group (issue 03).
-    label: String,
-    branch: Branch,
-    current: Option<String>,
-}
-
-/// Aggregate the in-scope roots' branches into rows. With a repo filter set
-/// (issue 14) only that repo contributes; otherwise every repo contributes
-/// and rows carry their owning repo's name.
-fn aggregate_rows(state: &AppState) -> Vec<Row> {
+/// The local rows the keyboard path walks (plan D6): every in-scope repo's
+/// local leaves under the active filter, ordered by the shared pure function —
+/// the same rows the list shows.
+fn keyboard_locals<'a>(state: &AppState, view: &'a BranchView) -> Vec<LocalRow<'a>> {
     let multi = state.multi.roots.len() > 1;
-    let mut out = Vec::new();
-    for r in &state.multi.roots {
+    let mut out: Vec<LocalRow<'a>> = Vec::new();
+    for section in &view.repos {
         if let Some(f) = &state.ui.branches_repo_filter
-            && &r.id != f
+            && &section.root_id != f
         {
             continue;
         }
-        let repo = if multi { r.id.name() } else { String::new() };
-        let current = r.current_branch.clone();
-        for b in &r.branches {
-            out.push(Row {
-                root: r.id.clone(),
-                repo: repo.clone(),
-                label: b.name.clone(),
-                branch: b.clone(),
-                current: current.clone(),
-            });
+        let repo = if multi {
+            section.repo_name.as_str()
+        } else {
+            ""
+        };
+        let current = section.current_branch.as_deref();
+        let mut leaves: Vec<&'a Branch> = Vec::new();
+        fn walk<'a>(nodes: &'a [BranchNode], out: &mut Vec<&'a Branch>) {
+            for n in nodes {
+                match n {
+                    BranchNode::Leaf(l) => out.push(&l.branch),
+                    BranchNode::Dir(d) => walk(&d.children, out),
+                }
+            }
+        }
+        walk(&section.locals, &mut leaves);
+        for b in leaves {
+            if branch_matches(b, &state.ui.branches_filter) {
+                out.push(LocalRow {
+                    root: &section.root_id,
+                    branch: b,
+                    current,
+                    repo,
+                });
+            }
         }
     }
+    branch_tree_view::keyboard_order(&mut out);
     out
-}
-
-/// Local-branch ordering for the keyboard path: list order (current first,
-/// then newest tip) under the active filter — the same rows the list shows.
-fn keyboard_rows<'a>(state: &AppState, rows: &'a [Row]) -> Vec<&'a Row> {
-    let visible: Vec<&Row> = rows
-        .iter()
-        .filter(|r| {
-            r.branch.kind == BranchKind::Local
-                && branch_matches(&r.branch, &state.ui.branches_filter)
-        })
-        .collect();
-    ordered_rows(&visible)
 }
 
 /// Full keyboard path (issue 15, design §9/§15): arrows move the selection
 /// through the visible branches, Enter checks the selected row out, Delete
-/// asks to delete it (never the current branch), and Escape clears the
-/// filter then closes the detail area. Nothing on this screen needs the
-/// mouse to discover. Events are read before any widget consumes them — an
+/// asks to delete it (never the current branch). Nothing on this screen needs
+/// the mouse to discover. Events are read before any widget consumes them — a
 /// focused search box never eats the path.
-fn handle_keys(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
+fn handle_keys(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     // Never hijack keys while a modal surface owns the keyboard.
     if state.ui.dialog.is_some()
         || state.ui.confirm.is_some()
-        || state.ui.branches_renaming.is_some()
-        || state.ui.branches_overflow.is_some()
+        || state.ui.branches_tree.renaming.is_some()
+        || state.ui.branches_tree.overflow.is_some()
         || state.ui.branches_scope_picker_open
     {
         return;
     }
-    let ordered = keyboard_rows(state, rows);
-    let sel = state.ui.branches_selected_root.as_ref().and_then(|rid| {
-        ordered.iter().position(|r| {
-            &r.root == rid && state.ui.branches_selected.as_deref() == Some(&r.branch.name)
-        })
-    });
+    let ordered = keyboard_locals(state, view);
+    let sel = state
+        .ui
+        .branches_tree
+        .selected_root
+        .as_ref()
+        .and_then(|rid| {
+            ordered.iter().position(|r| {
+                r.root == rid
+                    && state.ui.branches_tree.selected.as_deref() == Some(r.branch.name.as_str())
+            })
+        });
     // Enter/Delete act on the selected row whatever its kind — the local
     // navigation set is only what the arrows move through (remote rows are
-    // reference material, issue 13).
-    let selected_row = state.ui.branches_selected_root.as_ref().and_then(|rid| {
-        let name = state.ui.branches_selected.as_deref()?;
-        rows.iter()
-            .find(|r| &r.root == rid && r.branch.name == name)
-    });
+    // reference material, issue 13). The branch is looked up in its own repo.
+    let selected_branch: Option<(RootId, Branch, Option<String>)> = state
+        .ui
+        .branches_tree
+        .selected_root
+        .clone()
+        .and_then(|rid| {
+            let name = state.ui.branches_tree.selected.clone()?;
+            let root = state.multi.by_id(&rid)?.clone();
+            let branch = root.branches.iter().find(|b| b.name == name)?.clone();
+            Some((rid, branch, root.current_branch.clone()))
+        });
     let down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
     let up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -362,23 +361,21 @@ fn handle_keys(ui: &mut Ui, state: &mut AppState, rows: &[Row]) {
             Some(i) => (i + 1).min(ordered.len() - 1),
             None => 0,
         };
-        let row = ordered[idx];
-        state.ui.branches_selected = Some(row.branch.name.clone());
-        state.ui.branches_selected_root = Some(row.root.clone());
+        let row = &ordered[idx];
+        state.ui.branches_tree.selected = Some(row.branch.name.clone());
+        state.ui.branches_tree.selected_root = Some(row.root.clone());
     } else if up && !ordered.is_empty() {
         let idx = sel.map_or(0, |i| i.saturating_sub(1));
-        let row = ordered[idx];
-        state.ui.branches_selected = Some(row.branch.name.clone());
-        state.ui.branches_selected_root = Some(row.root.clone());
-    } else if enter {
-        if let Some(row) = selected_row {
-            checkout_branch(state, &row.root, &row.branch);
-        }
-    } else if delete && let Some(row) = selected_row {
+        let row = &ordered[idx];
+        state.ui.branches_tree.selected = Some(row.branch.name.clone());
+        state.ui.branches_tree.selected_root = Some(row.root.clone());
+    } else if enter && let Some((rid, branch, _)) = &selected_branch {
+        checkout_branch(state, rid, branch);
+    } else if delete && let Some((rid, branch, current)) = &selected_branch {
         // The current branch can never be deleted (issue 12); everything
         // else gets the same "what will be lost" ask as the click path.
-        if row.current.as_deref() != Some(row.branch.name.as_str()) {
-            apply_action(state, &row.root, &row.branch, BranchAction::Delete);
+        if current.as_deref() != Some(branch.name.as_str()) {
+            apply_action(state, rid, branch, BranchAction::Delete);
         }
     }
 }
@@ -431,7 +428,7 @@ fn toolbar(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
 /// "feature/ 3", "origin 2").
 fn remotes_toggle(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     let hidden: usize = view.repos.iter().map(|s| s.remote_branch_count).sum();
-    let show = state.ui.branches_show_remotes;
+    let show = state.ui.branches_tree.show_remotes;
     // Allocated before the control so the right-to-left toolbar paints it to
     // the toggle's right: "Show remotes  2".
     if !show && hidden > 0 {
@@ -444,7 +441,7 @@ fn remotes_toggle(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     }
     let label = if show { "Hide remotes" } else { "Show remotes" };
     if kit_button(ui, KitButton::Quiet, label).clicked() {
-        state.ui.branches_show_remotes = !show;
+        state.ui.branches_tree.show_remotes = !show;
     }
 }
 
@@ -499,69 +496,43 @@ fn scope_chip(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The grouped list (issue 03): Local expanded, Remote expanded, Tags
-/// collapsed — filtered live by the search (issue 06) — or the reading/empty
-/// states instead of a blank panel. Rows come from every in-scope root
-/// (issue 14) unless the repo filter narrows them.
-/// Indentation per directory-nesting level inside a repo section.
-const BRANCH_INDENT: f32 = 16.0;
-/// Height of one repo section header (status dot + repo name + current chip).
-const REPO_HEADER_H: f32 = 30.0;
-
-/// The Branches list area, driven by the repo-grouped [`BranchView`] (redesign
-/// issues 02–04). Each in-scope repo paints a section: a header, a Local group
-/// (directory subgroups, stripped prefixes), the Remote area (collapsed rollup
-/// or expanded per-remote groups), and a Tags group. Row-level treatment is
-/// unchanged; the redesign only re-layers the grouping above the rows.
+/// The Branches list area: a thin caller over the shared tree component
+/// (branch-tree-view extraction, plan D5). The "working…" line and the
+/// delete-undo banner stay above the scroll area, on the surface; the
+/// component paints the list states and the rows; the surface applies the
+/// returned events and then paints the ⋯ overflow menu that depends on them.
 fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
-    // No branch data anywhere and no HEAD: reading or the one-sentence empty
-    // state (the redesign still never paints a blank panel).
-    let any_data = state
+    let has_any_data = state
         .multi
         .roots
         .iter()
         .any(|r| !r.branches.is_empty() || r.head.is_some());
-    if !any_data {
-        if state.ui.busy {
-            reading_state(ui);
-        } else {
-            empty_state(ui, state);
-        }
-        return;
-    }
-
+    let tags_by_root = state.ui.branches_tags.clone();
+    // Owned copies of the surface-owned string props: the component borrows
+    // them while the surface keeps &mut AppState for the banner and events.
     let filter = state.ui.branches_filter.clone();
-    let filtering = !filter.trim().is_empty();
-
-    // Search is for jumping, not browsing: save the scroll position the moment
-    // filtering begins and restore it when it clears.
-    if filtering && state.ui.branches_scroll_saved.is_none() {
-        state.ui.branches_scroll_saved = Some(state.ui.branches_scroll);
-    }
-    if !filtering && state.ui.branches_scroll_saved.is_some() {
-        state.ui.branches_scroll = state.ui.branches_scroll_saved.take().unwrap_or(0.0);
-    }
-    let scroll = state.ui.branches_scroll;
-
-    // Esc clears the filter first, then closes the detail area (§9).
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        if !filter.trim().is_empty() {
-            state.ui.branches_filter.clear();
-        } else {
-            state.ui.branches_selected = None;
-            state.ui.branches_selected_root = None;
-            state.ui.branches_overflow = None;
-        }
-    }
-
-    let scroll_target = state.ui.branches_scroll_to.clone();
-    let mut target_y: Option<f32> = None;
-    let mut y_cursor = 0.0;
+    let repo_filter = state.ui.branches_repo_filter.clone();
+    let props = TreeProps {
+        view,
+        filter: &filter,
+        repo_filter: repo_filter.as_ref(),
+        tags_by_root: &tags_by_root,
+        multi_repo: state.multi.roots.len() > 1,
+        busy: state.ui.busy,
+        has_any_data,
+        merge_in_progress: state.ui.merge_in_progress,
+        last_fetch: state.ui.branches_last_fetch,
+        now: chrono::Utc::now(),
+        allows_rename: true,
+        shows_row_actions: true,
+        id_salt: "branches_list",
+        full_height: true,
+    };
 
     // Issue 15: an operation in flight shows in place — a muted "working…"
     // line above the list, never a silent wait. The busy flag is shell-global,
     // so the mid-operation state survives switching tabs.
-    if state.ui.busy && any_data {
+    if has_any_data && state.ui.busy {
         ui.horizontal(|ui| {
             ui.add_space(PAD_LIST);
             ui.label(
@@ -575,59 +546,16 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     // (issue 12).
     undo_banner(ui, state);
 
-    // Only the in-scope repos paint: the scope chip narrows the tree to one
-    // repo (issue 04), and a lone in-scope repo renders its section invisibly
-    // (issue 02 — the grouping adds no chrome).
-    let in_scope: Vec<&RepoSection> = view
-        .repos
-        .iter()
-        .filter(|s| match &state.ui.branches_repo_filter {
-            Some(f) => &s.root_id == f,
-            None => true,
-        })
-        .collect();
-    let invisible = in_scope.len() == 1;
-
-    let out = ScrollArea::vertical()
-        .id_salt("branches_list")
-        .auto_shrink([false, false])
-        .vertical_scroll_offset(scroll)
-        .show(ui, |ui| {
-            // A dead end turns into the likely next intent.
-            if filtering
-                && in_scope
-                    .iter()
-                    .all(|s| section_match_count(s, &filter, state.ui.branches_show_remotes) == 0)
-            {
-                no_match_state(ui, state, filter.trim());
-                return;
-            }
-            for section in &in_scope {
-                paint_repo_section(
-                    ui,
-                    state,
-                    section,
-                    &filter,
-                    invisible,
-                    &scroll_target,
-                    &mut y_cursor,
-                    &mut target_y,
-                );
-            }
-        });
-    state.ui.branches_scroll = out.state.offset.y;
-    // Scroll the freshly created branch into view (issue 08) and consume the
-    // intent.
-    if state.ui.branches_scroll_to.take().is_some()
-        && let Some(ty) = target_y
-    {
-        state.ui.branches_scroll = ty;
+    let events = branch_tree_view::branch_tree(ui, &props, &mut state.ui.branches_tree);
+    for event in events {
+        apply_tree_event(state, event);
     }
 
     // The ⋯ overflow menu floats over the list with the same actions as the
-    // detail panel (issue 05). It resolves the target row from the flat
-    // aggregate (the view model only carries display structure).
-    if let Some((root_id, name)) = state.ui.branches_overflow.clone() {
+    // detail panel (issue 05). Events were applied before this paint, so the
+    // menu still opens in the frame it was clicked (plan D4). The target row
+    // is resolved from its owning repository's snapshot.
+    if let Some((root_id, name)) = state.ui.branches_tree.overflow.clone() {
         let anchor = ui.ctx().memory(|m| {
             m.data
                 .get_temp::<Rect>(egui::Id::new(("branches_overflow_anchor", &root_id, &name)))
@@ -638,14 +566,12 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
                 .show(ui.ctx(), |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(160.0);
-                        let rows = aggregate_rows(state);
-                        if let Some(row) = rows
-                            .iter()
-                            .find(|r| r.root == root_id && r.branch.name == name)
-                            && let Some(root) = state.multi.by_id(&row.root).cloned()
-                            && let Some(a) = detail_actions(ui, state, &root, &row.branch)
+                        if let Some(root) = state.multi.by_id(&root_id).cloned()
+                            && let Some(branch) =
+                                root.branches.iter().find(|b| b.name == name).cloned()
+                            && let Some(a) = detail_actions(ui, state, &root, &branch)
                         {
-                            apply_action(state, &row.root, &row.branch, a);
+                            apply_action(state, &root.id, &branch, a);
                         }
                     });
                 });
@@ -653,282 +579,115 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     }
 }
 
-/// Total visible branches/tags in a section under the current filter — used to
-/// decide the no-match state and to size group headers.
-fn section_match_count(section: &RepoSection, filter: &str, show_remotes: bool) -> usize {
-    let locals = branches_tree::leaf_count(&filter_nodes(&section.locals, filter, false));
-    let remotes = if show_remotes {
-        section
-            .remote_groups
-            .iter()
-            .map(|g| branches_tree::leaf_count(&filter_nodes(&g.children, filter, true)))
-            .sum()
-    } else {
-        0
-    };
-    let tags = section
-        .tags
-        .iter()
-        .filter(|t| matches_query(t, filter))
-        .count();
-    locals + remotes + tags
-}
-
-/// Recursively keep nodes whose branch (or descendant) matches the query,
-/// preserving the directory structure. Counts on surviving directory nodes are
-/// recomputed from the surviving children.
-fn filter_nodes(nodes: &[BranchNode], filter: &str, _is_remote: bool) -> Vec<BranchNode> {
-    if filter.trim().is_empty() {
-        return nodes.to_vec();
-    }
-    let mut out = Vec::new();
-    for n in nodes {
-        match n {
-            BranchNode::Leaf(l) => {
-                if branch_matches(&l.branch, filter) {
-                    out.push(n.clone());
-                }
-            }
-            BranchNode::Dir(d) => {
-                let children = filter_nodes(&d.children, filter, _is_remote);
-                if !children.is_empty() {
-                    out.push(BranchNode::Dir(DirNode {
-                        label: d.label.clone(),
-                        count: branches_tree::leaf_count(&children),
-                        children,
-                    }));
-                }
-            }
-        }
-    }
-    out
-}
-
-/// Paint one repo's section: header (unless invisible for single-repo), Local
-/// group, Remote area, and Tags group.
-#[allow(clippy::too_many_arguments)]
-fn paint_repo_section(
-    ui: &mut Ui,
-    state: &mut AppState,
-    section: &RepoSection,
-    filter: &str,
-    invisible: bool,
-    scroll_target: &Option<String>,
-    y_cursor: &mut f32,
-    target_y: &mut Option<f32>,
-) {
-    // The header always paints so the repo-level Fetch stays one click away
-    // (issue 03); its identity chrome is suppressed for a single-repo project
-    // whose grouping must stay invisible (issue 02).
-    repo_header(ui, state, section, !invisible);
-    *y_cursor += REPO_HEADER_H;
-
-    // --- Local group ---
-    let locals = filter_nodes(&section.locals, filter, false);
-    let local_count = branches_tree::leaf_count(&locals);
-    let local_header = section_header(
-        ui,
-        "Local",
-        local_count,
-        state.ui.branches_groups.local,
-        |_| {},
-    );
-    if local_header.clicked() {
-        state.ui.branches_groups.local = !state.ui.branches_groups.local;
-    }
-    *y_cursor += crate::ui::components::SECTION_H;
-    if state.ui.branches_groups.local {
-        paint_nodes(
-            ui,
-            state,
-            section,
-            &locals,
-            0,
-            scroll_target,
-            y_cursor,
-            target_y,
-        );
-    }
-
-    // --- Remote area ---
-    if state.ui.branches_show_remotes {
-        for rg in &section.remote_groups {
-            let children = filter_nodes(&rg.children, filter, true);
-            if branches_tree::leaf_count(&children) == 0 && !filter.trim().is_empty() {
-                continue;
-            }
-            remote_group_header(ui, state, section, rg, &children);
-            *y_cursor += crate::ui::components::SECTION_H;
-            if !state
-                .ui
-                .branches_collapsed_remotes
-                .contains(&(section.root_id.clone(), rg.remote.clone()))
+/// Apply one tree event (plan D4): the surface owns the policy — selection,
+/// checkout, fetch scope, rename dispatch, dialog opening — while the
+/// component decides none of it.
+fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
+    match event {
+        TreeEvent::RowClicked { root, branch } => {
+            // Clicking selects; clicking the selected row again closes the
+            // detail (it closes cleanly without disturbing the list — issue 05).
+            if state.ui.branches_tree.selected_root.as_ref() == Some(&root)
+                && state.ui.branches_tree.selected.as_deref() == Some(branch.as_str())
             {
-                paint_nodes(
-                    ui,
-                    state,
-                    section,
-                    &children,
-                    1,
-                    scroll_target,
-                    y_cursor,
-                    target_y,
-                );
+                state.ui.branches_tree.selected = None;
+                state.ui.branches_tree.selected_root = None;
+            } else {
+                state.ui.branches_tree.selected = Some(branch);
+                state.ui.branches_tree.selected_root = Some(root);
+            }
+            state.ui.branches_tree.overflow = None;
+        }
+        TreeEvent::RowActivated { root, branch } => {
+            // Double-click (and the row's hover Checkout button) checks out —
+            // selecting and switching stay separate intents.
+            if let Some(b) = state
+                .multi
+                .by_id(&root)
+                .and_then(|r| r.branches.iter().find(|b| b.name == branch))
+                .cloned()
+            {
+                checkout_branch(state, &root, &b);
             }
         }
-    } else {
-        // Collapsed rollup row — one per repo, toggles remotes on when clicked.
-        remote_rollup_row(ui, state, section);
-        *y_cursor += BRANCH_ROW_H;
-    }
-
-    // --- Tags group ---
-    let mut tags: Vec<String> = section
-        .tags
-        .iter()
-        .filter(|t| matches_query(t, filter))
-        .cloned()
-        .collect();
-    tags.sort();
-    let tags_header = section_header(
-        ui,
-        "Tags",
-        tags.len(),
-        state.ui.branches_groups.tags,
-        |_| {},
-    );
-    if tags_header.clicked() {
-        state.ui.branches_groups.tags = !state.ui.branches_groups.tags;
-    }
-    *y_cursor += crate::ui::components::SECTION_H;
-    if state.ui.branches_groups.tags {
-        for t in &tags {
-            if Some(t.as_str()) == scroll_target.as_deref() {
-                *target_y = Some(*y_cursor);
-            }
-            *y_cursor += BRANCH_ROW_H;
-            tag_row(ui, t);
-        }
-    }
-}
-
-/// Paint a forest of branch nodes (local or remote) with directory headers at
-/// `depth` indentation.
-#[allow(clippy::too_many_arguments)]
-fn paint_nodes(
-    ui: &mut Ui,
-    state: &mut AppState,
-    section: &RepoSection,
-    nodes: &[BranchNode],
-    depth: usize,
-    scroll_target: &Option<String>,
-    y_cursor: &mut f32,
-    target_y: &mut Option<f32>,
-) {
-    let repo_label = if state.multi.roots.len() > 1 {
-        section.repo_name.clone()
-    } else {
-        String::new()
-    };
-    for n in nodes {
-        match n {
-            BranchNode::Leaf(l) => {
-                if Some(l.branch.name.as_str()) == scroll_target.as_deref() {
-                    *target_y = Some(*y_cursor);
-                }
-                *y_cursor += BRANCH_ROW_H;
-                let row = Row {
-                    root: section.root_id.clone(),
-                    repo: repo_label.clone(),
-                    label: l.label.clone(),
-                    branch: l.branch.clone(),
-                    current: section.current_branch.clone(),
-                };
-                branch_row(ui, state, &row, depth as f32 * BRANCH_INDENT);
-            }
-            BranchNode::Dir(d) => {
-                dir_header(ui, &d.label, d.count, depth);
-                *y_cursor += BRANCH_ROW_H;
-                paint_nodes(
-                    ui,
-                    state,
-                    section,
-                    &d.children,
-                    depth + 1,
-                    scroll_target,
-                    y_cursor,
-                    target_y,
-                );
+        TreeEvent::OverflowToggled { root, branch } => {
+            let key = (root, branch);
+            if state.ui.branches_tree.overflow.as_ref() == Some(&key) {
+                state.ui.branches_tree.overflow = None;
+            } else {
+                state.ui.branches_tree.overflow = Some(key);
             }
         }
-    }
-}
-
-/// One repo section header: a status dot, the repo name (sans), a repo-level
-/// Fetch (issue 03 — one click away even with remotes hidden), and a chip
-/// showing the repo's current branch (mono). `show_identity` is false for a
-/// single-repo project, where the grouping is invisible: the identity chrome
-/// (dot, name, chip) is suppressed so no redundant repo header appears, but the
-/// Fetch control stays so primary actions remain one click away.
-fn repo_header(ui: &mut Ui, state: &mut AppState, section: &RepoSection, show_identity: bool) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, REPO_HEADER_H), Sense::hover());
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    child.add_space(PAD_LIST);
-    if show_identity {
-        // Status dot.
-        let (dot_rect, _) = child.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-        child
-            .painter()
-            .circle_filled(dot_rect.center(), 4.0, repo_status_color(section.status));
-        child.add_space(8.0);
-        // Repo name (UI sans, section-ish weight).
-        child.add(
-            egui::Label::new(
-                RichText::new(section.repo_name.clone())
-                    .font(chrome_font(TYPE_CONTROL))
-                    .color(Palette::T_PRIMARY),
-            )
-            .truncate(),
-        );
-    }
-    // Right-aligned cluster: current-branch chip (rightmost), then Fetch.
-    child.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        ui.add_space(PAD_LIST);
-        if show_identity && let Some(cur) = &section.current_branch {
-            let _ = egui::Frame::new()
-                .fill(Palette::selection_bg())
-                .corner_radius(Palette::RADIUS_CHIP)
-                .inner_margin(egui::Margin::symmetric(6, 2))
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(cur.clone())
-                                .font(data_font(TYPE_CONTROL))
-                                .color(Palette::STATE_INFO),
-                        )
-                        .truncate(),
-                    );
-                });
+        TreeEvent::GroupToggled(group) => match group {
+            TreeGroup::Local => {
+                let on = state.ui.branches_tree.groups.local;
+                state.ui.branches_tree.groups.local = !on;
+            }
+            TreeGroup::Tags => {
+                let on = state.ui.branches_tree.groups.tags;
+                state.ui.branches_tree.groups.tags = !on;
+            }
+        },
+        TreeEvent::RemoteToggled { root, remote } => {
+            let key = (root.clone(), remote.clone());
+            if !state.ui.branches_tree.collapsed_remotes.remove(&key) {
+                state.ui.branches_tree.collapsed_remotes.insert(key);
+            }
         }
-        ui.add_space(PAD_LIST);
-        // Repo-level Fetch (issue 03): one click away even with remotes hidden,
-        // because the old Remote group header is gone.
-        if kit_button(ui, KitButton::Quiet, "Fetch").clicked() {
+        TreeEvent::RemotesVisibleChanged { visible } => {
+            state.ui.branches_tree.show_remotes = visible;
+        }
+        TreeEvent::FetchRequested { .. } => {
+            // The repo-level Fetch covers the narrowed repo's scope — or all
+            // in-scope repos when nothing is narrowed (issue 03).
             fetch_scope(state);
         }
-    });
+        TreeEvent::RenameStarted { root, branch } => {
+            state.ui.branches_tree.overflow = None;
+            state.ui.branches_tree.renaming = Some(branch.clone());
+            state.ui.branches_tree.rename_draft = branch;
+            state.ui.branches_tree.selected_root = Some(root);
+        }
+        TreeEvent::RenameCommitted { root, old, new } => {
+            state.ui.branches_tree.renaming = None;
+            if new.is_empty() || new == old {
+                return;
+            }
+            // The selection follows the new name so the detail panel stays
+            // coherent.
+            if state.ui.branches_tree.selected.as_deref() == Some(old.as_str()) {
+                state.ui.branches_tree.selected = Some(new.clone());
+            }
+            state.rename_branch(&root, &old, &new);
+        }
+        TreeEvent::RenameCancelled => {
+            state.ui.branches_tree.renaming = None;
+        }
+        TreeEvent::CreateBranchRequested { name } => {
+            // The no-match state carries the typed query; the empty state
+            // starts from a blank name.
+            if name.is_empty() {
+                state.ui.dlg.new_branch_name.clear();
+            } else {
+                state.ui.dlg.new_branch_name = name;
+            }
+            state.ui.dlg.new_branch_start.clear();
+            state.ui.dlg.new_branch_base.clear();
+            state.ui.dlg.new_branch_base_picker_open = false;
+            state.ui.dlg.new_branch_checkout = true;
+            state.ui.dialog = Some(Dialog::NewBranch);
+        }
+        TreeEvent::ClearFilterRequested => {
+            state.ui.branches_filter.clear();
+        }
+    }
 }
 
 /// The view-wide Fetch (issue 03). Reachable from every repo header, it covers
 /// the narrowed repo's scope — or all in-scope repos when nothing is narrowed —
 /// so primary actions never leave reach. Each target records its pre-fetch
 /// remote snapshot so the report can say what *that* repo changed.
-fn fetch_scope(state: &mut AppState) {
+pub fn fetch_scope(state: &mut AppState) {
     let targets: Vec<RootId> = match &state.ui.branches_repo_filter {
         Some(id) => vec![id.clone()],
         None => state.multi.roots.iter().map(|r| r.id.clone()).collect(),
@@ -950,605 +709,6 @@ fn fetch_scope(state: &mut AppState) {
         state.run_git("Fetch".to_string(), Affected::Root(rid), move |v| {
             v.fetch(&exec_rid.0, None)
         });
-    }
-}
-
-/// Map a repo's derived status to its dot color (dark-only palette): clean =
-/// success green, unpushed = soft blue, unpulled/dirty = amber.
-fn repo_status_color(status: RepoStatus) -> Color32 {
-    match status {
-        RepoStatus::Clean => Palette::STATE_SUCCESS,
-        RepoStatus::Unpushed => Palette::STATE_INFO,
-        RepoStatus::Unpulled | RepoStatus::Dirty => Palette::STATE_WARNING,
-    }
-}
-
-/// One directory group header inside a repo section: the directory segment
-/// (sans) and its branch count, indented by nesting depth.
-fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    child.add_space(PAD_LIST + depth as f32 * BRANCH_INDENT);
-    child.add(
-        egui::Label::new(
-            RichText::new(format!("{label}/"))
-                .font(chrome_font(TYPE_CONTROL))
-                .color(Palette::T_SECONDARY),
-        )
-        .truncate(),
-    );
-    child.add_space(6.0);
-    child.add(egui::Label::new(
-        RichText::new(count.to_string())
-            .font(chrome_font(TYPE_CONTROL))
-            .color(Palette::T_MUTED),
-    ));
-}
-
-/// One expanded remote group header: the remote name, its branch count, and a
-/// "fetched Nm ago" freshness hint from the last-fetch timestamp. Clicking the
-/// header collapses that remote's group.
-fn remote_group_header(
-    ui: &mut Ui,
-    state: &mut AppState,
-    section: &RepoSection,
-    rg: &RemoteGroup,
-    _children: &[BranchNode],
-) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(
-        Vec2::new(width, crate::ui::components::SECTION_H),
-        Sense::hover(),
-    );
-    let id = ui.auto_id_with(("remote_group", &section.root_id, &rg.remote));
-    let response = ui.interact(rect, id, Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &rg.remote));
-
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    child.add_space(PAD_LIST);
-    let collapsed = state
-        .ui
-        .branches_collapsed_remotes
-        .contains(&(section.root_id.clone(), rg.remote.clone()));
-    let chevron = if collapsed {
-        Icon::CHEVRON_RIGHT
-    } else {
-        Icon::CHEVRON_DOWN
-    };
-    icons::icon(&mut child, chevron, KIT_ICON, Palette::T_MUTED);
-    child.add_space(6.0);
-    // A remote's name is data, like a branch name (spec §19) — monospace, so
-    // `origin` and `upstream-fork` line up the same way branch paths do.
-    child.add(
-        egui::Label::new(
-            RichText::new(rg.remote.clone())
-                .font(data_font(TYPE_SECTION))
-                .color(Palette::T_SECONDARY),
-        )
-        .truncate(),
-    );
-    // Branch count.
-    child.add_space(6.0);
-    child.add(egui::Label::new(
-        RichText::new(rg.count.to_string())
-            .font(chrome_font(TYPE_CONTROL))
-            .color(Palette::T_MUTED),
-    ));
-    if response.clicked() {
-        if collapsed {
-            state
-                .ui
-                .branches_collapsed_remotes
-                .remove(&(section.root_id.clone(), rg.remote.clone()));
-        } else {
-            state
-                .ui
-                .branches_collapsed_remotes
-                .insert((section.root_id.clone(), rg.remote.clone()));
-        }
-    }
-
-    // Freshness hint: the last fetch, reused from the single view-wide
-    // timestamp (spec: "fetched Nm ago").
-    if let Some(last) = state.ui.branches_last_fetch {
-        let age = chrono::Utc::now()
-            .signed_duration_since(last)
-            .to_std()
-            .unwrap_or_default();
-        child.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(PAD_LIST);
-            ui.add(egui::Label::new(
-                RichText::new(format!("fetched {}", stale_badge(age)))
-                    .font(data_font(TYPE_CONTROL))
-                    .color(Palette::T_MUTED),
-            ));
-        });
-    }
-}
-
-/// The collapsed per-repo "Remote" rollup row: a chevron, the word "Remote",
-/// and a count like "3 remotes · 41 branches". Clicking it reveals the remote
-/// groups for the whole view (issue 03).
-fn remote_rollup_row(ui: &mut Ui, state: &mut AppState, section: &RepoSection) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::click());
-    let id = ui.auto_id_with(("remote_rollup", &section.root_id));
-    let response = ui.interact(rect, id, Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Remote"));
-
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    child.add_space(PAD_LIST);
-    let chevron = if state.ui.branches_show_remotes {
-        Icon::CHEVRON_DOWN
-    } else {
-        Icon::CHEVRON_RIGHT
-    };
-    icons::icon(&mut child, chevron, KIT_ICON, Palette::T_MUTED);
-    child.add_space(6.0);
-    child.add(
-        egui::Label::new(
-            RichText::new("Remote")
-                .font(chrome_font(TYPE_SECTION))
-                .color(Palette::T_SECONDARY),
-        )
-        .truncate(),
-    );
-    // The derived rollup count — never a separate estimate. Labels and counts
-    // are chrome, so it reads in the UI sans (spec §19): only the branch and
-    // remote *names* are monospace.
-    if let Some(rollup) = section.remote_rollup() {
-        child.add_space(8.0);
-        child.add(
-            egui::Label::new(
-                RichText::new(rollup)
-                    .font(chrome_font(TYPE_CONTROL))
-                    .color(Palette::T_MUTED),
-            )
-            .truncate(),
-        );
-    }
-    if response.clicked() {
-        state.ui.branches_show_remotes = true;
-    }
-}
-
-/// Local-row ordering across the aggregate (issue 14): each repo's current
-/// branch first, then most recent tip, ties alphabetical.
-fn ordered_rows<'a>(rows: &[&'a Row]) -> Vec<&'a Row> {
-    let mut v = rows.to_vec();
-    v.sort_by(|a, b| {
-        let ac = Some(a.branch.name.as_str()) == a.current.as_deref();
-        let bc = Some(b.branch.name.as_str()) == b.current.as_deref();
-        bc.cmp(&ac)
-            .then_with(|| b.branch.last_touched.cmp(&a.branch.last_touched))
-            .then_with(|| a.repo.cmp(&b.repo))
-            .then_with(|| a.branch.name.cmp(&b.branch.name))
-    });
-    v
-}
-
-/// Muted "reading branches…" line in place of the list — never a blank panel.
-fn reading_state(ui: &mut Ui) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(40.0);
-        ui.label(
-            RichText::new("reading branches…")
-                .font(chrome_font(TYPE_CONTROL))
-                .color(Palette::T_MUTED),
-        );
-    });
-}
-
-/// No search results: the list itself says so and turns the dead end into the
-/// likely next intent — creating the branch (design doc §3/§15).
-fn no_match_state(ui: &mut Ui, state: &mut AppState, query: &str) {
-    ui.add_space(24.0);
-    ui.horizontal(|ui| {
-        ui.add_space(PAD_LIST);
-        ui.label(
-            RichText::new(format!("no branch called {query}. Create it?"))
-                .font(chrome_font(TYPE_CONTROL))
-                .color(Palette::T_MUTED),
-        );
-    });
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.add_space(PAD_LIST);
-        if kit_button(ui, KitButton::Secondary, &format!("Create \"{query}\"")).clicked() {
-            state.ui.dlg.new_branch_name = query.to_string();
-            state.ui.dlg.new_branch_start.clear();
-            state.ui.dlg.new_branch_base.clear();
-            state.ui.dlg.new_branch_base_picker_open = false;
-            state.ui.dlg.new_branch_checkout = true;
-            state.ui.dialog = Some(Dialog::NewBranch);
-        }
-    });
-}
-
-/// A repo with no branches at all: one sentence + one create action, and no
-/// empty group headers (design doc §2/§15).
-fn empty_state(ui: &mut Ui, state: &mut AppState) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(56.0);
-        ui.label(
-            RichText::new("This repo has no branches yet")
-                .font(data_font(TYPE_BODY))
-                .color(Palette::T_PRIMARY),
-        );
-        ui.add_space(8.0);
-        if kit_button(ui, KitButton::Primary, "Create the first branch").clicked() {
-            state.ui.dlg.new_branch_name.clear();
-            state.ui.dlg.new_branch_start.clear();
-            state.ui.dlg.new_branch_base.clear();
-            state.ui.dlg.new_branch_base_picker_open = false;
-            state.ui.dlg.new_branch_checkout = true;
-            state.ui.dialog = Some(Dialog::NewBranch);
-        }
-    });
-}
-
-/// One 30px branch row: current marker, owning-repo prefix (multi-repo),
-/// middle-truncated mono name, upstream, sync chips (icon+count / in-sync /
-/// gone), relative last-activity time. Hover and selection fills come from
-/// the §14.1 row states; clicking selects (never checks out — issue 05
-/// wires the detail).
-fn branch_row(ui: &mut Ui, state: &mut AppState, row: &Row, indent: f32) {
-    let branch = &row.branch;
-    let id = &row.root;
-    // Issue 11: the branch being renamed edits inline on its own row. Rename
-    // is a local-branch verb, scoped to the owning repo.
-    if branch.kind == BranchKind::Local
-        && state.ui.branches_selected_root.as_ref() == Some(id)
-        && state.ui.branches_renaming.as_deref() == Some(branch.name.as_str())
-    {
-        rename_editor(ui, state, id, branch);
-        return;
-    }
-
-    let now = chrono::Utc::now();
-    let meta = row_meta(branch, now);
-    let is_current = row.current.as_deref() == Some(branch.name.as_str());
-    let selected = state.ui.branches_selected_root.as_ref() == Some(id)
-        && state.ui.branches_selected.as_deref() == Some(branch.name.as_str());
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
-    let hovered = ui.rect_contains_pointer(rect);
-
-    // Interact after contents so child widgets (later actions) win clicks.
-    let response = ui.interact(
-        rect,
-        ui.auto_id_with(("branch_row", id, &branch.name)),
-        Sense::click(),
-    );
-
-    let row_state = if selected {
-        RowState::Selected
-    } else if hovered {
-        RowState::Hover
-    } else {
-        RowState::Default
-    };
-    let fill = row_fill(row_state);
-    if fill != Color32::TRANSPARENT {
-        let mut bg = ui.painter().clone();
-        bg.set_layer_id(egui::LayerId::new(egui::Order::Background, response.id));
-        bg.rect_filled(rect, CornerRadius::same(3), fill);
-    }
-
-    // Right cluster: on hover the row reveals its actions (Checkout + the ⋯
-    // overflow) — design doc §4 "Actions live on the row"; otherwise the sync
-    // chips and relative time. Rendered first so name+upstream take the rest.
-    let chips = branch
-        .tracking
-        .as_ref()
-        .map(|_| sync_chips(branch.ahead, branch.behind, branch.gone));
-    let overflow_id = egui::Id::new(("branches_overflow_anchor", id, &branch.name));
-    // The action names its repo's scope in multi-repo projects so a bare
-    // "Checkout" never applies to an ambiguous repo (issue 14).
-    let scope = if state.multi.roots.len() > 1 {
-        format!(" in {}", row.repo)
-    } else {
-        String::new()
-    };
-    let mut action: Option<BranchAction> = None;
-    if hovered {
-        ui.new_child(
-            UiBuilder::new()
-                .max_rect(rect)
-                .layout(Layout::right_to_left(Align::Center)),
-        )
-        .with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(8.0);
-            let more = overflow_button(ui, "More actions");
-            ui.ctx()
-                .memory_mut(|m| m.data.insert_temp(overflow_id, more.rect));
-            if more.clicked() {
-                let key = (row.root.clone(), branch.name.clone());
-                if state.ui.branches_overflow.as_ref() == Some(&key) {
-                    state.ui.branches_overflow = None;
-                } else {
-                    state.ui.branches_overflow = Some(key);
-                }
-            }
-            if kit_button(ui, KitButton::Quiet, &format!("Checkout{scope}")).clicked() {
-                action = Some(BranchAction::Checkout);
-            }
-        });
-    } else {
-        ui.new_child(
-            UiBuilder::new()
-                .max_rect(rect)
-                .layout(Layout::right_to_left(Align::Center)),
-        )
-        .with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(12.0);
-            if let Some(ts) = branch.last_touched {
-                let age = now.signed_duration_since(ts).to_std().unwrap_or_default();
-                ui.label(
-                    RichText::new(stale_badge(age))
-                        .font(data_font(TYPE_CONTROL))
-                        .color(Palette::T_MUTED),
-                );
-            }
-            // Mid-operation state is first-class on the row (issue 09): a
-            // merge in progress reads "merging…" and survives tab switches.
-            if is_current && state.ui.merge_in_progress {
-                ui.label(
-                    RichText::new(crate::ui::components::mid_op_label("merging"))
-                        .font(data_font(TYPE_CONTROL))
-                        .color(Palette::STATE_WARNING),
-                );
-            }
-            if let Some(chips) = &chips {
-                for (kind, label) in chips.iter().rev() {
-                    sync_chip(ui, *kind, label);
-                    ui.add_space(4.0);
-                }
-            }
-        });
-    }
-
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    child.add_space(PAD_LIST + indent);
-    // Remote rows are reference material (issue 13): quieter, labelled with
-    // their remote's name, and never carrying the current marker.
-    let is_remote = branch.kind == BranchKind::Remote;
-    if is_current && !is_remote {
-        icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, Palette::AHEAD);
-        child.add_space(6.0);
-    } else {
-        child.add_space(KIT_ICON + 6.0);
-    }
-    let budget = name_budget(rect.width() - PAD_LIST - KIT_ICON - 6.0 - 130.0);
-    // Display the leaf's own label: remote leaves carry the prefix-stripped
-    // name because their group header already names the remote (issue 03), so
-    // "origin/" is never re-printed here.
-    let label = middle_truncate(&row.label, budget);
-    let ink = if is_remote {
-        // Remote rows are reference material: quiet by design.
-        Palette::T_SECONDARY
-    } else if is_current {
-        // Active/current branch reads in soft blue (issue 04).
-        Palette::STATE_INFO
-    } else if branch.ahead > 0 && branch.behind > 0 {
-        // Diverged from upstream: red (issue 04).
-        Palette::STATUS_DIVERGED
-    } else if branch.ahead > 0 || branch.behind > 0 {
-        // Ahead (unpushed) or behind (unpulled): amber (issue 04).
-        Palette::STATE_WARNING
-    } else {
-        // Plain local branch: stale-aware primary (preserves §14.1 dimming).
-        row_ink(meta.stale)
-    };
-    // No repo prefix on the row: the section header directly above already
-    // names the repo, so repeating it on every row under that header is noise
-    // (and it would push the branch name past its truncation budget). Rows stay
-    // distinguishable because each one lives inside exactly one repo's section.
-    child.add(
-        egui::Label::new(RichText::new(label).font(data_font(TYPE_BODY)).color(ink)).truncate(),
-    );
-    if let Some(up) = &meta.upstream {
-        child.add_space(6.0);
-        child.add(
-            egui::Label::new(
-                RichText::new(up.clone())
-                    .font(data_font(TYPE_CONTROL))
-                    .color(Palette::T_MUTED),
-            )
-            .truncate(),
-        );
-    }
-
-    if let Some(a) = action {
-        apply_action(state, &row.root, branch, a);
-    } else if response.clicked() {
-        // Clicking selects; clicking the selected row again closes the detail
-        // (it closes cleanly without disturbing the list — issue 05).
-        if state.ui.branches_selected_root.as_ref() == Some(&row.root)
-            && state.ui.branches_selected.as_deref() == Some(branch.name.as_str())
-        {
-            state.ui.branches_selected = None;
-            state.ui.branches_selected_root = None;
-        } else {
-            state.ui.branches_selected = Some(branch.name.clone());
-            state.ui.branches_selected_root = Some(row.root.clone());
-        }
-        state.ui.branches_overflow = None;
-    }
-    if response.double_clicked() {
-        // Double-click checks out — selecting and switching stay separate
-        // intents, and double-click is the explicit switch gesture.
-        checkout_branch(state, &row.root, branch);
-    }
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &branch.name));
-}
-
-/// Inline rename editor on the row (issue 11): a draft input plus the
-/// upstream-follows disclosure, with confirm/cancel. Renaming the current
-/// branch does not touch the working tree (git's `branch -m` moves the ref
-/// and HEAD follows); the renamed branch re-sorts under the current ordering
-/// after the refresh.
-fn rename_editor(ui: &mut Ui, state: &mut AppState, id: &RootId, branch: &Branch) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 56.0), Sense::hover());
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::top_down(Align::Min)),
-    );
-    child.add_space(6.0);
-    let enter = child.input(|i| i.key_pressed(egui::Key::Enter));
-    child.horizontal(|ui| {
-        ui.add_space(PAD_LIST);
-        let input = widgets::text_input(ui, &branch.name, &mut state.ui.branches_rename_draft);
-        input.request_focus();
-        if kit_button(ui, KitButton::Secondary, "Apply rename").clicked() || enter {
-            confirm_rename(state, id, branch);
-        }
-        if kit_button(ui, KitButton::Quiet, "Cancel").clicked() {
-            state.ui.branches_renaming = None;
-        }
-    });
-    // The one thing the person must know before confirming: the tracking
-    // relationship does NOT follow the rename (issue 11, design §6.5).
-    if let Some(up) = &branch.tracking {
-        child.add_space(2.0);
-        child.horizontal(|ui| {
-            ui.add_space(PAD_LIST);
-            ui.label(
-                RichText::new(format!(
-                    "tracking {up} does not follow the new name — set it again after"
-                ))
-                .font(chrome_font(TYPE_CONTROL))
-                .color(Palette::T_MUTED),
-            );
-        });
-    }
-}
-
-/// Apply an inline rename through the engine seam and close the editor.
-fn confirm_rename(state: &mut AppState, id: &RootId, branch: &Branch) {
-    let new = state.ui.branches_rename_draft.trim().to_string();
-    let old = branch.name.clone();
-    state.ui.branches_renaming = None;
-    if new.is_empty() || new == old {
-        return;
-    }
-    // The selection follows the new name so the detail panel stays coherent.
-    if state.ui.branches_selected.as_deref() == Some(old.as_str()) {
-        state.ui.branches_selected = Some(new.clone());
-    }
-    state.rename_branch(id, &old, &new);
-}
-
-/// Dispatch one branch action from the detail panel or the ⋯ overflow
-/// (issue 05). The owning root rides every action so its scope is stated in
-/// the wording (issue 14) — "Checkout in alpha".
-fn apply_action(state: &mut AppState, root: &RootId, branch: &Branch, action: BranchAction) {
-    state.ui.branches_overflow = None;
-    match action {
-        BranchAction::Checkout => checkout_branch(state, root, branch),
-        BranchAction::Merge => state.open_merge_into(root, &branch.name),
-        BranchAction::Rebase => {
-            // Issue 09: rebase the selected branch onto the current one — the
-            // label states the direction before anything runs.
-            let current = state
-                .multi
-                .by_id(root)
-                .and_then(|r| r.current_branch.clone())
-                .unwrap_or_default();
-            if !current.is_empty() {
-                state.rebase_branch_onto_current(root, &branch.name, &current);
-            }
-        }
-        BranchAction::Compare => state.open_compare(root, &branch.name),
-        BranchAction::Rename => {
-            // Issue 11: renaming happens inline on the branch itself, never a
-            // separate form screen.
-            state.ui.branches_renaming = Some(branch.name.clone());
-            state.ui.branches_rename_draft = branch.name.clone();
-            state.ui.branches_selected_root = Some(root.clone());
-        }
-        BranchAction::Delete => match branch.kind {
-            BranchKind::Remote => {
-                let (remote, name) = branch
-                    .name
-                    .split_once('/')
-                    .map(|(r, n)| (r.to_string(), n.to_string()))
-                    .unwrap_or(("origin".into(), branch.name.clone()));
-                state.ui.confirm = Some(PendingConfirm::DeleteRemoteBranch { remote, name });
-            }
-            BranchKind::Local => {
-                // A branch checked out in another worktree is refused up
-                // front, with the worktree named (issue 12).
-                if let Some(wt) = state
-                    .caches
-                    .worktrees(root)
-                    .into_iter()
-                    .flatten()
-                    .find(|w| w.branch == branch.name)
-                {
-                    state.ui.confirm = Some(PendingConfirm::CheckoutInWorktree {
-                        branch: branch.name.clone(),
-                        worktree: wt.path.clone(),
-                    });
-                    return;
-                }
-                // The one piece of information that makes deletion feel safe:
-                // what is lost, in human terms (issue 12, design §6.6).
-                state.ui.branches_delete_consequence = delete_consequence(state, root, branch);
-                state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
-                    name: branch.name.clone(),
-                });
-            }
-        },
-    }
-}
-
-/// The human-terms consequence of deleting a local branch (issue 12,
-/// design §6.6): unreachable commits versus safe-to-delete, naming the
-/// current branch the way the design's examples do ("not on any other
-/// branch" → "not on <current>").
-fn delete_consequence(state: &mut AppState, id: &RootId, branch: &Branch) -> Option<String> {
-    let current = state
-        .multi
-        .by_id(id)
-        .and_then(|r| r.current_branch.clone())?;
-    let args = [
-        "rev-list".to_string(),
-        "--count".to_string(),
-        format!("HEAD..{}", branch.name),
-    ];
-    let count = state
-        .executor
-        .run_raw(&id.0, &args)
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok());
-    match count {
-        Some(0) => Some(format!(
-            "everything on this branch already exists on {current} — safe to delete"
-        )),
-        Some(n) => Some(format!(
-            "this branch has {n} commit(s) not on {current} — they become unreachable after deleting"
-        )),
-        None => None,
     }
 }
 
@@ -1626,71 +786,6 @@ fn checkout_branch(state: &mut AppState, root: &RootId, branch: &Branch) {
     state.checkout_branch_op(root, branch.kind, &branch.name);
 }
 
-/// One tinted sync chip: 10px icon + count (or the quiet "in sync" / "gone"
-/// label) on the §13 meaning-color tint. 18px tall, radius 3, mono data type.
-fn sync_chip(ui: &mut Ui, kind: SyncKind, label: &str) {
-    let fg = sync_ink(kind);
-    let bg = sync_bg(kind);
-    let font = data_font(TYPE_CHIP);
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, fg);
-    let icon_s = 10.0;
-    let pad = 5.0;
-    let w = pad * 2.0 + icon_s + 2.0 + galley.size().x;
-    let h = 18.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(Palette::RADIUS_CHIP), bg);
-
-    let icon = match kind {
-        SyncKind::Ahead => Some(Icon::ARROW_UP),
-        SyncKind::Behind => Some(Icon::ARROW_DOWN),
-        SyncKind::InSync => Some(Icon::CHECK),
-        SyncKind::Gone => Some(Icon::ALERT_TRIANGLE),
-        SyncKind::Diverged => None,
-    };
-    let mut x = rect.left() + pad;
-    if let Some(ic) = icon {
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(Rect::from_min_size(
-                    Pos2::new(x, rect.center().y - icon_s / 2.0),
-                    Vec2::splat(icon_s),
-                ))
-                .layout(egui::Layout::centered_and_justified(
-                    egui::Direction::LeftToRight,
-                )),
-        );
-        icons::icon(&mut child, ic, icon_s, fg);
-        x += icon_s + 2.0;
-    }
-    ui.painter().galley_with_override_text_color(
-        Pos2::new(x, rect.center().y - galley.size().y / 2.0),
-        galley,
-        fg,
-    );
-}
-
-/// One tag row: quiet mono name (tags are reference material, issue 13 makes
-/// them visually quieter; today they read at secondary).
-fn tag_row(ui: &mut Ui, name: &str) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    child.add_space(PAD_LIST + KIT_ICON + 6.0);
-    child.add(
-        egui::Label::new(
-            RichText::new(name.to_string())
-                .font(data_font(TYPE_BODY))
-                .color(Palette::T_SECONDARY),
-        )
-        .truncate(),
-    );
-}
-
 /// Detail panel (280px): paints its background + left divider, then the
 /// selected branch's block (issue 05) or the quiet selection prompt. It never
 /// blocks the list — it is a side panel on the same frame.
@@ -1707,7 +802,7 @@ fn detail_panel(ui: &mut Ui, state: &mut AppState) {
         Palette::DIVIDER,
     );
 
-    let Some(name) = state.ui.branches_selected.clone() else {
+    let Some(name) = state.ui.branches_tree.selected.clone() else {
         // Quiet prompt about what selecting a branch will give you — never an
         // error, never empty space (§2).
         ui.add_space(24.0);
@@ -1737,18 +832,19 @@ fn detail_panel(ui: &mut Ui, state: &mut AppState) {
     // selection closes the panel cleanly.
     let Some(root) = state
         .ui
-        .branches_selected_root
+        .branches_tree
+        .selected_root
         .as_ref()
         .and_then(|id| state.multi.by_id(id))
         .cloned()
     else {
-        state.ui.branches_selected = None;
-        state.ui.branches_selected_root = None;
+        state.ui.branches_tree.selected = None;
+        state.ui.branches_tree.selected_root = None;
         return;
     };
     let Some(branch) = root.branches.iter().find(|b| b.name == name).cloned() else {
-        state.ui.branches_selected = None;
-        state.ui.branches_selected_root = None;
+        state.ui.branches_tree.selected = None;
+        state.ui.branches_tree.selected_root = None;
         return;
     };
     let now = chrono::Utc::now();
@@ -1889,4 +985,98 @@ fn detail_actions(
         action = Some(BranchAction::Delete);
     }
     action
+}
+
+/// Dispatch one branch action from the detail panel or the ⋯ overflow
+/// (issue 05). The owning root rides every action so its scope is stated in
+/// the wording (issue 14) — "Checkout in alpha".
+fn apply_action(state: &mut AppState, root: &RootId, branch: &Branch, action: BranchAction) {
+    state.ui.branches_tree.overflow = None;
+    match action {
+        BranchAction::Checkout => checkout_branch(state, root, branch),
+        BranchAction::Merge => state.open_merge_into(root, &branch.name),
+        BranchAction::Rebase => {
+            // Issue 09: rebase the selected branch onto the current one — the
+            // label states the direction before anything runs.
+            let current = state
+                .multi
+                .by_id(root)
+                .and_then(|r| r.current_branch.clone())
+                .unwrap_or_default();
+            if !current.is_empty() {
+                state.rebase_branch_onto_current(root, &branch.name, &current);
+            }
+        }
+        BranchAction::Compare => state.open_compare(root, &branch.name),
+        BranchAction::Rename => {
+            // Issue 11: renaming happens inline on the branch itself, never a
+            // separate form screen.
+            state.ui.branches_tree.renaming = Some(branch.name.clone());
+            state.ui.branches_tree.rename_draft = branch.name.clone();
+            state.ui.branches_tree.selected_root = Some(root.clone());
+        }
+        BranchAction::Delete => match branch.kind {
+            BranchKind::Remote => {
+                let (remote, name) = branch
+                    .name
+                    .split_once('/')
+                    .map(|(r, n)| (r.to_string(), n.to_string()))
+                    .unwrap_or(("origin".into(), branch.name.clone()));
+                state.ui.confirm = Some(PendingConfirm::DeleteRemoteBranch { remote, name });
+            }
+            BranchKind::Local => {
+                // A branch checked out in another worktree is refused up
+                // front, with the worktree named (issue 12).
+                if let Some(wt) = state
+                    .caches
+                    .worktrees(root)
+                    .into_iter()
+                    .flatten()
+                    .find(|w| w.branch == branch.name)
+                {
+                    state.ui.confirm = Some(PendingConfirm::CheckoutInWorktree {
+                        branch: branch.name.clone(),
+                        worktree: wt.path.clone(),
+                    });
+                    return;
+                }
+                // The one piece of information that makes deletion feel safe:
+                // what is lost, in human terms (issue 12, design §6.6).
+                state.ui.branches_delete_consequence = delete_consequence(state, root, branch);
+                state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
+                    name: branch.name.clone(),
+                });
+            }
+        },
+    }
+}
+
+/// The human-terms consequence of deleting a local branch (issue 12,
+/// design §6.6): unreachable commits versus safe-to-delete, naming the
+/// current branch the way the design's examples do ("not on any other
+/// branch" → "not on <current>").
+fn delete_consequence(state: &mut AppState, id: &RootId, branch: &Branch) -> Option<String> {
+    let current = state
+        .multi
+        .by_id(id)
+        .and_then(|r| r.current_branch.clone())?;
+    let args = [
+        "rev-list".to_string(),
+        "--count".to_string(),
+        format!("HEAD..{}", branch.name),
+    ];
+    let count = state
+        .executor
+        .run_raw(&id.0, &args)
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok());
+    match count {
+        Some(0) => Some(format!(
+            "everything on this branch already exists on {current} — safe to delete"
+        )),
+        Some(n) => Some(format!(
+            "this branch has {n} commit(s) not on {current} — they become unreachable after deleting"
+        )),
+        None => None,
+    }
 }

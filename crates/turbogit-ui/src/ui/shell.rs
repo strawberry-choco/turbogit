@@ -440,9 +440,10 @@ const TOPBAR_TEXT: f32 = 13.0; // topbar text scale (spec §4.2)
 const TOPBAR_ACTIONS_TEXT: f32 = 12.0; // right-cluster button text
 
 /// Topbar (issue #03, screen 01): TurboGit brand on the left, then a
-/// workspace selector and a breadcrumb (project / focused repo); the
-/// right-aligned action cluster ([`render_topbar_actions`]) is rendered
-/// as a sibling top panel so it shares the same horizontal row.
+/// workspace selector that opens the picker (issue #34) and a breadcrumb
+/// (project / focused repo); the right-aligned action cluster
+/// ([`render_topbar_actions`]) is rendered as a sibling top panel so it
+/// shares the same horizontal row.
 ///
 /// Replaces the IDE menubar from the previous design — every shortcut
 /// previously reachable through the File / Git / View menus is now
@@ -470,7 +471,11 @@ fn render_topbar(ui: &mut Ui, state: &mut AppState) {
                 );
                 ui.add_space(16.0);
 
-                // Workspace selector: project_dir basename + chevron.
+                // Workspace selector: project_dir basename + chevron. The
+                // click opens the workspace picker (issue #34) — a
+                // state-driven window painted by the floating-surface block
+                // in `ui::render` later this same frame, which is also how
+                // the palette's Switch Workspace action reaches it.
                 if let Some(workspace) = workspace_label(state) {
                     let selector = ui
                         .button(
@@ -480,8 +485,13 @@ fn render_topbar(ui: &mut Ui, state: &mut AppState) {
                         )
                         .on_hover_text("Switch workspace");
                     widgets::focus_ring(ui, &selector);
-                    // v1 placeholder — issue #34 owns the picker.
-                    let _ = selector.clicked();
+                    if selector.clicked() {
+                        state.ui.workspace_picker_open = true;
+                        // Bottom-left of the button: the dropdown hangs
+                        // under the chevron.
+                        state.ui.workspace_picker_anchor =
+                            Some((selector.rect.left(), selector.rect.bottom()));
+                    }
                     icons::icon(ui, Icon::CHEVRON_DOWN, TOPBAR_ICON_SIZE, Palette::INK_3);
                     ui.add_space(16.0);
                 }

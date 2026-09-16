@@ -190,7 +190,7 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
             let co = state.ui.dlg.new_branch_checkout;
             // The Branches tab scrolls the fresh branch into view (issue 08):
             // creating something and then hunting for it feels broken.
-            state.ui.branches_scroll_to = Some(name.clone());
+            state.ui.branches_tree.scroll_to = Some(name.clone());
             state.run_git(
                 format!("Create branch {name}"),
                 Affected::from_optional_root(root.as_deref()),

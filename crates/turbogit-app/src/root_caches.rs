@@ -51,6 +51,9 @@ pub struct RootCaches {
     files_cache: HashMap<(RootId, CommitId), Vec<Change>>,
     /// Path-scoped logs keyed by (root, scoped path) (issue #19).
     log_path_cache: HashMap<(RootId, PathBuf), Vec<Commit>>,
+    /// Ref-scoped logs keyed by (root, ref) (branch-tree extraction, plan
+    /// D9) — mirrors the path-scoped cache: same shape, same cost model.
+    log_ref_cache: HashMap<(RootId, String), Vec<Commit>>,
     /// Pickaxe search results keyed by (root, query) (issue 17).
     search_cache: HashMap<(RootId, String), Vec<Commit>>,
     /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
@@ -111,6 +114,13 @@ impl RootCaches {
     pub fn path_log(&self, root: &RootId, path: &Path) -> Option<&[Commit]> {
         self.log_path_cache
             .get(&(root.clone(), path.to_path_buf()))
+            .map(|v| v.as_slice())
+    }
+
+    /// The cached ref-scoped log for `(root, ref)`, if loaded (plan D9).
+    pub fn ref_log(&self, root: &RootId, ref_name: &str) -> Option<&[Commit]> {
+        self.log_ref_cache
+            .get(&(root.clone(), ref_name.to_string()))
             .map(|v| v.as_slice())
     }
 
@@ -237,6 +247,35 @@ impl RootCaches {
             .unwrap_or(&[])
     }
 
+    /// The commits of `ref_name` in `root` (`git log <ref>`), computed
+    /// through the engine seam on miss and cached (plan D9). Returns a
+    /// borrow of the cached list — same fill-and-reborrow shape as
+    /// [`RootCaches::ensure_files`] (plan §1.2).
+    pub fn ensure_ref_log(
+        &mut self,
+        exec: &dyn GitExecutor,
+        root: &RootId,
+        ref_name: &str,
+    ) -> &[Commit] {
+        let key = (root.clone(), ref_name.to_string());
+        if !self.log_ref_cache.contains_key(&key) {
+            let commits = exec
+                .log(
+                    &root.0,
+                    &LogOpts {
+                        branch: Some(key.1.clone()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_default();
+            self.log_ref_cache.insert(key.clone(), commits);
+        }
+        self.log_ref_cache
+            .get(&key)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// The commits where the occurrence count of `query` changed (pickaxe,
     /// issue 17), computed through the engine seam on miss and cached.
     /// Returns a borrow of the cached list — same fill-and-reborrow shape
@@ -337,6 +376,7 @@ impl RootCaches {
                 self.ref_cache.remove(root);
                 self.files_cache.retain(|(r, _), _| r != root);
                 self.log_path_cache.retain(|(r, _), _| r != root);
+                self.log_ref_cache.retain(|(r, _), _| r != root);
                 self.search_cache.retain(|(r, _), _| r != root);
                 self.ahead_behind.remove(root);
                 self.worktree_cache.remove(root);
@@ -352,6 +392,7 @@ impl RootCaches {
         self.ref_cache.clear();
         self.files_cache.clear();
         self.log_path_cache.clear();
+        self.log_ref_cache.clear();
         self.search_cache.clear();
         self.ahead_behind.clear();
         self.worktree_cache.clear();
@@ -366,6 +407,7 @@ impl RootCaches {
             && self.ref_cache.is_empty()
             && self.files_cache.is_empty()
             && self.log_path_cache.is_empty()
+            && self.log_ref_cache.is_empty()
             && self.search_cache.is_empty()
             && self.ahead_behind.is_empty()
             && self.worktree_cache.is_empty()

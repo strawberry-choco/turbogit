@@ -9,8 +9,8 @@
 
 use chrono::Local;
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, RichText, ScrollArea, Sense,
-    Stroke, Ui, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, RichText, ScrollArea,
+    Sense, Shape, Stroke, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 
 use super::icons::{self, Icon};
@@ -62,13 +62,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        render_collapse_toggle(ui, state);
-        ui.label(
-            RichText::new("ACTIVITY")
-                .strong()
-                .font(FontId::new(HEADER_TEXT, FontFamily::Proportional))
-                .color(Palette::INK_3),
-        );
+        render_title_chip(ui, state);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if state.ui.activity.expanded {
                 if ui.button(header_button("Clear feed")).clicked() {
@@ -130,26 +124,60 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// The chevron toggle. Its accessibility label names the action it performs
-/// ("Collapse activity" / "Expand activity") so it is queryable headlessly.
-fn render_collapse_toggle(ui: &mut Ui, state: &mut AppState) {
+/// The header's title chip — the chevron and the ACTIVITY label inside one
+/// interactive rect, so the glyph a user aims at is the glyph that responds.
+///
+/// History worth keeping: the old toggle allocated the click target and then
+/// let `icons::icon` allocate its own slot *beside* it, so the painted
+/// chevron landed outside the hit rect and the visible control was dead —
+/// only the invisible 16px box to its left answered. The headless suite
+/// never noticed because kittest clicks the a11y rect's centre.
+fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
+    const ICON_SLOT: f32 = 16.0;
+    const ICON_SIZE: f32 = 12.0;
+
     let expanded = state.ui.activity.expanded;
     let (label, icon) = if expanded {
         ("Collapse activity", Icon::CHEVRON_DOWN)
     } else {
         ("Expand activity", Icon::CHEVRON_RIGHT)
     };
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::click());
+
+    // Hover-tint slot: filled after the chip rect is known but written back
+    // at its original index, so the tint renders behind the glyph and label.
+    let hover_tint = ui.painter().add(Shape::Noop);
+
+    let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(ICON_SLOT), Sense::hover());
+    paint_icon_centered(ui, icon, icon_rect.center(), ICON_SIZE, Palette::INK_2);
+
+    let text = ui.label(
+        RichText::new("ACTIVITY")
+            .strong()
+            .font(FontId::new(HEADER_TEXT, FontFamily::Proportional))
+            .color(Palette::INK_3),
+    );
+
+    let chip = icon_rect.union(text.rect).expand2(Vec2::new(2.0, 0.0));
+    let response = ui.interact(chip, ui.auto_id_with("activity_title_chip"), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
     if response.clicked() {
         state.ui.activity.expanded = !expanded;
     }
     if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(3), Palette::SURFACE_2);
+        ui.painter().set(
+            hover_tint,
+            Shape::rect_filled(chip, CornerRadius::same(3), Palette::SURFACE_2),
+        );
     }
     widgets::focus_ring(ui, &response);
-    icons::icon(ui, icon, 12.0, Palette::INK_2);
+}
+
+/// Paint one icon primitive centered at `center` without disturbing layout
+/// (mirrors `shell::paint_icon_centered`).
+fn paint_icon_centered(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
+    let mut child =
+        ui.new_child(UiBuilder::new().max_rect(Rect::from_center_size(center, Vec2::splat(size))));
+    icons::icon(&mut child, icon, size, color);
 }
 
 fn header_button(label: &str) -> RichText {

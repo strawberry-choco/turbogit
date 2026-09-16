@@ -17,8 +17,9 @@
 //!    message below.
 
 use crate::theme::Palette;
-use crate::ui::icons;
-use crate::ui::icons::Icon;
+use crate::ui::branch_tree_view::{self, TreeEvent, TreeGroup, TreeProps};
+use crate::ui::branches::fetch_scope;
+use crate::ui::branches_tree::build_branch_view;
 use crate::ui::widgets::{self, BadgeKind, RefKind};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
@@ -28,7 +29,7 @@ use egui::{
 use std::path::PathBuf;
 use turbogit_app::state::{AppState, BlameTarget, Dialog, DiffTarget, PendingConfirm, Toast};
 use turbogit_domain::model::{
-    ChangeStatus, Commit, CommitId, CommitRef, DateFormat, GitRefKind, RefState, RootId,
+    BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
     SignatureState,
 };
 use turbogit_services::sync_service;
@@ -204,6 +205,14 @@ fn ensure_log_data(state: &mut AppState) {
             .caches
             .ensure_path_log(state.executor.as_ref(), &root, &path);
     }
+    // Ref-scoped history (branch-tree extraction, plan D9): filled like the
+    // path scope, through the engine seam's `LogOpts::branch` support
+    // (`git log <ref>`).
+    if let Some((root, ref_name)) = state.ui.log_ref_scope.clone() {
+        state
+            .caches
+            .ensure_ref_log(state.executor.as_ref(), &root, &ref_name);
+    }
     // Code-change search (issue 17): a non-empty search box also fills the
     // pickaxe cache per visible root — `git log -S` covers commits whose
     // content changed the query string's count, which client-side filtering
@@ -224,6 +233,15 @@ fn ensure_log_data(state: &mut AppState) {
 /// details pane, changed-files parent lookup). Borrows the cache slices —
 /// no per-frame commit clones (plan §1.3).
 fn commits_for<'a>(state: &'a AppState, root: &RootId) -> Vec<&'a Commit> {
+    if let Some((scope_root, ref_name)) = &state.ui.log_ref_scope
+        && let Some(commits) = state.caches.ref_log(scope_root, ref_name)
+    {
+        return if scope_root == root {
+            commits.iter().collect()
+        } else {
+            Vec::new()
+        };
+    }
     if let Some(path) = &state.ui.log_path_scope
         && let Some(commits) = state.caches.path_log(root, path)
     {
@@ -240,6 +258,11 @@ fn commits_for<'a>(state: &'a AppState, root: &RootId) -> Vec<&'a Commit> {
 /// [`commits_for`] — borrowed over the cache slice instead of cloning the
 /// whole listing for parent lookups (plan §1.3).
 fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a Commit> {
+    if let Some((scope_root, ref_name)) = &state.ui.log_ref_scope
+        && let Some(commits) = state.caches.ref_log(scope_root, ref_name)
+    {
+        return commits.iter().find(|c| c.id == cid);
+    }
     if let Some(path) = &state.ui.log_path_scope
         && let Some(commits) = state.caches.path_log(root, path)
     {
@@ -257,7 +280,15 @@ fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a 
 /// root's unscoped log. Yields borrowed commits sorted by `(time, id)`
 /// instead of cloning the union per frame (plan §1.3).
 fn visible_commits(state: &AppState) -> Vec<&Commit> {
-    let mut commits: Vec<&Commit> = if state.ui.log_path_scope.is_some() {
+    // Ref scope (plan D9): only the scoped ref's cached listing is shown —
+    // same shape as the path scope below.
+    let mut commits: Vec<&Commit> = if let Some((root, ref_name)) = &state.ui.log_ref_scope {
+        state
+            .caches
+            .ref_log(root, ref_name)
+            .map(|c| c.iter().collect())
+            .unwrap_or_default()
+    } else if state.ui.log_path_scope.is_some() {
         match &state.selected_root {
             Some(root) => commits_for(state, root),
             None => Vec::new(),
@@ -320,6 +351,13 @@ fn ref_kind(kind: GitRefKind) -> RefKind {
 // --- Composition ----------------------------------------------------------------
 
 pub fn show_log(ui: &mut Ui, state: &mut AppState) {
+    // The ref scope clears when the selected repository changes (plan D9),
+    // so the graph never becomes silently empty.
+    if let Some((root, _)) = &state.ui.log_ref_scope
+        && state.selected_root.as_ref() != Some(root)
+    {
+        state.ui.log_ref_scope = None;
+    }
     ensure_log_data(state);
 
     // Fixed spec widths shrink proportionally on narrow windows so the graph
@@ -378,117 +416,117 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
     widgets::search_input(ui, "Search branches", &mut state.ui.log_branch_filter);
     ui.add_space(4.0);
 
-    // Union decorations across the visible roots, deduplicated by name+kind
-    // (a name seen with a sync state keeps it — issue 17).
+    // Warm the shared tag cache (plan D10): whichever tool window opens
+    // first warms the tags for both.
+    branch_tree_view::warm_tags(state);
+
+    // This instance has remotes visible, fixed — no toggle lives in the pane.
+    state.ui.log_tree.show_remotes = true;
+
+    // Build the tree over the Roots-filter-visible roots. The decorations
+    // upgrade the warmed tag states (plan D8) and mark remote-tracking refs
+    // whose upstream was deleted as gone (issue 17, carried through the
+    // branch snapshot).
     let ids = visible_root_ids(state);
-    let mut local: Vec<CommitRef> = Vec::new();
-    let mut remote: Vec<CommitRef> = Vec::new();
-    let mut tags: Vec<CommitRef> = Vec::new();
-    for id in &ids {
-        for refs in state.caches.ref_groups(id) {
-            for r in refs {
-                let bucket = match r.kind {
-                    GitRefKind::Branch => &mut local,
-                    GitRefKind::Remote => &mut remote,
-                    GitRefKind::Tag => &mut tags,
+    let mut roots: Vec<Root> = ids
+        .iter()
+        .filter_map(|id| state.multi.by_id(id).cloned())
+        .collect();
+    let mut tags_by_root = state.ui.branches_tags.clone();
+    for root in &mut roots {
+        let mut deco: std::collections::HashMap<String, RefState> =
+            std::collections::HashMap::new();
+        for group in state.caches.ref_groups(&root.id) {
+            for r in group {
+                deco.entry(r.name.clone()).or_insert(r.state);
+            }
+        }
+        for b in &mut root.branches {
+            if b.kind == BranchKind::Remote {
+                // Decorations name remote refs `remote/branch`; the snapshot
+                // carries the split form (`name` + `remote`).
+                let full = match &b.remote {
+                    Some(r) => format!("{r}/{}", b.name),
+                    None => b.name.clone(),
                 };
-                match bucket.iter_mut().find(|b| b.name == r.name) {
-                    Some(b) => {
-                        if b.state == RefState::Default {
-                            b.state = r.state;
-                        }
-                    }
-                    None => bucket.push(r.clone()),
+                b.gone = deco.get(&full).is_some_and(|st| *st == RefState::Gone);
+            }
+        }
+        if let Some(tags) = tags_by_root.get_mut(&root.id) {
+            for (name, st) in tags {
+                if let Some(d) = deco.get(name) {
+                    *st = *d;
                 }
             }
         }
     }
+    let view = build_branch_view(&roots, &tags_by_root, state.ui.log_tree.show_remotes);
 
-    let filter = state.ui.log_branch_filter.to_lowercase();
-    let matches = |name: &str| filter.is_empty() || name.to_lowercase().contains(&filter);
-
-    ScrollArea::vertical().show(ui, |ui| {
-        widgets::group_title(ui, "Local");
-        for r in local.iter().filter(|r| matches(&r.name)) {
-            let current = ids.iter().any(|id| {
-                state
-                    .multi
-                    .by_id(id)
-                    .and_then(|r| r.current_branch.clone())
-                    .as_deref()
-                    == Some(r.name.as_str())
-            });
-            branch_row(ui, &r.name, Icon::GIT_BRANCH, current, RefState::Default);
-        }
-
-        ui.add_space(6.0);
-        widgets::group_title(ui, "Remote");
-        for r in remote.iter().filter(|r| matches(&r.name)) {
-            branch_row(ui, &r.name, Icon::FOLDER_GIT, false, r.state);
-        }
-
-        ui.add_space(6.0);
-        widgets::group_title(ui, "Tags");
-        for r in tags.iter().filter(|r| matches(&r.name)) {
-            branch_row(ui, &r.name, Icon::TAG, false, r.state);
-        }
-
-        ui.add_space(8.0);
-        roots_filter_section(ui, state);
-    });
-}
-
-/// One row of the branches pane (LOCAL / REMOTE / TAGS). Live-filtered by the
-/// caller; the current branch gets a brand-tinted icon and emphasized ink.
-/// `state` (issue 17) drives the right-aligned sync marker: remote rows may
-/// read "gone", tag rows "pushed" / "local only" (screen 09).
-fn branch_row(ui: &mut Ui, name: &str, icon: Icon, current: bool, state: RefState) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::hover());
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    icons::icon(&mut child, icon, 13.0, Palette::INK_3);
-    child.add_space(4.0);
-    let ink = if current {
-        Palette::INK
-    } else {
-        Palette::INK_2
+    // The shared tree component with the pane's narrower capability set
+    // (plan D7): no inline rename, no per-row actions, no repo-scope picker.
+    let props = TreeProps {
+        view: &view,
+        filter: &state.ui.log_branch_filter,
+        repo_filter: None,
+        tags_by_root: &tags_by_root,
+        multi_repo: state.multi.roots.len() > 1,
+        busy: false,
+        has_any_data: true,
+        merge_in_progress: false,
+        last_fetch: None,
+        now: chrono::Utc::now(),
+        allows_rename: false,
+        shows_row_actions: false,
+        id_salt: "log_branch_tree",
+        full_height: false,
     };
-    child.label(
-        RichText::new(name)
-            .font(micro_or_body_font(current))
-            .color(ink),
-    );
-    let marker = match state {
-        RefState::Default => None,
-        RefState::Gone => Some(("gone", Palette::STATE_ERROR)),
-        RefState::Pushed => Some(("pushed", Palette::STATE_SUCCESS)),
-        RefState::LocalOnly => Some(("local only", Palette::STATE_WARNING)),
-    };
-    if current || marker.is_some() {
-        child.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if let Some((text, color)) = marker {
-                ui.label(
-                    RichText::new(text)
-                        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                        .color(color),
-                );
-            }
-            if current {
-                icons::icon(ui, Icon::CHECK, 13.0, Palette::BRAND);
-            }
-        });
+    let events = branch_tree_view::branch_tree(ui, &props, &mut state.ui.log_tree);
+    for event in events {
+        apply_log_tree_event(state, event);
     }
+
+    ui.add_space(8.0);
+    roots_filter_section(ui, state);
 }
 
-fn micro_or_body_font(emphasized: bool) -> FontId {
-    FontId::new(
-        if emphasized { 12.0 } else { MICRO_TEXT },
-        FontFamily::Proportional,
-    )
+/// The Log pane's tree-event policy (plan D7): row activation scopes the
+/// graph to that ref; group/remote toggles keep the pane's own tree state;
+/// the repo header's Fetch covers the same scope as the Branches window's.
+fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
+    // A modal surface owns the keyboard and pointer: tree events are ignored
+    // while a dialog or confirmation is up.
+    if state.ui.dialog.is_some() || state.ui.confirm.is_some() {
+        return;
+    }
+    match event {
+        TreeEvent::RowClicked { root, branch } | TreeEvent::RowActivated { root, branch } => {
+            state.ui.log_ref_scope = Some((root.clone(), branch));
+            state.selected_root = Some(root);
+            state.ui.selected_commit = None;
+            state.ui.log_selected_file = None;
+        }
+        TreeEvent::GroupToggled(group) => match group {
+            TreeGroup::Local => {
+                let on = state.ui.log_tree.groups.local;
+                state.ui.log_tree.groups.local = !on;
+            }
+            TreeGroup::Tags => {
+                let on = state.ui.log_tree.groups.tags;
+                state.ui.log_tree.groups.tags = !on;
+            }
+        },
+        TreeEvent::RemoteToggled { root, remote } => {
+            let key = (root.clone(), remote.clone());
+            if !state.ui.log_tree.collapsed_remotes.remove(&key) {
+                state.ui.log_tree.collapsed_remotes.insert(key);
+            }
+        }
+        TreeEvent::RemotesVisibleChanged { visible } => {
+            state.ui.log_tree.show_remotes = visible;
+        }
+        TreeEvent::FetchRequested { .. } => fetch_scope(state),
+        _ => {}
+    }
 }
 
 /// Bottom-of-pane ROOTS filter (multi-root): All roots / per-root rows.
@@ -585,6 +623,26 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 );
             });
         }
+        if let Some((_, ref_name)) = state.ui.log_ref_scope.clone() {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // The ref scope's chip — the same removable-chip gesture as
+                // the path filter (plan D7/D9).
+                let remove = ui
+                    .small_button(RichText::new("×").size(13.0))
+                    .on_hover_text("Remove the ref filter");
+                remove.widget_info(|| {
+                    WidgetInfo::labeled(WidgetType::Button, true, "Remove ref filter")
+                });
+                if remove.clicked() {
+                    state.ui.log_ref_scope = None;
+                }
+                ui.label(
+                    RichText::new(format!("Ref filter: {ref_name}"))
+                        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                        .color(Palette::BRAND),
+                );
+            });
+        }
     });
 
     let commits = visible_commits(state);
@@ -593,7 +651,8 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     // Scoped views are single-root by definition — no root stripes/legend.
     let multi_root = state.multi.roots.len() > 1
         && state.ui.log_root_filter.is_none()
-        && state.ui.log_path_scope.is_none();
+        && state.ui.log_path_scope.is_none()
+        && state.ui.log_ref_scope.is_none();
 
     // Pagination (issue 17): "Load more" is offered while a visible root's
     // cached log fills its whole fetch window — and never in a scoped view,
@@ -601,6 +660,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     // selections: `commits` borrows the caches until rendering ends.
     let page_limit = (state.ui.log_page + 1) * turbogit_app::state::LOG_PAGE_SIZE;
     let may_have_more = state.ui.log_path_scope.is_none()
+        && state.ui.log_ref_scope.is_none()
         && visible_root_ids(state)
             .iter()
             .any(|id| state.caches.log(id).is_some_and(|c| c.len() >= page_limit));

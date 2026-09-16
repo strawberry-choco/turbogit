@@ -144,8 +144,10 @@ pub fn record_workspace_into(recents: &mut Recents, path: &Path, repo_count: usi
     }
 }
 
-/// Display name for a project directory: its final component.
-fn project_name(path: &Path) -> String {
+/// Display name for a project directory: its final component. The canonical
+/// naming rule for recents rows (used by [`record_into`] and by the workspace
+/// picker's synthesized current row).
+pub fn project_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned())

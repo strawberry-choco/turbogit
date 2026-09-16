@@ -758,8 +758,31 @@ fn paint_checkbox(ui: &Ui, rect: Rect, checked: bool, resp: &egui::Response) {
     }
 }
 
+// Fixed columns of one file row, expressed from the row's left edge. They are
+// named constants because a row's text has to be measured — and its height
+// settled — before the row rect is allocated.
+
+/// Left padding before the checkbox glyph.
+const ROW_PAD_X: f32 = 6.0;
+/// Width of the per-file include checkbox.
+const ROW_CHECKBOX: f32 = 16.0;
+/// Gap between two row columns.
+const ROW_GAP: f32 = 6.0;
+/// Right padding of the row: the dim location column ends here.
+const ROW_EDGE: f32 = 12.0;
+/// Space the partially-staged dot reserves after the status letter.
+const PARTIAL_DOT_COLUMN: f32 = 18.0;
+/// Lead of the rename arrow (plus its gap) before the renamed-from path.
+const RENAME_ARROW_W: f32 = 24.0;
+/// Narrowest name column a row accepts before the dim location gives up its
+/// first-line seat and moves onto its own line under the name.
+const MIN_NAME_COLUMN: f32 = 96.0;
+
 /// One file row (issue 05, design doc §4): `[checkbox] [status letter]
-/// [coloured filename] … [dim location]` on the fixed 24 px file-row height.
+/// [coloured filename] … [dim location]` on the 24 px file-row height — or
+/// taller: a filename too long for its column **wraps onto continuation
+/// lines** and the row grows one text line per extra row of text, so a long
+/// name is never clipped at the pane edge or painted over the dim location.
 /// The status letter colour-codes the row — M blue / A green / U olive — the
 /// filename takes the status colour, and the parent directory renders dim at
 /// the pane edge; hunk counts moved out of rows into the diff header
@@ -798,30 +821,101 @@ fn change_row(
     let included = state.ui.selected.contains(&key);
     let tint = status_color(c.status);
     let (name, location) = row_display(&c.path);
+    let font = FontId::new(12.5, FontFamily::Proportional);
+    let painter = ui.painter().clone();
 
-    // Fixed-height row (issue 01 spacing scale, design doc §8).
-    let row = Rect::from_min_size(
-        ui.cursor().left_top(),
-        Vec2::new(ui.available_width(), crate::theme::FILE_ROW_HEIGHT),
-    );
+    // ---- measure, then allocate --------------------------------------
+    // The row's height is a function of its text, so everything is laid out
+    // first: the name's wrap width depends on the fixed prefix columns and
+    // on whether the dim location keeps its first-line seat.
+    let letter_galley =
+        painter.layout_no_wrap(badge_letter(c.status).to_owned(), font.clone(), tint);
+    let (letter_w, letter_h) = letter_galley.size().into();
+    let left = ui.cursor().left_top();
+    let content_right = left.x + ui.available_width() - ROW_EDGE;
+    // x of the name column: the row's left edge plus the fixed prefix — the
+    // checkbox, the status letter, and the partially-staged dot when the
+    // file is partly staged.
+    let name_x = left.x
+        + ROW_PAD_X
+        + ROW_CHECKBOX
+        + ROW_GAP
+        + letter_w
+        + ROW_GAP
+        + if c.staged && c.unstaged {
+            PARTIAL_DOT_COLUMN
+        } else {
+            0.0
+        };
+    // The dim location keeps its own right-aligned column on the first line
+    // as long as the name keeps a readable width; on deep paths in a narrow
+    // pane it drops onto its own line beneath the name instead of squeezing
+    // the name into a sliver.
+    let loc_galley = location
+        .as_ref()
+        .map(|loc| painter.layout_no_wrap(loc.clone(), font.clone(), Palette::INK_3));
+    let loc_w = loc_galley.as_ref().map_or(0.0, |g| g.size().x);
+    let loc_h = loc_galley.as_ref().map_or(0.0, |g| g.size().y);
+    let loc_gap = if loc_galley.is_some() { ROW_GAP } else { 0.0 };
+    let full_column = content_right - name_x;
+    let loc_below = loc_galley.is_some() && full_column - loc_w - loc_gap < MIN_NAME_COLUMN;
+    let name_column = if loc_below {
+        full_column
+    } else {
+        full_column - loc_w - loc_gap
+    }
+    .max(1.0);
+    // A filename that does not fit its column wraps onto continuation lines
+    // (breaking mid-word — file names rarely contain a space) rather than
+    // overrunning the pane or the location column.
+    let name_galley = painter.layout(name.clone(), font.clone(), tint, name_column);
+
+    // Renames/copies (spec R8) keep the muted arrow + old path: inline after
+    // a single-line name that leaves room for them, else on their own line.
+    let orig_galley = c
+        .orig_path
+        .as_ref()
+        .map(|p| painter.layout_no_wrap(p.display().to_string(), font.clone(), Palette::INK_3));
+    let rename_below = match (&orig_galley, name_galley.rows.len()) {
+        (Some(orig), 1) => {
+            name_x + name_galley.size().x + ROW_GAP + RENAME_ARROW_W + orig.size().x
+                > name_x + name_column
+        }
+        (Some(_), _) => true,
+        (None, _) => false,
+    };
+
+    // The row keeps the design's 24 px single-line height (design doc §8)
+    // and grows exactly one text line per extra line of text.
+    let line_h = name_galley
+        .rows
+        .first()
+        .map_or(name_galley.size().y, |row| row.size.y);
+    let name_h = name_galley.size().y;
+    let name_lines = name_galley.rows.len().max(1);
+    let below_lines = usize::from(rename_below) + usize::from(loc_below);
+    let content_h = name_h + below_lines as f32 * line_h;
+    let row_h = crate::theme::FILE_ROW_HEIGHT + (name_lines - 1 + below_lines) as f32 * line_h;
+    let row = Rect::from_min_size(left, Vec2::new(ui.available_width(), row_h));
     ui.allocate_exact_size(row.size(), Sense::hover());
 
     // Selected row: solid design-blue fill under the content — the checkbox
     // and the background derive from the same selection, which also drives
     // the diff preview.
     if included {
-        ui.painter()
-            .rect_filled(row, CornerRadius::same(4), Palette::SELECTION_BG);
+        painter.rect_filled(row, CornerRadius::same(4), Palette::SELECTION_BG);
     }
 
-    let cy = row.center().y;
-    let mut x = row.left() + 6.0;
+    // The text block is centred in the row; the checkbox, the status letter
+    // and the right-aligned location all ride the block's first line.
+    let block_top = row.top() + (row_h - content_h) / 2.0;
+    let cy = block_top + line_h / 2.0;
 
     // Checkbox: toggles commit inclusion only, never the preview.
-    let cb = 16.0;
+    let cb = ROW_CHECKBOX;
     let cb_rect = Rect::from_min_max(
-        Pos2::new(x, cy - cb / 2.0),
-        Pos2::new(x + cb, cy + cb / 2.0),
+        Pos2::new(row.left() + ROW_PAD_X, cy - cb / 2.0),
+        Pos2::new(row.left() + ROW_PAD_X + cb, cy + cb / 2.0),
     );
     let mut is_included = included;
     let cb_resp = ui.interact(
@@ -839,62 +933,81 @@ fn change_row(
         });
     }
     paint_checkbox(ui, cb_rect, is_included, &cb_resp);
-    x += cb + 6.0;
 
     // Status letter, then the coloured filename, then the dim location.
-    let font = FontId::new(12.5, FontFamily::Proportional);
-    let painter = ui.painter().clone();
-    let letter = badge_letter(c.status);
-    let letter_galley = painter.layout_no_wrap(letter.to_owned(), font.clone(), tint);
-    let (letter_w, letter_h) = letter_galley.size().into();
-    painter.galley_with_override_text_color(Pos2::new(x, cy - letter_h / 2.0), letter_galley, tint);
-    x += letter_w + 6.0;
+    let letter_x = row.left() + ROW_PAD_X + ROW_CHECKBOX + ROW_GAP;
+    painter.galley_with_override_text_color(
+        Pos2::new(letter_x, cy - letter_h / 2.0),
+        letter_galley,
+        tint,
+    );
 
     if c.staged && c.unstaged {
-        partially_staged_dot_at(ui, Pos2::new(x + 7.0, cy), &key);
-        x += 14.0 + 4.0;
+        // The dot's 14 px hit rect is centred in its own slot, just left of
+        // the name column.
+        partially_staged_dot_at(ui, Pos2::new(name_x - PARTIAL_DOT_COLUMN + 7.0, cy), &key);
     }
 
-    let name_galley = painter.layout_no_wrap(name.clone(), font.clone(), tint);
-    let (name_w, name_h) = name_galley.size().into();
-    painter.galley_with_override_text_color(Pos2::new(x, cy - name_h / 2.0), name_galley, tint);
-    x += name_w + 6.0;
+    painter.galley_with_override_text_color(
+        Pos2::new(name_x, block_top),
+        name_galley.clone(),
+        tint,
+    );
 
-    if let Some(orig) = &c.orig_path {
-        let orig_text = orig.display().to_string();
+    // Lines below the name: the rename marker first, the dim location last.
+    let rename_top = block_top + name_h;
+    let loc_top = rename_top + if rename_below { line_h } else { 0.0 };
+    if let Some(orig) = &orig_galley {
+        let orig_h = orig.size().y;
+        let (arrow_cy, orig_x, orig_y) = if rename_below {
+            (
+                rename_top + line_h / 2.0,
+                name_x + RENAME_ARROW_W,
+                rename_top + (line_h - orig_h) / 2.0,
+            )
+        } else {
+            (
+                cy,
+                name_x + name_galley.size().x + ROW_GAP + RENAME_ARROW_W,
+                cy - orig_h / 2.0,
+            )
+        };
         // Muted arrow then the renamed-from path, both dim (R8).
         icon_at(
             ui,
             Icon::ARROW_RIGHT,
-            Pos2::new(x + 12.0, cy),
+            Pos2::new(orig_x - RENAME_ARROW_W / 2.0, arrow_cy),
             12.0,
             Palette::INK_3,
         );
-        let orig_galley = painter.layout_no_wrap(orig_text.clone(), font.clone(), Palette::INK_3);
-        let orig_h = orig_galley.size().y;
         painter.galley_with_override_text_color(
-            Pos2::new(x + 24.0, cy - orig_h / 2.0),
-            orig_galley,
+            Pos2::new(orig_x, orig_y),
+            orig.clone(),
             Palette::INK_3,
         );
     }
 
-    // Dim location, right-aligned to the pane edge.
-    if let Some(loc) = &location {
-        let loc_galley = painter.layout_no_wrap(loc.clone(), font.clone(), Palette::INK_3);
+    // Dim location, right-aligned to the pane edge — on the first line while
+    // the name keeps its column, otherwise under the name.
+    if let Some(loc) = &loc_galley {
+        let loc_y = if loc_below {
+            loc_top + (line_h - loc_h) / 2.0
+        } else {
+            cy - loc_h / 2.0
+        };
         painter.galley_with_override_text_color(
-            Pos2::new(
-                row.right() - 12.0 - loc_galley.size().x,
-                cy - loc_galley.size().y / 2.0,
-            ),
-            loc_galley,
+            Pos2::new(content_right - loc_w, loc_y),
+            loc.clone(),
             Palette::INK_3,
         );
     }
 
     // Row body: one select gesture — checks the box AND previews. Registered
     // after the checkbox so the checkbox owns its own clicks.
-    let body_rect = Rect::from_min_max(Pos2::new(row.left() + 6.0 + cb + 6.0, row.top()), row.max);
+    let body_rect = Rect::from_min_max(
+        Pos2::new(row.left() + ROW_PAD_X + ROW_CHECKBOX + ROW_GAP, row.top()),
+        row.max,
+    );
     let body = ui.interact(
         body_rect,
         ui.auto_id_with(("row_body", &key)),
