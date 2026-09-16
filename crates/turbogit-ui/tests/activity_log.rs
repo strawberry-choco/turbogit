@@ -319,8 +319,8 @@ fn real_fetch_lands_in_the_panel() {
     settle_quiet(&mut harness);
     harness.get_by_label("Fetch").click();
 
-    // The topbar dispatches the op labeled "Fetch"; wait for its entry to
-    // land in the store and be painted in the feed.
+    // The topbar dispatches the op labeled "Fetch"; the entry honestly names
+    // what the fetch changed (issue 13) — never a bare "Fetch" success.
     let mut landed = false;
     for _ in 0..300 {
         harness.step();
@@ -331,7 +331,7 @@ fn real_fetch_lands_in_the_panel() {
             .activity
             .entries
             .iter()
-            .any(|e| e.message == "Fetch" && e.kind == ActivityKind::Success);
+            .any(|e| e.message.starts_with("Fetch") && e.kind == ActivityKind::Success);
         if stored {
             landed = true;
             break;

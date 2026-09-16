@@ -16,10 +16,12 @@ pub mod activity_panel;
 pub mod banner;
 pub mod blame_view;
 pub mod branch_widget;
+pub mod branches;
 pub mod bulk_monitor;
 pub mod bulk_preflight;
 pub mod cherry_across;
 pub mod commit_window;
+pub mod components;
 pub mod conflict_resolver;
 pub mod conflicts;
 pub mod dialogs;
@@ -298,13 +300,32 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 if let Some(warning) = branch_ahead_warning(state, name) {
                     ui.colored_label(crate::theme::Palette::STATE_WARNING, warning);
                 }
+                // Issue 12: what is lost, in human terms.
+                if let Some(c) = &state.ui.branches_delete_consequence {
+                    ui.label(c.clone());
+                }
                 ui.horizontal(|ui| {
                     if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
+                        // Capture the tip for the undo window before the
+                        // branch is gone (issue 12).
+                        if let Some(root) = state.selected_path() {
+                            let args = ["rev-parse".to_string(), name.clone()];
+                            if let Ok(sha) = state.executor.run_raw(&root, &args) {
+                                state.ui.branches_delete_pending =
+                                    Some(turbogit_app::state::BranchDeletePending {
+                                        root: turbogit_domain::model::RootId(root.clone().into()),
+                                        name: name.clone(),
+                                        tip_sha: sha.trim().to_string(),
+                                    });
+                            }
+                        }
+                        state.run_confirmed(confirm.clone());
                         state.ui.confirm = None;
+                        state.ui.branches_delete_consequence = None;
                     }
                     if ui.button("Cancel").clicked() {
                         state.ui.confirm = None;
+                        state.ui.branches_delete_consequence = None;
                     }
                 });
             }
@@ -318,6 +339,56 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                         state.ui.confirm = None;
                     }
                     if ui.button("Cancel").clicked() {
+                        state.ui.confirm = None;
+                    }
+                });
+            }
+            PendingConfirm::CheckoutDirty {
+                root,
+                target,
+                kind,
+            } => {
+                // Issue 07: plain-language care, never a bare "cannot
+                // checkout". The conflict implication is stated before acting.
+                ui.label(format!("You have uncommitted changes. Switch to '{target}'?"));
+                ui.label(
+                    "Bring along — changes come with you; if any conflict with the other branch, checkout is refused and nothing changes.",
+                );
+                ui.label(
+                    "Set aside — changes are stashed now and can be brought back afterwards.",
+                );
+                let mut chosen = None;
+                ui.horizontal(|ui| {
+                    if ui.button("Bring along").clicked() {
+                        chosen = Some(0);
+                    }
+                    if ui.button("Set aside").clicked() {
+                        chosen = Some(1);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        state.ui.confirm = None;
+                    }
+                });
+                match chosen {
+                    Some(0) => {
+                        state.ui.confirm = None;
+                        state.checkout_branch_op(root, *kind, target);
+                    }
+                    Some(1) => {
+                        state.ui.confirm = None;
+                        state.checkout_branch_set_aside(root, *kind, target);
+                    }
+                    _ => {}
+                }
+            }
+            PendingConfirm::CheckoutInWorktree { branch, worktree } => {
+                // Issue 07: refused up front, naming the worktree — no
+                // confusing checkout failure.
+                ui.label(format!("'{branch}' is already checked out in another worktree:"));
+                ui.label(worktree.display().to_string());
+                ui.label("Switch there, or close that worktree first.");
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
                         state.ui.confirm = None;
                     }
                 });

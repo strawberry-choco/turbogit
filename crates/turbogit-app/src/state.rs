@@ -138,6 +138,11 @@ pub struct DialogState {
     pub new_branch_name: String,
     pub new_branch_start: String,
     pub new_branch_checkout: bool,
+    /// Create-branch base picker (issue 08): the branch the new one starts
+    /// from, defaulted to the current branch on dialog open. Cleared at the
+    /// open sites so the default re-applies each time.
+    pub new_branch_base: String,
+    pub new_branch_base_picker_open: bool,
     // Rename branch (issue 32, branches popup row action).
     pub rename_branch_root: Option<RootId>,
     pub rename_branch_name: String,
@@ -312,6 +317,25 @@ pub enum CommitSubTab {
     Stash,
 }
 
+/// Expand/collapse state of the Branches tab's groups (issue 03): Local and
+/// Remote open by default, Tags collapsed — the design's sensible default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BranchesGroups {
+    pub local: bool,
+    pub remote: bool,
+    pub tags: bool,
+}
+
+impl Default for BranchesGroups {
+    fn default() -> Self {
+        Self {
+            local: true,
+            remote: true,
+            tags: false,
+        }
+    }
+}
+
 /// A modal dialog currently open.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dialog {
@@ -367,6 +391,38 @@ pub enum PendingConfirm {
     RevertCommit {
         commit: String,
     },
+    /// Checkout with a dirty working tree (issue 07): the plain-language
+    /// bring-along / set-aside / cancel dialog, with conflict implications
+    /// stated before acting.
+    CheckoutDirty {
+        root: RootId,
+        target: String,
+        kind: turbogit_domain::model::BranchKind,
+    },
+    /// The target branch is already checked out in another worktree (issue
+    /// 07): refused up front, naming the worktree.
+    CheckoutInWorktree {
+        branch: String,
+        worktree: std::path::PathBuf,
+    },
+}
+
+/// A local branch deletion awaiting completion, with its tip captured so the
+/// undo affordance can restore it (issue 12).
+#[derive(Clone, Debug)]
+pub struct BranchDeletePending {
+    pub root: RootId,
+    pub name: String,
+    pub tip_sha: String,
+}
+
+/// A deleted branch restorable for a short window (issue 12).
+#[derive(Clone, Debug)]
+pub struct BranchDeleteUndo {
+    pub root: RootId,
+    pub name: String,
+    pub tip_sha: String,
+    pub created_at: std::time::Instant,
 }
 
 /// What the diff viewer should display.
@@ -602,6 +658,51 @@ pub struct UiState {
     pub branches_popup: bool,
     pub branch_filter: String,
     pub log_filter: String,
+    // Branches tab (issues 03+): search buffer, selection, group
+    // expand/collapse, the cached tag list, and the focus/scroll intents.
+    pub branches_filter: String,
+    /// The selected branch in the focused root (detail panel), by name.
+    pub branches_selected: Option<String>,
+    /// Expand/collapse of Local / Remote / Tags.
+    pub branches_groups: BranchesGroups,
+    /// Cached tag list for the Branches tab, keyed by the root it was read for.
+    pub branches_tags: Vec<String>,
+    pub branches_tags_root: Option<RootId>,
+    /// Focus the search input on the next render (tab open, issue 06/15).
+    pub branches_focus_search: bool,
+    /// Scroll the named branch into view on the next render (create/undo).
+    pub branches_scroll_to: Option<String>,
+    /// Which branch's ⋯ overflow menu is open in the Branches tab (issue 05);
+    /// carries the owning root so hover-only opens still resolve (issue 14).
+    pub branches_overflow: Option<(RootId, String)>,
+    /// Inline-rename editor (issue 11): the branch currently being renamed
+    /// and its draft name, edited on the row itself.
+    pub branches_renaming: Option<String>,
+    pub branches_rename_draft: String,
+    /// Delete-with-care state (issue 12): the human-terms consequence shown in
+    /// the delete confirmation, the pending-delete tip captured for undo, and
+    /// the short-window undo affordance itself.
+    pub branches_delete_consequence: Option<String>,
+    pub branches_delete_pending: Option<BranchDeletePending>,
+    pub branches_undo: Option<BranchDeleteUndo>,
+    /// Fetch reporting (issue 13/14): a callback per in-flight fetch holding
+    /// that root's remote-branch snapshot before the fetch, so every repo's
+    /// fetch reports what *it* changed ("N new remote branches" vs "nothing
+    /// changed") and when it happened (disclosed somewhere visible).
+    pub branches_fetch_before: Vec<(RootId, Vec<String>)>,
+    pub branches_last_fetch: Option<chrono::DateTime<chrono::Utc>>,
+    /// Multi-repo scope (issue 14): which repo the selected branch belongs to,
+    /// and a repo filter narrowing the aggregated list (None = all repos).
+    pub branches_selected_root: Option<RootId>,
+    pub branches_repo_filter: Option<RootId>,
+    /// Whether the toolbar's repo-scope picker is open (issue 14).
+    pub branches_scope_picker_open: bool,
+    /// Current vertical scroll offset of the Branches list (issue 06): saved
+    /// when filtering begins and restored when the filter clears, so search is
+    /// for jumping, not browsing.
+    pub branches_scroll: f32,
+    /// The pre-filter scroll offset, while a filter is active.
+    pub branches_scroll_saved: Option<f32>,
     // Git Log four-pane workspace (issue #12)
     /// Live search text for the branches pane.
     pub log_branch_filter: String,
@@ -1525,9 +1626,13 @@ impl AppState {
             PendingConfirm::DeleteLocalBranch { name } => {
                 let root = self.selected_path();
                 let affected = Affected::from_optional_root(root.as_deref());
+                // Force delete: the confirmation already discloses what is
+                // lost in human terms (issue 12) before this runs, so an
+                // unmerged branch deletes with the user's informed consent
+                // instead of a bare refusal.
                 self.run_git(format!("Delete branch {name}"), affected, move |v| {
                     if let Some(r) = &root {
-                        v.branch_delete(r, &name, false)
+                        v.branch_delete(r, &name, true)
                     } else {
                         Ok(())
                     }
@@ -1544,6 +1649,13 @@ impl AppState {
                     }
                 });
             }
+            // Issue 07: the dirty-checkout dialog dispatches its own choices;
+            // this arm covers the generic confirm path (bring the changes
+            // along) for completeness.
+            PendingConfirm::CheckoutDirty { root, target, kind } => {
+                self.checkout_branch_op(&root, kind, &target);
+            }
+            PendingConfirm::CheckoutInWorktree { .. } => {}
             PendingConfirm::InitHere => self.init_repo(),
             PendingConfirm::CloneRepo => self.clone_repo(),
             PendingConfirm::RemoveWorktree { path } => {
@@ -2052,8 +2164,16 @@ impl AppState {
                                     crate::activity::ActivityKind::Warning,
                                     format!("{label} · {conflicts} unresolved conflicts"),
                                 )
+                            } else if label == "Fetch" {
+                                (
+                                    crate::activity::ActivityKind::Success,
+                                    self.fetch_report(&affected),
+                                )
                             } else {
-                                (crate::activity::ActivityKind::Success, label.clone())
+                                (
+                                    crate::activity::ActivityKind::Success,
+                                    merge_report(self, &affected, &label),
+                                )
                             };
                             self.ui.activity.push(crate::activity::ActivityEntry {
                                 at: chrono::Local::now(),
@@ -2061,15 +2181,79 @@ impl AppState {
                                 message,
                                 kind,
                             });
+                            // Issue 13: a fetch reports plainly what changed —
+                            // never a bare success, never a silent no-op.
+                            if label == "Fetch" {
+                                let report = self
+                                    .ui
+                                    .activity
+                                    .entries
+                                    .last()
+                                    .map(|e| e.message.clone())
+                                    .unwrap_or_else(|| "Fetch · done".into());
+                                self.ui.toast = Some(Toast::success(report));
+                            }
+                            // Issue 09: a merge/rebase that landed mid-conflict
+                            // hands off cleanly to the conflict experience with
+                            // an explicit mid-operation state that survives
+                            // switching tabs.
+                            if conflicts > 0
+                                && (label.starts_with("Merge ") || label.starts_with("Rebase "))
+                            {
+                                self.ui.merge_in_progress = true;
+                                self.ui.conflict_resolver_open = true;
+                            }
+                            // Issue 12: a confirmed local-branch deletion arms
+                            // the short-window undo with the captured tip.
+                            if let Some(pending) = self.ui.branches_delete_pending.take()
+                                && label.starts_with("Delete branch ")
+                            {
+                                self.ui.branches_undo = Some(crate::state::BranchDeleteUndo {
+                                    root: pending.root,
+                                    name: pending.name,
+                                    tip_sha: pending.tip_sha,
+                                    created_at: std::time::Instant::now(),
+                                });
+                            }
                         }
                         Err(e) => {
+                            let msg = e.to_string();
+                            self.ui.branches_delete_pending = None;
+                            // Issue 09: a merge/rebase that hits conflicts is
+                            // not a failure — it is a handoff to the conflict
+                            // experience, with an explicit mid-operation state
+                            // that survives switching tabs. The reliable
+                            // signal is the worktree's fresh conflict list
+                            // (git's own stderr text is not stable here).
+                            let conflict =
+                                if label.starts_with("Merge ") || label.starts_with("Rebase ") {
+                                    self.refresh(affected.clone());
+                                    conflicted_count(self, &affected) > 0
+                                } else {
+                                    false
+                                };
+                            if conflict {
+                                granular::settle(self);
+                                self.ui.merge_in_progress = true;
+                                self.ui.conflict_resolver_open = true;
+                                let conflicts = conflicted_count(self, &affected);
+                                let report = format!("{label} · {conflicts} unresolved conflicts");
+                                self.ui.toast = Some(Toast::warning(report.clone()));
+                                self.ui.activity.push(crate::activity::ActivityEntry {
+                                    at: chrono::Local::now(),
+                                    repo: activity_repo_label(&affected),
+                                    message: report,
+                                    kind: crate::activity::ActivityKind::Warning,
+                                });
+                                continue;
+                            }
                             let mut t = Toast::error(format!("{label}: {e}"));
                             // Attach the replay handle to the error toast
                             // so the user can retry the exact same op
                             // (issue #02). None → no Retry button.
                             t.retry = retry;
                             self.ui.toast = Some(t);
-                            self.last_error = Some(e.to_string());
+                            self.last_error = Some(msg);
                             // Activity log (issue #04): failures are entries
                             // too — the toast vanishes, the feed remembers.
                             self.ui.activity.push(crate::activity::ActivityEntry {
@@ -2627,6 +2811,119 @@ impl AppState {
         self.ui.branches_popup = false;
     }
 
+    /// Dispatch a branch checkout through the engine seam (issue 07): local
+    /// branches switch directly; remote branches become a new local branch
+    /// that tracks them (issue 13). Recent-branch bookkeeping belongs to the
+    /// callers. The completion refresh updates the current marker on every
+    /// surface together (row, breadcrumb, metadata panel, status bar).
+    pub fn checkout_branch_op(&mut self, root: &RootId, kind: BranchKind, name: &str) {
+        let path = root.0.clone();
+        let affected = Affected::Root(root.clone());
+        let nm = name.to_string();
+        match kind {
+            BranchKind::Local => {
+                self.run_git(format!("Checkout {nm}"), affected, move |v| {
+                    v.branch_checkout(&path, &nm)
+                });
+            }
+            BranchKind::Remote => {
+                let start = format!("origin/{nm}");
+                self.run_git(format!("Checkout {nm} (new local)"), affected, move |v| {
+                    v.branch_create(&path, &nm, true, Some(&start))?;
+                    v.set_branch_upstream(&path, &nm, &start)
+                });
+            }
+        }
+    }
+
+    /// Set the working tree's changes aside (stash) and switch to `name`
+    /// (issue 07): the changes stay intact and are restorable afterwards.
+    pub fn checkout_branch_set_aside(&mut self, root: &RootId, kind: BranchKind, name: &str) {
+        let path = root.0.clone();
+        let affected = Affected::Root(root.clone());
+        let nm = name.to_string();
+        let stash = "set aside before checkout".to_string();
+        match kind {
+            BranchKind::Local => {
+                self.run_git(
+                    format!("Set aside changes · Checkout {nm}"),
+                    affected,
+                    move |v| {
+                        v.stash_push(&path, &stash, false)?;
+                        v.branch_checkout(&path, &nm)
+                    },
+                );
+            }
+            BranchKind::Remote => {
+                let start = format!("origin/{nm}");
+                self.run_git(
+                    format!("Set aside changes · Checkout {nm} (new local)"),
+                    affected,
+                    move |v| {
+                        v.stash_push(&path, &stash, false)?;
+                        v.branch_create(&path, &nm, true, Some(&start))?;
+                        v.set_branch_upstream(&path, &nm, &start)
+                    },
+                );
+            }
+        }
+    }
+
+    /// Rebase the selected branch onto the current branch (issue 09): check
+    /// the selected branch out, then replay it onto `current`. The label
+    /// states the direction ("Rebase feat onto main"), the cheapest
+    /// guardrail against mis-applied direction.
+    pub fn rebase_branch_onto_current(&mut self, root: &RootId, branch: &str, current: &str) {
+        let path = root.0.clone();
+        let affected = Affected::Root(root.clone());
+        let b = branch.to_string();
+        let c = current.to_string();
+        self.run_git(format!("Rebase {b} onto {c}"), affected, move |v| {
+            v.branch_checkout(&path, &b)?;
+            v.rebase(&path, &c, &turbogit_domain::model::RebaseOpts::default())
+        });
+    }
+
+    /// Issue 13: report what a completed fetch changed, in plain terms —
+    /// "N new remote branches" or "nothing changed". Never silence, never a
+    /// bare success. Also records when the fetch happened for disclosure.
+    fn fetch_report(&mut self, affected: &Affected) -> String {
+        let before: Vec<String> = match affected {
+            Affected::Root(id) => {
+                let pos = self
+                    .ui
+                    .branches_fetch_before
+                    .iter()
+                    .position(|(rid, _)| rid == id);
+                pos.map(|i| self.ui.branches_fetch_before.remove(i).1)
+                    .unwrap_or_default()
+            }
+            Affected::All => Vec::new(),
+        };
+        let now: Vec<String> = self
+            .multi
+            .roots
+            .iter()
+            .filter(|r| match affected {
+                Affected::All => true,
+                Affected::Root(id) => &r.id == id,
+            })
+            .flat_map(|r| {
+                r.branches
+                    .iter()
+                    .filter(|b| b.kind == BranchKind::Remote)
+                    .map(|b| b.name.clone())
+            })
+            .collect();
+        let new = now.iter().filter(|n| !before.contains(n)).count();
+        self.ui.branches_last_fetch = Some(chrono::Utc::now());
+        if new > 0 {
+            format!("Fetch · {new} new remote branches")
+        } else {
+            "Fetch · nothing changed".to_string()
+        }
+    }
+
     /// Is the command typed into the custom-command modal destructive-looking
     /// (issue 13: reset, clean, history rewrites, force pushes, `-D`)? A
     /// destructive command needs the two-stage confirmation before it may
@@ -2990,6 +3287,32 @@ fn conflicted_count(state: &AppState, affected: &Affected) -> usize {
         })
         .map(|r| r.status.conflicted.len())
         .sum()
+}
+
+/// Success message for a completed merge/rebase (issue 09): the label already
+/// carries how many commits came in when the dialog knew; the push state is
+/// read from the freshly refreshed ahead/behind cache — "3 commits to push"
+/// or "nothing to push". Other operations keep their plain label.
+fn merge_report(state: &AppState, affected: &Affected, label: &str) -> String {
+    if !label.starts_with("Merge ") && !label.starts_with("Rebase ") {
+        return label.to_string();
+    }
+    let ahead = state
+        .multi
+        .roots
+        .iter()
+        .filter(|r| match affected {
+            Affected::All => true,
+            Affected::Root(id) => &r.id == id,
+        })
+        .filter_map(|r| state.caches.ahead_behind(&r.id))
+        .map(|(a, _)| a)
+        .sum::<usize>();
+    if ahead > 0 {
+        format!("{label} · {ahead} commit(s) to push")
+    } else {
+        format!("{label} · nothing to push")
+    }
 }
 
 /// First 7 chars of a commit id for op labels (issue 15).

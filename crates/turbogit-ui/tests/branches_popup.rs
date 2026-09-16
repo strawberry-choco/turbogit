@@ -718,6 +718,8 @@ mod pure {
             behind: 0,
             gone: false,
             last_touched: None,
+            tip: None,
+            remote: None,
         }
     }
 
