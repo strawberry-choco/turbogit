@@ -13,10 +13,61 @@
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use std::process::Command;
 use test_support::harness::{assert_not_painted, assert_painted, settle, shell_harness};
 use turbogit_app::persistence;
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{GitBackend, IncomingCheckInterval, VcsSettings};
+
+/// Harness over a real single-repo project so the shell (tab strip, repo
+/// header) renders — the Welcome page shows the tool tabs no more.
+fn repo_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).expect("repo dir");
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .output()
+            .expect("git must be on PATH");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(repo.join("f.txt"), "hi").expect("write file");
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "initial"]);
+
+    let cfg = tempfile::tempdir().expect("temp config dir");
+    let cfg_path = cfg.path().to_path_buf();
+    std::mem::forget(cfg);
+    let state = AppState::launch_in(Some(repo), Some(cfg_path));
+    assert!(
+        !state.multi.roots.is_empty(),
+        "seeded repo root must be discovered"
+    );
+
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            if !fonts_installed {
+                turbogit_ui::theme::install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            turbogit_ui::ui::render(ui, state);
+        },
+        state,
+    );
+    harness.set_size(egui::vec2(1024.0, 768.0));
+    (harness, tmp)
+}
 
 /// The modal opens from the command palette (issue #03 retired the toolbar
 /// gear): the topbar's More button raises the palette whose `Settings…`
@@ -127,13 +178,14 @@ fn settings_modal_is_about_768px_wide() {
 
 #[test]
 fn tab_strip_no_longer_offers_settings() {
-    let (mut harness, _project) = shell_harness();
+    // The tab strip only renders with a project open, so run over a real
+    // repo (the Welcome page shows the tool tabs no more).
+    let (mut harness, _tmp) = repo_harness();
     settle(&mut harness);
 
-    // The strip renders Commit + Log only; History was already deleted in
-    // issue #19 and Settings in issue #16. (Painted-text checks: "Commit"
-    // also labels the toolbar button, so label queries stay unambiguous.)
-    for label in ["Commit", "Log"] {
+    // The strip renders the five tool tabs; History was already deleted in
+    // issue #19 and Settings in issue #16.
+    for label in ["Changes", "Log", "Branches", "Worktrees", "Submodules"] {
         assert_painted(&harness, label);
     }
     assert_not_painted(&harness, "History");

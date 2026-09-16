@@ -305,18 +305,20 @@ fn only_one_focus_ring_is_visible_at_a_time() {
 
 #[test]
 fn tab_items_paint_brand_focus_rings() {
-    let (mut harness, _project) = shell_harness();
-    settle(&mut harness);
+    // The tab strip only renders with a project open (the Welcome page shows
+    // the tool tabs no more), so run over the seeded shell.
+    let seed = seeded_project();
+    let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Commit);
 
     // The old sidebar rail retired with the IDE chrome (issue #03); the
     // center tab strip's custom-drawn tab items are its focus-ring carriers.
     harness.get_by_label("Log").focus();
-    settle(&mut harness);
+    settle_long(&mut harness);
     let tab_center = harness.get_by_label("Log").rect().center();
     assert_ring_covers(&harness, tab_center, "focused shell tab item");
 
     harness.get_by_label("Changes").focus();
-    settle(&mut harness);
+    settle_long(&mut harness);
     let tab_center = harness.get_by_label("Changes").rect().center();
     assert_ring_covers(&harness, tab_center, "focused shell tab item");
 }
@@ -417,9 +419,11 @@ fn settings_category_row_paints_brand_focus_ring() {
 
 #[test]
 fn shell_chrome_holds_at_small_window_sizes() {
-    let (mut harness, _project) = shell_harness();
-    harness.set_size(egui::vec2(560.0, 420.0));
-    settle(&mut harness);
+    // The tab strip only renders with a project open, so run over the seeded
+    // shell (the Welcome page's own small-window reachability is covered by
+    // `welcome_page_stays_reachable_at_small_window_sizes`).
+    let seed = seeded_project();
+    let harness = polish_harness(&seed, (560.0, 420.0), Tab::Commit);
 
     let vp = viewport(560.0, 420.0);
     // Every chrome band stays painted and the status bar pins to the bottom.
@@ -444,13 +448,6 @@ fn shell_chrome_holds_at_small_window_sizes() {
             .any(|(r, _)| (r.height() - 24.0).abs() <= 4.0 && r.bottom() >= 420.0 - 10.0),
         "status bar must pin to the window bottom at 560x420; bands: {status_bands:?}"
     );
-
-    // Welcome body remains scrollable rather than truncated: the clone form
-    // below the fold can be scrolled into view.
-    harness.get_by_label("Repository URL").scroll_to_me();
-    steps(&mut harness, 4);
-    settle(&mut harness);
-    assert_visible(&harness, "Repository URL", vp, "scrolled-to clone input");
 }
 
 #[test]
@@ -560,14 +557,16 @@ fn settings_modal_fits_small_heights() {
 
 #[test]
 fn ctrl_k_returns_to_the_commit_tool_window() {
-    let (mut harness, _project) = shell_harness();
-    settle(&mut harness);
+    // The tab strip only renders with a project open, so run over the seeded
+    // shell — clicking the Log tab is what opens it.
+    let seed = seeded_project();
+    let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Commit);
     harness.get_by_label("Log").click();
-    settle(&mut harness);
+    settle_long(&mut harness);
     assert_eq!(harness.state().ui.tab, Tab::Log);
 
     harness.key_press_modifiers(Modifiers::CTRL, Key::K);
-    settle(&mut harness);
+    settle_long(&mut harness);
 
     assert_eq!(harness.state().ui.tab, Tab::Commit);
 }

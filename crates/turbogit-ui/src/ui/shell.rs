@@ -70,7 +70,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
     egui::CentralPanel::default().show(ui, |ui| {
         if state.show_welcome() {
-            render_tab_strip(ui, state);
+            // Welcome page: no project is open, so the tool-window tab strip
+            // (Changes / Log / Branches / Worktrees / Submodules) is dead
+            // chrome — skip it and show only the page itself.
             super::welcome::show(ui, state);
         } else {
             // The tool window, the activity log panel (issue #04), and the

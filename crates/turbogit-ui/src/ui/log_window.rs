@@ -7,9 +7,10 @@
 //! 1. **Branches** (left, 210px): live search; LOCAL / REMOTE / TAGS groups
 //!    fed by ref decorations; a bottom `ROOTS` filter for multi-root projects.
 //! 2. **Graph** (center): live search toolbar, root-stripe legend, and the
-//!    commit table (Graph | Hash | Author | Date | Message) with inline ref
-//!    chips (branch=brand, remote=success, tag=warning) and a translucent
-//!    `SELECTION_BG` row highlight that keeps lane colors readable.
+//!    commit table (Graph | Hash | Author | Date | Message) with one collapsed
+//!    `.tg-label` pill per decorated commit — the ref names (branch=brand,
+//!    remote=success, tag=warning) are revealed in its hover tooltip — and a
+//!    translucent `SELECTION_BG` row highlight that keeps lane colors readable.
 //! 3. **Changed files** (right-top, 320px): the selected commit's files with
 //!    status badges; clicking loads the diff.
 //! 4. **Commit details** (right-bottom, ~300px SURFACE): key-value hash /
@@ -20,11 +21,13 @@ use crate::theme::Palette;
 use crate::ui::branch_tree_view::{self, TreeEvent, TreeGroup, TreeProps};
 use crate::ui::branches::fetch_scope;
 use crate::ui::branches_tree::build_branch_view;
+use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::{self, BadgeKind, RefKind};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Frame, Layout, Margin, Panel, Pos2, Rect,
-    Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Frame, Layout, Margin, Panel, Popup,
+    PopupKind, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2, WidgetInfo,
+    WidgetType,
 };
 use std::path::PathBuf;
 use turbogit_app::state::{AppState, BlameTarget, Dialog, DiffTarget, PendingConfirm, Toast};
@@ -56,7 +59,6 @@ const MONO_TEXT: f32 = 12.0;
 /// Chip metrics — mirrors `widgets::chip` (`.tg-label` pills).
 const CHIP_HEIGHT: f32 = 18.0;
 const CHIP_PAD_X: f32 = 6.0;
-const CHIP_GAP: f32 = 4.0;
 
 /// Distinct lane colors for the commit graph (Epic D1). Also reused as the
 /// deterministic per-root stripe palette.
@@ -862,10 +864,10 @@ fn commit_row(
         Palette::INK_3,
     );
 
-    // Message cell with inline ref chips. Everything is painted directly
-    // (galleys + pills, no child widgets) so the row itself stays the only
-    // interactive surface — a child `ui.label` here would sit on top of the
-    // row in hit-testing and swallow its clicks.
+    // Message cell with one collapsed label pill. Everything is painted
+    // directly (galleys + the pill, no child widgets) so the row itself
+    // stays the only interactive surface — a child `ui.label` here would sit
+    // on top of the row in hit-testing and swallow its clicks.
     let painter = ui.painter().clone();
     let mut mx = content_left + 236.0;
     let subject = c.message.lines().next().unwrap_or("");
@@ -877,8 +879,40 @@ fn commit_row(
         Palette::INK,
     );
     mx += subject_w + 6.0;
-    for r in state.caches.refs_for(&c.root, &c.id) {
-        mx = paint_ref_chip(&painter, r.name.clone(), ref_kind(r.kind), mx, cy);
+
+    // Refs collapse into one ".tg-label" pill, shown only when the commit
+    // actually carries labels (branch / remote / tag); the individual names
+    // are revealed in a hover tooltip so decorated rows stay scannable.
+    let labels = state.caches.refs_for(&c.root, &c.id);
+    if !labels.is_empty() {
+        let pill = paint_label_pill(&painter, mx, cy);
+        if ui.rect_contains_pointer(pill) {
+            // The popup anchors in global space; the row lives inside the
+            // graph's scroll area, so map the pill rect to screen first.
+            let screen_pill = ui
+                .ctx()
+                .layer_transform_to_global(ui.layer_id())
+                .map(|t| t * pill)
+                .unwrap_or(pill);
+            Popup::new(
+                ui.id().with(("log_label_tooltip", &c.id)),
+                ui.ctx().clone(),
+                screen_pill,
+                ui.layer_id(),
+            )
+            .kind(PopupKind::Tooltip)
+            .gap(4.0)
+            .interactable(false)
+            .show(|ui| {
+                for r in labels {
+                    ui.label(
+                        RichText::new(&r.name)
+                            .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                            .color(ref_kind(r.kind).accent()),
+                    );
+                }
+            });
+        }
     }
 
     response.widget_info(|| {
@@ -892,30 +926,32 @@ fn commit_row(
     response.clicked()
 }
 
-/// Paint one `.tg-label` pill (18px, kind colors) at `(x, cy)` and return the
-/// x position after it. Painter-only: registers no widget (see commit_row).
-fn paint_ref_chip(painter: &egui::Painter, text: String, kind: RefKind, x: f32, cy: f32) -> f32 {
-    let colors = kind.colors();
-    let font = FontId::new(MICRO_TEXT, FontFamily::Proportional);
-    let galley = painter.layout_no_wrap(text, font, colors.fg);
+/// Paint one `.tg-label` pill (18px, neutral token colors) holding a label
+/// (tag) icon, and return its rect. The ref names live in the hover tooltip
+/// (see `commit_row`). Painter-only: registers no widget.
+fn paint_label_pill(painter: &egui::Painter, x: f32, cy: f32) -> Rect {
+    const ICON_SIZE: f32 = 12.0;
+    let colors = BadgeKind::Neutral.colors();
     let rect = Rect::from_min_size(
         Pos2::new(x, cy - CHIP_HEIGHT / 2.0),
-        Vec2::new(galley.size().x + CHIP_PAD_X * 2.0, CHIP_HEIGHT),
+        Vec2::new(ICON_SIZE + CHIP_PAD_X * 2.0, CHIP_HEIGHT),
     );
     painter.rect_filled(
         rect,
         CornerRadius::same((CHIP_HEIGHT / 2.0) as u8),
         colors.bg,
     );
-    painter.galley(
+    icons::paint_icon(
+        painter,
         Pos2::new(
-            rect.center().x - galley.size().x / 2.0,
-            cy - galley.size().y / 2.0,
+            rect.center().x - ICON_SIZE / 2.0,
+            rect.center().y - ICON_SIZE / 2.0,
         ),
-        galley,
+        ICON_SIZE,
+        Icon::TAG,
         colors.fg,
     );
-    rect.right() + CHIP_GAP
+    rect
 }
 
 // --- Pane 3: changed files -----------------------------------------------------------

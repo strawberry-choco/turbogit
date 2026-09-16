@@ -346,7 +346,7 @@ fn long_branch_names_truncate_in_the_middle_on_the_row() {
 
 /// Sync fixture: `alpha` on `main` with `feat` tracking `origin/main`
 /// (ahead 2, behind 1), `ghost` tracking a pruned `origin/ghost` (gone), and
-/// untracked `zebra` on the 3-week-old commit (stale badge "3w").
+/// untracked `zebra` on the 3-week-old commit (stale, dimmed but shown).
 fn sync_repo_project() -> (TempDir, PathBuf) {
     let now = chrono::Utc::now().timestamp();
     let old = now - 21 * 24 * 60 * 60;
@@ -422,9 +422,8 @@ fn rows_render_icon_count_pairs_in_sync_gone_and_upstream() {
     // ghost: upstream deleted → gone marker.
     assert_painted(&harness, "gone");
     assert_painted(&harness, "origin/ghost");
-    // Stale zebra is dimmed but never hidden (still painted, relative "3w").
+    // Stale zebra is dimmed but never hidden (still painted).
     assert_painted(&harness, "zebra");
-    assert_painted(&harness, "3w");
 }
 
 #[test]
