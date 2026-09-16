@@ -336,6 +336,52 @@ impl Default for BranchesGroups {
     }
 }
 
+/// What the branch tree itself remembers between frames (branch-tree-view
+/// extraction, plan D2/D3): grouping, collapse, selection, the inline-rename
+/// draft, the overflow menu, and scroll. Plain data only — the application
+/// crate cannot name egui types, so no widget ids, rectangles, colors or
+/// text-edit state live here. Each tree surface owns one instance (the
+/// Branches tool window, the Log window's branches pane), so opening one
+/// cannot affect the other.
+///
+/// Deliberately *not* here — that is surface policy, not tree state: the
+/// search buffer and its focus intent, the repo-scope picker, delete-with-care
+/// state and the undo window, fetch reporting, and the tag cache (git-read
+/// data, which reaches the tree as a prop).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TreeState {
+    /// Expand/collapse of Local / Remote / Tags.
+    pub groups: BranchesGroups,
+    /// View-wide remotes-on/off switch: when `false`, remote branches
+    /// collapse into the per-repo rollup.
+    pub show_remotes: bool,
+    /// Per-remote collapse within the expanded remote groups: each entry is
+    /// `(root, remote)` whose group is collapsed.
+    pub collapsed_remotes: HashSet<(RootId, String)>,
+    /// The selected branch, by name, and its owning repository. Two
+    /// repositories that both have a `main` are never interchangeable.
+    pub selected: Option<String>,
+    pub selected_root: Option<RootId>,
+    /// Inline-rename target (the branch currently being renamed) and its
+    /// draft name, edited on the row itself. The draft is the one deliberate
+    /// exception to "events out": egui's text input needs mutable access
+    /// while rendering, so only commit/cancel are emitted as events.
+    pub renaming: Option<String>,
+    pub rename_draft: String,
+    /// Which branch's ⋯ overflow menu is open; carries the owning root so
+    /// hover-only opens still resolve (issue 14).
+    pub overflow: Option<(RootId, String)>,
+    /// Current vertical scroll offset of the list (issue 06).
+    pub scroll: f32,
+    /// The pre-filter scroll offset, while a filter is active.
+    pub scroll_saved: Option<f32>,
+    /// Scroll the named branch into view on the next render (create/undo).
+    pub scroll_to: Option<String>,
+    /// The filter text as of the previous frame, so the tree can detect a
+    /// filter transition and save/restore scroll itself.
+    pub previous_filter: String,
+}
+
 /// A modal dialog currently open.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Dialog {
@@ -658,33 +704,22 @@ pub struct UiState {
     pub branches_popup: bool,
     pub branch_filter: String,
     pub log_filter: String,
-    // Branches tab (issues 03+): search buffer, selection, group
-    // expand/collapse, the cached tag list, and the focus/scroll intents.
+    // Branches tab (issues 03+): search buffer and the focus/scroll intents.
     pub branches_filter: String,
-    /// The selected branch in the focused root (detail panel), by name.
-    pub branches_selected: Option<String>,
     /// Expand/collapse of Local / Remote / Tags.
-    pub branches_groups: BranchesGroups,
-    /// View-wide remotes-on/off switch for the Branches tab (redesign issue 03):
-    /// when `false`, remote branches collapse into the per-repo rollup.
-    pub branches_show_remotes: bool,
-    /// Per-remote collapse state within the expanded remote groups (redesign
-    /// issue 03): each entry is `(root, remote)` whose group is collapsed.
-    pub branches_collapsed_remotes: std::collections::HashSet<(RootId, String)>,
+    // The tree-remembered branch view state, one independent block per tree
+    // surface (branch-tree-view extraction, plan D2): the Branches tool
+    // window and the Log window's branches pane. See [`TreeState`].
+    pub branches_tree: TreeState,
+    pub log_tree: TreeState,
     /// Cached tag lists for the Branches tab, keyed by the root each list was
-    /// read for (redesign issue 02: tags are a per-repo group).
-    pub branches_tags: std::collections::HashMap<RootId, Vec<String>>,
+    /// read for (redesign issue 02: tags are a per-repo group). Each entry
+    /// carries the tag's decoration state (plan D8) — the warm fill records
+    /// [`RefState::Default`]; a surface holding real decorations upgrades it.
+    pub branches_tags:
+        std::collections::HashMap<RootId, Vec<(String, turbogit_domain::model::RefState)>>,
     /// Focus the search input on the next render (tab open, issue 06/15).
     pub branches_focus_search: bool,
-    /// Scroll the named branch into view on the next render (create/undo).
-    pub branches_scroll_to: Option<String>,
-    /// Which branch's ⋯ overflow menu is open in the Branches tab (issue 05);
-    /// carries the owning root so hover-only opens still resolve (issue 14).
-    pub branches_overflow: Option<(RootId, String)>,
-    /// Inline-rename editor (issue 11): the branch currently being renamed
-    /// and its draft name, edited on the row itself.
-    pub branches_renaming: Option<String>,
-    pub branches_rename_draft: String,
     /// Delete-with-care state (issue 12): the human-terms consequence shown in
     /// the delete confirmation, the pending-delete tip captured for undo, and
     /// the short-window undo affordance itself.
@@ -697,18 +732,11 @@ pub struct UiState {
     /// changed") and when it happened (disclosed somewhere visible).
     pub branches_fetch_before: Vec<(RootId, Vec<String>)>,
     pub branches_last_fetch: Option<chrono::DateTime<chrono::Utc>>,
-    /// Multi-repo scope (issue 14): which repo the selected branch belongs to,
-    /// and a repo filter narrowing the aggregated list (None = all repos).
-    pub branches_selected_root: Option<RootId>,
+    /// Multi-repo scope (issue 14): a repo filter narrowing the aggregated
+    /// list (None = all repos).
     pub branches_repo_filter: Option<RootId>,
     /// Whether the toolbar's repo-scope picker is open (issue 14).
     pub branches_scope_picker_open: bool,
-    /// Current vertical scroll offset of the Branches list (issue 06): saved
-    /// when filtering begins and restored when the filter clears, so search is
-    /// for jumping, not browsing.
-    pub branches_scroll: f32,
-    /// The pre-filter scroll offset, while a filter is active.
-    pub branches_scroll_saved: Option<f32>,
     // Git Log four-pane workspace (issue #12)
     /// Live search text for the branches pane.
     pub log_branch_filter: String,
@@ -720,6 +748,11 @@ pub struct UiState {
     /// graph to only the commits touching that path (set from the
     /// changed-files pane's "Show history for file..." context menu).
     pub log_path_scope: Option<PathBuf>,
+    /// Active ref scope in Git Log (branch-tree extraction, plan D9):
+    /// `Some((root, ref))` narrows the graph to only that ref's history
+    /// (set from the branches pane's row activation). Cleared when the
+    /// selected repository changes, so the graph never goes silently empty.
+    pub log_ref_scope: Option<(RootId, String)>,
     /// Log pagination (issue 17): 0-based loaded-page index. The fetch
     /// window is `(log_page + 1) * LOG_PAGE_SIZE` commits per root;
     /// [`AppState::load_more_log`] widens it. The cache holds only the
@@ -739,6 +772,13 @@ pub struct UiState {
     pub blame_error: Option<String>,
     pub dialog: Option<Dialog>,
     pub vcs_popup: bool,
+    // Topbar workspace picker (issue #34). Session-only; never persisted.
+    /// Whether the floating workspace picker is showing.
+    pub workspace_picker_open: bool,
+    /// The selector's bottom-left, in screen points, captured when the picker
+    /// was opened so the dropdown anchors under the chevron. `None` when
+    /// opened from the palette. Plain `f32` pairs — this crate is egui-free.
+    pub workspace_picker_anchor: Option<(f32, f32)>,
     pub settings_open: bool,
     /// The Settings modal category currently shown (issue #26, screen 11).
     pub settings_category: crate::state::SettingsCategory,
@@ -2029,6 +2069,7 @@ impl AppState {
         self.project_dir = dir.to_path_buf();
         self.multi = MultiRootManager::default();
         self.selected_root = None;
+        self.ui.workspace_picker_open = false;
         // Drop every cache entry: the old project's roots must not leak into
         // the new one (bug fix — only logs/ahead-behind were cleared before).
         self.caches.invalidate_all();
@@ -2047,6 +2088,7 @@ impl AppState {
         self.project_dir = dir.to_path_buf();
         self.multi = MultiRootManager::default();
         self.selected_root = None;
+        self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
 
         let roots = turbogit_services::multi_root::scan_deep(self.executor.as_ref(), dir);
@@ -2072,6 +2114,29 @@ impl AppState {
         }
     }
 
+    /// Open a recents row (Welcome row click, topbar workspace picker): a
+    /// [`crate::recents::RecentKind::Workspace`] row deep-scans and
+    /// re-indexes, a [`crate::recents::RecentKind::Project`] row takes the
+    /// bounded [`Self::rescan`] path. Shared by both call sites so there is
+    /// exactly one copy of the kind dispatch to keep honest.
+    ///
+    /// A row whose directory has disappeared surfaces a toast and dispatches
+    /// nothing — `open_project` on a missing dir would `rescan` to zero roots
+    /// and silently bounce the user to Welcome (see [`Self::show_welcome`]).
+    pub fn open_recent(&mut self, recent: &crate::recents::RecentProject) {
+        if !recent.path.is_dir() {
+            self.ui.toast = Some(crate::state::Toast::error(format!(
+                "Workspace no longer exists: {}",
+                recent.path.display()
+            )));
+            return;
+        }
+        match recent.kind {
+            crate::recents::RecentKind::Workspace => self.attach_workspace(&recent.path),
+            crate::recents::RecentKind::Project => self.open_project(&recent.path),
+        }
+    }
+
     /// Create a real repository at `dir` through the engine seam and enter
     /// it (Welcome "Initialize Repository" card, issue #10).
     pub fn initialize_and_enter(&mut self, dir: &Path) {
@@ -2088,6 +2153,7 @@ impl AppState {
     pub fn close_all_projects(&mut self) {
         self.multi = MultiRootManager::default();
         self.selected_root = None;
+        self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
         self.ui.welcome_visible = true;
     }

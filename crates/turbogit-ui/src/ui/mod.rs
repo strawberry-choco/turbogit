@@ -15,6 +15,7 @@
 pub mod activity_panel;
 pub mod banner;
 pub mod blame_view;
+pub mod branch_tree_view;
 pub mod branch_widget;
 pub mod branches;
 pub mod branches_tree;
@@ -62,6 +63,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     branch_widget::branches_popup(ui, state);
     popups::vcs_operations(ui, state);
     popups::command_palette(ui, state);
+    // Workspace picker (issue #34): painted after the shell and after the
+    // palette so a same-frame open works from either the selector click or
+    // the palette's Switch Workspace action.
+    popups::workspace_picker(ui, state);
     if let Some(d) = state.ui.dialog {
         if d == Dialog::Push {
             // Issue #20: the redesigned push dialog lives in its own module.

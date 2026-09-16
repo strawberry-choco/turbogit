@@ -169,7 +169,9 @@ impl Palette {
 // Dimension tokens, kept beside the color palette as part of the single
 // central token set. Rows keep one consistent height per kind; gaps and
 // padding sit on the 4 px grid.
-/// File-row height in the changes tree (24 px).
+/// File-row height in the changes tree (24 px). This is the single-line
+/// height: a row grows one text line per extra line of text, because a
+/// filename too long for its column wraps rather than clipping.
 pub const FILE_ROW_HEIGHT: f32 = 24.0;
 /// Group-row height in the changes tree (26 px).
 pub const GROUP_ROW_HEIGHT: f32 = 26.0;

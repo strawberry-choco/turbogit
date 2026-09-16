@@ -14,6 +14,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use egui_kittest::kittest::NodeT as _;
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
 use test_support::harness::{assert_painted, painted_text};
@@ -258,11 +259,26 @@ fn cherry_pick_opens_the_branch_picker_and_applies_onto_the_chosen_branch() {
     );
     assert_painted(&harness, "main");
     assert_painted(&harness, "(protected)");
-    // The branches pane also paints a Label "feature"; target the picker's
-    // Button role explicitly.
-    harness
-        .get_by_role_and_label(egui::accesskit::Role::Button, "feature")
-        .click();
+    // Since the branch-tree extraction the branches pane paints its rows as
+    // Buttons too, so "feature" matches twice; the picker's row is the one
+    // right of the leftmost branches pane.
+    let feature: Vec<_> = harness
+        .query_all_by_label_contains("feature")
+        .filter(|n| {
+            n.accesskit_node().role() == egui::accesskit::Role::Button
+                && n.accesskit_node().label().is_some_and(|l| l == "feature")
+        })
+        .collect();
+    assert!(
+        feature.len() >= 2,
+        "the picker row and the pane row must both exist: {}",
+        feature.len()
+    );
+    let mut sorted = feature;
+    sorted.sort_by(|a, b| a.rect().left().total_cmp(&b.rect().left()));
+    // The dialog's picker renders in a default-positioned Area at the far
+    // left; the pane's row sits right of the sidebar.
+    sorted.first().expect("picker row").click();
     settle(&mut harness);
 
     wait_for(&mut harness, |s| {
