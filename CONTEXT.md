@@ -12,6 +12,32 @@ The directory tree TurboGit was opened on; contains one or more roots. Shown
 on the welcome screen and in recent projects.
 _Avoid_: workspace, solution
 
+**Project tree**:
+The nested tree of the sidebar's PROJECTS section: folder nodes and repo
+nodes arranged by the project's directory structure, rooted at the project
+directory.
+_Avoid_: repo list, flat group list
+
+**Folder node**:
+A project-tree node for a directory that is not itself a repository root.
+Displayed only when its subtree holds at least two repo nodes; a folder whose
+subtree holds exactly one repo collapses and that repo is promoted to the
+folder's parent.
+_Avoid_: folder item, project group
+
+**Repo node**:
+A project-tree node for a repository root, carrying the root's git state
+(status dot, current branch, ahead/behind). A repo node may itself contain
+child nodes when repositories nest.
+_Avoid_: git item, repo row
+
+**Path label**:
+The label of a repo node promoted out of a collapsed folder chain: each
+folder in the chain contributes its first character, joined with the repo's
+own name by `/` (e.g. `f/bar` from `foo/bar`). Applies wherever the collapse
+rule fires, including filtered trees.
+_Avoid_: abbreviated name, short label
+
 **Repository root (root)**:
 A directory with its own `.git`, identified by its path; one Git repository
 within the scanned project tree. Every piece of mutable Git state (branches,

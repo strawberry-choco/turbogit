@@ -154,6 +154,10 @@ pub struct TreeProps<'a> {
     /// Branches tool window's full-height list) or shrinks to its content
     /// (`false` for the Log pane, which paints its Roots filter below).
     pub full_height: bool,
+    /// Per-remote collapse default: `false` starts every remote group expanded
+    /// (the Branches window), `true` starts them collapsed (the Log pane). A
+    /// user toggle still flips the effective state either way.
+    pub collapse_remotes_by_default: bool,
 }
 
 /// Paint the branch tree and report what the user did.
@@ -363,10 +367,7 @@ fn paint_repo_section(
             }
             remote_group_header(ui, props, tree, section, rg, events);
             *y_cursor += SECTION_H;
-            if !tree
-                .collapsed_remotes
-                .contains(&(section.root_id.clone(), rg.remote.clone()))
-            {
+            if !remote_collapsed(tree, props, &section.root_id, &rg.remote) {
                 paint_nodes(
                     ui,
                     props,
@@ -569,6 +570,22 @@ fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize, step: f32) {
     ));
 }
 
+/// Whether a remote group is effectively collapsed. The per-surface default
+/// (`collapse_remotes_by_default`) flips the meaning of
+/// `TreeState::collapsed_remotes` membership: with the default expanded, a
+/// member is collapsed; with the default collapsed, a member is expanded.
+/// Either way the user toggle flips the effective state.
+fn remote_collapsed(tree: &TreeState, props: &TreeProps<'_>, root: &RootId, remote: &str) -> bool {
+    let user_collapsed = tree
+        .collapsed_remotes
+        .contains(&(root.clone(), remote.to_owned()));
+    if props.collapse_remotes_by_default {
+        !user_collapsed
+    } else {
+        user_collapsed
+    }
+}
+
 /// One expanded remote group header: the remote name, its branch count, and a
 /// "fetched Nm ago" freshness hint from the last-fetch timestamp. Clicking the
 /// header collapses that remote's group.
@@ -592,9 +609,7 @@ fn remote_group_header(
             .layout(Layout::left_to_right(Align::Center)),
     );
     child.add_space(PAD_LIST);
-    let collapsed = tree
-        .collapsed_remotes
-        .contains(&(section.root_id.clone(), rg.remote.clone()));
+    let collapsed = remote_collapsed(tree, props, &section.root_id, &rg.remote);
     let chevron = if collapsed {
         Icon::CHEVRON_RIGHT
     } else {
@@ -966,8 +981,8 @@ fn rename_editor(
     }
 }
 
-/// One tinted sync chip: 10px icon + count (or the quiet "in sync" / "gone"
-/// label) on the §13 meaning-color tint. 18px tall, radius 3, mono data type.
+/// One tinted sync chip: 10px icon + count (or the "gone" label) on the §13
+/// meaning-color tint. 18px tall, radius 3, mono data type.
 fn sync_chip(ui: &mut Ui, kind: crate::ui::components::SyncKind, label: &str) {
     let fg = sync_ink(kind);
     let bg = sync_bg(kind);

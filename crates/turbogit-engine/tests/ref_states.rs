@@ -100,3 +100,54 @@ fn decorations_report_remote_gone_and_tag_push_state() {
         .expect("main decoration");
     assert_eq!(main.2, RefState::Default);
 }
+
+/// A remote that cannot be reached must leave refs unmarked (the
+/// `all_ok = false` path), never mistagging a pushed tag as local-only or a
+/// live ref as gone — and nothing may hang on the failure (the D3 bounded
+/// options keep offline `ls-remote` from sitting on a credential prompt or a
+/// slow stream).
+#[test]
+fn unreachable_remote_leaves_refs_unmarked_and_returns_promptly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "t@t"]);
+    git(&repo, &["config", "user.name", "t"]);
+    std::fs::write(repo.join("f.txt"), "one\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "c1"]);
+    git(&repo, &["tag", "v1.0"]);
+    // Port 1 refuses TCP connections immediately — the bounded ls-remote
+    // fails fast instead of hanging on a slow stream.
+    git(
+        &repo,
+        &["remote", "add", "origin", "http://127.0.0.1:1/unreachable"],
+    );
+
+    let started = std::time::Instant::now();
+    let exec = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+    let deco = exec.ref_decorations(&repo).expect("decorations");
+
+    // The tag is listed (from the local for-each-ref) but carries no sync
+    // state: the offline remote must not flip it to LocalOnly.
+    let mut seen_tag = None;
+    for (_, refs) in &deco {
+        if let Some(r) = refs.iter().find(|r| r.kind == GitRefKind::Tag) {
+            seen_tag = Some(r);
+        }
+    }
+    let tag = seen_tag.expect("v1.0 tag decoration");
+    assert_eq!(
+        tag.state,
+        RefState::Default,
+        "an unreachable remote must leave refs unmarked"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "offline ref decoration must return promptly, took {:?}",
+        started.elapsed()
+    );
+}

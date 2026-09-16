@@ -155,6 +155,9 @@ struct Fixture {
     now: chrono::DateTime<chrono::Utc>,
     allows_rename: bool,
     shows_row_actions: bool,
+    /// Mirrors `TreeProps::collapse_remotes_by_default` (false = Branches-style
+    /// expanded-by-default, true = Log-pane-style collapsed-by-default).
+    collapse_remotes_by_default: bool,
     /// The events returned by the last completed frame.
     events: Vec<TreeEvent>,
 }
@@ -173,6 +176,7 @@ impl Fixture {
             now: now(),
             allows_rename: true,
             shows_row_actions: true,
+            collapse_remotes_by_default: false,
             events: Vec::new(),
         }
     }
@@ -268,6 +272,7 @@ fn fixture_harness(fx: Fixture) -> Harness<'static, Fixture> {
                 shows_row_actions: fx.shows_row_actions,
                 id_salt: "fixture_tree",
                 full_height: true,
+                collapse_remotes_by_default: fx.collapse_remotes_by_default,
             };
             let events = branch_tree(ui, &props, &mut fx.tree);
             for event in &events {
@@ -482,6 +487,41 @@ fn remote_header_toggle_emits_event_and_collapses_that_remote() {
     assert!(
         painted_text(&h).iter().any(|t| t.contains("origin")),
         "the collapsed remote's header stays"
+    );
+}
+
+/// The Log pane's tree starts every remote group collapsed: the header rows
+/// paint, their branches hide until a header click expands them — and a second
+/// click re-collapses.
+#[test]
+fn remote_groups_start_collapsed_when_default_is_collapsed() {
+    let mut fx = Fixture::alpha_only();
+    fx.tree.show_remotes = true;
+    fx.collapse_remotes_by_default = true;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    assert!(
+        !painted_text(&h).iter().any(|t| t.contains("remote-only")),
+        "remote branches are collapsed by default"
+    );
+    assert!(
+        painted_text(&h).iter().any(|t| t.contains("origin")),
+        "the remote header stays visible"
+    );
+
+    button(&h, "origin").click();
+    settle(&mut h);
+    assert!(
+        painted_text(&h).iter().any(|t| t.contains("remote-only")),
+        "a header click expands the group"
+    );
+
+    button(&h, "origin").click();
+    settle(&mut h);
+    assert!(
+        !painted_text(&h).iter().any(|t| t.contains("remote-only")),
+        "a second click re-collapses the group"
     );
 }
 

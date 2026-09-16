@@ -6,7 +6,9 @@
 
 use std::path::PathBuf;
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::{BlameLine, Branch, Commit, RootId, RootStatus, Submodule, Worktree};
+use turbogit_domain::model::{
+    BlameLine, Branch, Commit, CommitId, CommitRef, RootId, RootStatus, Submodule, Worktree,
+};
 
 use crate::root_caches::Affected;
 
@@ -50,6 +52,13 @@ pub enum AppEvent {
     LogLoaded {
         root: RootId,
         commits: TgResult<Vec<Commit>>,
+    },
+    /// Ref decorations for a root were loaded off the UI thread (log-open
+    /// perf, D1): a success is stored into the ref cache; an error lands in
+    /// the last-error surface while the cache stays empty.
+    RefsLoaded {
+        root: RootId,
+        deco: TgResult<Vec<(CommitId, Vec<CommitRef>)>>,
     },
     /// Generic asynchronous completion (e.g. push/pull finished). `affected`
     /// declares which roots the op touched so the post-op refresh can be

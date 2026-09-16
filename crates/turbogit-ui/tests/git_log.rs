@@ -210,11 +210,20 @@ fn seeded_project() -> Seed {
 
 /// Harness rendering the full shell with the Log tool window active over the
 /// seeded project. The log cache is primed through the production event path
-/// (`AppEvent::LogLoaded` via `state.tx` + `drain_events()`); production
-/// fills it the same way, asynchronously.
+/// (`AppEvent::LogLoaded` / `AppEvent::RefsLoaded` via `state.tx` +
+/// `drain_events()`); production fills it the same way, asynchronously.
 fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
     let mut state = AppState::new(seed.project.clone());
     assert_eq!(state.multi.roots.len(), 2, "both roots discovered");
+    warm_log_and_refs(&mut state);
+    state.ui.tab = Tab::Log;
+    harness_with(state)
+}
+
+/// Prime every registered root's log + ref decorations through the worker
+/// event path, exactly the way `AppState::fetch_log` / `AppState::fetch_refs`
+/// land in production.
+fn warm_log_and_refs(state: &mut AppState) {
     let engine = CliExecutor {
         settings: VcsSettings::default(),
     };
@@ -227,10 +236,20 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
                 commits: Ok(commits),
             })
             .expect("send LogLoaded");
+        let deco = engine.ref_decorations(&root.path).expect("decorations");
+        state
+            .tx
+            .send(AppEvent::RefsLoaded {
+                root: root.id.clone(),
+                deco: Ok(deco),
+            })
+            .expect("send RefsLoaded");
     }
     state.drain_events();
-    state.ui.tab = Tab::Log;
+}
 
+/// The full-shell harness over an arbitrary pre-built state.
+fn harness_with(state: AppState) -> Harness<'static, AppState> {
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
@@ -393,6 +412,72 @@ fn ref_labels_collapse_into_a_single_pill_revealed_on_hover() {
     assert!(
         after > before,
         "hovering the labels pill must reveal the ref names (before={before}, after={after})"
+    );
+}
+
+// --- Log-open perf: empty-first render; decorations arrive via RefsLoaded --------
+
+#[test]
+fn log_renders_empty_first_and_decorations_appear_once_refs_loaded_lands() {
+    let seed = seeded_project();
+    let mut state = AppState::new(seed.project.clone());
+    assert_eq!(state.multi.roots.len(), 2, "both roots discovered");
+    // Prime ONLY the log — the ref decorations deliberately stay cold, the
+    // way they are before the worker's `RefsLoaded` event lands.
+    let engine = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+    for root in state.multi.roots.clone() {
+        let commits = engine.log(&root.path, &LogOpts::default()).expect("log");
+        state
+            .tx
+            .send(AppEvent::LogLoaded {
+                root: root.id.clone(),
+                commits: Ok(commits),
+            })
+            .expect("send LogLoaded");
+    }
+    state.drain_events();
+    state.ui.tab = Tab::Log;
+    let mut harness = harness_with(state);
+    let alpha_id = RootId(seed.alpha.clone().into());
+
+    // Empty-first: the render never waited on ref decoration loading (the
+    // sync `ensure_refs` path is gone), and nothing panicked on the cold
+    // cache — the log itself still paints.
+    assert!(
+        !harness.state().caches.refs_loaded(&alpha_id),
+        "refs must not be loaded on the render thread; the data-ensure step \
+         only kicks the worker"
+    );
+    assert_eq!(
+        label_pills(&harness).len(),
+        0,
+        "no decoration pills before RefsLoaded lands"
+    );
+    assert_painted(&harness, "alpha: second commit");
+
+    // Decorations appear once the event lands (the view kicks fetch_refs on
+    // the cold cache, and any worker event drains through the same path).
+    let deco = engine.ref_decorations(&seed.alpha).expect("decorations");
+    harness
+        .state_mut()
+        .tx
+        .send(AppEvent::RefsLoaded {
+            root: alpha_id.clone(),
+            deco: Ok(deco),
+        })
+        .expect("send RefsLoaded");
+    harness.state_mut().drain_events();
+    settle(&mut harness);
+
+    assert!(
+        harness.state().caches.refs_loaded(&alpha_id),
+        "the drained RefsLoaded must fill the ref cache"
+    );
+    assert!(
+        !label_pills(&harness).is_empty(),
+        "decoration pills must appear after RefsLoaded lands"
     );
 }
 

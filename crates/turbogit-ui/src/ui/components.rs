@@ -162,8 +162,10 @@ pub enum SyncKind {
     Gone,
 }
 
-/// The row's sync badge as `(kind, label)`. `None` means no upstream exists,
-/// so there is nothing to say. Called only when the row tracks a remote.
+/// The row's sync badge as `(kind, label)`. `None` means there is nothing to
+/// say — either no upstream exists, or the branch is in sync (issue: in-sync
+/// rows are unmarked rather than labelled "in sync"). Called only when the row
+/// tracks a remote.
 pub fn sync_badge(ahead: usize, behind: usize, gone: bool) -> Option<(SyncKind, String)> {
     if gone {
         return Some((SyncKind::Gone, "gone".to_string()));
@@ -177,7 +179,7 @@ pub fn sync_badge(ahead: usize, behind: usize, gone: bool) -> Option<(SyncKind, 
     if behind > 0 {
         return Some((SyncKind::Behind, format!("↓{behind}")));
     }
-    Some((SyncKind::InSync, "in sync".to_string()))
+    None
 }
 
 /// §13 meaning token for a sync badge's foreground.

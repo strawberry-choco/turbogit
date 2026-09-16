@@ -123,7 +123,9 @@ fn the_monitor_tracks_the_fleet_and_closes_on_demand() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
+    // A single registered repo collapses its folder away, so the fleet is
+    // selected through the repo's own checkbox.
+    h.get_by_label("Select repo alpha").click();
     settle(&mut h);
     h.get_by_label("Pull all").click();
     settle(&mut h);
@@ -158,7 +160,7 @@ fn a_failed_row_exposes_resolve_that_jumps_to_the_repo() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
+    h.get_by_label("Select repo alpha").click();
     settle(&mut h);
     h.get_by_label("Fetch all").click();
     settle(&mut h);
@@ -198,7 +200,7 @@ fn resolve_on_a_conflicted_repo_opens_the_conflict_resolver() {
     let mut h = harness(state);
     settle(&mut h);
 
-    h.get_by_label("Select group frontend").click();
+    h.get_by_label("Select repo alpha").click();
     settle(&mut h);
     h.get_by_label("Fetch all").click();
     settle(&mut h);

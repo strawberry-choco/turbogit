@@ -925,7 +925,10 @@ pub struct UiState {
     // Derived true whenever no root is open (`AppState::show_welcome`).
     pub welcome_visible: bool,
     // Workspace tree sidebar (issue #05): live filter text matched against
-    // repo names, paths, and branch names; collapsed group keys.
+    // repo names, paths, and branch names. Collapsed folder / repo-with-
+    // children state, keyed by **relative path** so same-named folders at
+    // different depths collapse independently (sidebar-project-tree 03);
+    // persisted with the workspace.
     pub sidebar_filter: String,
     pub sidebar_collapsed: HashSet<String>,
     /// "What's new" changelog overlay visibility on the Welcome screen
@@ -1048,6 +1051,17 @@ pub struct AppState {
     /// fetch-on-miss trigger against re-dispatching every frame while a
     /// fetch is in flight (the cache entry only lands with the event).
     fetching_worktrees: HashSet<RootId>,
+    /// In-flight log fetches per root (log-open perf, D2): the tool-window
+    /// body asks for the log every frame while the cache is cold, so the
+    /// fetch gets the same one-per-root guard as the worktree fetches. The
+    /// guard releases when the `LogLoaded` event drains — on Ok and Err
+    /// alike, because the worker always posts the event.
+    log_fetch_inflight: HashSet<RootId>,
+    /// In-flight ref-decoration fetches per root (log-open perf, D2): guards
+    /// `fetch_refs` against re-dispatching every frame while a fetch is in
+    /// flight; the guard releases when the `RefsLoaded` event drains, on Ok
+    /// and Err alike.
+    fetching_refs: HashSet<RootId>,
     /// Worktree-list epoch per root (ticket 02): every worktree-mutating
     /// invalidation bumps it, so a list fetch started before a mutation is
     /// dropped when it settles (its stored epoch no longer matches).
@@ -1111,6 +1125,8 @@ impl AppState {
             dir_picker: None,
             sync_refresh: false,
             fetching_worktrees: HashSet::new(),
+            log_fetch_inflight: HashSet::new(),
+            fetching_refs: HashSet::new(),
             worktree_epochs: HashMap::new(),
             fetching_worktree_dirty: HashSet::new(),
             fetching_submodules: HashSet::new(),
@@ -1145,6 +1161,7 @@ impl AppState {
                 state.ui.pinned_views = ui.pinned_views;
                 state.ui.bulk_history = ui.bulk_history;
                 state.ui.recent_custom_commands = ui.recent_custom_commands;
+                state.ui.sidebar_collapsed = ui.sidebar_collapsed;
             }
             None => {
                 // No project directory supplied: land on Welcome (ADR-0004).
@@ -1187,6 +1204,8 @@ impl AppState {
             dir_picker: None,
             sync_refresh: true,
             fetching_worktrees: HashSet::new(),
+            log_fetch_inflight: HashSet::new(),
+            fetching_refs: HashSet::new(),
             worktree_epochs: HashMap::new(),
             fetching_worktree_dirty: HashSet::new(),
             fetching_submodules: HashSet::new(),
@@ -1252,6 +1271,7 @@ impl AppState {
             pinned_views: self.ui.pinned_views.clone(),
             bulk_history: self.ui.bulk_history.clone(),
             recent_custom_commands: self.ui.recent_custom_commands.clone(),
+            sidebar_collapsed: self.ui.sidebar_collapsed.clone(),
         };
         let _ = crate::persistence::save_ui_state(&self.project_dir, &ui);
     }
@@ -1309,6 +1329,12 @@ impl AppState {
     /// commits, widened by [`Self::load_more_log`] — never the uncapped
     /// whole history.
     pub fn fetch_log(&mut self, root: RootId) {
+        // One fetch per root in flight (log-open perf, D2): the tool-window
+        // body asks every frame while the cache is cold; a second fetch for
+        // the same root while one is pending is a no-op.
+        if !self.log_fetch_inflight.insert(root.clone()) {
+            return;
+        }
         let executor = self.executor.clone();
         let tx = self.tx.clone();
         let limit = (self.ui.log_page + 1) * LOG_PAGE_SIZE;
@@ -1321,6 +1347,24 @@ impl AppState {
                 },
             );
             let _ = tx.send(AppEvent::LogLoaded { root, commits: res });
+        });
+    }
+
+    /// Fetch (and cache) ref decorations for a root on a worker thread
+    /// (log-open perf, D1): the Log view's data-ensure step kicks this
+    /// instead of running `ref_decorations` synchronously on the render
+    /// thread. One fetch per root in flight — a second fetch for the same
+    /// root while one is pending is a no-op; the guard releases when the
+    /// `RefsLoaded` event drains, on Ok and Err alike.
+    pub fn fetch_refs(&mut self, root: RootId) {
+        if !self.fetching_refs.insert(root.clone()) {
+            return;
+        }
+        let executor = self.executor.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let res = executor.ref_decorations(&root.0);
+            let _ = tx.send(AppEvent::RefsLoaded { root, deco: res });
         });
     }
 
@@ -2290,10 +2334,24 @@ impl AppState {
                         }
                     }
                 }
-                AppEvent::LogLoaded { root, commits } => match commits {
-                    Ok(c) => self.caches.store_log(root, c),
-                    Err(e) => self.last_error = Some(e.to_string()),
-                },
+                AppEvent::LogLoaded { root, commits } => {
+                    // Release the in-flight guard on Ok and Err alike — the
+                    // worker always posts the event (log-open perf, D2).
+                    self.log_fetch_inflight.remove(&root);
+                    match commits {
+                        Ok(c) => self.caches.store_log(root, c),
+                        Err(e) => self.last_error = Some(e.to_string()),
+                    }
+                }
+                AppEvent::RefsLoaded { root, deco } => {
+                    // Release the in-flight guard on Ok and Err alike — the
+                    // worker always posts the event (log-open perf, D2).
+                    self.fetching_refs.remove(&root);
+                    match deco {
+                        Ok(d) => self.caches.store_refs(root, d),
+                        Err(e) => self.last_error = Some(e.to_string()),
+                    }
+                }
                 AppEvent::OpCompleted {
                     label,
                     affected,

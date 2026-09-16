@@ -30,6 +30,27 @@ pub struct CliExecutor {
     pub settings: VcsSettings,
 }
 
+/// The argv + env for one bounded, non-interactive `ls-remote` (log-open
+/// perf, D3): credential prompts disabled, http remotes bounded by git's
+/// low-speed timeouts, ssh remotes bounded by a `ConnectTimeout`. Consumed by
+/// `ref_decorations` only — no other git call gains these options. Pure and
+/// unit-tested without spawning git.
+fn ls_remote_invocation(remote: &str) -> (Vec<String>, Vec<(&'static str, String)>) {
+    let args = vec![
+        "-c".to_string(),
+        "http.lowSpeedLimit=1".to_string(),
+        "-c".to_string(),
+        "http.lowSpeedTime=5".to_string(),
+        "ls-remote".to_string(),
+        remote.to_string(),
+    ];
+    let envs = vec![
+        ("GIT_TERMINAL_PROMPT", "0".to_string()),
+        ("GIT_SSH_COMMAND", "ssh -o ConnectTimeout=10".to_string()),
+    ];
+    (args, envs)
+}
+
 impl CliExecutor {
     /// Spawn `git` in `root` (used as the working directory), capturing stdout,
     /// stderr and the exit code. On a non-zero exit, return
@@ -369,7 +390,9 @@ impl GitExecutor for CliExecutor {
                     HashMap::new();
                 let mut all_ok = true;
                 for remote in &remotes {
-                    match self.run(root, &["ls-remote", remote]) {
+                    let (args, envs) = ls_remote_invocation(remote);
+                    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                    match self.run_env(root, &arg_refs, &envs) {
                         Ok((out, _, _)) => {
                             let entry = remote_refs.entry(remote.clone()).or_default();
                             for line in out.lines() {
@@ -1805,6 +1828,35 @@ fn parse_blame(s: &str) -> Vec<BlameLine> {
 mod tests {
     use super::*;
     use turbogit_domain::model::SignatureState;
+
+    #[test]
+    fn ls_remote_invocation_carries_the_d3_bounded_options() {
+        let (args, envs) = ls_remote_invocation("origin");
+        assert_eq!(
+            args,
+            vec![
+                "-c",
+                "http.lowSpeedLimit=1",
+                "-c",
+                "http.lowSpeedTime=5",
+                "ls-remote",
+                "origin",
+            ],
+            "http remotes must be bounded by git's low-speed limits"
+        );
+        let prompt = envs
+            .iter()
+            .find(|(k, _)| k == &"GIT_TERMINAL_PROMPT")
+            .map(|(_, v)| v)
+            .expect("credential prompts must be disabled");
+        assert_eq!(prompt, "0");
+        let ssh = envs
+            .iter()
+            .find(|(k, _)| k == &"GIT_SSH_COMMAND")
+            .map(|(_, v)| v)
+            .expect("ssh remotes must be bounded by a connect timeout");
+        assert_eq!(ssh, "ssh -o ConnectTimeout=10");
+    }
 
     #[test]
     fn signature_state_maps_the_g_question_mark_codes() {
