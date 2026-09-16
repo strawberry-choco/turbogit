@@ -1,9 +1,12 @@
 //! Issue #05 — Workspace tree sidebar.
 //!
-//! The left rail lists every discovered repository root as a tree of
-//! projects → repos: a workspace header with the total repo count, a
-//! filter field, collapsible project groups with aggregate counts, and one
-//! row per repo with a status dot, branch label, and ahead/behind badges.
+//! The left rail lists every discovered repository root as a recursive
+//! project tree (sidebar-project-tree issue 01): a workspace header with
+//! the total repo count, a filter field, folder nodes with subtree counts
+//! and tri-state checkboxes, and one row per repo with a status dot,
+//! branch label, and ahead/behind badges. Single-repo folders collapse and
+//! promote their repo with a path label; the rules are uniform under the
+//! live and smart-group filters (issue 03).
 //!
 //! Tests drive the real [`turbogit_ui::ui::render`] through `egui_kittest`
 //! over temporary git repositories (CONTEXT.md "Headless harness") and
@@ -75,6 +78,76 @@ fn two_group_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     (project, alpha, lib)
 }
 
+/// A deterministic two-repos-per-folder project:
+/// `<root>/ws2/open/{alpha, ui}` and `<root>/ws2/oss/{cli, lib}`, so every
+/// first-level folder displays. Returns the project dir and the four repo
+/// paths.
+fn two_by_two_project(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
+    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .join(format!(".scratch/ws2-{tag}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("ws2");
+    let frontend = project.join("frontend");
+    let oss = project.join("oss");
+    std::fs::create_dir_all(&frontend).unwrap();
+    std::fs::create_dir_all(&oss).unwrap();
+    let alpha = temp_repo(&frontend, "alpha");
+    let ui = temp_repo(&frontend, "ui");
+    let cli = temp_repo(&oss, "cli");
+    let lib = temp_repo(&oss, "lib");
+    (project, alpha, ui, cli, lib)
+}
+
+/// A nested project exercising every recursive shape:
+/// `wsn/app/.git` + `wsn/app/core/.git` (a repo inside a repo),
+/// `wsn/tools/{cli, gui}` (a folder over two repos), and
+/// `wsn/foo/bar/.git` (a single-repo chain → path label `f/bar`).
+/// Returns the project dir and every repo path.
+fn nested_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
+    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .join(format!(".scratch/wsn-{tag}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("wsn");
+    let tools = project.join("tools");
+    let foo_dir = project.join("foo");
+    std::fs::create_dir_all(&tools).unwrap();
+    std::fs::create_dir_all(&foo_dir).unwrap();
+    let app = temp_repo(&project, "app");
+    let core = temp_repo(&app, "core");
+    let cli = temp_repo(&tools, "cli");
+    let gui = temp_repo(&tools, "gui");
+    let bar = temp_repo(&foo_dir, "bar");
+    (project, vec![app, core, cli, gui, bar])
+}
+
+/// A project with same-named folders at different depths:
+/// `wss/a/src/{r1, r2}` and `wss/b/src/{r3, r4}` — collapse state must
+/// key by relative path so one collapses independently of the other.
+fn same_named_folders_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
+    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .join(format!(".scratch/wss-{tag}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("wss");
+    let a_src = project.join("a").join("src");
+    let b_src = project.join("b").join("src");
+    std::fs::create_dir_all(&a_src).unwrap();
+    std::fs::create_dir_all(&b_src).unwrap();
+    let r1 = temp_repo(&a_src, "r1");
+    let r2 = temp_repo(&a_src, "r2");
+    let r3 = temp_repo(&b_src, "r3");
+    let r4 = temp_repo(&b_src, "r4");
+    (project, vec![r1, r2, r3, r4])
+}
+
 /// Headless harness driving the full app UI (mirrors `workspace_shell_frame`).
 /// Sized wide of the sidebar's small-window threshold so the rail renders.
 fn harness(state: AppState) -> Harness<'static, AppState> {
@@ -104,27 +177,32 @@ fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
     );
 }
 
-// -- Cycle A — the tree paints: workspace header, groups, repo rows --
+// -- Cycle A — the tree paints: workspace header, folders, repo rows --
 
 #[test]
-fn sidebar_paints_workspace_header_groups_and_repo_rows() {
-    let (project, alpha, lib) = two_group_project("paint");
-    let state = app_state(&project, &[alpha.clone(), lib.clone()]);
+fn sidebar_paints_workspace_header_folders_and_repo_rows() {
+    let (project, alpha, ui, cli, lib) = two_by_two_project("paint");
+    let state = app_state(&project, &[alpha, ui, cli, lib]);
     let mut h = harness(state);
     settle(&mut h);
 
     // Workspace header: project basename + the total repo count badge.
-    assert_painted(&h, "wsb");
-    assert_galley(&h, "2");
+    assert_painted(&h, "ws2");
+    assert_galley(&h, "4");
     // Filter field with its placeholder hint.
     assert_painted(&h, "Filter repos / branches…");
     // Section title.
     assert_painted(&h, "PROJECTS");
-    // Group headers.
-    assert_painted(&h, "frontend");
-    assert_painted(&h, "oss");
+    // Folder rows: the project dir folder plus one per first-level group,
+    // each holding two repos (the "2" folder badge).
+    assert_galley(&h, "ws2");
+    assert_galley(&h, "frontend");
+    assert_galley(&h, "oss");
+    assert_galley(&h, "2");
     // Repo rows with branch labels.
     assert_painted(&h, "alpha");
+    assert_painted(&h, "ui");
+    assert_painted(&h, "cli");
     assert_painted(&h, "lib");
     assert_painted(&h, "main");
 }
@@ -286,17 +364,19 @@ fn clicking_a_smart_group_filters_the_tree_to_its_members() {
 
     // Switching to another group re-filters: dirty worktree keeps only lib
     // (the status bar still paints the focused repo alpha, so the tree-level
-    // signal is the frontend group header dropping out).
+    // signal is the frontend folder dropping out and the single surviving
+    // chain collapsing to its path label).
     h.get_by_label("dirty worktree").click();
     settle(&mut h);
     assert_eq!(
         h.state().ui.sidebar_smart_group,
         Some("dirty worktree".into())
     );
+    assert_galley(&h, "w/o/lib");
     h.get_by_label("Select repo lib");
     assert!(
         h.query_by_label("Select group frontend").is_none(),
-        "the memberless frontend group header must drop out"
+        "the memberless frontend folder header must drop out"
     );
 
     // Clicking the active group again clears the filter: the whole tree
@@ -305,8 +385,8 @@ fn clicking_a_smart_group_filters_the_tree_to_its_members() {
     settle(&mut h);
     assert_eq!(h.state().ui.sidebar_smart_group, None);
     assert_painted(&h, "alpha");
-    assert_painted(&h, "lib");
-    assert_galley(&h, "oss");
+    assert_painted(&h, "extra");
+    assert_painted(&h, "o/lib");
 }
 
 #[test]
@@ -566,35 +646,87 @@ fn clicking_repo_row_focuses_it_in_header_and_breadcrumb() {
     assert_painted(&h, "oss/lib");
 }
 
-// -- Cycle C — group collapse / expand --
+// -- Cycle C — folder collapses key by relative path --
 
 #[test]
-fn group_header_toggles_collapse_and_expand() {
-    let (project, alpha, lib) = two_group_project("collapse");
-    let state = app_state(&project, &[alpha, lib]);
+fn folder_header_toggles_collapse_and_expand() {
+    let (project, alpha, ui, cli, lib) = two_by_two_project("collapse");
+    let state = app_state(&project, &[alpha, ui, cli, lib]);
     let mut h = harness(state);
     settle(&mut h);
 
-    // Collapse the `oss` group: its rows disappear (lib is not the focused
-    // root, so nothing else repaints its name) and the key is recorded.
+    // Collapse the `oss` folder: its rows disappear (a first-level folder's
+    // relative-path key equals its name) and the key is recorded.
     h.get_by_label("oss").click();
     settle(&mut h);
     assert_not_painted(&h, "lib");
+    assert_not_painted(&h, "cli");
     assert!(h.state().ui.sidebar_collapsed.contains("oss"));
 
-    // Expand again: the row returns and the key is cleared.
+    // Expand again: the rows return and the key is cleared.
     h.get_by_label("oss").click();
     settle(&mut h);
     assert_painted(&h, "lib");
     assert!(!h.state().ui.sidebar_collapsed.contains("oss"));
 }
 
-// -- Cycle D — the filter narrows the tree live --
+#[test]
+fn same_named_folders_at_different_depths_collapse_independently() {
+    let (project, repos) = same_named_folders_project("paths");
+    let mut state = app_state(&project, &repos);
+    // Seed a collapse for the `a/src` folder only; matching must key by
+    // relative path, never by the name `src` alone.
+    state.ui.sidebar_collapsed.insert("a/src".to_string());
+    let mut h = harness(state);
+    settle(&mut h);
+
+    // Both `src` folders paint (they each hold two repos)…
+    assert_painted(&h, "src");
+    assert_painted(&h, "r3");
+    assert_painted(&h, "r4");
+    // …but only the a-side rows are hidden (the b-side folders stay
+    // visible under their own `src`; absence is a sidebar-scoped checkbox
+    // query so the Commit window's repo lists never interfere).
+    assert_sidebar_repo_dropped(&h, "r1");
+    assert_sidebar_repo_dropped(&h, "r2");
+    assert!(h.query_by_label("Select repo r3").is_some());
+    assert!(h.query_by_label("Select repo r4").is_some());
+    assert_eq!(h.state().ui.sidebar_collapsed.len(), 1);
+    assert!(h.state().ui.sidebar_collapsed.contains("a/src"));
+}
 
 #[test]
-fn filter_input_narrows_the_tree_live() {
-    let (project, alpha, lib) = two_group_project("filter");
-    let state = app_state(&project, &[alpha, lib]);
+fn collapse_state_survives_an_app_restart() {
+    let (project, alpha, ui, cli, lib) = two_by_two_project("restart");
+    let state = app_state(&project, &[alpha, ui, cli, lib]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    h.get_by_label("oss").click();
+    settle(&mut h);
+    assert!(h.state().ui.sidebar_collapsed.contains("oss"));
+    drop(h);
+
+    // Restart the same project through the production launch path: the
+    // relative-path key comes back and the folder stays collapsed.
+    let recents_cfg = tempfile::tempdir().unwrap();
+    let relaunched = turbogit_app::state::AppState::launch_in(
+        Some(project.clone()),
+        Some(recents_cfg.path().to_path_buf()),
+    );
+    let mut h2 = harness(relaunched);
+    settle(&mut h2);
+    assert!(h2.state().ui.sidebar_collapsed.contains("oss"));
+    assert_not_painted(&h2, "lib");
+    assert_not_painted(&h2, "cli");
+}
+
+// -- Cycle D — the filter narrows the tree live and re-collapses it --
+
+#[test]
+fn filter_input_narrows_the_tree_live_and_recollapses() {
+    let (project, alpha, ui, cli, lib) = two_by_two_project("filter");
+    let state = app_state(&project, &[alpha, ui, cli, lib]);
     let mut h = harness(state);
     settle(&mut h);
 
@@ -603,24 +735,64 @@ fn filter_input_narrows_the_tree_live() {
     search.type_text("lib");
     settle(&mut h);
 
-    // Public state carries the query; the tree narrowed live: the oss
-    // group survives with lib, the frontend group drops out entirely.
-    // (The breadcrumb still paints "frontend/alpha" for the focused root,
-    // so group assertions use exact galleys.)
+    // Public state carries the query; one survivor re-collapses every
+    // folder above it, so no view shows a folder with a single child.
     assert_eq!(h.state().ui.sidebar_filter, "lib");
-    assert_galley(&h, "oss");
-    assert_painted(&h, "lib");
+    assert_galley(&h, "w/o/lib");
     let texts = painted_text(&h);
     assert!(
-        !texts.iter().any(|t| t == "frontend"),
-        "frontend group header must drop out while filtered: {texts:?}"
+        !texts.iter().any(|t| t == "oss"),
+        "a folder with one surviving repo must collapse: {texts:#?}"
     );
+    assert!(
+        !texts.iter().any(|t| t == "frontend"),
+        "the memberless frontend folder must drop out: {texts:#?}"
+    );
+
+    // A folder-name match keeps the whole subtree.
+    h.state_mut().ui.sidebar_filter.clear();
+    settle(&mut h);
+    let search = h.get_by_label("Filter repos / branches…");
+    search.focus();
+    search.type_text("frontend");
+    settle(&mut h);
+    assert_painted(&h, "alpha");
+    assert_painted(&h, "ui");
+    assert_not_painted(&h, "lib");
 
     // Clearing the query restores the whole tree.
     h.state_mut().ui.sidebar_filter.clear();
     settle(&mut h);
     assert_galley(&h, "frontend");
-    assert_painted(&h, "alpha");
+    assert_painted(&h, "lib");
+}
+
+#[test]
+fn folder_rows_paint_subtree_dirty_badges_reflecting_the_worktree() {
+    let (project, alpha, ui, cli, lib) = two_by_two_project("dirty-badge");
+    let state = app_state(&project, &[alpha, ui, cli, lib.clone()]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    // All-clean: folder badges show repo counts (a "2" per folder) and no
+    // dirty badge ("1" appears nowhere — counts are 2 and 4).
+    assert_galley(&h, "2");
+    let texts = painted_text(&h);
+    assert!(
+        !texts.iter().any(|t| t == "1"),
+        "an all-clean worktree paints no dirty badge: {texts:#?}"
+    );
+
+    // lib gets uncommitted work; the refresh lands it in the `oss` folder's
+    // dirty badge (a "1" for one dirty repo in the subtree) and in the
+    // "dirty worktree" smart-group row.
+    std::fs::write(lib.join("wip.txt"), "wip\n").unwrap();
+    h.get_by_label("Refresh").click();
+    settle(&mut h);
+    assert_galley(&h, "1");
+
+    // A conflicted repo counts as dirty too (the smart-group predicate).
+    assert_painted(&h, "dirty worktree");
 }
 
 // -- Background incoming check (issue #27) -------------------------------------
@@ -670,4 +842,52 @@ fn background_poll_badges_incoming_commits_without_manual_refresh() {
     h.run();
 
     assert_galley(&h, "↓1");
+}
+
+// -- Sidebar-project-tree: nested shapes, path labels, expandable repos --
+
+#[test]
+fn nested_tree_paints_repo_inside_repo_and_promoted_path_labels() {
+    let (project, repos) = nested_project("nested");
+    let state = app_state(&project, &repos);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    // The `tools` folder displays with its two repos beneath it.
+    assert_galley(&h, "tools");
+    assert_painted(&h, "cli");
+    assert_painted(&h, "gui");
+    // The single-repo chain `foo/bar` collapsed to its path label — the
+    // folder wraps nothing.
+    assert_galley(&h, "f/bar");
+    // A repo inside a repo: `app` renders as a repo row (its own label)
+    // with `core` beneath it, visible without any click.
+    assert_galley(&h, "app");
+    assert_painted(&h, "core");
+    // Folder subtree totals count repos nested beneath repo rows: the
+    // `wsn` folder badge and the header total both show all five repos.
+    assert_galley(&h, "5");
+}
+
+#[test]
+fn a_repo_with_nested_repos_collapses_and_expands_by_its_relative_path() {
+    let (project, repos) = nested_project("expand");
+    let state = app_state(&project, &repos);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    // Expanded by default: the nested repo is visible without a click.
+    assert_painted(&h, "core");
+    // The expander chevron collapses the nested repo, keyed by its
+    // relative path.
+    h.get_by_label("Contract repo app").click();
+    settle(&mut h);
+    assert_sidebar_repo_dropped(&h, "core");
+    assert!(h.state().ui.sidebar_collapsed.contains("app"));
+    assert_painted(&h, "app");
+    // Expanding again brings the nested repo back and clears the key.
+    h.get_by_label("Contract repo app").click();
+    settle(&mut h);
+    assert!(h.query_by_label("Select repo core").is_some());
+    assert!(!h.state().ui.sidebar_collapsed.contains("app"));
 }

@@ -199,8 +199,15 @@ fn visible_root_ids(state: &AppState) -> Vec<RootId> {
 /// active (issue #19) — the path-scoped commit listing. All fills happen
 /// behind the [`turbogit_app::root_caches::RootCaches`] interface.
 fn ensure_log_data(state: &mut AppState) {
+    // Ref decorations load off the render thread (log-open perf, D1): kick
+    // the worker per root while its decorations aren't in yet; the filled
+    // cache arrives with the `RefsLoaded` event and the view renders the
+    // empty-first log meanwhile. The one-per-root in-flight guard inside
+    // `fetch_refs` keeps this from stacking workers frame after frame.
     for id in visible_root_ids(state) {
-        state.caches.ensure_refs(state.executor.as_ref(), &id);
+        if !state.caches.refs_loaded(&id) {
+            state.fetch_refs(id);
+        }
     }
     if let (Some(root), Some(cid)) = (
         state.selected_root.clone(),
@@ -435,6 +442,8 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
 
     // This instance has remotes visible, fixed — no toggle lives in the pane.
     state.ui.log_tree.show_remotes = true;
+    // ... and they start collapsed: the remote-header rows show, their
+    // branches hide until a group is expanded.
 
     // Build the tree over the Roots-filter-visible roots. The decorations
     // upgrade the warmed tag states (plan D8) and mark remote-tracking refs
@@ -492,6 +501,7 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
         shows_row_actions: false,
         id_salt: "log_branch_tree",
         full_height: false,
+        collapse_remotes_by_default: true,
     };
     let events = branch_tree_view::branch_tree(ui, &props, &mut state.ui.log_tree);
     for event in events {

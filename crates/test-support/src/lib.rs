@@ -130,6 +130,13 @@ pub enum RecordedCall {
 pub struct RecordingExecutor {
     pub inner: Arc<dyn GitExecutor>,
     calls: Mutex<Vec<RecordedCall>>,
+    /// `log` invocation counter (log-open perf: in-flight-guard tests assert
+    /// exactly one worker per fetch, without relying on `recorded()` which
+    /// other suites compare strictly).
+    log_calls: Mutex<usize>,
+    /// `ref_decorations` invocation counter (log-open perf: the refs
+    /// in-flight guard releases on Ok and Err alike).
+    ref_calls: Mutex<usize>,
 }
 
 impl RecordingExecutor {
@@ -137,7 +144,19 @@ impl RecordingExecutor {
         Self {
             inner,
             calls: Mutex::new(Vec::new()),
+            log_calls: Mutex::new(0),
+            ref_calls: Mutex::new(0),
         }
+    }
+
+    /// How many `log` invocations have been made so far.
+    pub fn log_call_count(&self) -> usize {
+        *self.log_calls.lock().expect("log mutex")
+    }
+
+    /// How many `ref_decorations` invocations have been made so far.
+    pub fn ref_call_count(&self) -> usize {
+        *self.ref_calls.lock().expect("ref mutex")
     }
 
     /// Snapshot of every recorded call so far, in order.
@@ -216,6 +235,7 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
+        *self.log_calls.lock().expect("log mutex") += 1;
         self.inner.log(root, opts)
     }
 
@@ -232,6 +252,7 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn ref_decorations(&self, root: &Path) -> TgResult<Vec<(CommitId, Vec<CommitRef>)>> {
+        *self.ref_calls.lock().expect("ref mutex") += 1;
         self.inner.ref_decorations(root)
     }
 
