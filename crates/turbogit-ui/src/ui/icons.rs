@@ -263,6 +263,16 @@ pub fn icon_by_name(ui: &mut Ui, name: &str, size: f32, color: Color32) {
     paint_at(ui.painter(), rect.min, size, name, color);
 }
 
+/// Paint an icon's strokes with `origin` at its top-left, scaled to
+/// `size × size` and stroked `color`, through `painter`.
+///
+/// Painter-only: registers no widget (unlike [`icon`]), so it is safe to
+/// draw inside a painter-based row without stealing its clicks.
+/// Unknown names paint nothing (and log at debug) — never panic (§5.3).
+pub fn paint_icon(painter: &egui::Painter, origin: Pos2, size: f32, name: Icon, color: Color32) {
+    paint_at(painter, origin, size, name.name(), color);
+}
+
 /// Paint an icon's strokes into `rect`'s top-left at `size`, stroked `color`.
 fn paint_at(painter: &egui::Painter, origin: Pos2, size: f32, name: &str, color: Color32) {
     let Some(subpaths) = geometry(name) else {

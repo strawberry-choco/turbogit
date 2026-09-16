@@ -686,9 +686,9 @@ fn remote_rollup_row(
 }
 
 /// One 30px branch row: current marker, middle-truncated mono name, upstream,
-/// sync chips (icon+count / in-sync / gone), relative last-activity time. Hover
-/// and selection fills come from the §14.1 row states; clicking reports
-/// [`TreeEvent::RowClicked`] (never checks out — the caller decides).
+/// and sync chips (icon+count / in-sync / gone). Hover and selection fills
+/// come from the §14.1 row states; clicking reports [`TreeEvent::RowClicked`]
+/// (never checks out — the caller decides).
 #[allow(clippy::too_many_arguments)]
 fn branch_row(
     ui: &mut Ui,
@@ -787,14 +787,6 @@ fn branch_row(
         )
         .with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(12.0);
-            if let Some(ts) = branch.last_touched {
-                let age = now.signed_duration_since(ts).to_std().unwrap_or_default();
-                ui.label(
-                    RichText::new(stale_badge(age))
-                        .font(data_font(TYPE_CONTROL))
-                        .color(Palette::T_MUTED),
-                );
-            }
             // Mid-operation state is first-class on the row (issue 09): a
             // merge in progress reads "merging…" and survives tab switches.
             if is_current && props.merge_in_progress {
