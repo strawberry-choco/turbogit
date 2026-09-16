@@ -5,7 +5,7 @@
 //! over a seeded multi-root project (two real git repos in a tempdir):
 //!
 //! - `alpha` — `main` with a tagged, remote-decorated history plus a
-//!   `feature` branch (branch + remote + tag chips all land on one commit)
+//!   `feature` branch (branches, a remote and a tag sprinkled over history)
 //! - `beta` — a second root for the multi-root stripes / roots-filter cases
 //!
 //! Assertions use only public surfaces: painted output (text galleys +
@@ -257,49 +257,33 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// The pill rect painted behind a chip whose text is exactly `text`, together
-/// with its fill color. Chips are ~18px tall pills, which distinguishes them
-/// from selected tree rows (24px). Ref names can appear both as a chip in the
-/// graph and as a plain row label in the branches pane, so every galley with
-/// that exact text is tried until one sits on a qualifying pill.
-#[track_caller]
-fn expect_chip(harness: &Harness<'_, AppState>, text: &str, what: &str) -> (Rect, Color32) {
-    let positions: Vec<Pos2> = harness
+/// Number of galleys painting exactly `text` (tooltips included).
+fn count_exact(harness: &Harness<'_, AppState>, text: &str) -> usize {
+    harness
         .output()
         .shapes
         .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(shape) if shape.galley.text() == text => Some(shape.pos),
-            _ => None,
+        .filter(|cl| matches!(&cl.shape, Shape::Text(s) if s.galley.text() == text))
+        .count()
+}
+
+/// The label pills painted in the graph: compact (~24×18px) neutral
+/// SURFACE_3 pills. The tag icon inside them paints strokes, not fills, so
+/// the pill's rounded background rect is the reliable signature.
+fn label_pills(harness: &Harness<'_, AppState>) -> Vec<Rect> {
+    let graph = graph_region(harness);
+    filled_rects(harness)
+        .into_iter()
+        .filter(|(r, c)| {
+            *c == Palette::SURFACE_3
+                && r.height() >= 14.0
+                && r.height() <= 22.0
+                && r.width() >= 20.0
+                && r.width() <= 28.0
+                && r.intersects(graph)
         })
-        .collect();
-    assert!(
-        !positions.is_empty(),
-        "{what}: chip text `{text}` was not painted"
-    );
-    // The new shell frame (issue #03) paints a branch pill of its own in
-    // the repo header; the ref chip under test lives in the log graph, so
-    // prefer pills carrying one of the three ref-token colors and only
-    // fall back to the first pill-shaped rect behind any occurrence.
-    const REF_TOKENS: [Color32; 3] = [
-        Palette::BRAND,
-        Palette::STATE_SUCCESS,
-        Palette::STATE_WARNING,
-    ];
-    let pills: Vec<(Rect, Color32)> = positions
-        .iter()
-        .filter_map(|pos| {
-            filled_rects(harness)
-                .into_iter()
-                .find(|(r, _)| r.height() >= 14.0 && r.height() <= 22.0 && r.contains(*pos))
-        })
-        .collect();
-    pills
-        .iter()
-        .find(|(_, c)| REF_TOKENS.contains(c))
-        .or_else(|| pills.first())
-        .copied()
-        .unwrap_or_else(|| panic!("{what}: no pill rect behind `{text}`"))
+        .map(|(r, _)| r)
+        .collect()
 }
 
 // --- Cycle 1: four panes render in mockup layout with token styling ----------
@@ -360,29 +344,55 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
     );
 }
 
-// --- Cycle 2: ref chips classify branch / remote / tag correctly --------------
+// --- Cycle 2: refs collapse into one label pill; names show on hover -------
 
 #[test]
-fn ref_chips_classify_branch_remote_tag_correctly() {
+fn ref_labels_collapse_into_a_single_pill_revealed_on_hover() {
     let seed = seeded_project();
-    let harness = log_harness(&seed);
+    let mut harness = log_harness(&seed);
 
-    // c1 carries all three decoration kinds; each chip must be painted with
-    // its kind's token: branch=BRAND, remote=STATE_SUCCESS, tag=STATE_WARNING.
-    let (branch_rect, branch_fill) = expect_chip(&harness, "main", "branch chip");
-    let (_remote_rect, remote_fill) = expect_chip(&harness, "origin/main", "remote chip");
-    let (_tag_rect, tag_fill) = expect_chip(&harness, "v1.0", "tag chip");
-
-    assert_eq!(branch_fill, Palette::BRAND, "branch chip must be brand");
+    // The union shows 4 commits: c1 (remote origin/main + tag v1.0), c3
+    // (main) and the beta root (main) are decorated; the ref-less c2 row is
+    // not. Each decorated commit paints exactly one compact label pill —
+    // the undecorated row gets none. (The `feature` branch's commit is not
+    // an ancestor of main, so it only drives the branches pane.)
     assert_eq!(
-        remote_fill,
-        Palette::STATE_SUCCESS,
-        "remote chip must be success"
+        label_pills(&harness).len(),
+        3,
+        "one label pill per decorated commit; the ref-less row gets none"
     );
-    assert_eq!(tag_fill, Palette::STATE_WARNING, "tag chip must be warning");
+
+    // The pill is compact and neutral — not a per-kind ref chip.
+    for pill in label_pills(&harness) {
+        assert!(
+            pill.width() < 120.0 && pill.height() <= 22.0,
+            "label pills are compact pills, not full rows"
+        );
+    }
+
+    // No ref name is painted inline in the graph anymore (names survive only
+    // as plain rows inside the branches pane, or in the hover tooltip).
+    let graph_text = painted_in_region(&harness, graph_region(&harness));
+    for name in ["main", "origin/main", "v1.0", "feature"] {
+        assert!(
+            !graph_text.iter().any(|t| t == name),
+            "`{name}` must not be painted inline in the graph (only on hover)"
+        );
+    }
+
+    // Hovering the bottom-most pill (c1's, carrying origin/main + v1.0)
+    // reveals the names in the tooltip.
+    let pill = label_pills(&harness)
+        .into_iter()
+        .max_by(|a, b| a.top().total_cmp(&b.top()))
+        .expect("a pill exists");
+    let before = count_exact(&harness, "origin/main") + count_exact(&harness, "v1.0");
+    harness.hover_at(pill.center());
+    settle(&mut harness);
+    let after = count_exact(&harness, "origin/main") + count_exact(&harness, "v1.0");
     assert!(
-        branch_rect.width() < 120.0,
-        "chips are compact pills, not full rows"
+        after > before,
+        "hovering the labels pill must reveal the ref names (before={before}, after={after})"
     );
 }
 
@@ -537,7 +547,7 @@ fn selection_uses_translucent_highlight_not_solid_brand() {
 // --- Cycle 6: live filtering in both search inputs -----------------------------
 
 /// All text painted inside `region` (used to scope assertions to one pane —
-/// ref names also appear as graph chips outside the branches pane).
+/// ref names live in the branches pane, away from the graph's labels pill).
 fn painted_in_region(harness: &Harness<'_, AppState>, region: Rect) -> Vec<String> {
     harness
         .output()
@@ -559,6 +569,20 @@ fn branches_region(harness: &Harness<'_, AppState>) -> Rect {
         .find(|(r, c)| *c == Palette::SURFACE && r.width() >= 200.0 && r.width() <= 220.0)
         .map(|(r, _)| r)
         .expect("branches pane band not painted")
+}
+
+/// The central graph band between the branches pane and the right column —
+/// the only place ref chips ever appeared inline (now collapsed into a pill).
+fn graph_region(harness: &Harness<'_, AppState>) -> Rect {
+    let branches = branches_region(harness);
+    let body_right = filled_rects(harness)
+        .iter()
+        .map(|(r, _)| r.right())
+        .fold(f32::NEG_INFINITY, f32::max);
+    Rect::from_min_max(
+        Pos2::new(branches.right(), branches.top()),
+        Pos2::new(body_right - 330.0, branches.bottom()),
+    )
 }
 
 #[test]

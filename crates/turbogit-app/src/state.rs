@@ -52,7 +52,7 @@ pub const MAX_RECENT_CUSTOM_COMMANDS: usize = 8;
 /// Commits fetched per log page (issue 17): the initial log load takes one
 /// page and `load_more_log` widens the fetch by another page, so a huge
 /// history never blocks the first paint.
-pub const LOG_PAGE_SIZE: usize = 200;
+pub const LOG_PAGE_SIZE: usize = 50;
 
 /// Persistent input fields for the modal dialogs (kept across redraws).
 #[derive(Default)]
