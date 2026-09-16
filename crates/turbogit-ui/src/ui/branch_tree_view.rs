@@ -50,10 +50,27 @@ use crate::ui::components::{
 };
 use crate::ui::icons::{self, Icon};
 
-/// Indentation per directory-nesting level inside a repo section.
-const BRANCH_INDENT: f32 = 16.0;
 /// Height of one repo section header (status dot + repo name + current chip).
 const REPO_HEADER_H: f32 = 30.0;
+
+/// Width of two whitespace characters in the data face — the per-level indent
+/// for directory subgroups under "Local" (branch names are monospace, so the
+/// hierarchy hangs two spaces per depth).
+fn two_space_indent(ui: &Ui) -> f32 {
+    ui.painter()
+        .layout_no_wrap("  ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
+        .size()
+        .x
+}
+
+/// Width of one whitespace character in the data face — the inline gap between
+/// a branch name and the current-branch marker after it.
+fn space_width(ui: &Ui) -> f32 {
+    ui.painter()
+        .layout_no_wrap(" ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
+        .size()
+        .x
+}
 
 /// What the user did to the tree (plan D4). Plain data — every action target
 /// arrives as `(owning repository, branch)` so no surface re-derives it and no
@@ -409,6 +426,7 @@ fn paint_nodes(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
+    let step = two_space_indent(ui);
     for n in nodes {
         match n {
             BranchNode::Leaf(l) => {
@@ -423,12 +441,12 @@ fn paint_nodes(
                     section,
                     &l.label,
                     &l.branch,
-                    depth as f32 * BRANCH_INDENT,
+                    depth as f32 * step,
                     events,
                 );
             }
             BranchNode::Dir(d) => {
-                dir_header(ui, &d.label, d.count, depth);
+                dir_header(ui, &d.label, d.count, depth, step);
                 *y_cursor += BRANCH_ROW_H;
                 paint_nodes(
                     ui,
@@ -526,7 +544,7 @@ fn repo_status_color(status: RepoStatus) -> Color32 {
 
 /// One directory group header inside a repo section: the directory segment
 /// (sans) and its branch count, indented by nesting depth.
-fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize) {
+fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize, step: f32) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
     let mut child = ui.new_child(
@@ -534,7 +552,7 @@ fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize) {
             .max_rect(rect)
             .layout(Layout::left_to_right(Align::Center)),
     );
-    child.add_space(PAD_LIST + depth as f32 * BRANCH_INDENT);
+    child.add_space(PAD_LIST + depth as f32 * step);
     child.add(
         egui::Label::new(
             RichText::new(format!("{label}/"))
@@ -737,9 +755,11 @@ fn branch_row(
     };
     let fill = row_fill(row_state);
     if fill != Color32::TRANSPARENT {
-        let mut bg = ui.painter().clone();
-        bg.set_layer_id(egui::LayerId::new(egui::Order::Background, response.id));
-        bg.rect_filled(rect, CornerRadius::same(3), fill);
+        // Paint on the row's own layer, before the row content: a dedicated
+        // `Order::Background` layer renders *above* the scroll content in the
+        // final pass, so a fill parked there would bury the branch name. Same
+        // layer + insertion order keeps the fill behind the row's own text.
+        ui.painter().rect_filled(rect, CornerRadius::same(3), fill);
     }
 
     // Right cluster: on hover the row reveals its actions (Checkout + the ⋯
@@ -824,12 +844,6 @@ fn branch_row(
     // Remote rows are reference material (issue 13): quieter, labelled with
     // their remote's name, and never carrying the current marker.
     let is_remote = branch.kind == BranchKind::Remote;
-    if is_current && !is_remote {
-        icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, Palette::AHEAD);
-        child.add_space(6.0);
-    } else {
-        child.add_space(KIT_ICON + 6.0);
-    }
     let budget = name_budget(rect.width() - PAD_LIST - KIT_ICON - 6.0 - 130.0);
     // Display the leaf's own label: remote leaves carry the prefix-stripped
     // name because their group header already names the remote (issue 03), so
@@ -858,6 +872,12 @@ fn branch_row(
     child.add(
         egui::Label::new(RichText::new(label).font(data_font(TYPE_BODY)).color(ink)).truncate(),
     );
+    // The current-branch marker reads inline right after the name, one
+    // whitespace apart — not a leading column, and not right-aligned.
+    if is_current && !is_remote {
+        child.add_space(space_width(ui));
+        icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, Palette::AHEAD);
+    }
     if let Some(up) = &meta.upstream {
         child.add_space(6.0);
         child.add(
