@@ -417,8 +417,8 @@ fn rows_render_icon_count_pairs_in_sync_gone_and_upstream() {
     assert_painted(&harness, "2");
     assert_painted(&harness, "1");
     assert_painted(&harness, "origin/main");
-    // main: tracks origin/main and is in sync → quiet confirmation.
-    assert_painted(&harness, "in sync");
+    // main: tracks origin/main and is in sync → unmarked (no "in sync" label).
+    assert_not_painted(&harness, "in sync");
     // ghost: upstream deleted → gone marker.
     assert_painted(&harness, "gone");
     assert_painted(&harness, "origin/ghost");
@@ -1618,13 +1618,12 @@ mod pure {
     }
 
     #[test]
-    fn row_meta_says_in_sync_quietly() {
-        use turbogit_ui::ui::components::SyncKind;
+    fn row_meta_leaves_in_sync_unmarked() {
         let now = Utc::now();
         let mut br = b("main", Some(now.timestamp()));
         br.tracking = Some("origin/main".into());
         let meta = row_meta(&br, now);
-        assert_eq!(meta.badge, Some((SyncKind::InSync, "in sync".to_string())));
+        assert_eq!(meta.badge, None);
     }
 
     #[test]

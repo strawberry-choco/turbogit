@@ -153,11 +153,8 @@ fn sync_badge_contract_matches_design() {
         sync_badge(2, 1, false),
         Some((SyncKind::Diverged, "↑2 ↓1".to_string()))
     );
-    // In sync is said quietly, never silent.
-    assert_eq!(
-        sync_badge(0, 0, false),
-        Some((SyncKind::InSync, "in sync".to_string()))
-    );
+    // In sync is left unmarked — the row shows nothing rather than a label.
+    assert_eq!(sync_badge(0, 0, false), None);
     // A deleted upstream wins over any count.
     assert_eq!(
         sync_badge(3, 0, true),

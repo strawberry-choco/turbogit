@@ -17,7 +17,9 @@
 //! - an op outside the selected root does not refetch the selected log
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
+use test_support::RecordingExecutor;
 use turbogit_app::events::AppEvent;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
@@ -107,13 +109,23 @@ fn prime_engine_backed_entries(state: &mut AppState, root_dir: &Path) {
         settings: VcsSettings::default(),
     };
     let root = RootId(root_dir.to_path_buf().into());
-    state.caches.ensure_refs(&exec, &root);
+    // Ref decorations now arrive through the worker event path (log-open
+    // perf, D1) — injected here exactly the way `drain_events` receives them.
+    let deco = exec.ref_decorations(&root.0).expect("decorations");
+    state
+        .tx
+        .send(AppEvent::RefsLoaded {
+            root: root.clone(),
+            deco: Ok(deco),
+        })
+        .expect("send RefsLoaded");
     state
         .caches
         .ensure_files(&exec, &root, &head_commit(root_dir));
     state
         .caches
         .ensure_path_log(&exec, &root, Path::new("file.txt"));
+    state.drain_events();
 }
 
 fn engine_log(dir: &Path) -> Vec<Commit> {
@@ -312,6 +324,157 @@ fn refresh_all_clears_every_cache_and_refetches_selected_log() {
     assert_eq!(state.caches.log(&alpha_id), Some(expected.as_slice()));
     // …and ahead/behind is recomputed synchronously.
     assert_eq!(state.caches.ahead_behind(&alpha_id), Some((0, 0)));
+}
+
+// --- Issue: refs arrive as an event into the ref cache (log-open perf, D1) --------
+
+#[test]
+fn refs_loaded_event_populates_the_ref_readers_for_a_root() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+
+    let mut state = AppState::for_roots(&p.dir, std::slice::from_ref(&p.alpha));
+    let exec = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+    let deco = exec.ref_decorations(&p.alpha).expect("decorations");
+    assert!(!deco.is_empty(), "seeded repo must have decorations");
+
+    assert!(
+        !state.caches.refs_loaded(&alpha_id),
+        "a cold ref cache reports nothing loaded"
+    );
+    state
+        .tx
+        .send(AppEvent::RefsLoaded {
+            root: alpha_id.clone(),
+            deco: Ok(deco.clone()),
+        })
+        .expect("send RefsLoaded");
+    state.drain_events();
+
+    assert!(
+        state.caches.refs_loaded(&alpha_id),
+        "refs_loaded() must reflect the injected decorations"
+    );
+    assert!(
+        state.caches.ref_groups(&alpha_id).next().is_some(),
+        "ref readers must return the injected decorations after RefsLoaded"
+    );
+    for (cid, refs) in &deco {
+        assert_eq!(
+            state.caches.refs_for(&alpha_id, cid),
+            refs.as_slice(),
+            "every injected commit's decorations must be readable"
+        );
+    }
+}
+
+#[test]
+fn refs_loaded_error_leaves_the_cache_empty_and_surfaces_the_error() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+
+    let mut state = AppState::for_roots(&p.dir, std::slice::from_ref(&p.alpha));
+    state
+        .tx
+        .send(AppEvent::RefsLoaded {
+            root: alpha_id.clone(),
+            deco: Err(turbogit_domain::error::TgError::Other(
+                "offline".to_string(),
+            )),
+        })
+        .expect("send RefsLoaded");
+    state.drain_events();
+
+    assert!(
+        !state.caches.refs_loaded(&alpha_id),
+        "a failing refs load must leave the cache empty"
+    );
+    assert_eq!(
+        state.caches.ref_groups(&alpha_id).count(),
+        0,
+        "no decorations may be readable after a failing load"
+    );
+    assert!(
+        state.last_error.is_some(),
+        "the failing refs load must surface through the last-error path"
+    );
+}
+
+// --- Worker fetch + in-flight guard (log-open perf, D2) ----------------------
+
+/// Drain events until the recording executor has seen at least `n`
+/// `ref_decorations` calls **and** `pred` holds — the call counter flips
+/// inside the worker before it sends the event, so a count-only wait can
+/// race the event still being in flight.
+fn wait_ref_calls(
+    state: &mut AppState,
+    recorder: &RecordingExecutor,
+    n: usize,
+    pred: impl Fn(&AppState) -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        state.drain_events();
+        if recorder.ref_call_count() >= n && pred(state) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("ref_decorations count {n} / predicate never satisfied");
+}
+
+#[test]
+fn refs_fetch_guard_dedupes_and_releases_on_refs_loaded_ok_and_err() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+
+    let recorder: Arc<RecordingExecutor> =
+        Arc::new(RecordingExecutor::new(Arc::new(CliExecutor {
+            settings: VcsSettings::default(),
+        })));
+    let mut state =
+        AppState::for_roots(&p.dir, std::slice::from_ref(&p.alpha)).with_executor(recorder.clone());
+
+    // Two same-frame fetches for the same root → exactly one worker.
+    state.fetch_refs(alpha_id.clone());
+    state.fetch_refs(alpha_id.clone());
+    wait_ref_calls(&mut state, &recorder, 1, |s| {
+        s.caches.refs_loaded(&alpha_id)
+    });
+    assert_eq!(
+        recorder.ref_call_count(),
+        1,
+        "two same-frame fetches must produce exactly one ref_decorations call"
+    );
+
+    // The Ok drain freed the guard: a later fetch runs again.
+    state.fetch_refs(alpha_id.clone());
+    wait_ref_calls(&mut state, &recorder, 2, |_| true);
+
+    // The Err drain frees the guard too — a later fetch runs again, and the
+    // failure surfaces through last_error.
+    state
+        .tx
+        .send(AppEvent::RefsLoaded {
+            root: alpha_id.clone(),
+            deco: Err(turbogit_domain::error::TgError::Other(
+                "offline".to_string(),
+            )),
+        })
+        .expect("send failing RefsLoaded");
+    state.drain_events();
+    assert!(
+        state.last_error.is_some(),
+        "a failing refs load must surface through last_error"
+    );
+    state.fetch_refs(alpha_id.clone());
+    wait_ref_calls(&mut state, &recorder, 3, |_| true);
+    assert!(
+        recorder.ref_call_count() >= 3,
+        "a later fetch must run again after the Err drain"
+    );
 }
 
 // --- Issue 20: per-root hunk-span statistics ---------------------------------

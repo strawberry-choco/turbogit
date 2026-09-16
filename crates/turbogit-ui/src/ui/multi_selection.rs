@@ -5,15 +5,12 @@
 //! checked set is plain data — a `HashSet<RootId>` living in
 //! [`turbogit_app::state::UiState`] — and every rule here takes the tree
 //! plus that set, so the app crate never names UI types and this module
-//! never owns state. The rendering half lives in [`super::sidebar`] (the
-//! checkboxes and the bottom selection bar) and [`super::shell`] (the
-//! central summary surface).
-
-use std::collections::HashSet;
-
-use turbogit_domain::model::RootId;
-
-use super::sidebar::{SidebarRepo, SidebarTree};
+//! never owns state. The selection rules themselves live in
+//! [`super::tree_selection`] over the recursive project tree
+//! (sidebar-project-tree issue 02); this module owns the summary row
+//! types and the rendering half ([`super::sidebar`] paints the checkboxes
+//! and the bottom selection bar, [`super::shell`] the central summary
+//! surface).
 
 /// The three visual states of a group's checkbox, computed from its
 /// descendant repos.
@@ -25,69 +22,6 @@ pub enum CheckState {
     Partial,
     /// Every descendant repo is checked.
     Checked,
-}
-
-/// Toggle one repo's checkbox: repos check independently of their group.
-pub fn toggle_repo(selection: &mut HashSet<RootId>, repo: &SidebarRepo) {
-    if !selection.remove(&repo.id) {
-        selection.insert(repo.id.clone());
-    }
-}
-
-/// Toggle a group's checkbox: unchecked or partial → check every
-/// descendant repo; checked → uncheck them all.
-pub fn toggle_group(selection: &mut HashSet<RootId>, tree: &SidebarTree, group_name: &str) {
-    if group_state(tree, selection, group_name) == CheckState::Checked {
-        let ids: Vec<_> = group_repos(tree, group_name)
-            .map(|r| r.id.clone())
-            .collect();
-        for id in ids {
-            selection.remove(&id);
-        }
-    } else {
-        for r in group_repos(tree, group_name) {
-            selection.insert(r.id.clone());
-        }
-    }
-}
-
-/// A group checkbox's state, derived from its descendant repos.
-pub fn group_state(
-    tree: &SidebarTree,
-    selection: &HashSet<RootId>,
-    group_name: &str,
-) -> CheckState {
-    let (checked, total) = group_repos(tree, group_name).fold((0usize, 0usize), |(c, t), r| {
-        (c + selection.contains(&r.id) as usize, t + 1)
-    });
-    match (checked, total) {
-        (0, _) => CheckState::Unchecked,
-        (c, t) if c == t => CheckState::Checked,
-        _ => CheckState::Partial,
-    }
-}
-
-/// The selected repo rows, in tree order.
-pub fn selected_repos<'a>(
-    tree: &'a SidebarTree,
-    selection: &HashSet<RootId>,
-) -> Vec<&'a SidebarRepo> {
-    tree.groups
-        .iter()
-        .flat_map(|g| &g.repos)
-        .filter(|r| selection.contains(&r.id))
-        .collect()
-}
-
-/// One group's repo rows by group name (empty when the name matches none).
-fn group_repos<'a>(
-    tree: &'a SidebarTree,
-    group_name: &str,
-) -> impl Iterator<Item = &'a SidebarRepo> {
-    tree.groups
-        .iter()
-        .filter(move |g| g.name == group_name)
-        .flat_map(|g| g.repos.iter())
 }
 
 // --- Selection summary (issue #08, screen 04) --------------------------------
@@ -132,37 +66,6 @@ pub struct SelectionSummary {
     pub rows: Vec<SelectionRow>,
 }
 
-/// Compute the selection summary: aggregate stats and one table row per
-/// selected repo, in tree order. `last_commit` reads the root caches (a
-/// `(subject, unix time)` hit, or `None` when the log is not loaded);
-/// `now` is the reference unix time for age formatting.
-pub fn selection_summary(
-    tree: &SidebarTree,
-    selection: &HashSet<RootId>,
-    last_commit: &dyn Fn(&RootId) -> Option<(String, i64)>,
-    now: i64,
-) -> SelectionSummary {
-    let mut s = SelectionSummary::default();
-    for repo in selected_repos(tree, selection) {
-        s.repos += 1;
-        s.ahead += repo.ahead;
-        s.behind += repo.behind;
-        s.dirty_files += repo.dirty_count;
-        s.rows.push(SelectionRow {
-            name: repo.name.clone(),
-            branch: repo.branch.clone(),
-            ahead: repo.ahead,
-            behind: repo.behind,
-            dirty: repo.dirty_count,
-            last_commit: last_commit(&repo.id).map(|(subject, t)| LastCommit {
-                subject,
-                age: age_label(now.saturating_sub(t)),
-            }),
-        });
-    }
-    s
-}
-
 /// Compact relative age (screen 04's "14m" / "1h" / "3h" style) from a
 /// delta in seconds.
 pub fn age_label(delta_secs: i64) -> String {
@@ -185,7 +88,8 @@ use egui::{
 };
 
 use super::icons::{self, Icon};
-use super::sidebar;
+use super::project_tree;
+use super::tree_selection;
 use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::bulk_history::RepoOutcome;
@@ -286,11 +190,11 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     // Lazy log fill: selected roots whose log is not cached fetch through
     // the same worker path the Log tab uses (the table shows a dash until
     // the cache fills).
-    let tree = sidebar::build_tree(&state.project_dir, &state.multi.roots, &|id| {
+    let tree = project_tree::build_tree(&state.project_dir, &state.multi.roots, &|id| {
         state.caches.ahead_behind(id)
     });
     let missing: Vec<turbogit_domain::model::RootId> =
-        selected_repos(&tree, &state.ui.repo_selection)
+        tree_selection::selected_repos(&tree, &state.ui.repo_selection)
             .iter()
             .filter(|r| state.caches.log(&r.id).is_none())
             .map(|r| r.id.clone())
@@ -299,7 +203,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         state.fetch_log(id);
     }
     let now = chrono::Local::now().timestamp();
-    let summary = selection_summary(
+    let summary = tree_selection::selection_summary(
         &tree,
         &state.ui.repo_selection,
         &|id| {
@@ -396,12 +300,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         body.allocate_exact_size(Vec2::new(width, row_h), Sense::hover());
         let response = body.interact(r, body.auto_id_with(("sel_row", &row.name)), Sense::click());
         if response.clicked()
-            && let Some(id) = tree
-                .groups
-                .iter()
-                .flat_map(|g| &g.repos)
-                .find(|repo| repo.name == row.name)
-                .map(|repo| repo.id.clone())
+            && let Some(id) = find_repo_by_label(&tree, &row.name).map(|r| r.id.clone())
         {
             state.selected_root = Some(id);
         }
@@ -700,180 +599,41 @@ fn icon_at(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
     icons::icon(&mut child, icon, size, color);
 }
 
+/// The repo whose display label equals `label`, walking the recursive tree
+/// in pre-order (the selection summary's row names are those labels).
+fn find_repo_by_label<'a>(
+    tree: &'a project_tree::ProjectTree,
+    label: &str,
+) -> Option<&'a project_tree::RepoNode> {
+    fn walk<'a>(
+        nodes: &'a [project_tree::ProjectNode],
+        label: &str,
+    ) -> Option<&'a project_tree::RepoNode> {
+        for node in nodes {
+            match node {
+                project_tree::ProjectNode::Repo(r) => {
+                    if r.label == label {
+                        return Some(r);
+                    }
+                    if let Some(found) = walk(&r.children, label) {
+                        return Some(found);
+                    }
+                }
+                project_tree::ProjectNode::Folder(f) => {
+                    if let Some(found) = walk(&f.children, label) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        None
+    }
+    walk(&tree.nodes, label)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
-    use turbogit_domain::model::{Root, RootStatus};
-
-    fn root(path: &str, branch: Option<&str>) -> Root {
-        Root {
-            id: RootId(PathBuf::from(path).into()),
-            path: PathBuf::from(path),
-            remotes: vec![],
-            branches: vec![],
-            current_branch: branch.map(str::to_string),
-            head: None,
-            status: RootStatus::default(),
-        }
-    }
-
-    fn two_by_two_tree() -> SidebarTree {
-        let project = Path::new("/w");
-        let roots = vec![
-            root("/w/frontend/app", Some("main")),
-            root("/w/frontend/ui", Some("main")),
-            root("/w/oss/lib", Some("dev")),
-            root("/w/oss/cli", Some("dev")),
-        ];
-        super::super::sidebar::build_tree(project, &roots, &|_| Some((0, 0)))
-    }
-
-    fn repo(tree: &SidebarTree, name: &str) -> SidebarRepo {
-        tree.groups
-            .iter()
-            .flat_map(|g| &g.repos)
-            .find(|r| r.name == name)
-            .unwrap()
-            .clone()
-    }
-
-    #[test]
-    fn checking_a_repo_toggles_it_independently() {
-        let tree = two_by_two_tree();
-        let mut selection = HashSet::new();
-
-        toggle_repo(&mut selection, &repo(&tree, "app"));
-        assert_eq!(selection.len(), 1);
-        assert!(selection.contains(&repo(&tree, "app").id));
-
-        // Clicking again unchecks it.
-        toggle_repo(&mut selection, &repo(&tree, "app"));
-        assert!(selection.is_empty());
-    }
-
-    #[test]
-    fn checking_a_group_selects_every_descendant_and_reclicking_clears_them() {
-        let tree = two_by_two_tree();
-        let mut selection = HashSet::new();
-
-        toggle_group(&mut selection, &tree, "frontend");
-        assert_eq!(selection.len(), 2, "the group checks all its repos");
-        assert_eq!(
-            group_state(&tree, &selection, "frontend"),
-            CheckState::Checked
-        );
-
-        toggle_group(&mut selection, &tree, "frontend");
-        assert!(selection.is_empty(), "re-clicking clears the group");
-        assert_eq!(
-            group_state(&tree, &selection, "frontend"),
-            CheckState::Unchecked
-        );
-    }
-
-    #[test]
-    fn a_half_checked_group_reports_partial_and_clicking_it_completes() {
-        let tree = two_by_two_tree();
-        let mut selection = HashSet::new();
-        toggle_repo(&mut selection, &repo(&tree, "app"));
-
-        assert_eq!(
-            group_state(&tree, &selection, "frontend"),
-            CheckState::Partial,
-            "one of two repos checked is partial"
-        );
-        assert_eq!(group_state(&tree, &selection, "oss"), CheckState::Unchecked);
-
-        // Clicking a partial group completes it (never clears).
-        toggle_group(&mut selection, &tree, "frontend");
-        assert_eq!(
-            group_state(&tree, &selection, "frontend"),
-            CheckState::Checked
-        );
-        assert_eq!(selection.len(), 2);
-    }
-
-    #[test]
-    fn checking_one_group_leaves_the_other_unchecked() {
-        let tree = two_by_two_tree();
-        let mut selection = HashSet::new();
-        toggle_group(&mut selection, &tree, "oss");
-
-        assert_eq!(selection.len(), 2);
-        assert_eq!(
-            group_state(&tree, &selection, "frontend"),
-            CheckState::Unchecked
-        );
-    }
-
-    #[test]
-    fn selected_repos_lists_the_checked_rows_in_tree_order() {
-        let tree = two_by_two_tree();
-        let mut selection = HashSet::new();
-        toggle_repo(&mut selection, &repo(&tree, "lib"));
-        toggle_repo(&mut selection, &repo(&tree, "app"));
-
-        let names: Vec<&str> = selected_repos(&tree, &selection)
-            .iter()
-            .map(|r| r.name.as_str())
-            .collect();
-        assert_eq!(names, ["app", "lib"], "tree order, not click order");
-    }
-
-    // --- Selection summary (issue #08) ---
-
-    #[test]
-    fn summary_aggregates_repos_ahead_behind_and_dirty_files() {
-        let tree = tree_with_states();
-        let mut selection = HashSet::new();
-        toggle_group(&mut selection, &tree, "frontend");
-
-        let s = selection_summary(&tree, &selection, &|_| None, 1_000_000);
-        assert_eq!(s.repos, 2);
-        assert_eq!(s.ahead, 3, "app's ↑3 plus ui's ↑0");
-        assert_eq!(s.behind, 2, "app's ↓2 plus ui's ↓0");
-        assert_eq!(s.dirty_files, 5, "app's 5 dirty files plus ui's 0");
-    }
-
-    #[test]
-    fn summary_rows_carry_branch_sync_dirty_and_last_commit() {
-        let tree = tree_with_states();
-        let mut selection = HashSet::new();
-        toggle_repo(&mut selection, &repo(&tree, "app"));
-
-        let s = selection_summary(
-            &tree,
-            &selection,
-            &|id| {
-                if id.0.as_os_str() == "/w/frontend/app" {
-                    Some(("cascade: preflight matrix".to_string(), 999_140))
-                } else {
-                    None
-                }
-            },
-            1_000_000,
-        );
-        assert_eq!(s.rows.len(), 1);
-        let row = &s.rows[0];
-        assert_eq!(row.name, "app");
-        assert_eq!(row.branch.as_deref(), Some("main"));
-        assert_eq!((row.ahead, row.behind), (3, 2));
-        assert_eq!(row.dirty, 5);
-        let lc = row.last_commit.as_ref().expect("the lookup hit");
-        assert_eq!(lc.subject, "cascade: preflight matrix");
-        assert_eq!(lc.age, "14m");
-    }
-
-    #[test]
-    fn summary_rows_show_no_commit_when_the_log_is_not_cached() {
-        let tree = tree_with_states();
-        let mut selection = HashSet::new();
-        toggle_repo(&mut selection, &repo(&tree, "ui"));
-
-        let s = selection_summary(&tree, &selection, &|_| None, 1_000_000);
-        assert!(s.rows[0].last_commit.is_none(), "miss → no last commit");
-    }
 
     #[test]
     fn age_label_formats_deltas_compactly() {
@@ -881,36 +641,5 @@ mod tests {
         assert_eq!(age_label(14 * 60), "14m");
         assert_eq!(age_label(3 * 3600 + 40 * 60), "3h");
         assert_eq!(age_label(2 * 86_400 + 5 * 3600), "2d");
-    }
-
-    /// frontend/app is diverged (↑3 ↓2) with 5 dirty files and branch
-    /// main; frontend/ui is clean on main; oss/lib is ahead-only (↑1).
-    fn tree_with_states() -> SidebarTree {
-        let project = Path::new("/w");
-        let mut app = root("/w/frontend/app", Some("main"));
-        app.status.changes = (0..5)
-            .map(|i| turbogit_domain::model::Change {
-                path: PathBuf::from(format!("f{i}.txt")),
-                status: turbogit_domain::model::ChangeStatus::Modified,
-                chunks: vec![],
-                staged: false,
-                unstaged: false,
-                orig_path: None,
-            })
-            .collect();
-        let roots = vec![
-            app,
-            root("/w/frontend/ui", Some("main")),
-            root("/w/oss/lib", Some("dev")),
-        ];
-        super::super::sidebar::build_tree(project, &roots, &|id| {
-            if id.0.as_os_str() == "/w/frontend/app" {
-                Some((3, 2))
-            } else if id.0.as_os_str() == "/w/oss/lib" {
-                Some((1, 0))
-            } else {
-                Some((0, 0))
-            }
-        })
     }
 }

@@ -4,11 +4,15 @@
 //!
 //! Pure presentation logic (sidebar / hunk_nav precedent): the predicates
 //! and the membership computation live here; `super::sidebar` renders the
-//! rows and applies the active group as a tree filter. Because membership
-//! is recomputed from live repo state on every frame, it follows refreshes
-//! and rescans with no manual action.
+//! rows and applies the active group as a tree filter. Since the workspace
+//! tree is recursive (sidebar-project-tree issue 01), every pass below
+//! walks the recursive [`ProjectTree`] in pre-order instead of a flat
+//! group list; the narrowing re-collapses the survivors with the same
+//! path labels.
 
-use crate::ui::sidebar::{SidebarGroup, SidebarRepo, SidebarTree};
+use std::path::Path;
+
+use crate::ui::project_tree::{ProjectTree, RepoNode, filter_repos, iter_repos};
 use turbogit_app::smart_rules::{RepoFacts, SmartGroupRule};
 
 /// The active group filter: a built-in predicate or a user-defined rule
@@ -20,7 +24,7 @@ pub enum GroupFilter {
 }
 
 impl GroupFilter {
-    pub fn matches(&self, repo: &SidebarRepo) -> bool {
+    pub fn matches(&self, repo: &RepoNode) -> bool {
         match self {
             GroupFilter::BuiltIn(group) => group.matches(repo),
             GroupFilter::Custom(rule) => rule.matches(&repo_facts(repo)),
@@ -28,8 +32,8 @@ impl GroupFilter {
     }
 }
 
-/// Project one sidebar row onto the plain facts a rule's predicate reads.
-fn repo_facts(repo: &SidebarRepo) -> RepoFacts {
+/// Project one tree node onto the plain facts a rule's predicate reads.
+fn repo_facts(repo: &RepoNode) -> RepoFacts {
     RepoFacts {
         name: repo.name.clone(),
         path: repo.path.to_string_lossy().into_owned(),
@@ -42,10 +46,8 @@ fn repo_facts(repo: &SidebarRepo) -> RepoFacts {
 
 /// How many repos of the tree a user-defined rule collects (the custom
 /// row's badge). Recomputed from live state by the caller each frame.
-pub fn rule_count(tree: &SidebarTree, rule: &SmartGroupRule) -> usize {
-    tree.groups
-        .iter()
-        .flat_map(|g| &g.repos)
+pub fn rule_count(tree: &ProjectTree, rule: &SmartGroupRule) -> usize {
+    iter_repos(tree)
         .filter(|r| rule.matches(&repo_facts(r)))
         .count()
 }
@@ -88,10 +90,10 @@ impl SmartGroup {
         }
     }
 
-    /// The group's predicate over one repo row. Membership overlaps: a
+    /// The group's predicate over one repo. Membership overlaps: a
     /// diverged repo (ahead + behind) also matches "unpushed commits" and
     /// "unpulled commits".
-    pub fn matches(&self, repo: &SidebarRepo) -> bool {
+    pub fn matches(&self, repo: &RepoNode) -> bool {
         match self {
             SmartGroup::Diverged => repo.ahead > 0 && repo.behind > 0,
             SmartGroup::Conflicted => repo.conflicts > 0,
@@ -111,16 +113,11 @@ pub struct SmartGroupEntry {
 
 /// Compute the built-in groups over the whole tree, in display order.
 /// Zero-member groups are dropped (issue #06: hidden, not painted empty).
-pub fn smart_groups(tree: &SidebarTree) -> Vec<SmartGroupEntry> {
+pub fn smart_groups(tree: &ProjectTree) -> Vec<SmartGroupEntry> {
     SmartGroup::BUILTINS
         .iter()
         .filter_map(|group| {
-            let count = tree
-                .groups
-                .iter()
-                .flat_map(|g| &g.repos)
-                .filter(|r| group.matches(r))
-                .count();
+            let count = iter_repos(tree).filter(|r| group.matches(r)).count();
             (count > 0).then_some(SmartGroupEntry {
                 group: *group,
                 count,
@@ -130,43 +127,35 @@ pub fn smart_groups(tree: &SidebarTree) -> Vec<SmartGroupEntry> {
 }
 
 /// Narrow the tree to one group's member repos (issue #06: clicking a
-/// group filters the tree to its members). Project groups keep their
-/// structure but drop memberless rows; the top-level total recomputes.
-/// `None` (no active group) returns the tree unchanged.
-pub fn filter_to_group(tree: &SidebarTree, group: Option<SmartGroup>) -> SidebarTree {
-    filter_to(tree, group.map(GroupFilter::BuiltIn).as_ref())
+/// group filters the tree to its members). Survivors re-collapse with
+/// the same rule and path labels; `None` (no active group) returns the
+/// tree unchanged.
+pub fn filter_to_group(
+    project_dir: &Path,
+    tree: &ProjectTree,
+    group: Option<SmartGroup>,
+) -> ProjectTree {
+    filter_to(project_dir, tree, group.map(GroupFilter::BuiltIn).as_ref())
 }
 
 /// The generalized narrowing behind [`filter_to_group`]: one filter —
-/// built-in or custom (issue #07) — keeps only its member repos.
-pub fn filter_to(tree: &SidebarTree, filter: Option<&GroupFilter>) -> SidebarTree {
+/// built-in or custom (issue #07) — keeps only its member repos, then
+/// re-collapses the survivors.
+pub fn filter_to(
+    project_dir: &Path,
+    tree: &ProjectTree,
+    filter: Option<&GroupFilter>,
+) -> ProjectTree {
     let Some(filter) = filter else {
         return tree.clone();
     };
-    let mut groups = Vec::new();
-    let mut total = 0;
-    for g in &tree.groups {
-        let repos: Vec<_> = g
-            .repos
-            .iter()
-            .filter(|r| filter.matches(r))
-            .cloned()
-            .collect();
-        if !repos.is_empty() {
-            total += repos.len();
-            groups.push(SidebarGroup {
-                name: g.name.clone(),
-                repos,
-            });
-        }
-    }
-    SidebarTree { groups, total }
+    filter_repos(project_dir, tree, |r| filter.matches(r))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::sidebar::build_tree;
+    use crate::ui::project_tree::build_tree;
     use std::path::{Path, PathBuf};
     use turbogit_domain::model::{Change, ChangeStatus, Root, RootId, RootStatus};
 
@@ -191,6 +180,11 @@ mod tests {
             unstaged: false,
             orig_path: None,
         }
+    }
+
+    /// All repos of the tree flattened in pre-order, as their display labels.
+    fn member_labels(tree: &ProjectTree) -> Vec<String> {
+        iter_repos(tree).map(|r| r.label.clone()).collect()
     }
 
     #[test]
@@ -220,9 +214,6 @@ mod tests {
                 ("diverged", 1),
                 ("has conflicts", 1),
                 ("unpushed commits", 1),
-                // The diverged root is also behind its upstream, so it joins
-                // the unpulled group as well (issue 02, mirroring the status
-                // bar's unpulled counter: behind > 0).
                 ("unpulled commits", 1),
                 ("dirty worktree", 1),
             ],
@@ -233,8 +224,9 @@ mod tests {
     #[test]
     fn groups_with_zero_members_are_dropped() {
         let project = Path::new("/w");
-        let roots = vec![root("/w/g/clean", Some("main"))];
-        let tree = build_tree(project, &roots, &|_| Some((0, 0)));
+        let tree = build_tree(project, &[root("/w/g/clean", Some("main"))], &|_| {
+            Some((0, 0))
+        });
 
         assert!(
             smart_groups(&tree).is_empty(),
@@ -247,8 +239,9 @@ mod tests {
         // A diverged repo (ahead + behind) has unpushed commits too: a repo
         // may belong to several groups at once.
         let project = Path::new("/w");
-        let roots = vec![root("/w/g/one", Some("main"))];
-        let tree = build_tree(project, &roots, &|_| Some((1, 3)));
+        let tree = build_tree(project, &[root("/w/g/one", Some("main"))], &|_| {
+            Some((1, 3))
+        });
 
         let labels: Vec<&str> = smart_groups(&tree)
             .iter()
@@ -261,8 +254,9 @@ mod tests {
     #[test]
     fn unpushed_alone_is_not_diverged() {
         let project = Path::new("/w");
-        let roots = vec![root("/w/g/one", Some("main"))];
-        let tree = build_tree(project, &roots, &|_| Some((2, 0)));
+        let tree = build_tree(project, &[root("/w/g/one", Some("main"))], &|_| {
+            Some((2, 0))
+        });
 
         let labels: Vec<&str> = smart_groups(&tree)
             .iter()
@@ -277,9 +271,6 @@ mod tests {
 
     #[test]
     fn unpulled_matches_repos_with_incoming_commits() {
-        // Issue 02: the `unpulled commits` group mirrors the status bar's
-        // unpulled counter — behind > 0. Ahead-only repos are unpushed (not
-        // unpulled), and a diverged repo (ahead + behind) belongs to both.
         let project = Path::new("/w");
         let unpulled = root("/w/g/unpulled", Some("main")); // (0, 2)
         let unpushed = root("/w/g/unpushed", Some("main")); // (1, 0)
@@ -294,13 +285,10 @@ mod tests {
                 Some((1, 1))
             }
         });
-        let all: Vec<&crate::ui::sidebar::SidebarRepo> =
-            tree.groups.iter().flat_map(|g| &g.repos).collect();
         let members_of = |group: SmartGroup| {
-            let mut names: Vec<&str> = all
-                .iter()
+            let mut names: Vec<String> = iter_repos(&tree)
                 .filter(|r| group.matches(r))
-                .map(|r| r.name.as_str())
+                .map(|r| r.name.clone())
                 .collect();
             names.sort();
             names
@@ -311,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn filtering_the_tree_keeps_only_member_repos_in_place() {
+    fn filtering_the_tree_keeps_only_member_repos_and_recollapses() {
         let project = Path::new("/w");
         let mut dirty = root("/w/fe/dirty", Some("main"));
         dirty.status.changes = vec![modified("a.txt")];
@@ -325,14 +313,17 @@ mod tests {
             }
         });
 
-        let filtered = filter_to_group(&tree, Some(SmartGroup::Unpushed));
-        assert_eq!(filtered.total, 1, "top-level total narrows to members");
-        assert_eq!(filtered.groups.len(), 1, "memberless groups drop out");
-        assert_eq!(filtered.groups[0].name, "oss");
-        assert_eq!(filtered.groups[0].repos[0].name, "unpushed");
+        // The full view: folder `fe` over the two repos, the single-repo
+        // `oss` chain collapsed to its promoted label.
+        assert_eq!(member_labels(&tree), ["clean", "dirty", "o/unpushed"]);
+
+        // Narrowing to the unpushed member re-collapses the whole chain
+        // with the same path label.
+        let filtered = filter_to_group(project, &tree, Some(SmartGroup::Unpushed));
+        assert_eq!(member_labels(&filtered), ["w/o/unpushed"]);
 
         // Clearing the group (None) returns the tree unchanged.
-        assert_eq!(filter_to_group(&tree, None).total, 3);
+        assert_eq!(filter_to_group(project, &tree, None), tree);
     }
 
     #[test]
@@ -343,10 +334,7 @@ mod tests {
         let clean = root("/w/g/clean", Some("main"));
         let tree = build_tree(project, &[dirty, clean], &|_| Some((0, 0)));
 
-        let dirty_members: Vec<&RootId> = tree
-            .groups
-            .iter()
-            .flat_map(|g| &g.repos)
+        let dirty_members: Vec<&RootId> = iter_repos(&tree)
             .filter(|r| SmartGroup::Dirty.matches(r))
             .map(|r| &r.id)
             .collect();
@@ -393,19 +381,13 @@ mod tests {
         dirty_release.status.changes = vec![modified("a.txt")];
         let tree = build_tree(project, &[release, main, dirty_release], &|_| Some((0, 0)));
 
-        let filtered = filter_to(&tree, Some(&GroupFilter::Custom(release_rule())));
-        assert_eq!(filtered.total, 2, "top-level total narrows to members");
-        assert_eq!(filtered.groups.len(), 2, "memberless groups drop out");
-        let names: Vec<&str> = filtered
-            .groups
-            .iter()
-            .flat_map(|g| &g.repos)
-            .map(|r| r.name.as_str())
-            .collect();
-        assert_eq!(names, ["rel", "lib"]);
+        let filtered = filter_to(project, &tree, Some(&GroupFilter::Custom(release_rule())));
+        // `w` displays (two surviving members); both single-member chains
+        // beneath it collapse to their promoted labels.
+        assert_eq!(member_labels(&filtered), ["f/rel", "o/lib"]);
 
         // No active filter returns the tree unchanged.
-        assert_eq!(filter_to(&tree, None).total, 3);
+        assert_eq!(filter_to(project, &tree, None), tree);
     }
 
     #[test]
@@ -416,8 +398,11 @@ mod tests {
         let clean = root("/w/fe/clean", Some("main"));
         let tree = build_tree(project, &[dirty, clean], &|_| Some((0, 0)));
 
-        let filtered = filter_to(&tree, Some(&GroupFilter::BuiltIn(SmartGroup::Dirty)));
-        assert_eq!(filtered.total, 1);
-        assert_eq!(filtered.groups[0].repos[0].name, "dirty");
+        let filtered = filter_to(
+            project,
+            &tree,
+            Some(&GroupFilter::BuiltIn(SmartGroup::Dirty)),
+        );
+        assert_eq!(member_labels(&filtered), ["w/f/dirty"]);
     }
 }

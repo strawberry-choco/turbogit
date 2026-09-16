@@ -112,8 +112,8 @@ pub struct RowMeta {
     pub stale: bool,
     /// Upstream tracking branch (e.g. `origin/main`), if any.
     pub upstream: Option<String>,
-    /// The row's sync pair (icon+count, quiet "in sync", or "gone") — only
-    /// when the branch tracks an upstream.
+    /// The row's sync pair (icon+count, or "gone") when the branch tracks
+    /// an upstream and has something to report; `None` when it is in sync.
     pub badge: Option<(SyncKind, String)>,
 }
 
@@ -131,9 +131,9 @@ pub fn row_meta(branch: &Branch, now: chrono::DateTime<chrono::Utc>) -> RowMeta 
 
 use crate::ui::components::sync_badge;
 
-/// Per-direction chips for a tracked row (issue 04): icon+count pairs, a quiet
-/// "in sync" confirmation when there is nothing to say, or the gone marker —
-/// never the bare arrow, never silence.
+/// Per-direction chips for a tracked row (issue 04): icon+count pairs or the
+/// gone marker — a branch with nothing to report is left unmarked, never
+/// labelled "in sync".
 pub fn sync_chips(ahead: usize, behind: usize, gone: bool) -> Vec<(SyncKind, String)> {
     if gone {
         return vec![(SyncKind::Gone, "gone".to_string())];
@@ -144,9 +144,6 @@ pub fn sync_chips(ahead: usize, behind: usize, gone: bool) -> Vec<(SyncKind, Str
     }
     if behind > 0 {
         v.push((SyncKind::Behind, behind.to_string()));
-    }
-    if v.is_empty() {
-        v.push((SyncKind::InSync, "in sync".to_string()));
     }
     v
 }
@@ -527,6 +524,7 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         shows_row_actions: true,
         id_salt: "branches_list",
         full_height: true,
+        collapse_remotes_by_default: false,
     };
 
     // Issue 15: an operation in flight shows in place — a muted "working…"
@@ -910,7 +908,8 @@ fn detail_panel(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// One quiet relationship line: the sync state vs its tracked remote
-/// ("2 ahead · 1 behind · tracks origin/main", "in sync · tracks origin/main").
+/// ("2 ahead · 1 behind · tracks origin/main", "tracks origin/main" when in
+/// sync the row is unmarked).
 fn relationship_line(ui: &mut Ui, _branch: &Branch, meta: &RowMeta) {
     let mut parts = Vec::new();
     if let Some((kind, label)) = &meta.badge {

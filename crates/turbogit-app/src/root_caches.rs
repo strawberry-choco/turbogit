@@ -153,6 +153,12 @@ impl RootCaches {
             .map(|(_, refs)| refs.as_slice())
     }
 
+    /// True when `root`'s ref decorations have been stored (event-fed writer
+    /// path) — the Log view's kick checks this before dispatching a fetch.
+    pub fn refs_loaded(&self, root: &RootId) -> bool {
+        self.ref_cache.contains_key(root)
+    }
+
     /// The cached changed-file list of `(root, commit)`, if loaded (issue #12).
     pub fn files_for(&self, root: &RootId, commit: &CommitId) -> Option<&[Change]> {
         self.files_cache
@@ -181,16 +187,6 @@ impl RootCaches {
     }
 
     // --- Compute-on-miss ---------------------------------------------------
-
-    /// Load `root`'s ref decorations through the engine seam unless cached.
-    pub fn ensure_refs(&mut self, exec: &dyn GitExecutor, root: &RootId) {
-        if self.ref_cache.contains_key(root) {
-            return;
-        }
-        let deco = exec.ref_decorations(&root.0).unwrap_or_default();
-        self.ref_cache
-            .insert(root.clone(), deco.into_iter().collect());
-    }
 
     /// The changed files of `(root, commit)`, computed through the engine
     /// seam on miss and cached. Returns a borrow of the cached list (plan
@@ -346,6 +342,13 @@ impl RootCaches {
     /// Store a freshly loaded commit log for `root`.
     pub fn store_log(&mut self, root: RootId, commits: Vec<Commit>) {
         self.log_cache.insert(root, commits);
+    }
+
+    /// Store freshly loaded ref decorations for `root` (log-open perf, D1):
+    /// the worker-event writer behind `AppEvent::RefsLoaded`. Callers check
+    /// [`Self::refs_loaded`] before dispatching a (re)fetch.
+    pub fn store_refs(&mut self, root: RootId, deco: Vec<(CommitId, Vec<CommitRef>)>) {
+        self.ref_cache.insert(root, deco.into_iter().collect());
     }
 
     /// Store freshly computed ahead/behind counts for `root`.

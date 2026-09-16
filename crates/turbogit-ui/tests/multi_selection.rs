@@ -73,6 +73,28 @@ fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     (project, alpha, lib)
 }
 
+/// A four-repo project with two repos per folder — `frontend/{alpha, ui}`
+/// and `oss/{cli, lib}` — so both folder checkboxes display in the
+/// recursive tree. Returns the project dir and the repo paths.
+fn four_repo_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
+    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .join(format!(".scratch/msf-{tag}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("wsb");
+    let frontend = project.join("frontend");
+    let oss = project.join("oss");
+    std::fs::create_dir_all(&frontend).unwrap();
+    std::fs::create_dir_all(&oss).unwrap();
+    let alpha = temp_repo(&frontend, "alpha");
+    let ui = temp_repo(&frontend, "ui");
+    let cli = temp_repo(&oss, "cli");
+    let lib = temp_repo(&oss, "lib");
+    (project, vec![alpha, ui, cli, lib])
+}
+
 /// Headless harness driving the full app UI (mirrors `workspace_sidebar`).
 fn harness(state: AppState) -> Harness<'static, AppState> {
     let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
@@ -149,15 +171,15 @@ fn checking_a_repo_checkbox_selects_it_and_opens_the_summary() {
 
 #[test]
 fn checking_a_group_selects_every_descendant_without_collapsing() {
-    let (project, alpha, lib) = two_repo_project("group-check");
-    let state = AppState::for_roots(&project, &[alpha, lib]);
+    let (project, repos) = four_repo_project("group-check");
+    let state = AppState::for_roots(&project, &repos);
     let mut h = harness(state);
     settle(&mut h);
 
     h.get_by_label("Select group frontend").click();
     settle(&mut h);
 
-    assert_galley(&h, "1 selected / 2");
+    assert_galley(&h, "2 selected / 4");
     assert_painted(&h, "alpha"); // the select click must not collapse the group
 
     h.get_by_label("Select group frontend").click();
@@ -187,8 +209,8 @@ fn the_selection_bar_clear_button_empties_the_selection() {
 
 #[test]
 fn fetch_and_pull_quick_actions_dispatch_over_the_selection() {
-    let (project, alpha, lib) = two_repo_project("quick-ops");
-    let state = AppState::for_roots(&project, &[alpha, lib]);
+    let (project, repos) = four_repo_project("quick-ops");
+    let state = AppState::for_roots(&project, &repos);
     let mut h = harness(state);
     settle(&mut h);
 
@@ -198,10 +220,10 @@ fn fetch_and_pull_quick_actions_dispatch_over_the_selection() {
     settle(&mut h);
 
     h.get_by_label("Fetch selection").click();
-    wait_painted(&mut h, "Fetch · 2 repos");
+    wait_painted(&mut h, "Fetch · 4 repos");
 
     h.get_by_label("Pull selection").click();
-    wait_painted(&mut h, "Pull · 2 repos");
+    wait_painted(&mut h, "Pull · 4 repos");
 }
 
 #[test]
@@ -223,8 +245,8 @@ fn the_branch_quick_action_opens_the_new_branch_dialog() {
 
 #[test]
 fn pin_as_view_saves_the_selection_and_a_pinned_view_restores_it() {
-    let (project, alpha, lib) = two_repo_project("pin");
-    let state = AppState::for_roots(&project, &[alpha, lib]);
+    let (project, repos) = four_repo_project("pin");
+    let state = AppState::for_roots(&project, &repos);
     let mut h = harness(state);
     settle(&mut h);
 
@@ -247,7 +269,7 @@ fn pin_as_view_saves_the_selection_and_a_pinned_view_restores_it() {
     h.get_by_label("Restore view View 1").click();
     settle(&mut h);
     assert_painted(&h, "Multi-repo selection");
-    assert_galley(&h, "2 selected / 2");
+    assert_galley(&h, "4 selected / 4");
 }
 
 #[test]

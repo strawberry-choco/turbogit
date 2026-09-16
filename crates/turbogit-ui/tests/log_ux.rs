@@ -467,7 +467,9 @@ fn branches_pane_marks_remote_gone_and_tag_push_states() {
     // the prefix stripped, still carrying the gone marker; the TAGS rows
     // carry their push state (screen 09) via the view model's TagLeaf.
     // Tags start collapsed like in the Branches window — open the group.
+    // Remote groups start collapsed too (the Log pane's default) — open `origin`.
     harness.get_by_label("Tags").click();
+    click_button(&mut harness, "origin");
     settle(&mut harness);
     assert_painted(&harness, "origin");
     assert_painted(&harness, "gone");

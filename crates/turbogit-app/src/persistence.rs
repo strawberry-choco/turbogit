@@ -98,6 +98,13 @@ pub struct UiPersist {
     /// cleanly.
     #[serde(default)]
     pub recent_custom_commands: Vec<String>,
+    /// Sidebar PROJECTS collapse state, keyed by **relative path**
+    /// (sidebar-project-tree issue 03): one entry per collapsed folder or
+    /// repo-with-children. Stale name-keyed entries from older sessions
+    /// match nothing and are harmless. `serde(default)` keeps files written
+    /// before the key existed loading cleanly.
+    #[serde(default)]
+    pub sidebar_collapsed: std::collections::HashSet<String>,
 }
 
 fn ui_path(project_dir: &Path) -> PathBuf {

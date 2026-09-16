@@ -1,116 +1,16 @@
 //! Workspace tree sidebar (issue #05, screen 01): the left rail listing
-//! every discovered repository root as a tree of projects → repos.
+//! every discovered repository root as a recursive project tree
+//! (sidebar-project-tree issue 01).
 //!
-//! The tree model below is pure presentation logic (hunk_nav precedent):
-//! it groups roots by their first path component under the project
-//! directory, computes aggregate counts, applies the live filter, and maps
-//! each root's git state onto one [`DotState`]. The rendering half lives
-//! in [`super::shell`], which owns the left-rail geometry.
+//! The model is pure presentation logic living in [`super::project_tree`]:
+//! folder and repo nodes, the collapse rule, path labels, and the
+//! re-collapsing live / smart-group filters. This module paints that tree,
+//! the smart-group rows, pinned views, and the selection bar; the shell
+//! owns the left-rail geometry.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use turbogit_domain::model::{Root, RootId};
-
-/// One repository row of the tree.
-#[derive(Debug, Clone)]
-pub struct SidebarRepo {
-    pub id: RootId,
-    /// Repo row label: the root path's file name.
-    pub name: String,
-    /// Full path (the filter matches against it).
-    pub path: PathBuf,
-    /// Current branch label, `None` when detached.
-    pub branch: Option<String>,
-    /// The row's status dot (CONTEXT.md: clean / dirty / conflict / diverged).
-    pub dot: DotState,
-    /// Outgoing commits vs upstream (↑ badge).
-    pub ahead: usize,
-    /// Incoming commits vs upstream (↓ badge).
-    pub behind: usize,
-    /// Conflicted paths (the smart-group conflict predicate, issue #06).
-    pub conflicts: usize,
-    /// Modified + unversioned paths (the smart-group dirty predicate).
-    pub dirty_count: usize,
-}
-
-/// One collapsible project group: roots sharing the first path component
-/// under the project directory, with aggregate counts.
-#[derive(Debug, Clone)]
-pub struct SidebarGroup {
-    pub name: String,
-    pub repos: Vec<SidebarRepo>,
-}
-
-impl SidebarGroup {
-    /// Repos in the group (the group-header count).
-    pub fn total(&self) -> usize {
-        self.repos.len()
-    }
-
-    /// Repos carrying uncommitted work (the group's dirty badge).
-    pub fn dirty(&self) -> usize {
-        self.repos
-            .iter()
-            .filter(|r| matches!(r.dot, DotState::Dirty | DotState::Conflict))
-            .count()
-    }
-}
-
-/// The full tree: groups in name order plus the top-level repo total.
-#[derive(Debug, Clone, Default)]
-pub struct SidebarTree {
-    pub groups: Vec<SidebarGroup>,
-    /// Total repos across every group (the workspace-header badge).
-    pub total: usize,
-}
-
-/// The four row-level states a repo's status dot can express.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DotState {
-    Clean,
-    Dirty,
-    Conflict,
-    Diverged,
-}
-
-/// Apply the sidebar filter live: a repo survives when the query matches
-/// its name, its full path, or its current branch (case-insensitive); a
-/// group survives when any of its repos does. The empty query returns the
-/// tree unchanged. Counts recompute from the surviving rows.
-pub fn filter_tree(tree: &SidebarTree, query: &str) -> SidebarTree {
-    let q = query.trim().to_lowercase();
-    if q.is_empty() {
-        return tree.clone();
-    }
-    let mut groups = Vec::new();
-    let mut total = 0;
-    for group in &tree.groups {
-        // A group-name match keeps the whole group; otherwise only the
-        // rows matching on name / path / branch survive.
-        let keep_all = group.name.to_lowercase().contains(&q);
-        let repos: Vec<SidebarRepo> = group
-            .repos
-            .iter()
-            .filter(|r| {
-                keep_all
-                    || r.name.to_lowercase().contains(&q)
-                    || r.path.to_string_lossy().to_lowercase().contains(&q)
-                    || r.branch
-                        .as_deref()
-                        .is_some_and(|b| b.to_lowercase().contains(&q))
-            })
-            .cloned()
-            .collect();
-        if !repos.is_empty() {
-            total += repos.len();
-            groups.push(SidebarGroup {
-                name: group.name.clone(),
-                repos,
-            });
-        }
-    }
-    SidebarTree { groups, total }
-}
+use super::project_tree::DotState;
 
 // --- Rendering ---------------------------------------------------------------
 
@@ -120,8 +20,10 @@ use egui::{
 };
 
 use super::icons::{self, Icon};
-use super::multi_selection::{self, CheckState};
-use super::smart_groups::{self, GroupFilter, filter_to};
+use super::multi_selection::CheckState;
+use super::project_tree::{self, ProjectNode, iter_repos};
+use super::smart_groups::{self, GroupFilter};
+use super::tree_selection::{self};
 use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::root_caches::Affected;
@@ -133,6 +35,8 @@ pub const SIDEBAR_WIDTH: f32 = 280.0;
 
 const ROW_HEIGHT: f32 = 26.0;
 const GROUP_HEIGHT: f32 = 24.0;
+/// Horizontal indent per tree depth (sidebar-project-tree issue 03).
+const INDENT: f32 = 14.0;
 /// Right zone of a rule row reserved for its edit/delete affordances;
 /// the row's click target shrinks by the same amount.
 const RULE_BUTTONS_ZONE: f32 = 56.0;
@@ -374,7 +278,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
     // Snapshot the tree so the rows borrow nothing while clicks mutate
     // `selected_root` / collapsed state.
-    let full_tree = build_tree(&state.project_dir, &state.multi.roots, &|id| {
+    let full_tree = project_tree::build_tree(&state.project_dir, &state.multi.roots, &|id| {
         state.caches.ahead_behind(id)
     });
     render_smart_groups(&mut col, state, &full_tree);
@@ -391,8 +295,15 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             .color(Palette::INK_3),
     );
 
-    let tree = filter_to(&full_tree, active_group_filter(state).as_ref());
-    let tree = filter_tree(&tree, &state.ui.sidebar_filter);
+    // Both filters narrow the recursive tree and re-collapse the survivors
+    // with the same path labels (sidebar-project-tree issue 01), so no view
+    // ever shows a folder with a single child.
+    let tree = smart_groups::filter_to(
+        &state.project_dir,
+        &full_tree,
+        active_group_filter(state).as_ref(),
+    );
+    let tree = project_tree::filter_tree(&state.project_dir, &tree, &state.ui.sidebar_filter);
 
     // The bottom selection bar (issue #08) claims a strip of the rail while
     // a selection is live; the tree scrolls in the space above it.
@@ -411,9 +322,14 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             .max_rect(list_rect)
             .layout(Layout::top_down(Align::Min)),
     );
+    let project_dir = state.project_dir.clone();
     ScrollArea::vertical().show(&mut list, |ui| {
-        for group in &tree.groups {
-            render_group(ui, state, &tree, group);
+        for node in &tree.nodes {
+            let root_path = match node {
+                ProjectNode::Folder(_) => project_dir.clone(),
+                ProjectNode::Repo(r) => r.path.clone(),
+            };
+            render_node(ui, state, node, 0, &root_path, &project_dir);
         }
     });
     if bar_h > 0.0 {
@@ -426,7 +342,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 .max_rect(bar_rect)
                 .layout(Layout::top_down(Align::Min)),
         );
-        render_selection_bar(&mut bar, state, full_tree.total);
+        render_selection_bar(&mut bar, state, iter_repos(&full_tree).count());
     }
 }
 
@@ -470,7 +386,7 @@ fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
 /// repo state each frame, so it follows refreshes without manual action;
 /// user rules always render (they are persisted configuration — hiding a
 /// zero-member rule would strand its editor), with their live count.
-fn render_smart_groups(ui: &mut Ui, state: &mut AppState, tree: &SidebarTree) {
+fn render_smart_groups(ui: &mut Ui, state: &mut AppState, tree: &project_tree::ProjectTree) {
     ui.horizontal(|ui| {
         ui.add_space(12.0);
         ui.label(
@@ -585,7 +501,7 @@ fn smart_group_color(group: smart_groups::SmartGroup) -> Color32 {
 fn render_rule_group_row(
     ui: &mut Ui,
     state: &mut AppState,
-    tree: &SidebarTree,
+    tree: &project_tree::ProjectTree,
     ix: usize,
     rule: &SmartGroupRule,
 ) {
@@ -744,36 +660,63 @@ fn toggle_group_filter(state: &mut AppState, label: &str) {
     }
 }
 
-/// One project group: a tri-state selection checkbox, then a clickable
-/// header (chevron + folder + name + dirty badge + repo count) and, when
-/// expanded, one row per repo.
-fn render_group(ui: &mut Ui, state: &mut AppState, tree: &SidebarTree, group: &SidebarGroup) {
-    let expanded = !state.ui.sidebar_collapsed.contains(&group.name);
-    let header = group_header_rect(ui, group.name.clone());
+/// One folder or repo node of the recursive project tree. `node_path` is
+/// the node's real path (collapse state keys by its relative path); `depth`
+/// indents children so the tree mirrors the directory structure.
+fn render_node(
+    ui: &mut Ui,
+    state: &mut AppState,
+    node: &ProjectNode,
+    depth: usize,
+    node_path: &std::path::Path,
+    project_dir: &std::path::Path,
+) {
+    match node {
+        ProjectNode::Folder(f) => render_folder_row(ui, state, f, depth, node_path, project_dir),
+        ProjectNode::Repo(r) => render_repo_node(ui, state, r, depth, project_dir),
+    }
+}
+
+/// One folder row: a tri-state selection checkbox, then a clickable header
+/// (chevron + folder + name + subtree dirty badge + repo count) and, when
+/// expanded, its children at the next depth. Collapse state keys by the
+/// folder's relative path (sidebar-project-tree issue 03).
+fn render_folder_row(
+    ui: &mut Ui,
+    state: &mut AppState,
+    folder: &project_tree::FolderNode,
+    depth: usize,
+    node_path: &std::path::Path,
+    project_dir: &std::path::Path,
+) {
+    let key = relative_key(node_path, project_dir);
+    let expanded = !state.ui.sidebar_collapsed.contains(&key);
+    let header = group_header_rect(ui);
     let response = ui.interact(
         header,
-        ui.auto_id_with(("sidebar_group", &group.name)),
+        ui.auto_id_with(("sidebar_folder", &key)),
         Sense::click(),
     );
     if response.clicked() {
         if expanded {
-            state.ui.sidebar_collapsed.insert(group.name.clone());
+            state.ui.sidebar_collapsed.insert(key.clone());
         } else {
-            state.ui.sidebar_collapsed.remove(&group.name);
+            state.ui.sidebar_collapsed.remove(&key);
         }
+        state.persist_ui();
     }
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, group.name.as_str()));
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, folder.name.as_str()));
     // The checkbox interacts after the header so it sits above it and
     // takes the click (the rule-row precedent).
     let checkbox = tri_state_checkbox(
         ui,
         checkbox_rect(header),
-        ("sel_group", &group.name),
-        format!("Select group {}", group.name),
-        multi_selection::group_state(tree, &state.ui.repo_selection, &group.name),
+        ("sel_folder", &key),
+        format!("Select group {}", folder.name),
+        tree_selection::folder_state(&state.ui.repo_selection, folder),
     );
     if checkbox.clicked() {
-        multi_selection::toggle_group(&mut state.ui.repo_selection, tree, &group.name);
+        tree_selection::toggle_folder(&mut state.ui.repo_selection, folder);
     }
 
     let painter = ui.painter().clone();
@@ -781,6 +724,7 @@ fn render_group(ui: &mut Ui, state: &mut AppState, tree: &SidebarTree, group: &S
         painter.rect_filled(header, CornerRadius::same(4), Palette::SURFACE_2);
     }
     let cy = header.center().y;
+    let indent = depth as f32 * INDENT;
     let chevron = if expanded {
         Icon::CHEVRON_DOWN
     } else {
@@ -789,14 +733,14 @@ fn render_group(ui: &mut Ui, state: &mut AppState, tree: &SidebarTree, group: &S
     icon_at(
         ui,
         chevron,
-        Pos2::new(header.left() + 28.0, cy),
+        Pos2::new(header.left() + 28.0 + indent, cy),
         12.0,
         Palette::INK_3,
     );
     icon_at(
         ui,
         Icon::FOLDER,
-        Pos2::new(header.left() + 46.0, cy),
+        Pos2::new(header.left() + 46.0 + indent, cy),
         14.0,
         if expanded {
             Palette::BRAND
@@ -805,20 +749,23 @@ fn render_group(ui: &mut Ui, state: &mut AppState, tree: &SidebarTree, group: &S
         },
     );
     let name_galley = ui.painter().layout_no_wrap(
-        group.name.clone(),
+        folder.name.clone(),
         FontId::new(12.5, FontFamily::Proportional),
         Palette::INK,
     );
     painter.galley_with_override_text_color(
-        Pos2::new(header.left() + 60.0, cy - name_galley.size().y / 2.0),
+        Pos2::new(
+            header.left() + 60.0 + indent,
+            cy - name_galley.size().y / 2.0,
+        ),
         name_galley,
         Palette::INK,
     );
     // Right cluster: dirty count badge (when any), then the repo count.
     let mut right = header.right() - 12.0;
-    if group.dirty() > 0 {
+    if folder.dirty > 0 {
         let galley = ui.painter().layout_no_wrap(
-            group.dirty().to_string(),
+            folder.dirty.to_string(),
             FontId::new(11.0, FontFamily::Proportional),
             Palette::STATE_WARNING,
         );
@@ -830,7 +777,7 @@ fn render_group(ui: &mut Ui, state: &mut AppState, tree: &SidebarTree, group: &S
         );
     }
     let count_galley = ui.painter().layout_no_wrap(
-        group.total().to_string(),
+        folder.total.to_string(),
         FontId::new(11.0, FontFamily::Proportional),
         Palette::INK_3,
     );
@@ -842,24 +789,29 @@ fn render_group(ui: &mut Ui, state: &mut AppState, tree: &SidebarTree, group: &S
     );
 
     if expanded {
-        for repo in &group.repos {
-            render_repo_row(ui, state, repo);
+        for child in &folder.children {
+            let child_path = match child {
+                ProjectNode::Folder(c) => node_path.join(&c.name),
+                ProjectNode::Repo(c) => c.path.clone(),
+            };
+            render_node(ui, state, child, depth + 1, &child_path, project_dir);
         }
     }
 }
 
-/// Reserve one full-width row inside the scroll area and return its rect.
-fn group_header_rect(ui: &mut Ui, name: String) -> egui::Rect {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, GROUP_HEIGHT), Sense::hover());
-    let _ = name;
-    rect
-}
-
-/// One repository row: tri-state selection checkbox, status dot + name,
+/// One repository row: tri-state selection checkbox, status dot + label,
 /// right-aligned ahead/behind badges and branch label. Clicking the row
-/// focuses the repo everywhere; clicking the checkbox toggles selection.
-fn render_repo_row(ui: &mut Ui, state: &mut AppState, repo: &SidebarRepo) {
+/// focuses the repo everywhere; clicking the checkbox toggles selection
+/// independently of any nested repos. A repo with nested repos renders an
+/// expander (expanded by default) whose state keys by the repo's relative
+/// path.
+fn render_repo_node(
+    ui: &mut Ui,
+    state: &mut AppState,
+    repo: &project_tree::RepoNode,
+    depth: usize,
+    project_dir: &std::path::Path,
+) {
     let width = ui.available_width();
     let row = Rect::from_min_size(
         Pos2::new(ui.cursor().left(), ui.cursor().top()),
@@ -890,7 +842,40 @@ fn render_repo_row(ui: &mut Ui, state: &mut AppState, repo: &SidebarRepo) {
         },
     );
     if checkbox.clicked() {
-        multi_selection::toggle_repo(&mut state.ui.repo_selection, repo);
+        tree_selection::toggle_repo(&mut state.ui.repo_selection, repo);
+    }
+
+    let has_children = !repo.children.is_empty();
+    let rel = relative_key(&repo.path, project_dir);
+    // A repo-with-children is expanded by default; the expander chevron
+    // toggles only the collapse, the row itself keeps focusing the repo.
+    let expanded = !has_children || !state.ui.sidebar_collapsed.contains(&rel);
+    let indent = depth as f32 * INDENT;
+    if has_children {
+        let chevron_rect = Rect::from_center_size(
+            Pos2::new(row.left() + 28.0 + indent, row.center().y),
+            Vec2::splat(26.0),
+        );
+        let chevron = ui.interact(
+            chevron_rect,
+            ui.auto_id_with(("repo_expand", &repo.id)),
+            Sense::click(),
+        );
+        chevron.widget_info(|| {
+            WidgetInfo::labeled(
+                WidgetType::Button,
+                true,
+                format!("Contract repo {}", repo.name),
+            )
+        });
+        if chevron.clicked() {
+            if expanded {
+                state.ui.sidebar_collapsed.insert(rel.clone());
+            } else {
+                state.ui.sidebar_collapsed.remove(&rel);
+            }
+            state.persist_ui();
+        }
     }
 
     let painter = ui.painter().clone();
@@ -907,17 +892,44 @@ fn render_repo_row(ui: &mut Ui, state: &mut AppState, repo: &SidebarRepo) {
         painter.rect_filled(row, CornerRadius::same(0), Palette::SURFACE_2);
     }
 
+    // A row with an expander shifts the dot and label right of the chevron;
+    // a plain row keeps today's anatomy.
+    let (dot_x, name_x) = if has_children {
+        (44.0, 58.0)
+    } else {
+        (30.0, 44.0)
+    };
     let cy = row.center().y;
+    if has_children {
+        icon_at(
+            ui,
+            if expanded {
+                Icon::CHEVRON_DOWN
+            } else {
+                Icon::CHEVRON_RIGHT
+            },
+            Pos2::new(row.left() + 28.0 + indent, cy),
+            12.0,
+            Palette::INK_3,
+        );
+    }
     // Status dot (right of the selection checkbox).
-    painter.circle_filled(Pos2::new(row.left() + 30.0, cy), 3.5, dot_color(repo.dot));
-    // Repo name.
+    painter.circle_filled(
+        Pos2::new(row.left() + dot_x + indent, cy),
+        3.5,
+        dot_color(repo.dot),
+    );
+    // Repo label: the path label when promoted, the bare name otherwise.
     let name_galley = ui.painter().layout_no_wrap(
-        repo.name.clone(),
+        repo.label.clone(),
         FontId::new(12.5, FontFamily::Proportional),
         Palette::INK,
     );
     painter.galley_with_override_text_color(
-        Pos2::new(row.left() + 44.0, cy - name_galley.size().y / 2.0),
+        Pos2::new(
+            row.left() + name_x + indent,
+            cy - name_galley.size().y / 2.0,
+        ),
         name_galley,
         Palette::INK,
     );
@@ -964,243 +976,37 @@ fn render_repo_row(ui: &mut Ui, state: &mut AppState, repo: &SidebarRepo) {
         branch_galley,
         Palette::INK_3,
     );
-}
 
-/// Build the workspace tree from the registered roots. `ahead_behind`
-/// reads the root caches (may be absent for some roots → `(0, 0)`).
-pub fn build_tree(
-    project_dir: &Path,
-    roots: &[Root],
-    ahead_behind: &dyn Fn(&RootId) -> Option<(usize, usize)>,
-) -> SidebarTree {
-    // Group key: the root's first path component relative to the project
-    // directory; a root at the project dir itself groups under the
-    // project's own basename (single-repo projects still render a group).
-    let mut groups: Vec<SidebarGroup> = Vec::new();
-    for root in roots {
-        let group_name = match root.path.strip_prefix(project_dir) {
-            Ok(rel) if !rel.as_os_str().is_empty() => rel
-                .components()
-                .next()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .unwrap_or_else(|| basename(project_dir)),
-            _ => basename(project_dir),
-        };
-        let (ahead, behind) = ahead_behind(&root.id).unwrap_or((0, 0));
-        let repo = SidebarRepo {
-            id: root.id.clone(),
-            name: basename(&root.path),
-            path: root.path.clone(),
-            branch: root.current_branch.clone(),
-            dot: dot_state(root, ahead, behind),
-            ahead,
-            behind,
-            conflicts: root.status.conflicted.len(),
-            dirty_count: root.status.modified() + root.status.unversioned(),
-        };
-        match groups.iter_mut().find(|g| g.name == group_name) {
-            Some(g) => g.repos.push(repo),
-            None => groups.push(SidebarGroup {
-                name: group_name,
-                repos: vec![repo],
-            }),
+    if has_children && expanded {
+        for child in &repo.children {
+            let child_path = match child {
+                ProjectNode::Folder(c) => repo.path.join(&c.name),
+                ProjectNode::Repo(c) => c.path.clone(),
+            };
+            render_node(ui, state, child, depth + 1, &child_path, project_dir);
         }
     }
-    groups.sort_by(|a, b| a.name.cmp(&b.name));
-    for g in &mut groups {
-        g.repos.sort_by(|a, b| a.name.cmp(&b.name));
-    }
-    let total = roots.len();
-    SidebarTree { groups, total }
 }
 
-/// File-name label of a path (the `<repo>` fallback matches the shell's).
-fn basename(path: &Path) -> String {
-    path.file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("<repo>")
-        .to_string()
+/// Reserve one full-width row inside the scroll area and return its rect.
+fn group_header_rect(ui: &mut Ui) -> egui::Rect {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, GROUP_HEIGHT), Sense::hover());
+    rect
 }
 
-/// One row's dot state (issue #05): conflict wins, then divergence from
-/// upstream, then uncommitted work, else clean.
-fn dot_state(root: &Root, ahead: usize, behind: usize) -> DotState {
-    if !root.status.conflicted.is_empty() {
-        DotState::Conflict
-    } else if ahead + behind > 0 {
-        DotState::Diverged
-    } else if root.status.modified() + root.status.unversioned() > 0 {
-        DotState::Dirty
-    } else {
-        DotState::Clean
-    }
+/// The node's relative path under the project directory, normalized to
+/// forward slashes so collapse keys are stable across platforms (and match
+/// the persisted `ui.ron` keys on any OS).
+fn relative_key(path: &std::path::Path, project_dir: &std::path::Path) -> String {
+    path.strip_prefix(project_dir)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use turbogit_domain::model::RootStatus;
-
-    fn root(path: &str, branch: Option<&str>) -> Root {
-        Root {
-            id: RootId(PathBuf::from(path).into()),
-            path: PathBuf::from(path),
-            remotes: vec![],
-            branches: vec![],
-            current_branch: branch.map(str::to_string),
-            head: None,
-            status: RootStatus::default(),
-        }
-    }
-
-    #[test]
-    fn tree_groups_roots_by_first_path_component_with_counts() {
-        let project = Path::new("/w");
-        let roots = vec![
-            root("/w/frontend/app", Some("main")),
-            root("/w/frontend/ui", Some("main")),
-            root("/w/oss/lib", Some("dev")),
-        ];
-        let tree = build_tree(project, &roots, &|_| Some((0, 0)));
-
-        assert_eq!(tree.total, 3, "workspace total counts every root");
-        let group_names: Vec<&str> = tree.groups.iter().map(|g| g.name.as_str()).collect();
-        assert_eq!(group_names, ["frontend", "oss"], "groups sort by name");
-        let frontend = &tree.groups[0];
-        assert_eq!(frontend.total(), 2);
-        let repo_names: Vec<&str> = frontend.repos.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(repo_names, ["app", "ui"], "repos sort by name in group");
-        assert_eq!(frontend.repos[0].branch.as_deref(), Some("main"));
-    }
-
-    #[test]
-    fn root_at_project_dir_groups_under_project_basename() {
-        let project = Path::new("/w/mono");
-        let roots = vec![root("/w/mono", Some("main"))];
-        let tree = build_tree(project, &roots, &|_| None);
-
-        assert_eq!(tree.total, 1);
-        assert_eq!(tree.groups.len(), 1);
-        assert_eq!(tree.groups[0].name, "mono");
-        assert_eq!(tree.groups[0].repos[0].name, "mono");
-    }
-
-    #[test]
-    fn filter_matches_name_path_and_branch_preserving_groups() {
-        let project = Path::new("/w");
-        let roots = vec![
-            root("/w/frontend/app", Some("main")),
-            root("/w/frontend/ui", Some("release/2")),
-            root("/w/oss/lib", Some("dev")),
-        ];
-        let tree = build_tree(project, &roots, &|_| Some((0, 0)));
-
-        // Empty query: the tree comes back unchanged.
-        let unfiltered = filter_tree(&tree, "");
-        assert_eq!(unfiltered.total, 3);
-        assert_eq!(unfiltered.groups.len(), 2);
-
-        // By repo name.
-        let by_name = filter_tree(&tree, "lib");
-        assert_eq!(by_name.groups.len(), 1, "empty groups are dropped");
-        assert_eq!(by_name.groups[0].name, "oss");
-        assert_eq!(by_name.groups[0].repos.len(), 1);
-        assert_eq!(by_name.total, 1, "top-level total narrows live");
-
-        // By full path.
-        let by_path = filter_tree(&tree, "/w/frontend/ui");
-        assert_eq!(by_path.total, 1);
-        assert_eq!(by_path.groups[0].repos[0].name, "ui");
-
-        // By current branch, case-insensitively.
-        let by_branch = filter_tree(&tree, "RELEASE");
-        assert_eq!(by_branch.total, 1);
-        assert_eq!(by_branch.groups[0].repos[0].name, "ui");
-
-        // No match: every group drops out.
-        assert!(filter_tree(&tree, "nothing-matches").groups.is_empty());
-    }
-
-    #[test]
-    fn filter_matches_group_name_keeping_whole_group() {
-        let project = Path::new("/w");
-        let roots = vec![
-            root("/w/frontend/app", Some("main")),
-            root("/w/frontend/ui", Some("main")),
-            root("/w/oss/lib", Some("dev")),
-        ];
-        let tree = build_tree(project, &roots, &|_| Some((0, 0)));
-
-        // A group-name match keeps all of the group's repos so the group
-        // structure stays navigable.
-        let by_group = filter_tree(&tree, "frontend");
-        assert_eq!(by_group.total, 2);
-        assert_eq!(by_group.groups[0].repos.len(), 2);
-    }
-
-    #[test]
-    fn dot_state_precedence_conflict_then_diverged_then_dirty_then_clean() {
-        let project = Path::new("/w");
-        let mut conflicted = root("/w/a", Some("main"));
-        conflicted.status.conflicted = vec![PathBuf::from("f.txt")];
-        let mut dirty = root("/w/b", Some("main"));
-        dirty.status.changes = vec![turbogit_domain::model::Change {
-            path: PathBuf::from("g.txt"),
-            status: turbogit_domain::model::ChangeStatus::Modified,
-            chunks: vec![],
-            staged: false,
-            unstaged: false,
-            orig_path: None,
-        }];
-        let clean = root("/w/c", Some("main"));
-        let diverged = root("/w/d", Some("main"));
-        let roots = vec![conflicted, dirty, clean, diverged];
-
-        // The diverged root is recognized purely from its ahead/behind
-        // counts (the cache reader's job); the others report (0, 0).
-        let tree = build_tree(project, &roots, &|id| {
-            if id.0.as_os_str() == "/w/d" {
-                Some((2, 1))
-            } else {
-                Some((0, 0))
-            }
-        });
-        let dot_of = |name: &str| {
-            tree.groups
-                .iter()
-                .flat_map(|g| &g.repos)
-                .find(|r| r.name == name)
-                .unwrap()
-                .dot
-        };
-        assert_eq!(dot_of("a"), DotState::Conflict, "conflict outranks all");
-        assert_eq!(dot_of("d"), DotState::Diverged, "diverged outranks dirty");
-        assert_eq!(dot_of("b"), DotState::Dirty);
-        assert_eq!(dot_of("c"), DotState::Clean);
-    }
-
-    #[test]
-    fn group_dirty_count_conflicts_count_as_dirty() {
-        let project = Path::new("/w");
-        let mut conflicted = root("/w/g/a", Some("main"));
-        conflicted.status.conflicted = vec![PathBuf::from("f.txt")];
-        let clean = root("/w/g/b", Some("main"));
-        let tree = build_tree(project, &[conflicted, clean], &|_| Some((0, 0)));
-
-        let group = &tree.groups[0];
-        assert_eq!(group.total(), 2);
-        assert_eq!(group.dirty(), 1, "conflicted roots count as dirty");
-    }
-
-    #[test]
-    fn ahead_behind_land_on_repo_rows_as_badge_counts() {
-        let project = Path::new("/w");
-        let roots = vec![root("/w/app", Some("main"))];
-        let tree = build_tree(project, &roots, &|_| Some((3, 2)));
-
-        let repo = &tree.groups[0].repos[0];
-        assert_eq!((repo.ahead, repo.behind), (3, 2));
-    }
 
     #[test]
     fn smart_group_color_reserves_orange_for_unpulled_and_dirty() {
