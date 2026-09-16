@@ -67,18 +67,24 @@ fn worktree_row(ui: &mut Ui, state: &mut AppState, wt: &Worktree) {
                 .font(FontId::new(11.0, FontFamily::Proportional))
                 .color(Palette::BRAND),
         );
-        if wt.dirty {
-            ui.label(
-                RichText::new("dirty")
-                    .font(FontId::new(11.0, FontFamily::Proportional))
-                    .color(Palette::STATE_WARNING),
-            );
-        } else {
-            ui.label(
-                RichText::new("clean")
-                    .font(FontId::new(11.0, FontFamily::Proportional))
-                    .color(Palette::INK_3),
-            );
+        // Dirty state fills in per worktree as its probe completes (ticket
+        // 01/04): while unknown (`None`) the row shows no label at all.
+        match wt.dirty {
+            Some(true) => {
+                ui.label(
+                    RichText::new("dirty")
+                        .font(FontId::new(11.0, FontFamily::Proportional))
+                        .color(Palette::STATE_WARNING),
+                );
+            }
+            Some(false) => {
+                ui.label(
+                    RichText::new("clean")
+                        .font(FontId::new(11.0, FontFamily::Proportional))
+                        .color(Palette::INK_3),
+                );
+            }
+            None => {}
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button(format!("Remove {name}")).clicked() {

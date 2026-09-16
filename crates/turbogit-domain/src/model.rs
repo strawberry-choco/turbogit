@@ -376,8 +376,11 @@ pub struct Stash {
 pub struct Worktree {
     pub path: PathBuf,
     pub branch: String,
-    /// The worktree has uncommitted changes (issue 14 status column).
-    pub dirty: bool,
+    /// Whether the worktree has uncommitted changes (issue 14 status column).
+    /// `None` while the per-worktree dirty probe has not run: the worktree
+    /// list is decoupled from the probe (ticket 01), so a freshly listed
+    /// worktree's dirtiness is unknown, not clean.
+    pub dirty: Option<bool>,
     pub root: RootId,
 }
 

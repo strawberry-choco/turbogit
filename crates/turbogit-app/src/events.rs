@@ -4,6 +4,7 @@
 //! them and their producers can live in any worker-thread module. The app
 //! drains the channel each frame and calls `ctx.request_repaint()`.
 
+use std::path::PathBuf;
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{BlameLine, Branch, Commit, RootId, RootStatus, Submodule, Worktree};
 
@@ -101,10 +102,24 @@ pub enum AppEvent {
         root: RootId,
         result: TgResult<Option<(usize, usize)>>,
     },
-    /// The linked-worktree list of a root was loaded (issue 14).
+    /// The linked-worktree list of a root was loaded (issue 14). `epoch`
+    /// guards against stale fills: a fetch started before a worktree
+    /// mutation is dropped when its epoch no longer matches (ticket 02).
     WorktreesLoaded {
         root: RootId,
         worktrees: TgResult<Vec<Worktree>>,
+        epoch: u64,
+    },
+    /// A worktree-mutating operation (add/remove, ticket 02) just completed
+    /// for `root`: invalidate the cached list and bump its epoch so the next
+    /// fill refetches the post-mutation list.
+    WorktreesMutated { root: RootId },
+    /// One linked worktree's dirty probe settled (ticket 04): the row at
+    /// `path` updates independently of every other row.
+    WorktreeDirty {
+        root: RootId,
+        path: PathBuf,
+        dirty: TgResult<bool>,
     },
     /// The submodule list of a root was loaded (issue 14).
     SubmodulesLoaded {

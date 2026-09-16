@@ -910,7 +910,7 @@ fn branch_checked_out_in_another_worktree_is_flagged_up_front() {
             vec![turbogit_domain::model::Worktree {
                 path: PathBuf::from("C:\\wt\\feature-a"),
                 branch: "feature-a".into(),
-                dirty: false,
+                dirty: None,
                 root: id,
             }],
         );
@@ -1390,7 +1390,7 @@ fn delete_refuses_a_branch_checked_out_elsewhere() {
             vec![turbogit_domain::model::Worktree {
                 path: PathBuf::from("C:\\wt\\feature-a"),
                 branch: "feature-a".into(),
-                dirty: false,
+                dirty: None,
                 root: id,
             }],
         );

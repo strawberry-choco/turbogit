@@ -737,32 +737,28 @@ impl GitExecutor for CliExecutor {
         let mut cur_path: Option<PathBuf> = None;
         let mut cur_branch = String::new();
 
-        let flush = |path: Option<PathBuf>,
-                     branch: String,
-                     root: &Path,
-                     out: &mut Vec<Worktree>| {
-            if let Some(p) = path
-                && p != root
-            {
-                let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
-                    stripped.to_string()
-                } else {
-                    branch
-                };
-                // Dirty state is a per-worktree status probe. A prunable
-                // (missing) worktree fails the probe and reads clean.
-                let dirty = self
-                    .status(&p)
-                    .map(|s| s.modified() > 0 || s.unversioned() > 0 || !s.conflicted.is_empty())
-                    .unwrap_or(false);
-                out.push(Worktree {
-                    path: p,
-                    branch: b,
-                    dirty,
-                    root: RootId(root.into()),
-                });
-            }
-        };
+        let flush =
+            |path: Option<PathBuf>, branch: String, root: &Path, out: &mut Vec<Worktree>| {
+                if let Some(p) = path
+                    && p != root
+                {
+                    let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
+                        stripped.to_string()
+                    } else {
+                        branch
+                    };
+                    // The list is decoupled from the dirty probe (ticket 01):
+                    // dirtiness is computed per worktree on demand by
+                    // `worktree_dirty`, never here. A prunable (missing) worktree
+                    // still lists, with no branch resolution needed.
+                    out.push(Worktree {
+                        path: p,
+                        branch: b,
+                        dirty: None,
+                        root: RootId(root.into()),
+                    });
+                }
+            };
 
         for line in out.lines() {
             if let Some(rest) = line.strip_prefix("worktree ") {
@@ -784,6 +780,34 @@ impl GitExecutor for CliExecutor {
         }
         flush(cur_path.take(), cur_branch, root, &mut result);
         Ok(result)
+    }
+
+    fn worktree_dirty(&self, path: &Path) -> TgResult<bool> {
+        // Strictly cheaper than a full porcelain status, same answer: any
+        // unmerged index entry, a tracked diff that stops at the first change
+        // (`diff --quiet` exits 1 on the first difference and never touches
+        // untracked files), or a single non-ignored untracked enumeration
+        // (`--directory` collapses a whole untracked build dir into one
+        // entry). A prunable (missing) worktree — whose command cannot run —
+        // answers clean, matching the list's error-tolerant reading.
+        let probe = (|| -> TgResult<bool> {
+            let (conflicted, _, _) = self.run(path, &["ls-files", "-u"])?;
+            if !conflicted.trim().is_empty() {
+                return Ok(true);
+            }
+            match self.run(path, &["diff", "--quiet", "HEAD"]) {
+                Ok(_) => {}
+                // Exit code 1 = differences were found.
+                Err(TgError::Cli { code: 1, .. }) => return Ok(true),
+                Err(e) => return Err(e),
+            }
+            let (untracked, _, _) = self.run(
+                path,
+                &["ls-files", "--others", "--exclude-standard", "--directory"],
+            )?;
+            Ok(!untracked.trim().is_empty())
+        })();
+        Ok(probe.unwrap_or(false))
     }
 
     fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>> {
