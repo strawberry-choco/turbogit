@@ -456,23 +456,28 @@ impl GitExecutor for CliExecutor {
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
         let (out, _, _) = self.run(root, &["branch", "-a", "-vv"])?;
-        // Branch-tip committer dates, one `git for-each-ref` call: keyed by
-        // (kind, short name) so the popup's stale badge has data for every
-        // row without an N-call fan-out (issue 32).
+        // Branch-tip data, one `git for-each-ref` call: committer dates for
+        // the popup's stale badge (issue 32) plus the short hash / subject /
+        // author that power search-by-message and the detail panel's
+        // latest-commit block (issue 02). Keyed by (kind, short name) so
+        // every row gets data without an N-call fan-out.
         let mut last_touched: HashMap<(BranchKind, String), chrono::DateTime<chrono::Utc>> =
             HashMap::new();
+        let mut tips: HashMap<(BranchKind, String), BranchTip> = HashMap::new();
         if let Ok((refs, _, _)) = self.run(
             root,
             &[
                 "for-each-ref",
-                "--format=%(refname:short)%00%(committerdate:iso-strict)",
+                "--format=%(refname:short)%00%(objectname:short)%00%(subject)%00%(authorname)%00%(committerdate:iso-strict)",
                 "refs/heads",
                 "refs/remotes",
             ],
         ) {
             for line in refs.lines() {
                 let mut it = line.split('\0');
-                let (Some(name), Some(date)) = (it.next(), it.next()) else {
+                let (Some(name), Some(oid), Some(subject), Some(author), Some(date)) =
+                    (it.next(), it.next(), it.next(), it.next(), it.next())
+                else {
                     continue;
                 };
                 // `refs/remotes/<remote>/HEAD` is a symbolic ref the `-vv`
@@ -490,7 +495,17 @@ impl GitExecutor for CliExecutor {
                     Some((_, rest)) => (BranchKind::Remote, rest.to_string()),
                     None => (BranchKind::Local, name.to_string()),
                 };
-                last_touched.insert((kind, short), dt.with_timezone(&chrono::Utc));
+                let dt = dt.with_timezone(&chrono::Utc);
+                last_touched.insert((kind, short.clone()), dt);
+                tips.insert(
+                    (kind, short),
+                    BranchTip {
+                        short_hash: oid.to_string(),
+                        message: subject.to_string(),
+                        author: author.to_string(),
+                        time: dt,
+                    },
+                );
             }
         }
 
@@ -541,14 +556,18 @@ impl GitExecutor for CliExecutor {
                 }
             }
 
-            let (kind, disp_name) = if let Some(without) = name.strip_prefix("remotes/") {
-                let local = match without.find('/') {
-                    Some(i) => &without[i + 1..],
-                    None => without,
+            let (kind, disp_name, remote) = if let Some(without) = name.strip_prefix("remotes/") {
+                let (remote_name, local) = match without.find('/') {
+                    Some(i) => (&without[..i], &without[i + 1..]),
+                    None => (without, without),
                 };
-                (BranchKind::Remote, local.to_string())
+                (
+                    BranchKind::Remote,
+                    local.to_string(),
+                    Some(remote_name.to_string()),
+                )
             } else {
-                (BranchKind::Local, name.to_string())
+                (BranchKind::Local, name.to_string(), None)
             };
 
             result.push(Branch {
@@ -565,7 +584,9 @@ impl GitExecutor for CliExecutor {
                 ahead: if kind == BranchKind::Local { ahead } else { 0 },
                 behind: if kind == BranchKind::Local { behind } else { 0 },
                 gone: kind == BranchKind::Local && gone,
-                last_touched: last_touched.get(&(kind, disp_name)).copied(),
+                last_touched: last_touched.get(&(kind, disp_name.clone())).copied(),
+                tip: tips.get(&(kind, disp_name)).cloned(),
+                remote,
             });
         }
         Ok(result)

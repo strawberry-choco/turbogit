@@ -427,6 +427,8 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             if widgets::compact_button(ui, "New Branch…").clicked() {
                 state.ui.dlg.new_branch_name.clear();
                 state.ui.dlg.new_branch_start.clear();
+                state.ui.dlg.new_branch_base.clear();
+                state.ui.dlg.new_branch_base_picker_open = false;
                 state.ui.dlg.new_branch_checkout = true;
                 state.ui.dialog = Some(Dialog::NewBranch);
                 state.ui.branches_popup = false;
@@ -689,6 +691,8 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 if widgets::compact_button(ui, "+ New branch").clicked() {
                     state.ui.dlg.new_branch_name.clear();
                     state.ui.dlg.new_branch_start.clear();
+                    state.ui.dlg.new_branch_base.clear();
+                    state.ui.dlg.new_branch_base_picker_open = false;
                     state.ui.dlg.new_branch_checkout = true;
                     state.ui.dialog = Some(Dialog::NewBranch);
                     state.ui.branches_popup = false;

@@ -75,6 +75,48 @@ impl Palette {
     /// Cached state is older than the source it mirrors — issue #01.
     pub const STATUS_STALE: Color32 = Self::STATE_INFO;
 
+    // --- Branches screen token set (design doc §13) ------------------------
+    // The Branches screen adds its own surface/meaning/text vocabulary beside
+    // the core palette. Values are the design reference's own; where a §13
+    // surface coincides with an existing token (RAISED == SURFACE, DIVIDER ==
+    // LINE) the existing token is aliased so the whole app keeps one source.
+
+    /// Window / bars (`#1A1B1E`): title bar, activity strip, status bar.
+    pub const WINDOW_BG: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x1e);
+    /// Panel (`#1E2023`): sidebar, metadata panel, detail panel, input wells.
+    pub const PANEL_BG: Color32 = Color32::from_rgb(0x1e, 0x20, 0x23);
+    /// Content (`#232529`): branch list, breadcrumb strip, tab strip.
+    pub const CONTENT_BG: Color32 = Color32::from_rgb(0x23, 0x25, 0x29);
+    /// Raised control (`#2B2D30`): secondary buttons, badges, chips, active tab.
+    pub const RAISED: Color32 = Self::SURFACE;
+    /// Selection (`#2E4369`): the active row/pill.
+    pub const SELECTION: Color32 = Color32::from_rgb(0x2e, 0x43, 0x69);
+    /// Divider (`#2B2D30`): 1px separators.
+    pub const DIVIDER: Color32 = Color32::from_rgb(0x2b, 0x2d, 0x30);
+
+    /// Accent / primary action (`#3574F0`): New Branch, Checkout, branch chips.
+    pub const ACCENT: Color32 = Self::BRAND;
+    /// Ahead (`#5FA86C`): ahead counts, current-branch icon, "in sync".
+    pub const AHEAD: Color32 = Color32::from_rgb(0x5f, 0xa8, 0x6c);
+    /// Behind (`#DCA34E`): behind counts, dirty markers.
+    pub const BEHIND: Color32 = Color32::from_rgb(0xdc, 0xa3, 0x4e);
+    /// Danger (`#DB5C5C`): Delete only.
+    pub const DANGER: Color32 = Color32::from_rgb(0xdb, 0x5c, 0x5c);
+    /// Link / hash (`#74A3E8`): commit hash chips.
+    pub const LINK: Color32 = Color32::from_rgb(0x74, 0xa3, 0xe8);
+
+    /// Text ramp — primary (`#DFE1E5`): branch names, body text.
+    pub const T_PRIMARY: Color32 = Color32::from_rgb(0xdf, 0xe1, 0xe5);
+    /// Text ramp — secondary (`#9DA0A8`): section labels, secondary actions.
+    pub const T_SECONDARY: Color32 = Color32::from_rgb(0x9d, 0xa0, 0xa8);
+    /// Text ramp — muted (`#6F737B`): counts, timestamps, placeholders.
+    pub const T_MUTED: Color32 = Color32::from_rgb(0x6f, 0x73, 0x7b);
+
+    /// Corner radius for chips and badges (design doc §13: 3).
+    pub const RADIUS_CHIP: u8 = 3;
+    /// Corner radius for buttons, inputs and panels (design doc §13: 4).
+    pub const RADIUS_CONTROL: u8 = 4;
+
     // Reserved counter orange (redesign issue 01): `#E0883C` is reserved for
     // dirt/unpulled count badges only. Never a general accent, action, or
     // warning — keep it out of any non-counter call site.
@@ -144,6 +186,34 @@ pub fn accent() -> Color32 {
 /// Muted icon/foreground tint that reads well on the dark palette.
 pub fn icon_color() -> Color32 {
     Palette::INK_2
+}
+
+// --- Branches-screen type ramp (design doc §13) -------------------------
+// Five sizes are enough for the whole screen: 9 section labels, 10 chips,
+// 11 controls/metadata, 12 branch names/body, 13 the detail title.
+/// Section labels — 9px, uppercase, letter-spaced (rendered via `section_label`).
+pub const TYPE_SECTION: f32 = 9.0;
+/// Chips and badges — 10px.
+pub const TYPE_CHIP: f32 = 10.0;
+/// Controls, key labels, metadata — 11px.
+pub const TYPE_CONTROL: f32 = 11.0;
+/// Branch names and body text — 12px.
+pub const TYPE_BODY: f32 = 12.0;
+/// Detail-panel title — 13px.
+pub const TYPE_DETAIL_TITLE: f32 = 13.0;
+
+/// Data font face — JetBrains Mono (branch names, hashes, paths, upstreams,
+/// counts, timestamps).
+pub fn data_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Monospace)
+}
+
+/// Chrome font face — Inter when it is registered; today the chassis embeds
+/// only JetBrains Mono (ADR-0002), so chrome falls back to the proportional
+/// family. Keeping the seam means a future Inter registration upgrades every
+/// chrome call site at once (buttons, tabs, section headers, labels).
+pub fn chrome_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Proportional)
 }
 
 fn dark_visuals() -> Visuals {

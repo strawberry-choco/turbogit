@@ -43,6 +43,8 @@ fn root_tracking(path: &str, branch: &str, remote: &str) -> Root {
         behind: 0,
         gone: false,
         last_touched: None,
+        tip: None,
+        remote: None,
     }];
     r.remotes = vec![turbogit_domain::model::Remote {
         name: remote.to_string(),

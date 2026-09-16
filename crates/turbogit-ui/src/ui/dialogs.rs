@@ -132,24 +132,65 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn new_branch(ui: &mut Ui, state: &mut AppState) {
+    // The base defaults to the branch the person is on — creating from an
+    // unexpected base is a classic silent mistake (issue 08, design §6.2).
+    if state.ui.dlg.new_branch_base.is_empty()
+        && let Some(cur) = current_branch_name(state)
+    {
+        state.ui.dlg.new_branch_base = cur;
+    }
     ui.label("Name:");
     ui.text_edit_singleline(&mut state.ui.dlg.new_branch_name);
-    ui.label("Start point (blank = current HEAD):");
-    ui.text_edit_singleline(&mut state.ui.dlg.new_branch_start);
+    ui.label("Start from:");
+    ui.horizontal(|ui| {
+        ui.label(&state.ui.dlg.new_branch_base);
+        if ui.button("Change…").clicked() {
+            state.ui.dlg.new_branch_base_picker_open = !state.ui.dlg.new_branch_base_picker_open;
+        }
+    });
+    if state.ui.dlg.new_branch_base_picker_open {
+        let branches: Vec<String> = state
+            .selected_root
+            .as_ref()
+            .and_then(|id| state.multi.by_id(id))
+            .map(|r| {
+                r.branches
+                    .iter()
+                    .filter(|b| b.kind == BranchKind::Local)
+                    .map(|b| b.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for b in branches {
+            if ui
+                .selectable_label(state.ui.dlg.new_branch_base == b, &b)
+                .clicked()
+            {
+                state.ui.dlg.new_branch_base = b;
+                state.ui.dlg.new_branch_base_picker_open = false;
+            }
+        }
+    }
+    // One decision made explicit: switch to the new branch right away? The
+    // default is yes — almost always the intent (issue 08).
     ui.checkbox(
         &mut state.ui.dlg.new_branch_checkout,
-        "Checkout after create",
+        "Switch to the new branch now",
     );
     ui.horizontal(|ui| {
         if ui.button("Create").clicked() {
             let root = state.selected_path();
             let name = state.ui.dlg.new_branch_name.clone();
-            let start = if state.ui.dlg.new_branch_start.trim().is_empty() {
+            let base = state.ui.dlg.new_branch_base.clone();
+            let start = if base.trim().is_empty() {
                 None
             } else {
-                Some(state.ui.dlg.new_branch_start.clone())
+                Some(base)
             };
             let co = state.ui.dlg.new_branch_checkout;
+            // The Branches tab scrolls the fresh branch into view (issue 08):
+            // creating something and then hunting for it feels broken.
+            state.ui.branches_scroll_to = Some(name.clone());
             state.run_git(
                 format!("Create branch {name}"),
                 Affected::from_optional_root(root.as_deref()),
@@ -316,8 +357,22 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
                 let target = state.ui.dlg.merge_target.clone();
                 let opts = state.merge_dialog_opts();
                 let clean = state.settings.clean_tree_method;
+                // Issue 09: the label reports how many commits come in (the
+                // preview already knows) so success says it plainly.
+                let commits = state
+                    .ui
+                    .dlg
+                    .merge_preview
+                    .as_ref()
+                    .map(|p| p.merge_commits)
+                    .unwrap_or(0);
+                let label = if commits > 0 {
+                    format!("Merge {target} ({commits} commits)")
+                } else {
+                    format!("Merge {target}")
+                };
                 state.run_git(
-                    format!("Merge {target}"),
+                    label,
                     Affected::from_optional_root(root.as_deref()),
                     move |v| {
                         if let Some(r) = &root {

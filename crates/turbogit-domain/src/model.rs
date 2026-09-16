@@ -123,6 +123,29 @@ pub struct Branch {
     /// `None` when the engine cannot answer.
     #[serde(default)]
     pub last_touched: Option<chrono::DateTime<chrono::Utc>>,
+    /// The tip commit this branch points at, captured on the same listing
+    /// read (issue 02 — no extra git calls per branch). Drives
+    /// search-by-message and the detail panel's latest-commit block.
+    #[serde(default)]
+    pub tip: Option<BranchTip>,
+    /// The remote a remote-tracking branch belongs to (e.g. `origin`), when
+    /// kind is [`BranchKind::Remote`] (issue 13 — remote rows group under
+    /// their remote's name). `None` for local branches.
+    #[serde(default)]
+    pub remote: Option<String>,
+}
+
+/// The tip commit of a branch (issue 02), gathered on the listing read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchTip {
+    /// Short SHA of the tip commit (git's minimal abbreviation).
+    pub short_hash: String,
+    /// First line of the tip commit message (the subject).
+    pub message: String,
+    /// Author name of the tip commit.
+    pub author: String,
+    /// Committer time of the tip commit.
+    pub time: chrono::DateTime<chrono::Utc>,
 }
 
 /// SHA-1 hex string.
