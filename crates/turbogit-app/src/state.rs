@@ -665,9 +665,15 @@ pub struct UiState {
     pub branches_selected: Option<String>,
     /// Expand/collapse of Local / Remote / Tags.
     pub branches_groups: BranchesGroups,
-    /// Cached tag list for the Branches tab, keyed by the root it was read for.
-    pub branches_tags: Vec<String>,
-    pub branches_tags_root: Option<RootId>,
+    /// View-wide remotes-on/off switch for the Branches tab (redesign issue 03):
+    /// when `false`, remote branches collapse into the per-repo rollup.
+    pub branches_show_remotes: bool,
+    /// Per-remote collapse state within the expanded remote groups (redesign
+    /// issue 03): each entry is `(root, remote)` whose group is collapsed.
+    pub branches_collapsed_remotes: std::collections::HashSet<(RootId, String)>,
+    /// Cached tag lists for the Branches tab, keyed by the root each list was
+    /// read for (redesign issue 02: tags are a per-repo group).
+    pub branches_tags: std::collections::HashMap<RootId, Vec<String>>,
     /// Focus the search input on the next render (tab open, issue 06/15).
     pub branches_focus_search: bool,
     /// Scroll the named branch into view on the next render (create/undo).

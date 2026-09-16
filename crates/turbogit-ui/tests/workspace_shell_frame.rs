@@ -99,7 +99,7 @@ fn topbar_paints_new_shape_with_brand_selector_breadcrumb_and_actions() {
     // assertion is stable across CI machines.
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-topbar");
     let _ = std::fs::remove_dir_all(&parent);
@@ -152,7 +152,7 @@ fn topbar_paints_new_shape_with_brand_selector_breadcrumb_and_actions() {
 fn repo_header_shows_branch_pill_and_refresh() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-repoheader");
     let _ = std::fs::remove_dir_all(&parent);
@@ -178,7 +178,7 @@ fn repo_header_paints_orange_dirty_badge_with_uncommitted_count() {
     // uncommitted count (modified + unversioned + conflicted paths).
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-repoheader-dirtybadge");
     let _ = std::fs::remove_dir_all(&parent);
@@ -230,7 +230,7 @@ fn repo_header_paints_orange_dirty_badge_with_uncommitted_count() {
 fn center_tabs_include_changes_log_branches_worktrees_submodules() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-tabs");
     let _ = std::fs::remove_dir_all(&parent);
@@ -253,7 +253,7 @@ fn center_tabs_include_changes_log_branches_worktrees_submodules() {
 fn unimplemented_tabs_render_empty_state_placeholder() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-placeholder");
     let _ = std::fs::remove_dir_all(&parent);
@@ -279,7 +279,7 @@ fn unimplemented_tabs_render_empty_state_placeholder() {
 fn active_tab_renders_as_a_filled_pill_not_a_box() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-pill");
     let _ = std::fs::remove_dir_all(&parent);
@@ -338,7 +338,7 @@ fn shell_is_two_zones_without_metadata_rail() {
     // stay.
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-metadata");
     let _ = std::fs::remove_dir_all(&parent);
@@ -370,7 +370,7 @@ fn shell_is_two_zones_without_metadata_rail() {
 fn status_bar_shows_aggregated_total_repos() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-statusbar");
     let project_dir = parent.clone();
@@ -390,7 +390,7 @@ fn status_bar_shows_aggregated_total_repos() {
 fn status_bar_shows_diverged_count_when_root_is_ahead_of_upstream() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-statusbar-diverged");
     let _ = std::fs::remove_dir_all(&parent);
@@ -426,7 +426,7 @@ fn status_bar_paints_unpulled_dirty_granularity_and_scope_from_real_data() {
     // granularity setting and the repo-scope count (issue 02 checkbox 1).
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
-        .nth(3)
+        .nth(2)
         .unwrap()
         .join(".scratch/workspace-shell-frame-statusbar-unpulled");
     let _ = std::fs::remove_dir_all(&parent);

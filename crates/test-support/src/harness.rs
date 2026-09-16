@@ -12,7 +12,7 @@
 //! Gated behind the `harness` feature so `turbogit-app`'s tests keep using
 //! the recording executor without paying `egui_kittest`'s compile cost.
 
-use egui::{Color32, Pos2, Rect, Shape};
+use egui::{Color32, FontFamily, Pos2, Rect, Shape};
 use egui_kittest::Harness;
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::{configure_style, install_fonts};
@@ -107,6 +107,55 @@ pub fn galley_origin(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2
         })
 }
 
+/// One painted text galley: what it says, where it was painted, in what color,
+/// and in which font family.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaintedGalley {
+    /// The galley's full string.
+    pub text: String,
+    /// Paint-time origin (top-left of the text).
+    pub pos: Pos2,
+    /// `RichText::color` / the widget's ink, from the galley's layout job.
+    pub color: Color32,
+    /// The resolved face — `Proportional` for chrome, `Monospace` for data
+    /// (branch and remote names).
+    pub family: FontFamily,
+}
+
+/// Every text galley painted by the last frame.
+///
+/// The single primitive behind the label queries above. A string usually paints
+/// in more than one place — the current branch names both a topbar button and a
+/// row; a repo name appears in the sidebar and in a section header — so ask for
+/// the color or face of *this* occurrence by matching on `pos`, rather than
+/// trusting the order shapes happen to arrive in. Color and font both land in
+/// the galley's layout job, so a token-colored, face-correct label (the active
+/// branch's soft blue monospace, a diverged branch's red) is assertable from
+/// painted output alone — no reach into widget internals.
+pub fn painted_galleys(harness: &Harness<'_, AppState>) -> Vec<PaintedGalley> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Text(shape) => {
+                let section = shape.galley.job.sections.first();
+                Some(PaintedGalley {
+                    text: shape.galley.text().to_owned(),
+                    pos: shape.pos,
+                    color: section
+                        .map(|s| s.format.color)
+                        .unwrap_or(Color32::TRANSPARENT),
+                    family: section
+                        .map(|s| s.format.font_id.family.clone())
+                        .unwrap_or(FontFamily::Proportional),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Every filled rectangle painted by the last frame as `(rect, fill)`.
 ///
 /// Panel frames, toolbars, rails, tabs, and buttons all emit `Shape::Rect`
@@ -120,6 +169,24 @@ pub fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
         .filter_map(|clipped| match &clipped.shape {
             Shape::Rect(rect_shape) if rect_shape.fill != Color32::TRANSPARENT => {
                 Some((rect_shape.rect, rect_shape.fill))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every filled circle painted by the last frame as `(center, radius, fill)`.
+///
+/// Status dots are painted as circles rather than rects, so [`filled_rects`]
+/// cannot see them; this is the sibling that can.
+pub fn filled_circles(harness: &Harness<'_, AppState>) -> Vec<(Pos2, f32, Color32)> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Circle(circle) if circle.fill != Color32::TRANSPARENT => {
+                Some((circle.center, circle.radius, circle.fill))
             }
             _ => None,
         })

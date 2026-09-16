@@ -17,6 +17,7 @@ pub mod banner;
 pub mod blame_view;
 pub mod branch_widget;
 pub mod branches;
+pub mod branches_tree;
 pub mod bulk_monitor;
 pub mod bulk_preflight;
 pub mod cherry_across;
