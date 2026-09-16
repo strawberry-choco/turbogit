@@ -96,7 +96,7 @@ fn super_with_submodule(parent: &Path, name: &str) -> (PathBuf, PathBuf) {
 }
 
 #[test]
-fn fetch_worktrees_fills_the_cache_with_dirty_state() {
+fn fetch_worktrees_fills_the_cache_from_the_cheap_list_only() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = temp_repo(tmp.path(), "alpha");
     let wt = add_worktree(&repo, tmp.path(), "wt-feature", "feature");
@@ -112,7 +112,10 @@ fn fetch_worktrees_fills_the_cache_with_dirty_state() {
     assert_eq!(wts.len(), 1, "the linked worktree is listed");
     assert_eq!(wts[0].path, wt);
     assert_eq!(wts[0].branch, "feature");
-    assert!(wts[0].dirty, "the modified worktree reads dirty");
+    assert!(
+        wts.iter().all(|w| w.dirty.is_none()),
+        "the fill is the cheap list alone — no dirty probe ran"
+    );
 }
 
 #[test]
@@ -182,10 +185,72 @@ fn refresh_drops_worktree_and_submodule_cache_entries() {
     );
 }
 
+/// An unrelated operation on the focused root (the `OpCompleted` →
+/// `refresh(Root)` shape) leaves the cached worktree list in place: nothing
+/// refetches the list for an operation that cannot have changed worktrees.
+#[test]
+fn refresh_on_the_focused_root_keeps_the_worktree_cache() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = temp_repo(tmp.path(), "alpha");
+    add_worktree(&repo, tmp.path(), "wt-feature", "feature");
+    let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
+    let root = RootId(repo.clone().into());
+
+    state.fetch_worktrees(root.clone());
+    wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
+    let project =
+        |w: &turbogit_domain::model::Worktree| (w.path.clone(), w.branch.clone(), w.dirty);
+    let before: Vec<_> = state
+        .caches
+        .worktrees(&root)
+        .unwrap()
+        .iter()
+        .map(project)
+        .collect();
+
+    state.refresh(Affected::Root(root.clone()));
+    assert!(
+        state.caches.worktrees(&root).is_some(),
+        "the worktree cache survives an unrelated root refresh"
+    );
+    let after: Vec<_> = state
+        .caches
+        .worktrees(&root)
+        .unwrap()
+        .iter()
+        .map(project)
+        .collect();
+    assert_eq!(
+        before, after,
+        "the refresh did not refetch (and thus rewrite) the cached list"
+    );
+}
+
+/// An operation completed in another root leaves the focused root's worktree
+/// cache untouched.
+#[test]
+fn refresh_on_another_root_leaves_the_focused_root_cache_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = temp_repo(tmp.path(), "alpha");
+    let b = temp_repo(tmp.path(), "beta");
+    let mut state = AppState::for_roots(tmp.path(), &[a.clone(), b.clone()]);
+    let root_a = RootId(a.into());
+
+    state.fetch_worktrees(root_a.clone());
+    wait_for(&mut state, |s| s.caches.worktrees(&root_a).is_some());
+
+    state.refresh(Affected::Root(RootId(b.as_path().into())));
+    assert!(
+        state.caches.worktrees(&root_a).is_some(),
+        "an op on another root leaves the focused root's worktree cache alone"
+    );
+}
+
 // --------------------------------------------------- dispatched actions --
 
-/// `add_worktree` dispatches through the worker and, once the completion
-/// toast lands, the refetched cache lists the new worktree.
+/// `add_worktree` dispatches through the worker: once the operation completes
+/// it invalidates the cached worktree list, and the refetched cache lists the
+/// new worktree.
 #[test]
 fn add_worktree_works_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
@@ -194,12 +259,18 @@ fn add_worktree_works_end_to_end() {
     let root = RootId(repo.into());
 
     let wt = tmp.path().join("wt-feature");
+    state.fetch_worktrees(root.clone());
+    wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
     state.add_worktree(wt.clone(), "feature".to_string());
     wait_for(&mut state, |s| {
         s.ui.toast
             .as_ref()
             .is_some_and(|t| t.kind == turbogit_app::state::ToastKind::Success)
     });
+    assert!(
+        state.caches.worktrees(&root).is_none(),
+        "completing an add invalidates the cached list"
+    );
 
     state.fetch_worktrees(root.clone());
     wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
@@ -209,8 +280,8 @@ fn add_worktree_works_end_to_end() {
     assert_eq!(wts[0].path, wt.canonicalize().unwrap());
 }
 
-/// `run_confirmed(RemoveWorktree)` deletes the worktree: the refetched
-/// cache no longer lists it and the directory is gone.
+/// `run_confirmed(RemoveWorktree)` deletes the worktree: its completion
+/// invalidates the cached list and the refetched cache no longer lists it.
 #[test]
 fn remove_worktree_works_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
@@ -219,12 +290,18 @@ fn remove_worktree_works_end_to_end() {
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
     let root = RootId(repo.into());
 
+    state.fetch_worktrees(root.clone());
+    wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
     state.run_confirmed(turbogit_app::state::PendingConfirm::RemoveWorktree { path: wt.clone() });
     wait_for(&mut state, |s| {
         s.ui.toast
             .as_ref()
             .is_some_and(|t| t.kind == turbogit_app::state::ToastKind::Success)
     });
+    assert!(
+        state.caches.worktrees(&root).is_none(),
+        "completing a remove invalidates the cached list"
+    );
 
     assert!(!wt.exists(), "removed worktree directory is gone");
     state.fetch_worktrees(root.clone());
@@ -233,6 +310,148 @@ fn remove_worktree_works_end_to_end() {
         state.caches.worktrees(&root).unwrap().is_empty(),
         "the removed worktree leaves the listing"
     );
+}
+
+// --------------------------------------------- ticket 04 — dirty probes --
+
+/// Dirty probes only run when requested (the Worktrees window is open): the
+/// badge / eager-fill path alone never probes, so the cached rows keep their
+/// unknown dirty state until `ensure_worktree_probes` is called.
+#[test]
+fn probes_do_not_run_until_requested() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = temp_repo(tmp.path(), "alpha");
+    let wt = add_worktree(&repo, tmp.path(), "wt-feature", "feature");
+    std::fs::write(wt.join("base.txt"), "changed\n").unwrap();
+    let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
+    let root = RootId(repo.into());
+
+    state.fetch_worktrees(root.clone());
+    wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
+    assert!(
+        state
+            .caches
+            .worktrees(&root)
+            .unwrap()
+            .iter()
+            .all(|w| w.dirty.is_none()),
+        "no probe ran while the window was never opened"
+    );
+
+    state.ensure_worktree_probes();
+    wait_for(&mut state, |s| {
+        s.caches
+            .worktrees(&root)
+            .unwrap()
+            .iter()
+            .any(|w| w.dirty == Some(true))
+    });
+    assert!(
+        state
+            .caches
+            .worktrees(&root)
+            .unwrap()
+            .iter()
+            .any(|w| w.dirty == Some(true)),
+        "opening the window probes the listed worktrees"
+    );
+}
+
+/// Each worktree's dirty flag fills in as its own probe settles — rows
+/// resolve independently, clean and dirty alike.
+#[test]
+fn probes_fill_each_row_independently() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = temp_repo(tmp.path(), "alpha");
+    let clean = add_worktree(&repo, tmp.path(), "wt-clean", "feature");
+    let dirty = add_worktree(&repo, tmp.path(), "wt-dirty", "other");
+    std::fs::write(dirty.join("base.txt"), "changed\n").unwrap();
+    let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
+    let root = RootId(repo.into());
+
+    state.fetch_worktrees(root.clone());
+    wait_for(&mut state, |s| {
+        s.caches.worktrees(&root).is_some_and(|w| w.len() == 2)
+    });
+    state.ensure_worktree_probes();
+    wait_for(&mut state, |s| {
+        s.caches
+            .worktrees(&root)
+            .is_some_and(|w| w.len() == 2 && w.iter().all(|w| w.dirty.is_some()))
+    });
+
+    let wts = state.caches.worktrees(&root).unwrap();
+    let by_path = |p: &std::path::Path| wts.iter().find(|w| w.path == p).unwrap();
+    assert_eq!(
+        by_path(&clean).dirty,
+        Some(false),
+        "a fresh worktree probes clean"
+    );
+    assert_eq!(
+        by_path(&dirty).dirty,
+        Some(true),
+        "a modified worktree probes dirty"
+    );
+}
+
+/// Adding a worktree while the window is open re-probes the affected rows so
+/// the tab stays fresh: the new row lists probe-free and fills on the next
+/// probe pass.
+#[test]
+fn probes_refill_after_add_while_window_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = temp_repo(tmp.path(), "alpha");
+    let existing = add_worktree(&repo, tmp.path(), "wt-existing", "feature");
+    std::fs::write(existing.join("base.txt"), "changed\n").unwrap();
+    let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
+    let root = RootId(repo.into());
+
+    state.fetch_worktrees(root.clone());
+    wait_for(&mut state, |s| s.caches.worktrees(&root).is_some());
+    state.ensure_worktree_probes();
+    wait_for(&mut state, |s| {
+        s.caches
+            .worktrees(&root)
+            .is_some_and(|w| w.iter().all(|w| w.dirty.is_some()))
+    });
+
+    let wt_new = tmp.path().join("wt-new");
+    state.add_worktree(wt_new.clone(), "feature-new".to_string());
+    wait_for(&mut state, |s| {
+        s.ui.toast
+            .as_ref()
+            .is_some_and(|t| t.kind == turbogit_app::state::ToastKind::Success)
+    });
+    state.fetch_worktrees(root.clone());
+    wait_for(&mut state, |s| {
+        s.caches.worktrees(&root).is_some_and(|w| w.len() == 2)
+    });
+    let new_row = state
+        .caches
+        .worktrees(&root)
+        .unwrap()
+        .iter()
+        .find(|w| w.path == wt_new.canonicalize().unwrap())
+        .expect("the added worktree is listed");
+    assert_eq!(
+        new_row.dirty, None,
+        "the newly added row is probe-free until the next probe pass"
+    );
+
+    state.ensure_worktree_probes();
+    wait_for(&mut state, |s| {
+        s.caches
+            .worktrees(&root)
+            .is_some_and(|w| w.iter().all(|w| w.dirty.is_some()))
+    });
+    let new_row = state
+        .caches
+        .worktrees(&root)
+        .unwrap()
+        .iter()
+        .find(|w| w.path == wt_new.canonicalize().unwrap())
+        .unwrap();
+    assert_eq!(new_row.dirty, Some(false), "a fresh worktree probes clean");
 }
 
 /// `update_submodule` checks the recorded commit back out on a submodule

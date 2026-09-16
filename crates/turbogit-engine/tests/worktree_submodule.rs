@@ -53,10 +53,11 @@ fn temp_repo(tag: &str) -> (tempfile::TempDir, PathBuf) {
 // ------------------------------------------------------- worktree reads --
 
 /// `worktree_list` reports each linked worktree with its checked-out branch
-/// and a dirty flag: clean on a fresh checkout, true once the worktree's
-/// files change (issue 14 Worktrees tab status column).
+/// and an unset dirty flag: the list is decoupled from the dirty probe
+/// (ticket 01), so dirtiness is unknown here — see the `worktree_probe`
+/// suite for the pinned probe semantics and the probe's on-demand answers.
 #[test]
-fn worktree_list_reports_branch_and_dirty_state() {
+fn worktree_list_reports_branch_and_probe_free_dirty() {
     let (_tmp, repo) = temp_repo("wt-dirty");
     run_git(&repo, &["branch", "feature"]);
     let wt_path = _tmp.path().join("wt-feature");
@@ -70,11 +71,14 @@ fn worktree_list_reports_branch_and_dirty_state() {
     assert_eq!(wts.len(), 1, "only the linked worktree is listed");
     assert_eq!(wts[0].path, wt_path);
     assert_eq!(wts[0].branch, "feature");
-    assert!(!wts[0].dirty, "a fresh checkout is clean");
+    assert_eq!(wts[0].dirty, None, "the list carries no probe result");
 
     std::fs::write(wt_path.join("base.txt"), "changed\n").unwrap();
     let wts = engine().worktree_list(&repo).expect("worktree_list");
-    assert!(wts[0].dirty, "a modified worktree reports dirty");
+    assert_eq!(
+        wts[0].dirty, None,
+        "a modified worktree still lists probe-free"
+    );
 }
 
 /// `worktree_remove` deletes a linked worktree: it refuses a dirty one

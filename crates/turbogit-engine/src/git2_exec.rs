@@ -654,11 +654,11 @@ impl GitExecutor for Git2Executor {
                 Err(_) => {
                     // Metadata exists but worktree directory missing/corrupt —
                     // surface it so the UI can show prunable worktrees
-                    // (matches CLI behavior).
+                    // (matches CLI behavior). Dirtiness is unknown here.
                     result.push(Worktree {
                         path: PathBuf::from(name),
                         branch: String::new(),
-                        dirty: false,
+                        dirty: None,
                         root: RootId(root.into()),
                     });
                     continue;
@@ -675,31 +675,72 @@ impl GitExecutor for Git2Executor {
                 continue;
             }
 
-            // One open answers both branch and dirty. Dirty = the worktree
-            // repo reports any status entry (libgit2 includes untracked
-            // files with the default show flags).
-            let (branch, dirty) = (|| -> Option<(Option<String>, bool)> {
+            // The list is decoupled from the dirty probe (ticket 01):
+            // branch is answered here, dirtiness only on demand through
+            // `worktree_dirty`. Detached HEAD reports no branch.
+            let branch = (|| -> Option<String> {
                 let wt_repo = git2::Repository::open_from_worktree(&wt).ok()?;
-                let dirty = wt_repo
-                    .statuses(None)
-                    .map(|s| !s.is_empty())
-                    .unwrap_or(false);
                 if wt_repo.head_detached().ok()? {
-                    return Some((None, dirty));
+                    return None;
                 }
-                let branch = wt_repo.head().ok()?.shorthand().ok().map(|s| s.to_string());
-                Some((branch, dirty))
+                wt_repo.head().ok()?.shorthand().ok().map(|s| s.to_string())
             })()
-            .unwrap_or((None, false));
+            .unwrap_or_default();
 
             result.push(Worktree {
                 path,
-                branch: branch.unwrap_or_default(),
-                dirty,
+                branch,
+                dirty: None,
                 root: RootId(root.into()),
             });
         }
         Ok(result)
+    }
+
+    fn worktree_dirty(&self, path: &Path) -> TgResult<bool> {
+        // Strictly cheaper than a full status scan, same answer (ticket 01):
+        // an unmerged-index check, then a HEAD↔workdir diff (staged +
+        // unstaged tracked changes, untracked included, ignored excluded)
+        // whose iteration stops at the first changed file. A prunable
+        // (missing) worktree cannot be opened and reads clean.
+        let probe = (|| -> TgResult<bool> {
+            let repo = git2::Repository::open(path).map_err(err)?;
+            if repo
+                .index()
+                .map_err(err)?
+                .conflicts()
+                .map_err(err)?
+                .next()
+                .is_some()
+            {
+                return Ok(true);
+            }
+            let tree = repo
+                .revparse_single("HEAD")
+                .map_err(err)?
+                .peel_to_tree()
+                .map_err(err)?;
+            let mut opts = git2::DiffOptions::new();
+            opts.include_untracked(true);
+            let mut dirty = false;
+            let mut file_cb = |_delta: git2::DiffDelta<'_>, _progress: f32| {
+                dirty = true;
+                false
+            };
+            let diff = repo
+                .diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))
+                .map_err(err)?;
+            match diff.foreach(&mut file_cb, None, None, None) {
+                // Halt after the first changed file: in git2 0.21 a `false`
+                // callback return terminates iteration AND surfaces as
+                // `GIT_EUSER` — the probe's early stop, not a failure.
+                Ok(()) => {}
+                Err(e) if e.code() == ErrorCode::User => {}
+                Err(e) => return Err(err(e)),
+            }
+            Ok(dirty)
+        })();
+        Ok(probe.unwrap_or(false))
     }
 
     fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>> {

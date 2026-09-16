@@ -358,6 +358,18 @@ impl RootCaches {
         self.worktree_cache.insert(root, worktrees);
     }
 
+    /// Fill in just one worktree row's dirty flag (ticket 04): the per-row
+    /// probe result updates that row's entry, leaving every other row — and
+    /// the rest of the list — untouched. A row whose path is no longer listed
+    /// (e.g. removed mid-probe) is a no-op.
+    pub fn update_worktree_dirty(&mut self, root: &RootId, path: &Path, dirty: bool) {
+        if let Some(list) = self.worktree_cache.get_mut(root)
+            && let Some(wt) = list.iter_mut().find(|w| w.path == path)
+        {
+            wt.dirty = Some(dirty);
+        }
+    }
+
     /// Store a freshly loaded submodule list for `root` (issue 14).
     pub fn store_submodules(&mut self, root: RootId, submodules: Vec<Submodule>) {
         self.submodule_cache.insert(root, submodules);
@@ -365,9 +377,14 @@ impl RootCaches {
 
     // --- Invalidation -------------------------------------------------------
 
-    /// Drop all five caches' entries for the affected scope. There are no
-    /// per-cache exceptions (policy uniformity): even immutable-by-commit-id
-    /// entries go. Borrows `affected` — it is only read (plan Phase 3).
+    /// Drop the caches for the affected scope. One sanctioned per-cache
+    /// exception (ticket 02): the worktree list is **not** dropped for
+    /// [`Affected::Root`] — ordinary operations (commit, checkout, staging,
+    /// push…) cannot change a root's linked worktrees, so keeping the list
+    /// stops the refetch storm. The list IS dropped for [`Affected::All`]
+    /// (project switches, rescans) and, per root, through the explicit
+    /// [`RootCaches::invalidate_worktrees`] used by the add/remove flows.
+    /// Everything else stays policy-uniform.
     pub fn invalidate(&mut self, affected: &Affected) {
         match affected {
             Affected::All => self.invalidate_all(),
@@ -379,11 +396,18 @@ impl RootCaches {
                 self.log_ref_cache.retain(|(r, _), _| r != root);
                 self.search_cache.retain(|(r, _), _| r != root);
                 self.ahead_behind.remove(root);
-                self.worktree_cache.remove(root);
                 self.submodule_cache.remove(root);
                 self.hunk_stats.remove(root);
             }
         }
+    }
+
+    /// Drop only one root's cached worktree list (ticket 02): the sanctioned
+    /// targeted invalidation behind the worktree-mutating flows — add and
+    /// remove — so their completion settles with fresh data while unrelated
+    /// operations keep the list.
+    pub fn invalidate_worktrees(&mut self, root: &RootId) {
+        self.worktree_cache.remove(root);
     }
 
     /// Drop every entry in all caches.

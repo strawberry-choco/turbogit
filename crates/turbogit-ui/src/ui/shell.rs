@@ -55,8 +55,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // Issue 14: the tab-strip badges and both tool tabs read the focused
     // root's worktree & submodule caches — keep them filled (fetch on
     // miss, i.e. first frame and after every refresh invalidation).
+    // Ticket 04: the cheap list is always kept for the badge, but the
+    // per-worktree dirty probes run only while the Worktrees window is
+    // open — they are never part of the badge / eager-fill path.
     if !state.show_welcome() {
         ensure_worktree_data(state);
+        if state.ui.tab == Tab::Worktrees {
+            state.ensure_worktree_probes();
+        }
     }
 
     // Panel order fixes the geometry: top strips claim full width first,

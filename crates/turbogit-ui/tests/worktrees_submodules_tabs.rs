@@ -102,7 +102,7 @@ fn painted_contains(h: &Harness<'_, AppState>, needle: &str) -> bool {
 // -- Cycle A — Worktrees tab body -------------------------------------------
 
 #[test]
-fn worktrees_tab_lists_worktrees_with_branch_and_dirty_state() {
+fn worktrees_tab_lists_worktrees_with_branch_without_waiting_on_dirty() {
     let parent = scratch("wt-sub-tabs-list");
     let repo = temp_repo(&parent, "alpha");
     let wt = add_worktree(&repo, &parent, "wt-feature", "feature");
@@ -115,10 +115,97 @@ fn worktrees_tab_lists_worktrees_with_branch_and_dirty_state() {
     // The tab's data loads asynchronously (event pump); step until it paints.
     step_until(&mut h, |h| painted_contains(h, "wt-feature"));
 
-    // The tab paints a real browser: the worktree row (path + branch +
-    // dirty status), and the add affordance.
+    // The tab paints a real browser from the cheap list: the worktree row
+    // (path + branch) renders, and the add affordance. The dirty label is
+    // filled in by the window-open probe (see the dirty-probe tests below).
     assert_painted(&h, "wt-feature");
-    assert_painted(&h, "dirty");
+    assert_painted(&h, "feature");
+    assert_painted(&h, "Add worktree");
+}
+
+// -- Ticket 04 — visibility-gated dirty probes fill the rows in ---------------
+
+/// Opening the Worktrees window starts per-worktree probes: each row's
+/// clean/dirty label appears as its own probe resolves — here the single
+/// dirty worktree's label paints once the probe settles.
+#[test]
+fn worktrees_tab_dirty_flags_fill_in_from_window_open_probes() {
+    let parent = scratch("wt-sub-tabs-dirty-probe");
+    let repo = temp_repo(&parent, "alpha");
+    let wt = add_worktree(&repo, &parent, "wt-feature", "feature");
+    std::fs::write(wt.join("base.txt"), "changed\n").unwrap();
+
+    let mut state = AppState::for_roots(&parent, &[repo]);
+    state.ui.tab = Tab::Worktrees;
+    let mut h = harness(state);
+
+    step_until(&mut h, |h| painted_contains(h, "wt-feature"));
+    // The dirty label is probe-driven: it paints as the window-open probe
+    // settles for this row.
+    step_until(&mut h, |h| painted_contains(h, "dirty"));
+    assert_painted(&h, "wt-feature");
+    assert_painted(&h, "feature");
+}
+
+// -- Ticket 03 — the list lands first: badge and rows before any probe --
+
+/// The tab-strip badge derives from the cheap list alone — no dirty
+/// computation anywhere in the path. Staying off the Worktrees tab, the
+/// badge shows the count of a DIRTY worktree while the cached rows keep
+/// their unknown probe state: the badge and eager fill never probe.
+#[test]
+fn worktrees_badge_counts_without_any_dirty_probe() {
+    let parent = scratch("wt-sub-tabs-list-first");
+    let repo = temp_repo(&parent, "alpha");
+    let wt = add_worktree(&repo, &parent, "wt-feature", "feature");
+    std::fs::write(wt.join("base.txt"), "changed\n").unwrap();
+    let state = AppState::for_roots(&parent, &[repo]);
+    // Stay off the Worktrees window: the badge must not wait on (or start)
+    // any probe.
+    let mut h = harness(state);
+
+    step_until(&mut h, |h| painted_contains(h, "Worktrees 1"));
+    let id = h.state_mut().selected_root.clone().unwrap();
+    assert!(
+        h.state_mut()
+            .caches
+            .worktrees(&id)
+            .unwrap()
+            .iter()
+            .all(|w| w.dirty.is_none()),
+        "the badge / eager-fill path never runs a dirty probe"
+    );
+}
+
+/// "Loading worktrees…" is tied to the LIST, not the (never-run) probe: once
+/// the list lands, the rows paint and the loading text is gone.
+#[test]
+fn worktrees_loading_text_disappears_once_the_list_arrives() {
+    let parent = scratch("wt-sub-tabs-loading");
+    let repo = temp_repo(&parent, "alpha");
+    add_worktree(&repo, &parent, "wt-feature", "feature");
+    let mut state = AppState::for_roots(&parent, &[repo]);
+    state.ui.tab = Tab::Worktrees;
+    let mut h = harness(state);
+
+    step_until(&mut h, |h| painted_contains(h, "wt-feature"));
+    assert!(
+        !painted_contains(&h, "Loading worktrees"),
+        "the loading state is gone once the list has arrived"
+    );
+}
+
+/// The "No linked worktrees" empty state appears once the (empty) list
+/// arrives — no slow scan precedes it.
+#[test]
+fn worktrees_empty_state_shows_once_the_list_arrives_empty() {
+    let parent = scratch("wt-sub-tabs-empty");
+    let repo = temp_repo(&parent, "alpha");
+    let mut state = AppState::for_roots(&parent, &[repo]);
+    state.ui.tab = Tab::Worktrees;
+    let mut h = harness(state);
+
+    step_until(&mut h, |h| painted_contains(h, "No linked worktrees"));
     assert_painted(&h, "Add worktree");
 }
 
