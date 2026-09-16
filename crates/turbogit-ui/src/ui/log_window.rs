@@ -60,6 +60,17 @@ const MONO_TEXT: f32 = 12.0;
 const CHIP_HEIGHT: f32 = 18.0;
 const CHIP_PAD_X: f32 = 6.0;
 
+/// Commit-table column x-offsets, measured from `content_left` (the row left
+/// edge, plus the root stripe in multi-root views). The micro column headers
+/// and the row cells share these offsets so they stay vertically aligned.
+/// `COL_GRAPH` is the graph node's center x (no header is drawn for it); the
+/// remaining headers left-align with their cell text.
+const COL_GRAPH: f32 = 10.0;
+const COL_HASH: f32 = 26.0;
+const COL_AUTHOR: f32 = 84.0;
+const COL_DATE: f32 = 164.0;
+const COL_MESSAGE: f32 = 236.0;
+
 /// Distinct lane colors for the commit graph (Epic D1). Also reused as the
 /// deterministic per-root stripe palette.
 const GRAPH_COLORS: &[Color32] = &[
@@ -685,8 +696,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     }
 
     // Column micro-headers aligned with the cells below.
-    let left = ui.cursor().left() + STRIPE_WIDTH;
-    header_cells(ui, left);
+    header_cells(ui, multi_root);
 
     // Row clicks are deferred (plan §1.3): the displayed union borrows the
     // cache slices, so rows render against a shared AppState and the
@@ -761,16 +771,19 @@ fn paint_row_fill(ui: &Ui, rect: &Rect, active: bool, hovered: bool) {
     ui.painter().rect_filled(*rect, CornerRadius::same(4), fill);
 }
 
-/// Micro column headers above the commit table.
-fn header_cells(ui: &mut Ui, left: f32) {
+/// Micro column headers above the commit table, aligned with the row cells.
+/// Rows measure their content from `content_left` (the row left edge, plus
+/// the root stripe when `multi_root`); the headers replicate that origin and
+/// the shared [`COL_*`] offsets so header text sits directly over the cells.
+fn header_cells(ui: &mut Ui, multi_root: bool) {
     let top = ui.cursor().top();
     ui.add_space(16.0);
+    let content_left = ui.cursor().left() + if multi_root { STRIPE_WIDTH + 2.0 } else { 0.0 };
     let headers = [
-        ("GRAPH", 16.0),
-        ("HASH", 68.0),
-        ("AUTHOR", 148.0),
-        ("DATE", 228.0),
-        ("MESSAGE", 308.0),
+        ("HASH", COL_HASH),
+        ("AUTHOR", COL_AUTHOR),
+        ("DATE", COL_DATE),
+        ("MESSAGE", COL_MESSAGE),
     ];
     for (title, dx) in headers {
         let galley = ui.painter().layout_no_wrap(
@@ -778,8 +791,11 @@ fn header_cells(ui: &mut Ui, left: f32) {
             FontId::new(MICRO_TEXT, FontFamily::Proportional),
             Palette::INK_3,
         );
-        ui.painter()
-            .galley(Pos2::new(left + dx, top + 2.0), galley, Palette::INK_3);
+        ui.painter().galley(
+            Pos2::new(content_left + dx, top + 2.0),
+            galley,
+            Palette::INK_3,
+        );
     }
 }
 
@@ -832,7 +848,7 @@ fn commit_row(
         .get(&c.id)
         .map(|i| root_color(*i))
         .unwrap_or(Color32::GRAY);
-    let center = Pos2::new(content_left + 10.0, rect.center().y);
+    let center = Pos2::new(content_left + COL_GRAPH, rect.center().y);
     if c.parents.len() > 1 {
         ui.painter()
             .circle_stroke(center, 4.0, egui::Stroke::new(1.5, lane));
@@ -845,21 +861,21 @@ fn commit_row(
     let cy = rect.center().y;
     let hash_galley = painter.layout_no_wrap(short(&c.id), mono_font(), Palette::BRAND);
     painter.galley(
-        Pos2::new(content_left + 26.0, cy - hash_galley.size().y / 2.0),
+        Pos2::new(content_left + COL_HASH, cy - hash_galley.size().y / 2.0),
         hash_galley,
         Palette::BRAND,
     );
     let author_galley =
         painter.layout_no_wrap(truncate(&c.author.name, 10), body_font(), Palette::INK_2);
     painter.galley(
-        Pos2::new(content_left + 84.0, cy - author_galley.size().y / 2.0),
+        Pos2::new(content_left + COL_AUTHOR, cy - author_galley.size().y / 2.0),
         author_galley,
         Palette::INK_2,
     );
     let date_galley =
         painter.layout_no_wrap(fmt_date(c.time, date_mode), body_font(), Palette::INK_3);
     painter.galley(
-        Pos2::new(content_left + 164.0, cy - date_galley.size().y / 2.0),
+        Pos2::new(content_left + COL_DATE, cy - date_galley.size().y / 2.0),
         date_galley,
         Palette::INK_3,
     );
@@ -869,7 +885,7 @@ fn commit_row(
     // stays the only interactive surface — a child `ui.label` here would sit
     // on top of the row in hit-testing and swallow its clicks.
     let painter = ui.painter().clone();
-    let mut mx = content_left + 236.0;
+    let mut mx = content_left + COL_MESSAGE;
     let subject = c.message.lines().next().unwrap_or("");
     let subject_galley = painter.layout_no_wrap(truncate(subject, 44), body_font(), Palette::INK);
     let subject_w = subject_galley.size().x;
