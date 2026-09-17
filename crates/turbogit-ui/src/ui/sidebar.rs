@@ -15,8 +15,8 @@ use super::project_tree::DotState;
 // --- Rendering ---------------------------------------------------------------
 
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, RichText, ScrollArea,
-    Sense, Stroke, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Sense, Stroke, Ui,
+    UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 
 use super::icons::{self, Icon};
@@ -161,7 +161,7 @@ fn render_selection_bar(ui: &mut Ui, state: &mut AppState, total: usize) {
     let count = format!("{} selected / {}", state.ui.repo_selection.len(), total);
     let count_galley = painter.layout_no_wrap(
         count,
-        FontId::new(12.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
         Palette::INK,
     );
     painter.galley_with_override_text_color(
@@ -239,12 +239,7 @@ fn pull_selection(state: &mut AppState) {
 /// error red with diverged (the domain STATUS_* aliases); the row's badges
 /// and the rest of the shell disambiguate.
 pub fn dot_color(dot: DotState) -> Color32 {
-    match dot {
-        DotState::Clean => Palette::STATUS_CLEAN,
-        DotState::Dirty => Palette::STATUS_DIRTY,
-        DotState::Diverged => Palette::STATUS_DIVERGED,
-        DotState::Conflict => Palette::STATE_ERROR,
-    }
+    dot.color()
 }
 
 /// Render the workspace tree into `ui`, whose max rect is the shell's
@@ -291,7 +286,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     col.label(
         RichText::new("PROJECTS")
             .strong()
-            .font(FontId::new(11.0, FontFamily::Proportional))
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
             .color(Palette::INK_3),
     );
 
@@ -364,14 +359,14 @@ fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
         ui.label(
             RichText::new(&name)
                 .strong()
-                .font(FontId::new(13.0, FontFamily::Proportional))
+                .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
                 .color(Palette::INK),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.add_space(12.0);
             ui.label(
                 RichText::new(total)
-                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                     .color(Palette::INK_2),
             );
             icons::icon(ui, Icon::CHEVRON_DOWN, 12.0, Palette::INK_3);
@@ -392,7 +387,7 @@ fn render_smart_groups(ui: &mut Ui, state: &mut AppState, tree: &project_tree::P
         ui.label(
             RichText::new("SMART GROUPS")
                 .strong()
-                .font(FontId::new(11.0, FontFamily::Proportional))
+                .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                 .color(Palette::INK_3),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -458,7 +453,7 @@ fn render_smart_group_row(
     );
     let label_galley = ui.painter().layout_no_wrap(
         entry.group.label().to_string(),
-        FontId::new(12.5, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
         Palette::INK,
     );
     painter.galley_with_override_text_color(
@@ -468,7 +463,7 @@ fn render_smart_group_row(
     );
     let count_galley = painter.layout_no_wrap(
         entry.count.to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_2,
     );
     painter.galley_with_override_text_color(
@@ -488,7 +483,7 @@ fn smart_group_color(group: smart_groups::SmartGroup) -> Color32 {
     match group {
         smart_groups::SmartGroup::Diverged => Palette::STATUS_DIVERGED,
         smart_groups::SmartGroup::Conflicted => Palette::STATE_ERROR,
-        smart_groups::SmartGroup::Unpushed => Palette::STATE_SUCCESS,
+        smart_groups::SmartGroup::Unpushed => DotState::Unpushed.color(),
         smart_groups::SmartGroup::Unpulled => Palette::COUNTER,
         smart_groups::SmartGroup::Dirty => Palette::COUNTER,
     }
@@ -548,7 +543,7 @@ fn render_rule_group_row(
     painter.circle_filled(Pos2::new(row.left() + 24.0, cy), 3.5, Palette::STATE_INFO);
     let label_galley = ui.painter().layout_no_wrap(
         rule.label.clone(),
-        FontId::new(12.5, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
         Palette::INK,
     );
     painter.galley_with_override_text_color(
@@ -559,7 +554,7 @@ fn render_rule_group_row(
     let count = smart_groups::rule_count(tree, rule);
     let count_galley = painter.layout_no_wrap(
         count.to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_2,
     );
     painter.galley_with_override_text_color(
@@ -750,7 +745,7 @@ fn render_folder_row(
     );
     let name_galley = ui.painter().layout_no_wrap(
         folder.name.clone(),
-        FontId::new(12.5, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
         Palette::INK,
     );
     painter.galley_with_override_text_color(
@@ -766,7 +761,7 @@ fn render_folder_row(
     if folder.dirty > 0 {
         let galley = ui.painter().layout_no_wrap(
             folder.dirty.to_string(),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::STATE_WARNING,
         );
         right -= galley.size().x + 10.0;
@@ -778,7 +773,7 @@ fn render_folder_row(
     }
     let count_galley = ui.painter().layout_no_wrap(
         folder.total.to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     right -= count_galley.size().x;
@@ -878,7 +873,7 @@ fn render_repo_node(
         }
     }
 
-    let painter = ui.painter().clone();
+    let painter = ui.painter().with_clip_rect(row.intersect(ui.clip_rect()));
     if selected {
         painter.rect_filled(row, CornerRadius::same(0), Palette::selection_bg());
         painter.line_segment(
@@ -892,13 +887,8 @@ fn render_repo_node(
         painter.rect_filled(row, CornerRadius::same(0), Palette::SURFACE_2);
     }
 
-    // A row with an expander shifts the dot and label right of the chevron;
-    // a plain row keeps today's anatomy.
-    let (dot_x, name_x) = if has_children {
-        (44.0, 58.0)
-    } else {
-        (30.0, 44.0)
-    };
+    // Preserve label offsets for rows with and without an expander.
+    let name_x = if has_children { 58.0 } else { 44.0 };
     let cy = row.center().y;
     if has_children {
         icon_at(
@@ -913,69 +903,72 @@ fn render_repo_node(
             Palette::INK_3,
         );
     }
-    // Status dot (right of the selection checkbox).
-    painter.circle_filled(
-        Pos2::new(row.left() + dot_x + indent, cy),
-        3.5,
-        dot_color(repo.dot),
-    );
-    // Repo label: the path label when promoted, the bare name otherwise.
-    let name_galley = ui.painter().layout_no_wrap(
-        repo.label.clone(),
-        FontId::new(12.5, FontFamily::Proportional),
-        Palette::INK,
-    );
-    painter.galley_with_override_text_color(
-        Pos2::new(
-            row.left() + name_x + indent,
-            cy - name_galley.size().y / 2.0,
-        ),
-        name_galley,
-        Palette::INK,
-    );
-    // Right cluster: ahead/behind badges, then the branch label.
+    // Keep controls and a minimum name column even when counters are huge.
+    let left = (row.left() + name_x + indent).min(row.right());
     let mut right = row.right() - 12.0;
+    let badge_left = left + ((right - left).max(0.0) * 0.52).max(24.0);
     if repo.behind > 0 {
         let galley = painter.layout_no_wrap(
             format!("↓{}", repo.behind),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::STATE_WARNING,
         );
-        right -= galley.size().x + 6.0;
-        painter.galley_with_override_text_color(
-            Pos2::new(right, cy - galley.size().y / 2.0),
-            galley,
-            Palette::STATE_WARNING,
-        );
+        if right - galley.size().x - 6.0 >= badge_left {
+            right -= galley.size().x + 6.0;
+            painter.galley_with_override_text_color(
+                Pos2::new(right, cy - galley.size().y / 2.0),
+                galley,
+                DotState::Unpulled.color(),
+            );
+        }
     }
     if repo.ahead > 0 {
         let galley = painter.layout_no_wrap(
             format!("↑{}", repo.ahead),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::STATE_SUCCESS,
         );
-        right -= galley.size().x + 6.0;
-        painter.galley_with_override_text_color(
-            Pos2::new(right, cy - galley.size().y / 2.0),
-            galley,
-            Palette::STATE_SUCCESS,
-        );
+        if right - galley.size().x - 6.0 >= badge_left {
+            right -= galley.size().x + 6.0;
+            painter.galley_with_override_text_color(
+                Pos2::new(right, cy - galley.size().y / 2.0),
+                galley,
+                DotState::Unpushed.color(),
+            );
+        }
     }
     let branch = repo
         .branch
         .clone()
         .unwrap_or_else(|| "<detached>".to_owned());
-    let branch_galley = painter.layout_no_wrap(
-        branch,
-        FontId::new(11.0, FontFamily::Proportional),
+    let available = (right - left - 8.0).max(0.0);
+    // Reserve a stable name column before fitting the branch into the remainder.
+    let name_width = available * 0.52;
+    let branch_width = (available - name_width - 8.0).max(0.0);
+    paint_row_label(
+        ui,
+        row,
+        &repo.label,
+        left,
+        name_width,
+        crate::theme::TYPE_BODY,
+        Palette::INK,
+    );
+    paint_row_label(
+        ui,
+        row,
+        &branch,
+        left + name_width + 8.0,
+        branch_width,
+        crate::theme::TYPE_CONTROL,
         Palette::INK_3,
     );
-    right -= branch_galley.size().x + 8.0;
-    painter.galley_with_override_text_color(
-        Pos2::new(right, cy - branch_galley.size().y / 2.0),
-        branch_galley,
-        Palette::INK_3,
-    );
+    response.on_hover_text(format!(
+        "{}\n{branch}\n↑{} ↓{}",
+        repo.path.display(),
+        repo.ahead,
+        repo.behind
+    ));
 
     if has_children && expanded {
         for child in &repo.children {
@@ -986,6 +979,25 @@ fn render_repo_node(
             render_node(ui, state, child, depth + 1, &child_path, project_dir);
         }
     }
+}
+
+/// Paint a single-line label inside its reserved column and row clip.
+#[allow(clippy::too_many_arguments)]
+fn paint_row_label(ui: &Ui, row: Rect, text: &str, x: f32, width: f32, size: f32, ink: Color32) {
+    let font = crate::theme::chrome_font(size);
+    let label = super::components::middle_truncate_to_width(ui, text, &font, width);
+    let galley = ui.painter().layout_no_wrap(label, font, ink);
+    let column = Rect::from_min_size(
+        Pos2::new(x, row.top()),
+        Vec2::new(width.max(0.0), row.height()),
+    );
+    ui.painter()
+        .with_clip_rect(row.intersect(column).intersect(ui.clip_rect()))
+        .galley(
+            Pos2::new(x, row.center().y - galley.size().y / 2.0),
+            galley,
+            ink,
+        );
 }
 
 /// Reserve one full-width row inside the scroll area and return its rect.
@@ -1007,6 +1019,55 @@ fn relative_key(path: &std::path::Path, project_dir: &std::path::Path) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrow_unicode_repo_rows_keep_labels_and_badges_in_separate_columns() {
+        let project = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let state = AppState::launch_in(Some(project.path().into()), Some(config.path().into()));
+        let repo = project_tree::RepoNode {
+            id: turbogit_domain::model::RootId(project.path().join("repo").into()),
+            name: "服務端-very-long-repository-équipe".into(),
+            label: "服務端-very-long-repository-équipe".into(),
+            path: project.path().join("repo"),
+            branch: Some("feature/修復-équipe-very-long-branch-終点".into()),
+            dot: DotState::Diverged,
+            ahead: usize::MAX,
+            behind: usize::MAX,
+            conflicts: 0,
+            dirty_count: 0,
+            children: vec![],
+        };
+        let mut harness = egui_kittest::Harness::new_ui_state(
+            move |ui, state| {
+                crate::theme::configure_style(ui.ctx());
+                render_repo_node(ui, state, &repo, 0, &repo.path);
+            },
+            state,
+        );
+        crate::theme::install_fonts(&harness.ctx);
+        for width in [320.0, 208.0, 120.0, 80.0] {
+            harness.set_size(egui::vec2(width, 100.0));
+            harness.run();
+            let mut text_rects = Vec::new();
+            for shape in &harness.output().shapes {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    let rect = text.galley.rect.translate(text.pos.to_vec2());
+                    assert!(rect.left() >= 44.0, "label/badge crowds controls: {rect:?}");
+                    assert!(rect.right() <= width, "text escapes row: {rect:?}");
+                    assert!(shape.clip_rect.height() <= ROW_HEIGHT);
+                    for previous in &text_rects {
+                        assert!(
+                            !rect.intersects(*previous),
+                            "labels overlap: {rect:?} / {previous:?}"
+                        );
+                    }
+                    text_rects.push(rect);
+                }
+            }
+            assert!(!text_rects.is_empty(), "keep the repository identifiable");
+        }
+    }
 
     #[test]
     fn smart_group_color_reserves_orange_for_unpulled_and_dirty() {
@@ -1041,8 +1102,8 @@ mod tests {
         );
         assert_eq!(
             smart_group_color(smart_groups::SmartGroup::Unpushed),
-            Palette::STATE_SUCCESS,
-            "unpushed dot keeps the success green"
+            DotState::Unpushed.color(),
+            "unpushed dot shares the repo and badge green"
         );
         assert_eq!(
             smart_group_color(smart_groups::SmartGroup::Conflicted),

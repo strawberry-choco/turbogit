@@ -151,7 +151,7 @@ fn tab_opens_with_groups_counts_and_nothing_selected() {
     // Group headers carry live counts: 4 locals, the Remote area collapsed
     // into a per-repo rollup (remotes are hidden by default, issue 03), 1 tag.
     assert_painted(&harness, "LOCAL 4");
-    assert_painted(&harness, "1 remotes · 2 branches");
+    assert_painted(&harness, "1 remote · 2 branches");
     assert_painted(&harness, "TAGS 1");
 
     // Local members paint. Remote members stay hidden while remotes are off;
@@ -217,7 +217,7 @@ fn tags_group_starts_collapsed_and_headers_keep_counts() {
     // Local paints; the Remote area paints its collapsed rollup (remotes are
     // hidden by default), so the remote member does not.
     assert_painted(&harness, "zebra");
-    assert_painted(&harness, "1 remotes · 2 branches");
+    assert_painted(&harness, "1 remote · 2 branches");
     assert_not_painted(&harness, "remote-only");
     // Tags is collapsed: the header with its count paints, the member does not.
     assert_painted(&harness, "TAGS 1");
@@ -2069,7 +2069,7 @@ fn tree_remote_rollup_reveals_remote_groups_without_a_toolbar_toggle() {
     open_branches_tab(&mut harness);
 
     assert!(!harness.state().ui.branches_tree.show_remotes);
-    assert_painted(&harness, "1 remotes · 2 branches");
+    assert_painted(&harness, "1 remote · 2 branches");
     assert_not_painted(&harness, "Show remotes");
     assert_not_painted(&harness, "Hide remotes");
 
@@ -2240,7 +2240,7 @@ fn names_are_monospace_and_labels_and_counts_are_sans() {
     assert_eq!(family_of("LOCAL 4"), FontFamily::Proportional);
     assert_eq!(family_of("TAGS 1"), FontFamily::Proportional);
     assert_eq!(
-        family_of("1 remotes · 2 branches"),
+        family_of("1 remote · 2 branches"),
         FontFamily::Proportional,
         "the rollup is a label+count phrase, not a name"
     );
@@ -2416,12 +2416,12 @@ fn repo_status_dots_paint_their_status_color() {
         .collect();
     assert_eq!(dots.len(), 2, "one status dot per repo header: {dots:?}");
     assert!(
-        dots.iter().any(|(_, _, f)| *f == Palette::STATE_WARNING),
-        "the unpulled repo's dot is amber: {dots:?}"
+        dots.iter().any(|(_, _, f)| *f == Palette::COUNTER),
+        "the unpulled repo's dot is the counter orange: {dots:?}"
     );
     assert!(
-        dots.iter().any(|(_, _, f)| *f == Palette::STATE_SUCCESS),
-        "the clean repo's dot is green: {dots:?}"
+        dots.iter().any(|(_, _, f)| *f == Palette::AHEAD),
+        "the clean repo's dot is the ahead green: {dots:?}"
     );
 }
 

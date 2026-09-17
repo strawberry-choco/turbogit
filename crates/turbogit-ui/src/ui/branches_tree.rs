@@ -77,18 +77,8 @@ pub struct RemoteGroup {
     pub children: Vec<BranchNode>,
 }
 
-/// Per-repo status summarized for the section header's status dot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RepoStatus {
-    /// Working tree matches HEAD (no local edits).
-    Clean,
-    /// Working tree has uncommitted edits.
-    Dirty,
-    /// Current branch is ahead of its upstream (unpushed).
-    Unpushed,
-    /// Current branch is behind its upstream (unpulled).
-    Unpulled,
-}
+/// Branch headers and sidebar dots share one status vocabulary.
+pub use crate::theme::RepoState as RepoStatus;
 
 /// One repository's section in the grouped tree.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,14 +104,21 @@ pub struct RepoSection {
 
 impl RepoSection {
     /// The collapsed "N remotes · M branches" rollup text, or `None` when the
-    /// repo has no remotes at all.
+    /// repo has neither configured remotes nor remote-tracking branches.
     pub fn remote_rollup(&self) -> Option<String> {
-        if self.remote_count == 0 {
+        if self.remote_count == 0 && self.remote_branch_count == 0 {
             None
         } else {
             Some(format!(
-                "{} remotes · {} branches",
-                self.remote_count, self.remote_branch_count
+                "{} remote{} · {} {}",
+                self.remote_count,
+                if self.remote_count == 1 { "" } else { "s" },
+                self.remote_branch_count,
+                if self.remote_branch_count == 1 {
+                    "branch"
+                } else {
+                    "branches"
+                }
             ))
         }
     }
@@ -268,19 +265,13 @@ fn build_tree(
 
 /// Derive a repo's header status from its snapshot (issue 01 §6).
 fn repo_status(root: &Root) -> RepoStatus {
-    if root.status.modified() > 0 {
-        return RepoStatus::Dirty;
-    }
     let current = root.current_branch.as_ref().and_then(|name| {
         root.branches
             .iter()
             .find(|b| b.kind == BranchKind::Local && b.name == *name)
     });
-    match current {
-        Some(b) if b.behind > 0 => RepoStatus::Unpulled,
-        Some(b) if b.ahead > 0 => RepoStatus::Unpushed,
-        _ => RepoStatus::Clean,
-    }
+    let (ahead, behind) = current.map_or((0, 0), |b| (b.ahead, b.behind));
+    RepoStatus::from_root(root, ahead, behind)
 }
 
 /// Count the leaf branches beneath a node forest (the count invariant source).

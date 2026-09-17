@@ -34,9 +34,9 @@ impl Palette {
     /// Primary text (`--tg-ink`).
     pub const INK: Color32 = Color32::from_rgb(0xbc, 0xbe, 0xc4);
     /// Secondary text (`--tg-ink-2`).
-    pub const INK_2: Color32 = Color32::from_rgb(0xa0, 0xa3, 0xab);
+    pub const INK_2: Color32 = Self::T_SECONDARY;
     /// Muted/hint text (`--tg-ink-3`).
-    pub const INK_3: Color32 = Color32::from_rgb(0x80, 0x80, 0x80);
+    pub const INK_3: Color32 = Self::T_MUTED;
 
     // Brand.
     /// Primary actions, selection, links (`--tg-brand`).
@@ -107,10 +107,13 @@ impl Palette {
 
     /// Text ramp — primary (`#DFE1E5`): branch names, body text.
     pub const T_PRIMARY: Color32 = Color32::from_rgb(0xdf, 0xe1, 0xe5);
-    /// Text ramp — secondary (`#9DA0A8`): section labels, secondary actions.
-    pub const T_SECONDARY: Color32 = Color32::from_rgb(0x9d, 0xa0, 0xa8);
-    /// Text ramp — muted (`#6F737B`): counts, timestamps, placeholders.
-    pub const T_MUTED: Color32 = Color32::from_rgb(0x6f, 0x73, 0x7b);
+    /// Secondary text, including on selected rows and raised controls.
+    pub const T_SECONDARY: Color32 = Color32::from_rgb(0xb0, 0xb3, 0xbb);
+    /// Muted text: AA contrast (≥4.5:1) on every surface muted ink paints on,
+    /// including the SELECTION fill.
+    pub const T_MUTED: Color32 = Color32::from_rgb(0xae, 0xb2, 0xba);
+    /// Readable accent ink. Action fills continue to use ACCENT/BRAND.
+    pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0x8b, 0xb5, 0xf5);
 
     /// Corner radius for chips and badges (design doc §13: 3).
     pub const RADIUS_CHIP: u8 = 3;
@@ -163,6 +166,44 @@ impl Palette {
     /// redesign. Distinct from the translucent [`Self::selection_bg`] the
     /// shell rows paint today; later tickets opt in by switching call sites.
     pub const SELECTION_BG: Color32 = Color32::from_rgb(0x2e, 0x43, 0x6e);
+}
+
+/// Shared repository-state vocabulary for dots, badges and summaries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RepoState {
+    Clean,
+    Dirty,
+    Conflict,
+    Diverged,
+    Unpushed,
+    Unpulled,
+}
+
+impl RepoState {
+    pub fn color(self) -> Color32 {
+        match self {
+            Self::Clean | Self::Unpushed => Palette::AHEAD,
+            Self::Dirty | Self::Unpulled => Palette::COUNTER,
+            Self::Conflict | Self::Diverged => Palette::STATUS_DIVERGED,
+        }
+    }
+
+    /// Conflicts and local edits take precedence over upstream drift.
+    pub fn from_root(root: &turbogit_domain::model::Root, ahead: usize, behind: usize) -> Self {
+        if !root.status.conflicted.is_empty() {
+            Self::Conflict
+        } else if root.status.modified() + root.status.unversioned() > 0 {
+            Self::Dirty
+        } else if ahead > 0 && behind > 0 {
+            Self::Diverged
+        } else if behind > 0 {
+            Self::Unpulled
+        } else if ahead > 0 {
+            Self::Unpushed
+        } else {
+            Self::Clean
+        }
+    }
 }
 
 // --- Spacing scale (Local Changes redesign, design doc §8) ---
@@ -227,7 +268,7 @@ fn dark_visuals() -> Visuals {
     v.override_text_color = Some(Palette::INK);
     v.faint_bg_color = Palette::SURFACE_2;
     v.code_bg_color = Palette::SURFACE_3;
-    v.hyperlink_color = Palette::BRAND;
+    v.hyperlink_color = Palette::ACCENT_TEXT;
     v.warn_fg_color = Palette::STATE_WARNING;
     v.error_fg_color = Palette::STATE_ERROR;
     v.selection.bg_fill = Palette::selection_bg();
@@ -265,26 +306,22 @@ pub fn configure_style(ctx: &Context) {
         style.spacing.button_padding = Vec2::new(10.0, 5.0);
         style.spacing.indent = 14.0;
 
-        // Typography scale (Epic A4): slightly larger body, mono for code.
+        // Shell defaults consume the same §13 ramp as the Branches view.
         style
             .text_styles
-            .insert(TextStyle::Body, FontId::new(14.0, FontFamily::Proportional));
-        style.text_styles.insert(
-            TextStyle::Button,
-            FontId::new(14.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            TextStyle::Heading,
-            FontId::new(18.0, FontFamily::Proportional),
-        );
-        style.text_styles.insert(
-            TextStyle::Monospace,
-            FontId::new(13.0, FontFamily::Monospace),
-        );
-        style.text_styles.insert(
-            TextStyle::Small,
-            FontId::new(12.0, FontFamily::Proportional),
-        );
+            .insert(TextStyle::Body, chrome_font(TYPE_BODY));
+        style
+            .text_styles
+            .insert(TextStyle::Button, chrome_font(TYPE_CONTROL));
+        style
+            .text_styles
+            .insert(TextStyle::Heading, chrome_font(TYPE_DETAIL_TITLE));
+        style
+            .text_styles
+            .insert(TextStyle::Monospace, data_font(TYPE_BODY));
+        style
+            .text_styles
+            .insert(TextStyle::Small, chrome_font(TYPE_CONTROL));
 
         style.animation_time = 0.12;
     });

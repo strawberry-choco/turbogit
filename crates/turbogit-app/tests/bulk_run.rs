@@ -78,7 +78,8 @@ fn rid(path: &Path) -> turbogit_domain::model::RootId {
 }
 
 /// Step the event pump until every monitor row is in a terminal state
-/// (Done / Failed / Skipped) or the deadline passes.
+/// (Done / Failed / Skipped) and BulkCompleted has cleared the busy flag,
+/// publishing the aggregate toast and history, or the deadline passes.
 fn wait_for_run_end(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -90,7 +91,9 @@ fn wait_for_run_end(state: &mut AppState) {
             .rows
             .iter()
             .any(|r| matches!(r.state, RowState::Queued { .. } | RowState::Running));
-        if !busy_row {
+        // Terminal row progress can arrive before the separate BulkCompleted
+        // event. Wait for that event too, including on retries with an old toast.
+        if !busy_row && !state.ui.busy {
             return;
         }
         assert!(Instant::now() < deadline, "run did not end within 10s");

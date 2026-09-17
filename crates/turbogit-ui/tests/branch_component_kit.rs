@@ -57,16 +57,16 @@ fn meaning_colors_match_design_doc() {
 // --- §13 text ramp ------------------------------------------------------------
 
 #[test]
-fn text_ramp_tokens_match_design_doc() {
+fn text_ramp_tokens_include_p0_accessibility_corrections() {
     assert_eq!(
         Palette::T_PRIMARY,
         egui::Color32::from_rgb(0xdf, 0xe1, 0xe5)
     ); // branch names, body
     assert_eq!(
         Palette::T_SECONDARY,
-        egui::Color32::from_rgb(0x9d, 0xa0, 0xa8)
+        egui::Color32::from_rgb(0xb0, 0xb3, 0xbb)
     ); // section labels, secondary actions
-    assert_eq!(Palette::T_MUTED, egui::Color32::from_rgb(0x6f, 0x73, 0x7b)); // counts, timestamps, placeholders
+    assert_eq!(Palette::T_MUTED, egui::Color32::from_rgb(0xae, 0xb2, 0xba)); // counts, timestamps, placeholders
 }
 
 // --- §13 shape + type sizes ---------------------------------------------------

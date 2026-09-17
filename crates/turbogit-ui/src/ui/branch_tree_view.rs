@@ -533,14 +533,9 @@ fn repo_header(
     });
 }
 
-/// Map a repo's derived status to its dot color (dark-only palette): clean =
-/// success green, unpushed = soft blue, unpulled/dirty = amber.
+/// Shared semantic colors, identical to the sidebar and sync badges.
 fn repo_status_color(status: RepoStatus) -> Color32 {
-    match status {
-        RepoStatus::Clean => Palette::STATE_SUCCESS,
-        RepoStatus::Unpushed => Palette::STATE_INFO,
-        RepoStatus::Unpulled | RepoStatus::Dirty => Palette::STATE_WARNING,
-    }
+    status.color()
 }
 
 /// One directory group header inside a repo section: the directory segment
