@@ -114,10 +114,9 @@ fn open_branches_tab(harness: &mut Harness<'_, AppState>) {
     settle_quiet(harness);
 }
 
-/// Turn the view-wide remotes on (issue 03): the toggle ships labelled
-/// "Show remotes", with the hidden remote-branch count beside it while off.
+/// Reveal remotes through the tree's collapsed Remote rollup.
 fn show_remotes(harness: &mut Harness<'_, AppState>) {
-    harness.get_by_label("Show remotes").click();
+    row_node(harness, "Remote").click();
     settle_quiet(harness);
 }
 
@@ -155,17 +154,17 @@ fn tab_opens_with_groups_counts_and_nothing_selected() {
     assert_painted(&harness, "1 remotes · 2 branches");
     assert_painted(&harness, "TAGS 1");
 
-    // Local members paint. Remote members stay hidden while remotes are off,
-    // and the toggle advertises the concealed remote-branch count ("2") so
-    // nobody acts on a partial list guessing what is missing.
+    // Local members paint. Remote members stay hidden while remotes are off;
+    // their counts remain in the tree rollup, not in the toolbar.
     for member in ["feature-a", "feature-b", "zebra"] {
         assert_painted(&harness, member);
     }
     assert_not_painted(&harness, "remote-only");
-    assert_painted(&harness, "Show remotes");
+    assert_not_painted(&harness, "Show remotes");
+    assert_not_painted(&harness, "Hide remotes");
     assert!(
-        galley_origin(&harness, "2").is_some(),
-        "the hidden remote-branch count paints as its own label"
+        galley_origin(&harness, "2").is_none(),
+        "the hidden remote-branch count no longer paints as its own label"
     );
 
     // Tags are collapsed by default, so v1.0 stays hidden (covered by the
@@ -1420,8 +1419,8 @@ fn remote_rows_group_under_their_remote_and_are_quiet() {
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    // Remotes are hidden by default; one toolbar toggle reveals them for the
-    // whole view (issue 03). Before the toggle nothing remote paints.
+    // Remotes are hidden by default; the tree rollup reveals them for the
+    // whole view (issue 03). Before expanding it no remote branches paint.
     assert_not_painted(&harness, "remote-only");
     show_remotes(&mut harness);
 
@@ -2064,20 +2063,15 @@ fn row_name_color(harness: &Harness<'_, AppState>, name: &str) -> Option<egui::C
 }
 
 #[test]
-fn remotes_toggle_advertises_the_hidden_count_and_reveals_remote_groups() {
+fn tree_remote_rollup_reveals_remote_groups_without_a_toolbar_toggle() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    // Off: the settled label reads "Show remotes" and the concealed
-    // remote-branch count (origin carries main + remote-only) rides beside it,
-    // so nobody acts on a partial list guessing what is missing.
-    let toggle = harness.get_by_label("Show remotes").rect();
-    let count = galley_origin(&harness, "2").expect("the hidden-count chip paints");
-    assert!(
-        count.x > toggle.max.x,
-        "the hidden count follows the toggle it belongs to: count {count:?} vs toggle {toggle:?}"
-    );
+    assert!(!harness.state().ui.branches_tree.show_remotes);
+    assert_painted(&harness, "1 remotes · 2 branches");
+    assert_not_painted(&harness, "Show remotes");
+    assert_not_painted(&harness, "Hide remotes");
 
     // On: each repo expands to per-remote groups. The remote name becomes the
     // group header, and the leaf never re-prints the "origin/" the header
@@ -2093,10 +2087,10 @@ fn remotes_toggle_advertises_the_hidden_count_and_reveals_remote_groups() {
         "the remote leaf paints under its group: {texts:?}"
     );
     assert_not_painted(&harness, "origin/remote-only");
-    // The control is settled: it now offers the reverse action, and the count
-    // it was advertising is gone with the state it described.
+    // Revealing remotes still updates the shared state without a toolbar toggle.
+    assert!(harness.state().ui.branches_tree.show_remotes);
     assert_not_painted(&harness, "Show remotes");
-    assert_painted(&harness, "Hide remotes");
+    assert_not_painted(&harness, "Hide remotes");
 }
 
 #[test]
@@ -2276,23 +2270,20 @@ fn names_are_monospace_and_labels_and_counts_are_sans() {
 }
 
 #[test]
-fn toolbar_composes_scope_remotes_and_new_branch_left_to_right() {
+fn toolbar_composes_scope_and_new_branch_without_remotes_toggle() {
     let (_project, dir) = two_repo_project();
     let mut harness = two_repo_harness(dir);
     open_branches_tab(&mut harness);
 
-    // The spec's toolbar order: scope chip, remotes toggle, New Branch.
+    // The toolbar keeps the scope chip before New Branch, with no remotes toggle.
     let scope = harness.get_by_label("Scope…").rect();
-    let toggle = harness.get_by_label("Show remotes").rect();
     let new_branch = harness.get_by_label("New Branch").rect();
     assert!(
-        scope.max.x <= toggle.min.x,
-        "the scope chip precedes the remotes toggle: {scope:?} vs {toggle:?}"
+        scope.max.x <= new_branch.min.x,
+        "the scope chip precedes New Branch: {scope:?} vs {new_branch:?}"
     );
-    assert!(
-        toggle.max.x <= new_branch.min.x,
-        "the remotes toggle precedes New Branch: {toggle:?} vs {new_branch:?}"
-    );
+    assert_not_painted(&harness, "Show remotes");
+    assert_not_painted(&harness, "Hide remotes");
 
     // Before any narrowing the chip names the whole scope.
     assert_painted(&harness, "all 2 repos");
