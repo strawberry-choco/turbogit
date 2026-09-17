@@ -232,7 +232,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             .max_rect(toolbar_rect)
             .layout(Layout::left_to_right(Align::Center)),
     );
-    toolbar(&mut toolbar_ui, state, &view);
+    toolbar(&mut toolbar_ui, state);
     ui.advance_cursor_after_rect(toolbar_rect);
 
     let content_rect = Rect::from_min_max(Pos2::new(body.min.x, toolbar_rect.max.y), body.max);
@@ -377,16 +377,13 @@ fn handle_keys(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     }
 }
 
-/// Toolbar (44px, §12): composes left → right as scope chip, remotes toggle,
-/// New Branch (issue 04). The search input takes the remaining left space; the
-/// three controls sit right-aligned so the layout never starves the search box.
-/// The remotes toggle is one view-wide switch (issue 03) that also shows the
-/// hidden remote-branch count while off.
-fn toolbar(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
+/// Toolbar (44px, §12): scope chip and New Branch sit right-aligned.
+/// The search input takes the remaining left space; remote visibility is
+/// controlled by the tree rollups.
+fn toolbar(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(PAD_STRIP);
-    // Right-aligned cluster, painted right→left so the first child is the
-    // rightmost: New Branch (rightmost), then the remotes toggle, then the
-    // scope chip (multi-repo only).
+    // Right-aligned cluster, painted right→left: New Branch (rightmost), then
+    // the scope chip (multi-repo only).
     let _ = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.add_space(PAD_STRIP);
         // Primary action: New Branch (issue 04 — blue).
@@ -398,10 +395,6 @@ fn toolbar(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
             state.ui.dlg.new_branch_checkout = true;
             state.ui.dialog = Some(Dialog::NewBranch);
         }
-        // Remotes toggle (issue 03/04): one view-wide switch; shows the hidden
-        // remote-branch count while off.
-        ui.add_space(PAD_STRIP);
-        remotes_toggle(ui, state, view);
         // Scope chip (issue 04): only when several repos are in scope.
         if state.multi.roots.len() > 1 {
             ui.add_space(PAD_STRIP);
@@ -414,32 +407,6 @@ fn toolbar(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         state.ui.branches_focus_search = false;
     }
     ui.add_space(PAD_STRIP);
-}
-
-/// The remotes toggle (issue 03/04): a single view-wide switch. While remotes
-/// are hidden it also prints the concealed remote-branch count (e.g. "41") so
-/// nobody acts on a partial list guessing what is missing. The settled label is
-/// "Show remotes" (action-oriented; the count is the hidden total) / "Hide
-/// remotes" when on — consistent with the hidden-count display, which follows
-/// the label the way every other count in the view does ("LOCAL 4",
-/// "feature/ 3", "origin 2").
-fn remotes_toggle(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
-    let hidden: usize = view.repos.iter().map(|s| s.remote_branch_count).sum();
-    let show = state.ui.branches_tree.show_remotes;
-    // Allocated before the control so the right-to-left toolbar paints it to
-    // the toggle's right: "Show remotes  2".
-    if !show && hidden > 0 {
-        ui.label(
-            RichText::new(hidden.to_string())
-                .font(chrome_font(TYPE_CONTROL))
-                .color(Palette::T_MUTED),
-        );
-        ui.add_space(4.0);
-    }
-    let label = if show { "Hide remotes" } else { "Show remotes" };
-    if kit_button(ui, KitButton::Quiet, label).clicked() {
-        state.ui.branches_tree.show_remotes = !show;
-    }
 }
 
 /// The scope chip (issue 04): "all N repos" when nothing is narrowed, or
