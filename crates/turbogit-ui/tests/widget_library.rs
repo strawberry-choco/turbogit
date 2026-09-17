@@ -36,8 +36,9 @@ fn palette_tokens_required_by_widgets_match_the_spec_hexes() {
     assert_eq!(Palette::LINE, Color32::from_rgb(0x4e, 0x51, 0x57));
     assert_eq!(Palette::LINE_SUBTLE, Color32::from_rgb(0x36, 0x38, 0x3c));
 
-    // Ink (B2: INK_2/INK_3 alias the lifted T_SECONDARY/T_MUTED ramp).
-    assert_eq!(Palette::INK, Color32::from_rgb(0xbc, 0xbe, 0xc4));
+    // Ink (C3: INK aliases the authoritative T_PRIMARY ramp; INK_2/INK_3
+    // alias the lifted T_SECONDARY/T_MUTED levels).
+    assert_eq!(Palette::INK, Palette::T_PRIMARY);
     assert_eq!(Palette::INK_2, Palette::T_SECONDARY);
     assert_eq!(Palette::INK_3, Palette::T_MUTED);
 

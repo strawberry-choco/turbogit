@@ -20,7 +20,7 @@ use egui_kittest::{
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::harness::{
-    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text,
+    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_text,
 };
 use turbogit_app::state::{AppState, CommitSubTab, Dialog};
 use turbogit_ui::theme::Palette;
@@ -1342,5 +1342,92 @@ fn short_file_names_keep_the_single_line_row_height() {
         selected_row_height(&h, origin),
         turbogit_ui::theme::FILE_ROW_HEIGHT,
         "a single-line row keeps the 24 px file-row height"
+    );
+}
+
+// ------------------------------ issue: severity vocabulary (C2) -------------
+
+/// C2: commit-window messages use the shared semantic severity inks too —
+/// the surfaced error in STATE_ERROR, the subject-length guidance in
+/// STATE_WARNING — via the actual commit consumers, not raw severity colors.
+#[test]
+fn commit_severity_messages_use_the_shared_semantic_inks() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "sev");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // The last_error banner is a blocking error.
+    h.state_mut().last_error = Some("push failed".into());
+    h.run();
+    assert_eq!(
+        painted_ink_of(&h, "push failed"),
+        Some(Palette::STATE_ERROR),
+        "the commit error banner must render in the shared error ink"
+    );
+
+    // The subject-length guidance is a warning with its message preserved.
+    h.state_mut().ui.commit_message = "a".repeat(51);
+    h.run();
+    assert_eq!(
+        painted_ink_of(&h, "keep \u{2264} 50"),
+        Some(Palette::STATE_WARNING),
+        "subject-length guidance must render in the shared warning ink"
+    );
+}
+
+/// The ink of the painted galley whose text contains `needle`.
+fn painted_ink_of(h: &Harness<'_, AppState>, needle: &str) -> Option<egui::Color32> {
+    painted_galleys(h)
+        .into_iter()
+        .find(|g| g.text.contains(needle))
+        .map(|g| g.color)
+}
+
+// ------------------------------ issue: shared typography roles (T2) ---------
+
+/// T2: the commit file row's name (and badge letter) render at the shared
+/// body size — the local 12.5px copy is superseded by the shared TYPE_BODY
+/// role so a central type-scale change reaches every filename consumer.
+#[test]
+fn file_row_name_renders_at_the_shared_body_size() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "type-role");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.run();
+
+    // The file row is painted; its name galley carries the shared body size.
+    let name_size = {
+        let mut sizes = Vec::new();
+        for clipped in &h.output().shapes {
+            if let egui::Shape::Text(shape) = &clipped.shape {
+                let text = shape.galley.text();
+                if text.contains("base.txt") {
+                    sizes.push(
+                        shape
+                            .galley
+                            .job
+                            .sections
+                            .first()
+                            .map_or(0.0, |s| s.format.font_id.size),
+                    );
+                }
+            }
+        }
+        sizes
+    };
+    assert!(
+        !name_size.is_empty(),
+        "the commit file row must paint its name"
+    );
+    assert!(
+        name_size
+            .iter()
+            .any(|s| (*s - turbogit_ui::theme::TYPE_BODY).abs() < 0.01),
+        "the file-row name must render at the shared body size (TYPE_BODY={}); got {name_size:?}",
+        turbogit_ui::theme::TYPE_BODY
     );
 }

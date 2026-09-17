@@ -42,7 +42,7 @@ const TOOLBAR_ICON_SIZE: f32 = 14.0; // §5.3/§6.2: 14×14 in the toolbar
 const CHIP_PAD_X: f32 = 6.0;
 const DIALOG_HEADER_HEIGHT: f32 = 40.0;
 const TOOLWINDOW_HEADER_HEIGHT: f32 = 28.0;
-const MICRO_TEXT: f32 = 11.0; // uppercase micro-headers (§3.3)
+const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL; // uppercase micro-headers (§3.3)
 const INPUT_ICON_SIZE: f32 = 14.0; // §5.3: 14×14 in inputs/badges
 
 /// Named bold family registered by `theme::install_fonts` (ADR-0002).

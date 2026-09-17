@@ -160,7 +160,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     );
     let crumb = hp.layout_no_wrap(
         project,
-        FontId::new(12.5, FontFamily::Proportional),
+        FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional),
         Palette::INK_3,
     );
     hp.galley_with_override_text_color(
@@ -237,7 +237,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         let x = stats_rect.left() + i as f32 * 150.0;
         let label_galley = sp.layout_no_wrap(
             label.to_string(),
-            FontId::new(11.0, FontFamily::Proportional),
+            FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional),
             Palette::INK_3,
         );
         sp.galley_with_override_text_color(
@@ -247,7 +247,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         );
         let value_galley = sp.layout_no_wrap(
             value.clone(),
-            FontId::new(22.0, FontFamily::Proportional),
+            FontId::new(crate::theme::TYPE_STATISTIC, FontFamily::Proportional),
             *color,
         );
         sp.galley_with_override_text_color(
@@ -316,7 +316,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         let cell = |x: f32, text: String, color: Color32| {
             let galley = body.painter().layout_no_wrap(
                 text,
-                FontId::new(12.5, FontFamily::Proportional),
+                FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional),
                 color,
             );
             body.painter().galley_with_override_text_color(
@@ -505,8 +505,11 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         let rp = body.painter().clone();
         let cy = row_rect.center().y;
         let cell = |x: f32, text: String, color: Color32, right: bool| {
-            let galley =
-                rp.layout_no_wrap(text, FontId::new(12.5, FontFamily::Proportional), color);
+            let galley = rp.layout_no_wrap(
+                text,
+                FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional),
+                color,
+            );
             let x = if right {
                 row_rect.right() - galley.size().x
             } else {
@@ -578,7 +581,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
                 };
                 let galley = dp.layout_no_wrap(
                     format!("{} · {}", repo.name, outcome),
-                    FontId::new(12.0, FontFamily::Proportional),
+                    FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional),
                     Palette::INK_2,
                 );
                 dp.galley_with_override_text_color(

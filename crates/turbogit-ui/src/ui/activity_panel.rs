@@ -24,8 +24,11 @@ pub const ACTIVITY_HEIGHT: f32 = 200.0;
 /// Collapsed height: the header strip only.
 pub const ACTIVITY_COLLAPSED_HEIGHT: f32 = 26.0;
 
-const HEADER_TEXT: f32 = 11.0;
-const ROW_TEXT: f32 = 12.0;
+// Shared type roles (T2): headers/metadata render at TYPE_CONTROL, rows/body
+// at TYPE_BODY — the activity panel consumes the global ramp instead of local
+// size copies.
+const HEADER_TEXT: f32 = crate::theme::TYPE_CONTROL;
+const ROW_TEXT: f32 = crate::theme::TYPE_BODY;
 
 /// The STATE_* token an entry's severity paints with (issue #04).
 pub fn kind_color(kind: ActivityKind) -> Color32 {

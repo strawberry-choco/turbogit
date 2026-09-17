@@ -142,6 +142,79 @@ fn p0_repo_state_shared_mapping_is_app_wide() {
     assert_eq!(RepoState::Unpulled.color(), Palette::COUNTER);
 }
 
+// --- C3/C4: one authoritative text hierarchy and selection model (ticket 04) ---
+
+#[test]
+fn one_authoritative_primary_ink_across_shell_and_tool_windows() {
+    // C3: the shell default text and the §13 body text are ONE primary role —
+    // no competing INK-vs-T_PRIMARY definitions for the same role.
+    assert_eq!(
+        Palette::INK,
+        Palette::T_PRIMARY,
+        "IK must be an alias of the authoritative primary"
+    );
+    // The secondary/muted levels also keep their single-role aliases.
+    assert_eq!(Palette::INK_2, Palette::T_SECONDARY);
+    assert_eq!(Palette::INK_3, Palette::T_MUTED);
+
+    // The three levels are distinct tokens so hierarchy is never accidental.
+    assert_ne!(Palette::INK, Palette::T_SECONDARY);
+    assert_ne!(Palette::T_SECONDARY, Palette::T_MUTED);
+}
+
+#[test]
+fn secondary_and_muted_keep_readable_distinct_roles() {
+    // The hierarchy is explicit while preserving the audited 4.5:1 pairings:
+    // the muted level stays usable on every audited surface (never dimmed to
+    // manufacture a hierarchy step).
+    let ctx = egui::Context::default();
+    configure_style(&ctx);
+
+    // Both levels still clear 4.5:1 on the darkest audited surface
+    // (SELECTION, whose commit-inclusion alias shares this value).
+    let luminance = |c: Color32| {
+        let lin = |v: u8| {
+            let s = f64::from(v) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    };
+    for (ink_name, ink) in [
+        ("secondary", Palette::T_SECONDARY),
+        ("muted", Palette::T_MUTED),
+    ] {
+        let ratio = (luminance(ink) + 0.05) / (luminance(Palette::SELECTION) + 0.05);
+        assert!(
+            ratio >= 4.5,
+            "{ink_name} on selection must stay ≥4.5:1, got {ratio:.3}:1"
+        );
+    }
+}
+
+#[test]
+fn selection_uses_one_canonical_opaque_fill() {
+    // C4: commit inclusion and navigation selection share ONE opaque fill —
+    // the two near-duplicate literals (#2E4369 / #2E436E) collapse into the
+    // canonical SELECTION token. The translucent focus fill stays separate
+    // and is documented against its compositing background (ticket 03).
+    assert_eq!(
+        Palette::SELECTION_BG,
+        Palette::SELECTION,
+        "inclusion reuses the canonical opaque selection fill"
+    );
+    assert!(Palette::SELECTION_BG.is_opaque());
+    // The translucent focus treatment is a distinct, documented variant.
+    assert_ne!(
+        Palette::SELECTION_BG,
+        Palette::selection_bg(),
+        "opaque selection must stay distinct from the translucent focus fill"
+    );
+}
+
 // --- Cycle 2: dark-only Visuals derive from the central token set (spec §2.5) ---
 use egui::Color32;
 use turbogit_ui::theme::{self, Palette, configure_style};
@@ -150,7 +223,7 @@ const BG: Color32 = Color32::from_rgb(0x1e, 0x1f, 0x22);
 const SURFACE: Color32 = Color32::from_rgb(0x2b, 0x2d, 0x30);
 const SURFACE_2: Color32 = Color32::from_rgb(0x31, 0x34, 0x38);
 const SURFACE_3: Color32 = Color32::from_rgb(0x3c, 0x3f, 0x41);
-const INK: Color32 = Color32::from_rgb(0xbc, 0xbe, 0xc4);
+const INK: Color32 = Color32::from_rgb(0xdf, 0xe1, 0xe5); // unified primary (C3)
 const BRAND: Color32 = Color32::from_rgb(0x35, 0x74, 0xf0);
 const STATE_WARNING: Color32 = Color32::from_rgb(0xf9, 0xa8, 0x25);
 const STATE_ERROR: Color32 = Color32::from_rgb(0xef, 0x53, 0x50);
@@ -401,40 +474,29 @@ fn sidebar_token_is_dedicated_and_distinct_from_shell_surfaces() {
     assert_eq!(Palette::SURFACE, Color32::from_rgb(0x2b, 0x2d, 0x30));
 }
 
-const SELECTION_BG: Color32 = Color32::from_rgb(0x2e, 0x43, 0x6e);
-
 #[test]
-fn selection_background_token_is_solid_design_blue_and_add_only() {
-    // The redesign's row-selection background is the solid #2E436E the Local
-    // Changes file rows (ticket 05) opt into — a new token, not a mutation of
-    // the translucent selection_bg() the shell rows paint today.
+fn selection_background_token_is_solid_and_aliases_canonical_selection() {
+    // C4: the commit-inclusion fill is the canonical opaque SELECTION token
+    // (their previously near-duplicate #2E4369/#2E436E values are unified),
+    // and it never aliases the translucent shell focus fill.
     assert_eq!(
         Palette::SELECTION_BG,
-        SELECTION_BG,
-        "selection bg must match the design"
+        Palette::SELECTION,
+        "inclusion reuses the canonical opaque selection fill"
     );
-    assert_eq!(
-        Palette::SELECTION_BG,
-        Color32::from_rgb(0x2e, 0x43, 0x6e),
-        "selection bg is fully opaque"
-    );
+    assert!(Palette::SELECTION_BG.is_opaque(), "selection fill is solid");
 
-    // Purely additive: the existing translucent selection fill is untouched,
-    // so no widget that renders selection today changes color.
-    let opaque = Palette::SELECTION_BG.is_opaque();
-    assert!(
-        opaque,
-        "redesign selection bg must be solid, not alpha-blended"
-    );
+    // The translucent focus treatment stays a distinct, documented variant
+    // composited over the surface it sits on (ticket 03).
     assert_ne!(
         Palette::SELECTION_BG,
         Palette::selection_bg(),
-        "new solid token must not alias the legacy translucent fill"
+        "solid selection must not alias the translucent focus fill"
     );
     assert_eq!(
         Palette::selection_bg(),
         Color32::from_rgba_premultiplied(0x0d, 0x1d, 0x3c, 0x40),
-        "legacy selection_bg() must remain the translucent brand blend"
+        "selection_bg() must remain the translucent brand blend"
     );
 }
 
@@ -558,4 +620,83 @@ fn spacing_scale_tokens_match_the_redesign_spec() {
         0,
         "panel padding sits on the 4 px grid"
     );
+}
+
+// --- S1/S2: named density and spacing roles (ticket 06) ---------------------
+
+#[test]
+fn shared_spacing_roles_match_the_configured_defaults() {
+    // S1: the shell's configured defaults are the shared roles — one source
+    // for item gaps, window margins, control padding and indentation; the
+    // false "every gap is a multiple of 4" claim is superseded here.
+    assert_eq!(theme::ITEM_SPACING, egui::vec2(8.0, 6.0));
+    assert_eq!(theme::WINDOW_MARGIN, 10);
+    assert_eq!(theme::BUTTON_PADDING, egui::vec2(10.0, 5.0));
+    assert_eq!(theme::INDENT, 14.0);
+
+    let ctx = egui::Context::default();
+    configure_style(&ctx);
+    let spacing = &ctx.style_of(egui::Theme::Dark).spacing;
+    assert_eq!(spacing.item_spacing, theme::ITEM_SPACING);
+    assert_eq!(
+        spacing.window_margin,
+        egui::Margin::same(theme::WINDOW_MARGIN)
+    );
+    assert_eq!(spacing.button_padding, theme::BUTTON_PADDING);
+    assert_eq!(spacing.indent, theme::INDENT);
+}
+
+#[test]
+fn named_density_variants_cover_shell_and_status_bar() {
+    // S2: compact shell controls and the dense status bar are named roles,
+    // not regional literals — central defaults plus explicit exceptions.
+    assert_eq!(theme::DENSITY_COMPACT_BUTTON, egui::vec2(8.0, 4.0));
+    assert_eq!(theme::DENSITY_DENSE_BUTTON, egui::vec2(6.0, 2.0));
+    // Compact/dense are genuinely tighter than the default control padding
+    // (static property — the values are compile-time constants).
+    const { assert!(theme::DENSITY_COMPACT_BUTTON.y < theme::BUTTON_PADDING.y) };
+    const { assert!(theme::DENSITY_DENSE_BUTTON.y < theme::DENSITY_COMPACT_BUTTON.y) };
+    // The default window radius stays distinct from chip/control radii
+    // (S3 guards chip shapes, not window chrome).
+    assert_ne!(theme::WINDOW_RADIUS, theme::CHIP_RADIUS);
+}
+
+#[test]
+fn chip_radii_are_shared_variants_not_local_contracts() {
+    // S3: compact chips and the welcome pill are explicit shared shape
+    // variants — the pill radius equals the welcome chip's half-height, and
+    // chip/control radii stay distinct from window/menu surface roles.
+    assert_eq!(theme::CHIP_RADIUS, 3);
+    assert_eq!(theme::CONTROL_RADIUS, 4);
+    assert_eq!(theme::PILL_RADIUS, 9);
+    assert_ne!(theme::CHIP_RADIUS, theme::PILL_RADIUS);
+    assert_ne!(theme::CONTROL_RADIUS, theme::PILL_RADIUS);
+}
+
+// --- G1: the consolidated role contract agrees with its consumers (ticket 07) --
+
+#[test]
+fn governance_consolidated_role_contract_is_internally_consistent() {
+    // One pass over the whole reconciled contract (docs/design-system-roles.md):
+    // each shared role resolves through exactly one authoritative source and
+    // stays distinct where semantics differ.
+    // C3 — one primary ink, two distinct lower levels.
+    assert_eq!(Palette::INK, Palette::T_PRIMARY);
+    assert_ne!(Palette::T_SECONDARY, Palette::T_MUTED);
+    // C4 — one opaque selection fill; translucent focus is a separate variant.
+    assert_eq!(Palette::SELECTION_BG, Palette::SELECTION);
+    assert_ne!(Palette::SELECTION_BG, Palette::selection_bg());
+    // C5 — the 1px separator reuses the raised surface, not the LINE border.
+    assert_eq!(Palette::DIVIDER, Palette::RAISED);
+    assert_ne!(Palette::DIVIDER, Palette::LINE);
+    // S3 — chip/control radii are shared variants, distinct from window/menu.
+    assert_eq!(Palette::RADIUS_CHIP, theme::CHIP_RADIUS);
+    assert_eq!(Palette::RADIUS_CONTROL, theme::CONTROL_RADIUS);
+    assert_ne!(theme::WINDOW_RADIUS, theme::CHIP_RADIUS);
+    // S2 — density roles are genuinely tighter than the default control
+    // (static property: the values are compile-time constants).
+    const { assert!(theme::DENSITY_DENSE_BUTTON.y < theme::DENSITY_COMPACT_BUTTON.y) };
+    // Severity family keeps its three meanings distinct (C2 semantics).
+    assert_ne!(Palette::STATE_INFO, Palette::STATE_WARNING);
+    assert_ne!(Palette::STATE_WARNING, Palette::STATE_ERROR);
 }

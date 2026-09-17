@@ -332,3 +332,79 @@ fn kit_smoke_renders_and_targets_stay_clickable() {
     harness.step();
     assert!(danger.get(), "danger kit button must be clickable");
 }
+
+// --- C5: divider role is the raised surface, not the LINE border --------------
+
+/// A harness rendering the production detail-panel header — the real consumer
+/// that paints the §13 1px `DIVIDER` separator under section titles.
+fn detail_header_harness() -> Harness<'static, ()> {
+    use turbogit_ui::ui::components::detail_panel_header;
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            if !fonts_installed {
+                turbogit_ui::theme::install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            egui::CentralPanel::default().show(ui, |ui| {
+                detail_panel_header(ui, "Branches");
+            });
+        },
+        (),
+    );
+    harness.set_size(egui::vec2(300.0, 60.0));
+    harness
+}
+
+/// C5 regression: the divider role is documented as an equal-valued alias of
+/// the raised surface (not the stronger LINE border), and the production
+/// consumer paints a 1px hairline separator in that tone. Guards against
+/// "fixing" DIVIDER to LINE per the old contradictory description.
+#[test]
+fn divider_role_is_raised_tone_and_renders_a_1px_separator() {
+    // Corrected role contract: DIVIDER is an equal-valued semantic alias of
+    // the raised control surface; LINE stays the stronger primary border.
+    assert_eq!(
+        Palette::DIVIDER,
+        Palette::RAISED,
+        "the 1px separator reuses the raised-surface tone"
+    );
+    assert_eq!(Palette::DIVIDER, Palette::SURFACE, "RAISED aliases SURFACE");
+    assert_ne!(
+        Palette::DIVIDER,
+        Palette::LINE,
+        "the divider is not the primary LINE border"
+    );
+
+    let mut harness = detail_header_harness();
+    harness.step();
+
+    // The consumer paints exactly one opaque 1px separator strip in the
+    // divider role.
+    let separators = harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rect)
+                if rect.fill != egui::Color32::TRANSPARENT
+                    && rect.fill == Palette::DIVIDER
+                    && rect.rect.height() == 1.0 =>
+            {
+                Some((rect.rect, rect.fill))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        separators.len(),
+        1,
+        "the detail-panel header paints exactly one 1px divider in the divider role"
+    );
+    assert_eq!(
+        separators[0].1,
+        Palette::RAISED,
+        "separator uses the raised tone"
+    );
+}
