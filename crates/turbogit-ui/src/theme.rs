@@ -1,10 +1,23 @@
 //! Central dark-only design token set (ADR-0003, issue #3).
 //!
-//! Every color used by the app derives from the single [`Palette`] token
-//! struct below, mirroring the mockups' `colors_and_type.css`. There is
-//! exactly one palette — widgets never branch on a theme mode because no
-//! other mode exists. One call to [`configure_style`] maps the tokens into
-//! egui `Visuals`; [`install_fonts`] applies the embedded type stack.
+//! [`Palette`] below is the single central token set for the *shared*
+//! presentation roles — surfaces, ink hierarchy, selection, severity,
+//! status/diff families, spacing, density and chip shapes — mirroring the
+//! mockups' `colors_and_type.css`. There is exactly one palette and widgets
+//! never branch on a theme mode because no other mode exists.
+//!
+//! Ownership boundary (G1): not every presentation value in the app is
+//! centralized here — screen- or component-specific vocabularies kept local
+//! to their consumers (e.g. the log graph palette and the cascade accent)
+//! remain where they are used, and Review-only C6/T3 families are out of
+//! scope. The shared roles below ARE the authoritative contract: changing one
+//! of these tokens reaches every consumer that uses the role. Enforcement
+//! lives in the existing design-token, widget-library and branch-component
+//! suites (`tests/design_tokens.rs`, `tests/widget_library.rs`,
+//! `tests/branch_component_kit.rs`).
+//!
+//! One call to [`configure_style`] maps the tokens into egui `Visuals`;
+//! [`install_fonts`] applies the embedded type stack.
 
 use egui::{Color32, Context, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Vec2, Visuals};
 
@@ -31,8 +44,10 @@ impl Palette {
     pub const SIDEBAR: Color32 = Color32::from_rgb(0x1b, 0x1c, 0x1e);
 
     // Ink (text).
-    /// Primary text (`--tg-ink`).
-    pub const INK: Color32 = Color32::from_rgb(0xbc, 0xbe, 0xc4);
+    /// Primary text (`--tg-ink`). Equal-value alias of the authoritative
+    /// `T_PRIMARY` body ink — one primary role across shell defaults and
+    /// tool-window content (C3), so a central ramp change reaches both.
+    pub const INK: Color32 = Self::T_PRIMARY;
     /// Secondary text (`--tg-ink-2`).
     pub const INK_2: Color32 = Self::T_SECONDARY;
     /// Muted/hint text (`--tg-ink-3`).
@@ -78,8 +93,15 @@ impl Palette {
     // --- Branches screen token set (design doc §13) ------------------------
     // The Branches screen adds its own surface/meaning/text vocabulary beside
     // the core palette. Values are the design reference's own; where a §13
-    // surface coincides with an existing token (RAISED == SURFACE, DIVIDER ==
-    // LINE) the existing token is aliased so the whole app keeps one source.
+    // surface carries the same value as an existing token the existing token
+    // is declared as the value's source so the whole app keeps one definition
+    // (RAISED aliases SURFACE, and DIVIDER aliases RAISED — the 1px separator
+    // uses the raised-surface tone, NOT the stronger LINE border).
+    //
+    // Supported surfaces and their intended compositing backgrounds (C5):
+    // all fills here are fully opaque and composite directly onto the window
+    // background; translucent treatments (e.g. the rgba selection fill) are
+    // defined against the specific surface they sit on and documented with it.
 
     /// Window / bars (`#1A1B1E`): title bar, activity strip, status bar.
     pub const WINDOW_BG: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x1e);
@@ -91,8 +113,10 @@ impl Palette {
     pub const RAISED: Color32 = Self::SURFACE;
     /// Selection (`#2E4369`): the active row/pill.
     pub const SELECTION: Color32 = Color32::from_rgb(0x2e, 0x43, 0x69);
-    /// Divider (`#2B2D30`): 1px separators.
-    pub const DIVIDER: Color32 = Color32::from_rgb(0x2b, 0x2d, 0x30);
+    /// Divider (`#2B2D30`): 1px separators. An equal-valued semantic alias of
+    /// the raised surface (RAISED/SURFACE) — separators read as hairline
+    /// relief against the raised tone, not as the stronger LINE border.
+    pub const DIVIDER: Color32 = Self::RAISED;
 
     /// Accent / primary action (`#3574F0`): New Branch, Checkout, branch chips.
     pub const ACCENT: Color32 = Self::BRAND;
@@ -115,10 +139,12 @@ impl Palette {
     /// Readable accent ink. Action fills continue to use ACCENT/BRAND.
     pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0x8b, 0xb5, 0xf5);
 
-    /// Corner radius for chips and badges (design doc §13: 3).
-    pub const RADIUS_CHIP: u8 = 3;
-    /// Corner radius for buttons, inputs and panels (design doc §13: 4).
-    pub const RADIUS_CONTROL: u8 = 4;
+    /// Corner radius for chips and badges (design doc §13: 3) — shared
+    /// `CHIP_RADIUS` variant (S3).
+    pub const RADIUS_CHIP: u8 = CHIP_RADIUS;
+    /// Corner radius for buttons, inputs and panels (design doc §13: 4) —
+    /// shared `CONTROL_RADIUS` variant (S3).
+    pub const RADIUS_CONTROL: u8 = CONTROL_RADIUS;
 
     // Reserved counter orange (redesign issue 01): `#E0883C` is reserved for
     // dirt/unpulled count badges only. Never a general accent, action, or
@@ -162,10 +188,12 @@ impl Palette {
         Color32::from_rgba_premultiplied(0x0d, 0x1d, 0x3c, 0x40)
     }
 
-    /// Solid row-selection background (`#2E436E`) for the Local Changes
-    /// redesign. Distinct from the translucent [`Self::selection_bg`] the
-    /// shell rows paint today; later tickets opt in by switching call sites.
-    pub const SELECTION_BG: Color32 = Color32::from_rgb(0x2e, 0x43, 0x6e);
+    /// Solid row-selection background for the Local Changes
+    /// redesign. Equal-value alias of the canonical [`Self::SELECTION`]:
+    /// commit inclusion and navigation selection share one opaque selection
+    /// fill (C4) — previously a near-duplicate #2E436E; the translucent
+    /// [`Self::selection_bg`] focus treatment remains a separate variant.
+    pub const SELECTION_BG: Color32 = Self::SELECTION;
 }
 
 /// Shared repository-state vocabulary for dots, badges and summaries.
@@ -208,18 +236,50 @@ impl RepoState {
 
 // --- Spacing scale (Local Changes redesign, design doc §8) ---
 // Dimension tokens, kept beside the color palette as part of the single
-// central token set. Rows keep one consistent height per kind; gaps and
-// padding sit on the 4 px grid.
+// central token set. Rows keep one consistent height per kind; the default
+// gaps/padding/margins below ARE the shared layout contract (S1) — the
+// 4 px grid describes row heights and panel padding, not every gap (the
+// default item spacing and control padding are named roles of their own).
 /// File-row height in the changes tree (24 px). This is the single-line
 /// height: a row grows one text line per extra line of text, because a
 /// filename too long for its column wraps rather than clipping.
 pub const FILE_ROW_HEIGHT: f32 = 24.0;
 /// Group-row height in the changes tree (26 px).
 pub const GROUP_ROW_HEIGHT: f32 = 26.0;
-/// Grid-gap base unit; all gaps are multiples of 4 px.
+/// Grid-gap base unit for row/group heights and panel padding.
 pub const GRID_GAP: f32 = 4.0;
 /// Panel padding (12 px; the spec allows 12–14 px).
 pub const PANEL_PADDING: f32 = 12.0;
+
+// Shared layout roles (S1): the one source for the shell defaults.
+/// Default item gap between widgets (8×6) — installed by [`configure_style`].
+pub const ITEM_SPACING: Vec2 = Vec2::new(8.0, 6.0);
+/// Default window/panel margin (10 px) — installed by [`configure_style`].
+pub const WINDOW_MARGIN: i8 = 10;
+/// Default control padding (10×5) — installed by [`configure_style`].
+pub const BUTTON_PADDING: Vec2 = Vec2::new(10.0, 5.0);
+/// Default list/tree indent (14 px) — installed by [`configure_style`].
+pub const INDENT: f32 = 14.0;
+
+// Density variants (S2): named exceptions to the defaults above, so compact
+// and dense regions stop carrying regional literals.
+/// Compact control padding (8×4) for dense shell/toolbar regions.
+pub const DENSITY_COMPACT_BUTTON: Vec2 = Vec2::new(8.0, 4.0);
+/// Dense control padding (6×2) for the status bar.
+pub const DENSITY_DENSE_BUTTON: Vec2 = Vec2::new(6.0, 2.0);
+
+// Shape variants (S3): chip/control radii are explicit shared roles; the
+// pill variant is the full-height wrap the welcome chips and badges use.
+/// Compact chip corner radius (3 px).
+pub const CHIP_RADIUS: u8 = 3;
+/// Control corner radius (4 px).
+pub const CONTROL_RADIUS: u8 = 4;
+/// Pill corner radius (9 px) — full-height pill chips (welcome, badges).
+pub const PILL_RADIUS: u8 = 9;
+/// Window corner radius (8 px).
+pub const WINDOW_RADIUS: u8 = 8;
+/// Menu corner radius (6 px).
+pub const MENU_RADIUS: u8 = 6;
 
 /// Accent (selection / primary action) color — the brand token.
 pub fn accent() -> Color32 {
@@ -245,16 +305,24 @@ pub const TYPE_BODY: f32 = 12.0;
 /// Detail-panel title — 13px.
 pub const TYPE_DETAIL_TITLE: f32 = 13.0;
 
+// Display roles (T2): distinct sizes for prominent display-only text. Named
+// so central type changes reach the consumers, without reducing them to body.
+/// Welcome wordmark — 42px (welcome.rs brand header).
+pub const TYPE_WORDMARK: f32 = 42.0;
+/// Multi-repo statistics — 22px (multi_selection.rs stats strip).
+pub const TYPE_STATISTIC: f32 = 22.0;
+
 /// Data font face — JetBrains Mono (branch names, hashes, paths, upstreams,
 /// counts, timestamps).
 pub fn data_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Monospace)
 }
 
-/// Chrome font face — Inter when it is registered; today the chassis embeds
-/// only JetBrains Mono (ADR-0002), so chrome falls back to the proportional
-/// family. Keeping the seam means a future Inter registration upgrades every
-/// chrome call site at once (buttons, tabs, section headers, labels).
+/// Chrome font face — the shared proportional face for shell chrome (buttons,
+/// tabs, section headers, labels). Per ADR-0002 both logical families
+/// currently prioritize the embedded JetBrains Mono Regular, so this resolves
+/// through the same installed stack as data text; keeping the seam means a
+/// future proportional registration upgrades every chrome call site at once.
 pub fn chrome_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
 }
@@ -285,8 +353,8 @@ fn dark_visuals() -> Visuals {
     v.widgets.open.fg_stroke = Stroke::new(1.0, Palette::INK);
     // Active window headers blend with the SURFACE window fill (issue #22).
     v.widgets.open.weak_bg_fill = Palette::SURFACE;
-    v.window_corner_radius = CornerRadius::same(8); // radius-lg
-    v.menu_corner_radius = CornerRadius::same(6); // radius-md
+    v.window_corner_radius = CornerRadius::same(WINDOW_RADIUS); // radius-lg
+    v.menu_corner_radius = CornerRadius::same(MENU_RADIUS); // radius-md
     // Popup chrome (issue #22, spec §10): every floating surface (dialogs,
     // popups, palette, toast) gets the LINE border stroke over its SURFACE
     // fill; radius + fill are already mapped above.
@@ -300,11 +368,11 @@ pub fn configure_style(ctx: &Context) {
     ctx.all_styles_mut(|style| {
         style.visuals = dark_visuals();
 
-        // Spacing scale (Epic A4).
-        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
-        style.spacing.window_margin = egui::Margin::same(10);
-        style.spacing.button_padding = Vec2::new(10.0, 5.0);
-        style.spacing.indent = 14.0;
+        // Shared layout roles (S1): the defaults below ARE the contract.
+        style.spacing.item_spacing = ITEM_SPACING;
+        style.spacing.window_margin = egui::Margin::same(WINDOW_MARGIN);
+        style.spacing.button_padding = BUTTON_PADDING;
+        style.spacing.indent = INDENT;
 
         // Shell defaults consume the same §13 ramp as the Branches view.
         style

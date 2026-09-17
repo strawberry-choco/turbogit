@@ -33,11 +33,12 @@ use egui_kittest::kittest::NodeT as _;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
-use test_support::harness::{assert_not_painted, assert_painted, painted_text};
+use test_support::harness::{assert_not_painted, assert_painted, painted_galleys, painted_text};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine_api::GitExecutor;
+use turbogit_ui::theme::Palette;
 
 // ---------------------------------------------------------------- helpers --
 
@@ -710,6 +711,83 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
         wait_until(15_000, || rec.contains_push("origin", "feature", true)),
         "unprotected target must execute with force=true at the boundary, got: {:?}",
         rec.recorded()
+    );
+}
+
+// ------------------------------------------ issue: severity vocabulary (C2) --
+
+/// The ink of the painted galley whose text contains `needle`; the actual
+/// visible severity treatment, not a token-name assertion.
+fn painted_ink_for(h: &Harness<'_, AppState>, needle: &str) -> Option<egui::Color32> {
+    painted_galleys(h)
+        .into_iter()
+        .find(|g| g.text.contains(needle))
+        .map(|g| g.color)
+}
+
+/// C2: push messages use the shared semantic severity inks — warnings in
+/// STATE_WARNING, blocking errors in STATE_ERROR, guidance in STATE_INFO —
+/// through the actual dialog consumers, never raw severity colors.
+#[test]
+fn push_severity_messages_use_the_shared_semantic_inks() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_ahead_of_origin(parent.path(), "sev");
+    let settings = VcsSettings {
+        protected_branch_patterns: vec!["main".to_string()],
+        ..VcsSettings::default()
+    };
+    let (rec, settings) = recording_engine(settings);
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&repo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    // Blocking error + informational guidance share the semantic inks.
+    h.get_by_label("Force push (--force-with-lease)").click();
+    h.get_by_label("Set upstream (--set-upstream)").click();
+    h.run();
+    h.query_all_by_label("This repo")
+        .last()
+        .unwrap()
+        .clone()
+        .click();
+    h.run();
+
+    assert_eq!(
+        painted_ink_for(&h, "force-push blocked"),
+        Some(Palette::STATE_ERROR),
+        "protected-branch block must render in the shared error ink"
+    );
+    assert_eq!(
+        painted_ink_for(&h, "upstream will be set"),
+        Some(Palette::STATE_INFO),
+        "upstream guidance must render in the shared informational ink"
+    );
+
+    // Nonblocking force-push warning: retarget an unprotected branch so the
+    // warning (not the block) is the visible treatment.
+    h.state_mut().ui.dlg.push_branch = "feature".into();
+    h.run();
+    assert_eq!(
+        painted_ink_for(&h, "Force push rewrites"),
+        Some(Palette::STATE_WARNING),
+        "force-push warning must render in the shared warning ink"
+    );
+
+    // Push-subset guidance ("All commits will be pushed…") is a warning too.
+    let snapshot = h.state().ui.dlg.push_outgoing.clone().expect("snapshot");
+    let commits = snapshot[0].commits.as_ref().expect("commits");
+    let older = commits[1].id.clone();
+    h.state_mut().ui.dlg.push_selected_commits = vec![older.clone()];
+    h.run();
+    assert_eq!(
+        painted_ink_for(&h, "commits will be pushed"),
+        Some(Palette::STATE_WARNING),
+        "subset guidance must render in the shared warning ink"
     );
 }
 

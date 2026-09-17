@@ -52,10 +52,10 @@ const DETAILS_HEIGHT: f32 = 340.0;
 const ROW_HEIGHT: f32 = 24.0;
 /// Root stripe width on multi-root rows.
 const STRIPE_WIDTH: f32 = 3.0;
-/// Uppercase micro text (§3.3).
-const MICRO_TEXT: f32 = 11.0;
-/// Mono cell font size.
-const MONO_TEXT: f32 = 12.0;
+/// Uppercase micro text (§3.3) — shared control role (T2).
+const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL;
+/// Mono cell font size — shared body role (T2).
+const MONO_TEXT: f32 = crate::theme::TYPE_BODY;
 /// Chip metrics — mirrors `widgets::chip` (`.tg-label` pills).
 const CHIP_HEIGHT: f32 = 18.0;
 const CHIP_PAD_X: f32 = 6.0;

@@ -77,7 +77,10 @@ fn brand_header(ui: &mut Ui) {
             ui.label(
                 RichText::new("TurboGit")
                     .strong()
-                    .font(FontId::new(42.0, FontFamily::Proportional))
+                    .font(FontId::new(
+                        crate::theme::TYPE_WORDMARK,
+                        FontFamily::Proportional,
+                    ))
                     .color(Palette::INK),
             );
         });
@@ -510,26 +513,32 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     painter.galley(Pos2::new(x, rect.top() + 42.0), meta_galley, Palette::INK_3);
 
     // Live branch indicator (ADR-0005): computed at render time, cached in
-    // memory, never stored.
+    // memory, never stored. Small text on the chip uses the readable accent
+    // ink (ACCENT_TEXT), not the action-fill BRAND — BRAND-on-SURFACE_3 only
+    // reaches 2.479:1 (C1 audit); ACCENT_TEXT clears 4.5:1 on the same chip.
     if let Some(branch) = cached_branch(state, &project.path) {
         let branch_galley = painter.layout_no_wrap(
             truncate(&branch, 18),
             FontId::new(11.0, FontFamily::Proportional),
-            Palette::BRAND,
+            Palette::ACCENT_TEXT,
         );
         let chip_w = branch_galley.size().x + 12.0;
         let chip_rect = Rect::from_min_size(
             Pos2::new(rect.right() - pad_x - chip_w, rect.center().y - 9.0),
             Vec2::new(chip_w, 18.0),
         );
-        painter.rect_filled(chip_rect, CornerRadius::same(9), Palette::SURFACE_3);
+        painter.rect_filled(
+            chip_rect,
+            CornerRadius::same(crate::theme::PILL_RADIUS),
+            Palette::SURFACE_3,
+        );
         painter.galley(
             Pos2::new(
                 chip_rect.left() + 6.0,
                 chip_rect.center().y - branch_galley.size().y / 2.0,
             ),
             branch_galley,
-            Palette::BRAND,
+            Palette::ACCENT_TEXT,
         );
     }
 
@@ -547,7 +556,7 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
         let count_galley = painter.layout_no_wrap(
             count_text,
             FontId::new(11.0, FontFamily::Proportional),
-            Palette::BRAND,
+            Palette::ACCENT_TEXT,
         );
         let right_edge = rect.right() - pad_x;
         // A branch chip would already own the right side; stack the count
@@ -562,14 +571,18 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
             Pos2::new(right_edge - chip_w, cy - 9.0),
             Vec2::new(chip_w, 18.0),
         );
-        painter.rect_filled(count_rect, CornerRadius::same(9), Palette::SURFACE_3);
+        painter.rect_filled(
+            count_rect,
+            CornerRadius::same(crate::theme::PILL_RADIUS),
+            Palette::SURFACE_3,
+        );
         painter.galley(
             Pos2::new(
                 count_rect.left() + 6.0,
                 count_rect.center().y - count_galley.size().y / 2.0,
             ),
             count_galley,
-            Palette::BRAND,
+            Palette::ACCENT_TEXT,
         );
     }
 

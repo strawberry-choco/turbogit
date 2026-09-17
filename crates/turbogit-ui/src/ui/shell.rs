@@ -466,7 +466,7 @@ fn render_topbar(ui: &mut Ui, state: &mut AppState) {
         )
         .show(ui, |ui| {
             ui.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-            ui.style_mut().spacing.button_padding = Vec2::new(8.0, 4.0);
+            ui.style_mut().spacing.button_padding = crate::theme::DENSITY_COMPACT_BUTTON;
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 // Brand: icon + wordmark.
                 icons::icon(ui, Icon::FOLDER_GIT, TOPBAR_BRANDSIZE, Palette::BRAND);
@@ -691,7 +691,7 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
     Frame::new()
         .inner_margin(Margin::symmetric(12, 0))
         .show(&mut child, |ui| {
-            ui.style_mut().spacing.button_padding = Vec2::new(8.0, 4.0);
+            ui.style_mut().spacing.button_padding = crate::theme::DENSITY_COMPACT_BUTTON;
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 // Focused root folder icon + name + chevron.
                 icons::icon(ui, Icon::FOLDER_GIT, 16.0, Palette::INK_2);
@@ -911,7 +911,7 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
                 .inner_margin(Margin::symmetric(8, 0)),
         )
         .show(ui, |ui| {
-            ui.style_mut().spacing.button_padding = Vec2::new(6.0, 2.0);
+            ui.style_mut().spacing.button_padding = crate::theme::DENSITY_DENSE_BUTTON;
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                 aggregated_status_chips(ui, &agg);
                 granular_status_chips(ui, state);

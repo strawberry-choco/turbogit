@@ -17,10 +17,10 @@ use turbogit_domain::model::BlameLine;
 
 /// Blame row height (slightly tighter than log rows — a file's lines).
 const ROW_HEIGHT: f32 = 20.0;
-/// Uppercase micro text (§3.3).
-const MICRO_TEXT: f32 = 11.0;
-/// Mono cell font size.
-const MONO_TEXT: f32 = 12.0;
+/// Uppercase micro text (§3.3) — shared control role (T2).
+const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL;
+/// Mono cell font size — shared body role (T2).
+const MONO_TEXT: f32 = crate::theme::TYPE_BODY;
 
 /// Cell x offsets within a row, mirroring the log table's rhythm.
 const HASH_X: f32 = 4.0;
@@ -33,7 +33,7 @@ fn mono_font() -> FontId {
 }
 
 fn body_font() -> FontId {
-    FontId::new(12.0, FontFamily::Proportional)
+    FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional)
 }
 
 fn micro_font() -> FontId {
