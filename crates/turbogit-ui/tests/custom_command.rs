@@ -11,7 +11,7 @@ use egui::Key;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use test_support::harness::{assert_not_painted, assert_painted, painted_text, settle};
+use test_support::harness::{assert_not_painted, assert_painted, settle};
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::BulkOp;
 use turbogit_services::bulk_run::RowState;
@@ -87,24 +87,6 @@ fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> boo
     panic!("condition was not met within 1000 frames");
 }
 
-/// Step until `needle` is painted, or fail loudly.
-///
-/// Confirming a run closes the modal and opens the monitor; the monitor fills
-/// its rows a frame or two later, so a single `settle` can land on the frame
-/// between "modal gone" and "monitor drawn" and then report the command as
-/// missing. Under the whole-workspace suite's parallel load that gap widens,
-/// which made the command assertion flake.
-fn wait_for_painted(harness: &mut Harness<'_, AppState>, needle: &str) {
-    for _ in 0..1000 {
-        harness.step();
-        if painted_text(harness).iter().any(|t| t.contains(needle)) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!("`{needle}` was never painted within 1000 frames");
-}
-
 /// Select the fleet group and open the custom-command modal.
 fn open_custom_command(h: &mut Harness<'_, AppState>) {
     h.get_by_label("Select group frontend").click();
@@ -138,19 +120,24 @@ fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
     settle(&mut h);
     assert_painted(&h, "Will run on all 2 repositories.");
 
-    // Confirming closes the modal and opens the run monitor, which shows
-    // the typed command on the running rows.
+    // Confirming closes the modal and opens the run monitor.
     h.get_by_label("Run on 2 of 2").click();
     settle(&mut h);
     assert_eq!(h.state().ui.bulk_op, None);
     assert!(h.state().ui.bulk_run.is_some(), "the monitor opened");
-    wait_for_painted(&mut h, "git branch bulk-marker");
 
     wait_for(&mut h, |s| {
         s.ui.bulk_run
             .as_ref()
             .is_some_and(|v| v.rows.len() == 2 && v.rows.iter().all(|r| r.state == RowState::Done))
     });
+
+    // A fast command can finish before any Running frame is rendered. Its
+    // identity must remain visible in the completed monitor, not just flash
+    // in a running row's detail cell.
+    settle(&mut h);
+    assert_painted(&h, "2 of 2 done");
+    assert_painted(&h, "git branch bulk-marker");
 
     // The command's effect is real on every selected repo.
     for repo in [&alpha, &ui] {

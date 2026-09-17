@@ -536,7 +536,7 @@ fn remote_rollup_click_emits_the_visibility_switch() {
     let texts = painted_text(&h);
     assert!(texts.iter().any(|t| t.contains("Remote")), "{texts:#?}");
     assert!(
-        texts.iter().any(|t| t.contains("1 remotes · 2 branches")),
+        texts.iter().any(|t| t.contains("1 remote · 2 branches")),
         "the rollup count is derived, never estimated: {texts:#?}"
     );
 

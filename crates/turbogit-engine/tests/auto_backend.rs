@@ -69,6 +69,30 @@ fn auto_backend_serves_reads_and_falls_back_to_cli() {
 }
 
 #[test]
+fn index_blob_reads_match_cli_without_reading_worktree() {
+    let tmp = fixture_repo();
+    let repo = tmp.path().join("repo");
+    let path = Path::new("f.txt");
+    let indexed = b"index\0\xff\n";
+    std::fs::write(repo.join(path), indexed).unwrap();
+    git(&repo, &["add", "f.txt"]);
+    std::fs::write(repo.join(path), "worktree only\n").unwrap();
+
+    for backend in [GitBackend::Cli, GitBackend::Auto, GitBackend::Libgit2] {
+        let exec = build_executor(&VcsSettings {
+            backend,
+            ..VcsSettings::default()
+        });
+        assert_eq!(exec.show_file_bytes(&repo, ":0", path).unwrap(), indexed);
+        assert_eq!(exec.show_file_bytes(&repo, "HEAD", path).unwrap(), b"one\n");
+        assert!(
+            exec.show_file_bytes(&repo, ":0", Path::new("missing.txt"))
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn auto_backend_matches_explicit_libgit2_on_reads() {
     let tmp = fixture_repo();
     let repo = tmp.path().join("repo");

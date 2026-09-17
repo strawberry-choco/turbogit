@@ -412,9 +412,7 @@ fn button_response_sized(
         .text_styles
         .get(&text_style)
         .cloned()
-        .unwrap_or_else(|| {
-            FontId::new(if compact { 12.0 } else { 14.0 }, FontFamily::Proportional)
-        });
+        .unwrap_or_else(|| crate::theme::chrome_font(crate::theme::TYPE_CONTROL));
 
     let pad_x = pad_x_override.unwrap_or(match variant {
         ButtonVariant::Compact => 12.0, // px-3
@@ -785,9 +783,12 @@ fn bold_font_if_available(ui: &Ui) -> FontId {
             .contains_key(&FontFamily::Name(BOLD_FAMILY.into()))
     });
     if has_bold {
-        FontId::new(14.0, FontFamily::Name(BOLD_FAMILY.into()))
+        FontId::new(
+            crate::theme::TYPE_DETAIL_TITLE,
+            FontFamily::Name(BOLD_FAMILY.into()),
+        )
     } else {
-        FontId::new(14.0, FontFamily::Proportional)
+        crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE)
     }
 }
 

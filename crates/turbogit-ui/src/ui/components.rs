@@ -185,18 +185,42 @@ pub fn sync_badge(ahead: usize, behind: usize, gone: bool) -> Option<(SyncKind, 
 /// §13 meaning token for a sync badge's foreground.
 pub fn sync_ink(kind: SyncKind) -> Color32 {
     match kind {
-        SyncKind::Ahead | SyncKind::InSync => Palette::AHEAD,
-        SyncKind::Behind | SyncKind::Diverged => Palette::BEHIND,
+        SyncKind::Ahead | SyncKind::InSync => crate::theme::RepoState::Unpushed.color(),
+        SyncKind::Behind => crate::theme::RepoState::Unpulled.color(),
+        SyncKind::Diverged => crate::theme::RepoState::Diverged.color(),
         SyncKind::Gone => Palette::DANGER,
     }
 }
 
 /// §13 meaning token for a sync badge's tinted background.
 pub fn sync_bg(kind: SyncKind) -> Color32 {
-    match kind {
-        SyncKind::Ahead | SyncKind::InSync => tint_over_bg(Palette::AHEAD, 0.18),
-        SyncKind::Behind | SyncKind::Diverged => tint_over_bg(Palette::BEHIND, 0.18),
-        SyncKind::Gone => tint_over_bg(Palette::DANGER, 0.18),
+    tint_over_bg(sync_ink(kind), 0.18)
+}
+
+/// Fit identifying ends to actual font metrics, including wide Unicode glyphs.
+pub fn middle_truncate_to_width(ui: &Ui, text: &str, font: &egui::FontId, width: f32) -> String {
+    let fits = |s: &str| {
+        ui.painter()
+            .layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+            <= width.max(0.0)
+    };
+    if fits(text) {
+        return text.to_owned();
+    }
+    let mut budget = text.chars().count().saturating_sub(1);
+    while budget >= 4 {
+        let candidate = middle_truncate(text, budget);
+        if fits(&candidate) {
+            return candidate;
+        }
+        budget -= 1;
+    }
+    if fits("…") {
+        "…".to_owned()
+    } else {
+        String::new()
     }
 }
 

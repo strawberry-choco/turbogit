@@ -57,9 +57,10 @@ pub fn diff_text(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> TgResu
 ///
 /// An unreadable old side means git knows something this module cannot
 /// reconstruct in-process (rename sources, newly added files carry rename /
-/// new-file metadata we would have to guess), so those fall back. An
-/// unreadable new side is an unambiguous deletion — the status scan saw the
-/// file absent there — and renders as a `/dev/null` patch like git does.
+/// new-file metadata we would have to guess), so those fall back. A new-side
+/// read error is not proof of deletion: unsupported index revisions, invalid
+/// revisions, and filesystem failures can all make an existing side unreadable.
+/// Fall back for those errors too, letting git distinguish actual deletions.
 fn in_process(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> Option<TgResult<String>> {
     // Single-path full patches only; whole-tree, stat, and commit-scoped
     // requests keep their CLI semantics.
@@ -82,22 +83,19 @@ fn in_process(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> Option<Tg
     };
 
     let new = match &opts.right {
-        Some(rev) => exec.show_file_bytes(root, rev, path).ok(),
-        None if opts.staged => exec.show_file_bytes(root, ":0", path).ok(),
-        None => std::fs::read(root.join(path)).ok(),
+        Some(rev) => exec.show_file_bytes(root, rev, path).ok()?,
+        None if opts.staged => exec.show_file_bytes(root, ":0", path).ok()?,
+        None => std::fs::read(root.join(path)).ok()?,
     };
 
     // Non-UTF-8 content stays CLI territory: git's own rendering of it
     // (binary detection quirks included) is what parity is measured against.
     let old = String::from_utf8(old).ok()?;
-    let new = match new {
-        Some(bytes) => Some(String::from_utf8(bytes).ok()?),
-        None => None,
-    };
+    let new = String::from_utf8(new).ok()?;
     Some(Ok(file_patch(
         &rel,
         Some(old.as_str()),
-        new.as_deref(),
+        Some(new.as_str()),
         opts.ignore_whitespace,
     )))
 }
@@ -289,6 +287,84 @@ fn push_normal(segs: &mut Vec<(String, String, bool)>, text: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unreadable_worktree_falls_back_instead_of_synthesizing_deletion() {
+        let root = tempfile::tempdir().unwrap();
+        let path = Path::new("file.txt");
+        let exec = turbogit_engine::fake::FakeExecutor::new();
+        exec.files
+            .lock()
+            .unwrap()
+            .insert(path.into(), "old\n".into());
+        // Reading a directory fails, but that is not evidence of deletion.
+        std::fs::create_dir(root.path().join(path)).unwrap();
+        let opts = DiffOpts {
+            path: Some(path.into()),
+            ..DiffOpts::default()
+        };
+        assert!(in_process(&exec, root.path(), &opts).is_none());
+        assert_eq!(
+            diff_text(&exec, root.path(), &opts).unwrap(),
+            exec.diff(root.path(), &opts).unwrap()
+        );
+    }
+
+    #[test]
+    fn unreadable_revision_falls_back_and_real_deletions_keep_cli_semantics() {
+        let root = tempfile::tempdir().unwrap();
+        let exec = turbogit_engine::cli::CliExecutor {
+            settings: Default::default(),
+        };
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(root.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        std::fs::write(root.path().join("file.txt"), "old\n").unwrap();
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "base",
+        ]);
+        let opts = DiffOpts {
+            path: Some("file.txt".into()),
+            left: Some("HEAD".into()),
+            right: Some("missing-revision".into()),
+            ..DiffOpts::default()
+        };
+        assert!(in_process(&exec, root.path(), &opts).is_none());
+        assert!(diff_text(&exec, root.path(), &opts).is_err());
+
+        std::fs::remove_file(root.path().join("file.txt")).unwrap();
+        for staged in [false, true] {
+            if staged {
+                git(&["add", "-u"]);
+            }
+            let opts = DiffOpts {
+                path: Some("file.txt".into()),
+                staged,
+                ..DiffOpts::default()
+            };
+            let patch = diff_text(&exec, root.path(), &opts).unwrap();
+            assert_eq!(patch, exec.diff(root.path(), &opts).unwrap());
+            assert!(patch.contains("deleted file mode"), "{patch}");
+            assert!(patch.contains("-old"), "{patch}");
+        }
+    }
 
     #[test]
     fn file_patch_renders_git_shaped_modify() {

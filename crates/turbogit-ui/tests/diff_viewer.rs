@@ -275,6 +275,49 @@ fn chips_select_their_documented_comparison_pairs() {
 }
 
 #[test]
+fn relative_row_preview_uses_index_not_worktree_for_staged_changes() {
+    for original in ["", "HEAD ONLY\n"] {
+        let (_tmp, repo) = init_repo();
+        write_file(&repo, "file.txt", original);
+        run_git(&repo, &["add", "."]);
+        run_git(&repo, &["commit", "-m", "base"]);
+        write_file(&repo, "file.txt", "INDEX ONLY\n");
+        run_git(&repo, &["add", "file.txt"]);
+        write_file(&repo, "file.txt", "WORKTREE ONLY\n");
+
+        let mut h = diff_harness(&repo);
+        assert_eq!(
+            h.state().settings.backend,
+            turbogit_domain::model::GitBackend::Auto
+        );
+        assert!(h.state().settings.in_process_diffs);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while h.query_by_label("file.txt").is_none() {
+            h.step();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "file row did not load"
+            );
+        }
+        h.get_by_label("file.txt").click();
+        settle(&mut h);
+        assert_eq!(h.state().ui.preview_change, Some(PathBuf::from("file.txt")));
+        h.get_by_label("Staged").click();
+        settle(&mut h);
+
+        assert_painted(&h, "INDEX ONLY");
+        assert_not_painted(&h, "WORKTREE ONLY");
+        assert_not_painted(&h, "(no differences)");
+        let patch = &h.state().ui.diff_cache.as_ref().unwrap().1;
+        assert!(patch.contains("+INDEX ONLY"), "{patch}");
+        assert!(!patch.contains("deleted file mode"), "{patch}");
+        if !original.is_empty() {
+            assert!(patch.contains("-HEAD ONLY"), "{patch}");
+        }
+    }
+}
+
+#[test]
 fn local_chip_reports_no_differences_for_fully_staged_files() {
     let (_tmp, repo) = repo_staged_only();
     let mut h = diff_harness(&repo);

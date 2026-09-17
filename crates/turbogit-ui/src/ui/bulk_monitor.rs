@@ -13,6 +13,7 @@ use egui::{
 };
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
+use turbogit_services::bulk_ops::BulkOp;
 use turbogit_services::bulk_run::RowState;
 
 use crate::theme::Palette;
@@ -90,6 +91,17 @@ fn body(ui: &mut Ui, state: &mut AppState) {
             )
         })
         .collect();
+
+    // Keep custom-command identity visible even when all Running events are
+    // drained before the first monitor frame, or a failed row shows its error.
+    if view.op == BulkOp::Custom {
+        ui.label(
+            egui::RichText::new(&running_command)
+                .monospace()
+                .color(Palette::INK_2),
+        );
+        ui.add_space(4.0);
+    }
 
     // Header: overall progress bar + elapsed/ETA.
     ui.horizontal(|ui| {

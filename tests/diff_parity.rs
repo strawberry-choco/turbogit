@@ -222,7 +222,8 @@ fn parity_deleted_file_rows_match_cli() {
     assert!(cli.contains("deleted file mode"), "{cli}");
     assert!(ip.contains("deleted file mode"), "{ip}");
     assert!(ip.contains("--- a/words.txt\n+++ /dev/null\n"), "{ip}");
-    assert_row_parity(&cli, &ip);
+    // A failed new-side read cannot prove deletion; preserve CLI output verbatim.
+    assert_eq!(cli, ip);
 }
 
 #[test]
