@@ -23,7 +23,7 @@
 //! push can proceed for the rest.
 
 use crate::theme::Palette;
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, OutgoingRoot, PushPreview};
 use turbogit_domain::error::TgError;
@@ -83,7 +83,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             state.ui.dlg.push_subset = subset.clone();
             if matches!(state.ui.dlg.push_subset, SubsetPushState::OlderUnchecked) {
                 ui.colored_label(
-                    Color32::YELLOW,
+                    Palette::STATE_WARNING,
                     "All commits will be pushed — an unchecked older ancestor forces a full push.",
                 );
             }
@@ -113,7 +113,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 "Set upstream (--set-upstream)",
             );
             if state.ui.dlg.push_set_upstream {
-                ui.colored_label(Color32::from_rgb(140, 200, 255), "upstream will be set");
+                ui.colored_label(Palette::STATE_INFO, "upstream will be set");
             }
 
             // Safety strip (issue #21): acknowledging force warns about
@@ -125,16 +125,16 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                     state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch);
                 if force_blocked {
                     ui.colored_label(
-                        Color32::RED,
+                        Palette::STATE_ERROR,
                         format!("⚠ '{branch}' is protected — force-push blocked."),
                     );
                     ui.colored_label(
-                        Color32::RED,
+                        Palette::STATE_ERROR,
                         "Uncheck force push or retarget the Branch field to continue.",
                     );
                 } else if state.ui.dlg.force_push {
                     ui.colored_label(
-                        Color32::YELLOW,
+                        Palette::STATE_WARNING,
                         "⚠ Force push rewrites the remote branch (--force-with-lease).",
                     );
                 }
@@ -304,7 +304,7 @@ fn remediation_banner(ui: &mut Ui, state: &mut AppState, scope: &[Root]) -> usiz
     let patterns = seen_patterns.join("|");
     let branch_label = protected[0].branch.clone();
     ui.colored_label(
-        Color32::YELLOW,
+        Palette::STATE_WARNING,
         format!(
             "Protected branch in scope — {names_str} track {branch_label}, which matches {patterns}"
         ),
@@ -330,7 +330,7 @@ fn preview_reports(ui: &mut Ui, preview: &PushPreview) {
         ui.label("Dry-run report (verbatim):");
     }
     if has_err {
-        ui.colored_label(Color32::RED, "Push rejected by git:");
+        ui.colored_label(Palette::STATE_ERROR, "Push rejected by git:");
     }
     egui::ScrollArea::vertical()
         .max_height(160.0)
@@ -342,12 +342,12 @@ fn preview_reports(ui: &mut Ui, preview: &PushPreview) {
                         ui.label(RichText::new(text).monospace().small());
                     }
                     Err(stderr) => {
-                        ui.colored_label(Color32::RED, format!("[{name}] rejected:"));
+                        ui.colored_label(Palette::STATE_ERROR, format!("[{name}] rejected:"));
                         ui.label(
                             RichText::new(stderr)
                                 .monospace()
                                 .small()
-                                .color(Color32::RED),
+                                .color(Palette::STATE_ERROR),
                         );
                     }
                 }

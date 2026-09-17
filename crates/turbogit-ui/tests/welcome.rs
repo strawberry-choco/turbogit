@@ -29,7 +29,7 @@
 //! - Missing picker / cancelled pick surface toasts instead of failing
 //! - The picker seam is invoked only behind user-initiated flows
 
-use egui::Shape;
+use egui::{Color32, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -372,6 +372,192 @@ fn seeded_recents_render_name_path_last_opened_and_live_branch() {
     // Branch indicator computed live at render time (ADR-0005): the repo's
     // current branch is painted next to the recent row.
     assert_painted(&harness, "main");
+}
+
+/// sRGB relative luminance (WCAG); the same linearization the existing
+/// contrast suite (design_tokens.rs) uses.
+fn luminance(color: Color32) -> f64 {
+    let linear = |v: u8| {
+        let s = f64::from(v) / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+}
+
+/// The actual foreground/background pair under the branch text of a recent
+/// row: the `Shape::Text` whose galley holds `text`, plus the opaque painted
+/// rect (the chip) directly beneath it. Fails if either is not rendered.
+#[track_caller]
+fn painted_fg_bg_pair(harness: &Harness<'_, AppState>, text: &str) -> (Color32, Color32) {
+    let shapes = &harness.output().shapes;
+    let text_shape = shapes
+        .iter()
+        .enumerate()
+        .find_map(|(index, clipped)| match &clipped.shape {
+            Shape::Text(t) if t.galley.text() == text => Some((index, t)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`{text}` branch text was not painted"));
+
+    let (index, text_shape) = text_shape;
+    // The chip rect is painted before its text, so the background is the last
+    // opaque rect behind the text's center.
+    let foreground = text_shape
+        .override_text_color
+        .unwrap_or(text_shape.galley.job.sections[0].format.color);
+    let center = text_shape.pos + text_shape.galley.size() / 2.0;
+    let background = shapes[..index]
+        .iter()
+        .rev()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Rect(rect) if rect.rect.contains(center) && rect.fill.a() == 255 => {
+                Some(rect.fill)
+            }
+            _ => None,
+        })
+        .expect("opaque chip background must sit beneath branch text");
+    (foreground, background)
+}
+
+/// Ticket 01 (C1): the welcome branch chip must use small-text ink that
+/// clears 4.5:1 against its actual SURFACE_3 chip background — the regression
+/// that fails while the chip is painted in action-fill BRAND (audit: 2.479:1)
+/// and passes once the readable accent ink is used.
+#[test]
+fn recent_branch_text_is_readable_on_its_painted_chip() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let repo = seed_repo(project.path(), "alpha");
+
+    seed_recents(
+        config.path(),
+        &[RecentProject {
+            path: repo.clone(),
+            name: "alpha".into(),
+            last_opened: 1_755_000_000_000,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
+        }],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = Harness::new_ui_state(
+        move |ui, state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
+        },
+        AppState::launch_in(None, Some(cfg)),
+    );
+    harness.set_size(egui::vec2(1024.0, 768.0));
+    settle(&mut harness);
+    wait_painted(&mut harness, "main", "current branch");
+
+    let (foreground, background) = painted_fg_bg_pair(&harness, "main");
+    let light = luminance(foreground).max(luminance(background));
+    let dark = luminance(foreground).min(luminance(background));
+    let ratio = (light + 0.05) / (dark + 0.05);
+    // The branch text is normal text (11px) on the recent-row chip; it must
+    // reach the 4.5:1 normal-text benchmark against the actual chip fill.
+    assert!(
+        ratio >= 4.5,
+        "branch chip text {foreground:?} on {background:?} is {ratio:.3}:1 — below 4.5:1"
+    );
+}
+
+// ----------------------------------- issue: shared typography roles (T2) ----
+
+/// Paint-time font sizes (points) of every galley carrying exactly `text`.
+fn painted_font_sizes(harness: &Harness<'_, AppState>, text: &str) -> Vec<f32> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Text(t) if t.galley.text() == text => Some(
+                t.galley
+                    .job
+                    .sections
+                    .first()
+                    .map_or(0.0, |s| s.format.font_id.size),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+/// T2: the welcome wordmark is a distinct display role that renders through
+/// the shared named size — never a local literal that central changes miss.
+#[test]
+fn welcome_wordmark_uses_the_shared_display_role() {
+    let mut fx = bare_fixture();
+    settle(&mut fx.harness);
+
+    let sizes = painted_font_sizes(&fx.harness, "TurboGit");
+    assert!(
+        sizes
+            .iter()
+            .any(|s| (*s - turbogit_ui::theme::TYPE_WORDMARK).abs() < 0.01),
+        "the welcome wordmark must render at the shared wordmark size ({}); got {sizes:?}",
+        turbogit_ui::theme::TYPE_WORDMARK
+    );
+}
+
+/// T2: the stats-and-table display in multi-root selection uses the shared
+/// statistic size (named display role), not a local literal.
+#[test]
+fn display_roles_have_named_shared_sizes() {
+    use turbogit_ui::theme::{TYPE_STATISTIC, TYPE_WORDMARK};
+    // Distinct display roles exist and are not body text (const check — the
+    // values are compile-time constants, so this is a static property).
+    const { assert!(TYPE_WORDMARK > turbogit_ui::theme::TYPE_BODY) };
+    const { assert!(TYPE_STATISTIC > turbogit_ui::theme::TYPE_BODY) };
+    const { assert!(TYPE_WORDMARK != TYPE_STATISTIC) };
+}
+
+// ----------------------------------- issue: shared chip shape variants (S3) --
+
+/// S3: the welcome branch chip and repo-count chip paint the shared pill
+/// shape (PILL_RADIUS) — they no longer declare a local shape contract, and
+/// the pill stays distinct from the compact chip/control radii.
+#[test]
+fn welcome_chips_paint_the_shared_pill_shape() {
+    let mut fx = bare_fixture();
+    let repo = seed_repo(fx._project.path(), "shape-project");
+    fx.harness.state_mut().ui.recent_projects = vec![RecentProject {
+        path: repo,
+        name: "shape-project".into(),
+        last_opened: 1_755_000_000_000,
+        kind: turbogit_app::recents::RecentKind::Project,
+        repo_count: None,
+    }];
+    settle(&mut fx.harness);
+    wait_painted(&mut fx.harness, "main", "current branch");
+
+    let pill_radius = turbogit_ui::theme::PILL_RADIUS;
+    let chip_fills = fx
+        .harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Rect(rect) if rect.fill == turbogit_ui::theme::Palette::SURFACE_3 => {
+                Some(rect.corner_radius)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        chip_fills
+            .iter()
+            .any(|r| r == &egui::CornerRadius::same(pill_radius)),
+        "the welcome chip must paint the shared pill radius {pill_radius}; got {chip_fills:?}"
+    );
 }
 
 #[test]

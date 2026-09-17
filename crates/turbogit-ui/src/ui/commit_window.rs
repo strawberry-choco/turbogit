@@ -200,7 +200,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
     if let Some(err) = &state.last_error {
         ui.separator();
-        ui.colored_label(Color32::RED, format!("⚠ {err}"));
+        ui.colored_label(Palette::STATE_ERROR, format!("⚠ {err}"));
     }
 }
 
@@ -821,7 +821,9 @@ fn change_row(
     let included = state.ui.selected.contains(&key);
     let tint = status_color(c.status);
     let (name, location) = row_display(&c.path);
-    let font = FontId::new(12.5, FontFamily::Proportional);
+    // The file-row name rides the shared body type (T2) — one size role for
+    // filename/body text across tool windows, not a local fractional copy.
+    let font = FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional);
     let painter = ui.painter().clone();
 
     // ---- measure, then allocate --------------------------------------
@@ -1350,7 +1352,7 @@ fn commit_message_box(ui: &mut Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
         ui.label(format!("Subject: {slen}/50"));
         if slen > 50 {
-            ui.colored_label(Color32::from_rgb(230, 120, 110), "(keep ≤ 50)");
+            ui.colored_label(Palette::STATE_WARNING, "(keep ≤ 50)");
         }
     });
 
