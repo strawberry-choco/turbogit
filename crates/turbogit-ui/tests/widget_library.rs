@@ -36,10 +36,10 @@ fn palette_tokens_required_by_widgets_match_the_spec_hexes() {
     assert_eq!(Palette::LINE, Color32::from_rgb(0x4e, 0x51, 0x57));
     assert_eq!(Palette::LINE_SUBTLE, Color32::from_rgb(0x36, 0x38, 0x3c));
 
-    // Ink.
+    // Ink (B2: INK_2/INK_3 alias the lifted T_SECONDARY/T_MUTED ramp).
     assert_eq!(Palette::INK, Color32::from_rgb(0xbc, 0xbe, 0xc4));
-    assert_eq!(Palette::INK_2, Color32::from_rgb(0xa0, 0xa3, 0xab));
-    assert_eq!(Palette::INK_3, Color32::from_rgb(0x80, 0x80, 0x80));
+    assert_eq!(Palette::INK_2, Palette::T_SECONDARY);
+    assert_eq!(Palette::INK_3, Palette::T_MUTED);
 
     // Brand.
     assert_eq!(Palette::BRAND, Color32::from_rgb(0x35, 0x74, 0xf0));

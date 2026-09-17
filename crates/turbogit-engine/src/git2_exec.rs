@@ -297,6 +297,11 @@ impl GitExecutor for Git2Executor {
     }
 
     fn show_file_bytes(&self, root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
+        // libgit2's rev parser does not support index-stage specs. Keep these
+        // reads on the CLI path so staged/conflict blobs never use worktree bytes.
+        if matches!(rev, ":0" | ":1" | ":2" | ":3") {
+            return self.cli.show_file_bytes(root, rev, path);
+        }
         let repo = self.open(root)?;
         let spec = format!("{}:{}", rev, path.to_string_lossy());
         let obj = repo.revparse_single(&spec).map_err(err)?;

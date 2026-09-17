@@ -20,14 +20,8 @@ use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{Root, RootId};
 
-/// The four row-level states a repo's status dot can express.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DotState {
-    Clean,
-    Dirty,
-    Conflict,
-    Diverged,
-}
+/// Sidebar and branch headers share state meanings and colors.
+pub use crate::theme::RepoState as DotState;
 
 /// A repo node: a repository root with its git state and, when
 /// repositories nest, the nodes beneath it.
@@ -440,18 +434,9 @@ fn basename(path: &Path) -> String {
         .to_string()
 }
 
-/// One row's dot state: conflict wins, then divergence from upstream, then
-/// uncommitted work, else clean.
+/// Use the same precedence as the branch section header.
 fn dot_state(root: &Root, ahead: usize, behind: usize) -> DotState {
-    if !root.status.conflicted.is_empty() {
-        DotState::Conflict
-    } else if ahead + behind > 0 {
-        DotState::Diverged
-    } else if root.status.modified() + root.status.unversioned() > 0 {
-        DotState::Dirty
-    } else {
-        DotState::Clean
-    }
+    DotState::from_root(root, ahead, behind)
 }
 
 #[cfg(test)]

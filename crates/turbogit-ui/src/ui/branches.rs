@@ -235,9 +235,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     toolbar(&mut toolbar_ui, state);
     ui.advance_cursor_after_rect(toolbar_rect);
 
-    let content_rect = Rect::from_min_max(Pos2::new(body.min.x, toolbar_rect.max.y), body.max);
+    let content_rect = Rect::from_min_max(Pos2::new(body.min.x, toolbar_rect.max.y), body.max)
+        .intersect(ui.clip_rect());
+    let detail_width = DETAIL_W.min(content_rect.width().max(0.0));
     let detail_rect = Rect::from_min_max(
-        Pos2::new(content_rect.max.x - DETAIL_W, content_rect.min.y),
+        Pos2::new(content_rect.max.x - detail_width, content_rect.min.y),
         content_rect.max,
     );
     let list_rect = Rect::from_min_max(
@@ -751,11 +753,32 @@ fn checkout_branch(state: &mut AppState, root: &RootId, branch: &Branch) {
     state.checkout_branch_op(root, branch.kind, &branch.name);
 }
 
+/// Wrap prose within the visible panel, including both side insets.
+fn detail_label(ui: &mut Ui, text: RichText) {
+    let width = ui
+        .available_width()
+        .min(ui.clip_rect().right() - ui.cursor().left());
+    ui.allocate_ui_with_layout(
+        egui::Vec2::new(width.max(0.0), 0.0),
+        Layout::left_to_right(Align::Min),
+        |ui| {
+            let inset = PAD_LIST.min(width.max(0.0) / 4.0);
+            ui.add_space(inset);
+            ui.add_sized(
+                egui::Vec2::new((width - 2.0 * inset).max(0.0), 0.0),
+                egui::Label::new(text).wrap(),
+            );
+        },
+    );
+}
+
 /// Detail panel (280px): paints its background + left divider, then the
 /// selected branch's block (issue 05) or the quiet selection prompt. It never
 /// blocks the list — it is a side panel on the same frame.
 fn detail_panel(ui: &mut Ui, state: &mut AppState) {
-    let rect = ui.available_rect_before_wrap();
+    let rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
+    ui.set_clip_rect(rect);
+    ui.set_max_width(rect.width().max(0.0));
     ui.painter().rect_filled(
         rect,
         CornerRadius::same(Palette::RADIUS_CONTROL),
@@ -773,23 +796,16 @@ fn detail_panel(ui: &mut Ui, state: &mut AppState) {
         ui.add_space(24.0);
         crate::ui::components::detail_panel_header(ui, "Branches");
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(PAD_LIST);
-            ui.label(
-                RichText::new("Select a branch")
-                    .font(data_font(TYPE_DETAIL_TITLE))
-                    .color(Palette::T_PRIMARY),
-            );
-        });
+        detail_label(
+            ui,
+            RichText::new("Select a branch")
+                .font(data_font(TYPE_DETAIL_TITLE))
+                .color(Palette::T_PRIMARY),
+        );
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.add_space(PAD_LIST);
-            ui.label(
-                RichText::new("See how it relates to the current branch, its latest commit, and what you can do with it.")
-                    .font(chrome_font(TYPE_CONTROL))
-                    .color(Palette::T_MUTED),
-            );
-        });
+        detail_label(ui, RichText::new("See how it relates to the current branch, its latest commit, and what you can do with it.")
+            .font(chrome_font(TYPE_CONTROL))
+            .color(Palette::T_MUTED));
         return;
     };
 
@@ -840,14 +856,12 @@ fn detail_panel(ui: &mut Ui, state: &mut AppState) {
                     );
                 });
                 ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(PAD_LIST);
-                    ui.label(
-                        RichText::new(tip.message.clone())
-                            .font(data_font(TYPE_BODY))
-                            .color(Palette::T_PRIMARY),
-                    );
-                });
+                detail_label(
+                    ui,
+                    RichText::new(tip.message.clone())
+                        .font(data_font(TYPE_BODY))
+                        .color(Palette::T_PRIMARY),
+                );
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     ui.add_space(PAD_LIST);
@@ -889,14 +903,12 @@ fn relationship_line(ui: &mut Ui, _branch: &Branch, meta: &RowMeta) {
     if let Some(up) = &meta.upstream {
         parts.push(format!("tracks {up}"));
     }
-    ui.horizontal(|ui| {
-        ui.add_space(PAD_LIST);
-        ui.label(
-            RichText::new(parts.join(" · "))
-                .font(chrome_font(TYPE_CONTROL))
-                .color(Palette::T_SECONDARY),
-        );
-    });
+    detail_label(
+        ui,
+        RichText::new(parts.join(" · "))
+            .font(chrome_font(TYPE_CONTROL))
+            .color(Palette::T_SECONDARY),
+    );
 }
 
 /// The action list in the spec's order and wording (issue 05): Checkout
@@ -1044,5 +1056,48 @@ fn delete_consequence(state: &mut AppState, id: &RootId, branch: &Branch) -> Opt
             "this branch has {n} commit(s) not on {current} — they become unreachable after deleting"
         )),
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod visual_tests {
+    use super::*;
+
+    #[test]
+    fn detail_prompt_wraps_to_allocated_and_clipped_width() {
+        let project = tempfile::tempdir().unwrap();
+        let config = tempfile::tempdir().unwrap();
+        let state = AppState::launch_in(Some(project.path().into()), Some(config.path().into()));
+        let mut harness = egui_kittest::Harness::new_ui_state(
+            |ui, state| {
+                crate::theme::configure_style(ui.ctx());
+                // Reproduce a nominal 280px allocation with only 208px visible.
+                let rect = Rect::from_min_size(ui.cursor().min, egui::vec2(DETAIL_W, 400.0));
+                let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
+                child.set_clip_rect(rect.intersect(ui.clip_rect()));
+                detail_panel(&mut child, state);
+            },
+            state,
+        );
+        crate::theme::install_fonts(&harness.ctx);
+        for width in [280.0, 208.0, 120.0] {
+            harness.set_size(egui::vec2(width, 500.0));
+            harness.run();
+            let shape = harness.output().shapes.iter().find(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().starts_with("See how"))
+            }).expect("detail prompt painted");
+            let egui::Shape::Text(text) = &shape.shape else {
+                unreachable!()
+            };
+            assert!(text.galley.rows.len() > 1, "prose must wrap");
+            let bounds = text.galley.rect.translate(text.pos.to_vec2());
+            assert!(
+                bounds.right() <= shape.clip_rect.right(),
+                "prose cut mid-word: {bounds:?} / {:?}",
+                shape.clip_rect
+            );
+            assert!(shape.clip_rect.right() <= width);
+            assert!(text.galley.text().ends_with("do with it."), "no lost prose");
+        }
     }
 }

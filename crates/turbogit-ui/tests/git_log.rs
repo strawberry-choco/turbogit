@@ -370,6 +370,20 @@ fn ref_labels_collapse_into_a_single_pill_revealed_on_hover() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
 
+    // Commit order is (time descending, hash ascending), not fixture creation
+    // order. Force the decorated c1 row first so this test cannot accidentally
+    // rely on it being the bottom pill when fixture commits share a second.
+    let root = RootId(seed.alpha.clone().into());
+    let mut commits = harness.state().caches.log(&root).unwrap().to_vec();
+    let newest = commits.iter().map(|commit| commit.time).max().unwrap();
+    commits
+        .iter_mut()
+        .find(|commit| commit.id == seed.c1)
+        .unwrap()
+        .time = newest + 86_400;
+    harness.state_mut().caches.store_log(root, commits);
+    settle(&mut harness);
+
     // The union shows 4 commits: c1 (remote origin/main + tag v1.0), c3
     // (main) and the beta root (main) are decorated; the ref-less c2 row is
     // not. Each decorated commit paints exactly one compact label pill —
@@ -399,19 +413,43 @@ fn ref_labels_collapse_into_a_single_pill_revealed_on_hover() {
         );
     }
 
-    // Hovering the bottom-most pill (c1's, carrying origin/main + v1.0)
-    // reveals the names in the tooltip.
-    let pill = label_pills(&harness)
-        .into_iter()
-        .max_by(|a, b| a.top().total_cmp(&b.top()))
-        .expect("a pill exists");
-    let before = count_exact(&harness, "origin/main") + count_exact(&harness, "v1.0");
+    // Locate c1 by its painted hash, not by its position in the sorted union.
+    // Its pill carries origin/main + v1.0 regardless of timestamps or hashes.
+    let hash = galley_origin(&harness, &short(&seed.c1)).expect("c1 hash is painted");
+    let pills = label_pills(&harness);
+    let matching: Vec<_> = pills
+        .iter()
+        .filter(|pill| pill.y_range().contains(hash.y))
+        .collect();
+    assert_eq!(matching.len(), 1, "exactly one pill on c1's row");
+    let pill = matching[0];
+    assert!(
+        pills.iter().any(|other| other.top() > pill.top()),
+        "fixture must exercise c1 away from the bottom pill"
+    );
+    assert!(
+        graph_region(&harness).contains(pill.center()),
+        "hover point must be inside the visible graph"
+    );
+    let before_remote = count_exact(&harness, "origin/main");
+    let before_tag = count_exact(&harness, "v1.0");
+    let before = before_remote + before_tag;
     harness.hover_at(pill.center());
     settle(&mut harness);
     let after = count_exact(&harness, "origin/main") + count_exact(&harness, "v1.0");
     assert!(
         after > before,
         "hovering the labels pill must reveal the ref names (before={before}, after={after})"
+    );
+    assert_eq!(
+        count_exact(&harness, "origin/main"),
+        before_remote + 1,
+        "c1 tooltip reveals its remote"
+    );
+    assert_eq!(
+        count_exact(&harness, "v1.0"),
+        before_tag + 1,
+        "c1 tooltip reveals its tag"
     );
 }
 

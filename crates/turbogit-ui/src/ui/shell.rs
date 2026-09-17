@@ -41,7 +41,7 @@ pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 pub const MIN_SIDEBAR_WINDOW_WIDTH: f32 = 1000.0;
 
 const TAB_ICON_SIZE: f32 = 14.0; // §6.2 tab icons
-const TAB_TEXT: f32 = 12.0;
+const TAB_TEXT: f32 = crate::theme::TYPE_CONTROL;
 
 /// Compose the whole shell: frozen shortcuts, the new shell frame
 /// regions (topbar / repo header / center tabs / status bar), then the
@@ -444,8 +444,8 @@ fn paint_icon_centered(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: 
 
 const TOPBAR_BRANDSIZE: f32 = 16.0; // brand-icon size (spec §4.2)
 const TOPBAR_ICON_SIZE: f32 = 14.0; // topbar action icons (spec §4.2)
-const TOPBAR_TEXT: f32 = 13.0; // topbar text scale (spec §4.2)
-const TOPBAR_ACTIONS_TEXT: f32 = 12.0; // right-cluster button text
+const TOPBAR_TEXT: f32 = crate::theme::TYPE_BODY;
+const TOPBAR_ACTIONS_TEXT: f32 = crate::theme::TYPE_CONTROL;
 
 /// Topbar (issue #03, screen 01): TurboGit brand on the left, then a
 /// workspace selector that opens the picker (issue #34) and a breadcrumb
@@ -474,7 +474,7 @@ fn render_topbar(ui: &mut Ui, state: &mut AppState) {
                 ui.label(
                     RichText::new("TurboGit")
                         .strong()
-                        .font(FontId::new(TOPBAR_TEXT + 1.0, FontFamily::Proportional))
+                        .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
                         .color(Palette::INK),
                 );
                 ui.add_space(16.0);
@@ -699,7 +699,7 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
                 ui.label(
                     RichText::new(&root_name)
                         .strong()
-                        .font(FontId::new(14.0, FontFamily::Proportional))
+                        .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
                         .color(Palette::INK),
                 );
                 icons::icon(ui, Icon::CHEVRON_DOWN, 12.0, Palette::INK_3);
@@ -721,7 +721,7 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let refresh = ui.button(
                         RichText::new("Refresh")
-                            .font(FontId::new(12.0, FontFamily::Proportional))
+                            .font(crate::theme::chrome_font(crate::theme::TYPE_BODY))
                             .color(Palette::INK_2),
                     );
                     widgets::focus_ring(ui, &refresh);
@@ -739,8 +739,8 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
 fn branch_pill(ui: &mut Ui, branch: &str) {
     let galley = ui.painter().layout_no_wrap(
         branch.to_owned(),
-        FontId::new(12.0, FontFamily::Proportional),
-        Palette::BRAND,
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
+        Palette::ACCENT_TEXT,
     );
     let pad = 6.0;
     let h = 22.0;
@@ -762,7 +762,7 @@ fn branch_pill(ui: &mut Ui, branch: &str) {
     ui.painter().galley_with_override_text_color(
         Pos2::new(rect.left() + pad, rect.center().y - galley.size().y / 2.0),
         galley,
-        Palette::BRAND,
+        Palette::ACCENT_TEXT,
     );
 }
 
@@ -777,7 +777,7 @@ fn dirty_badge(ui: &mut Ui, dirty_count: usize) {
     let bg = widgets::tint_over_bg(fg, 0.18);
     let galley = ui.painter().layout_no_wrap(
         dirty_count.to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         fg,
     );
     let pad = 6.0;
@@ -937,13 +937,17 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
     let chip = |ui: &mut Ui, color: Color32, text: String| {
         ui.label(
             RichText::new("·")
-                .font(FontId::new(11.0, FontFamily::Proportional))
+                .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                 .color(Palette::INK_3),
         );
         ui.colored_label(color, text);
     };
     if state.ui.char_selection.is_some() {
-        chip(ui, Palette::BRAND, "1 line-selection active".to_owned());
+        chip(
+            ui,
+            Palette::ACCENT_TEXT,
+            "1 line-selection active".to_owned(),
+        );
     }
     let granularity = match state.ui.diff_granularity {
         Granularity::File => "file",
@@ -1042,7 +1046,7 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
         if !first {
             ui.label(
                 RichText::new("·")
-                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                     .color(Palette::INK_3),
             );
         }
@@ -1090,7 +1094,7 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
 fn status_total(agg: &AggregatedStatus, ui: &mut Ui) {
     ui.label(
         RichText::new(format!("{} total", agg.total))
-            .font(FontId::new(11.0, FontFamily::Proportional))
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
             .color(Palette::INK_2),
     );
 }

@@ -45,6 +45,103 @@ fn legacy_state_with_removed_theme_mode_still_loads() {
     assert_eq!(hc.settings, light.settings);
 }
 
+#[test]
+fn p0_shell_defaults_use_the_branch_type_ramp() {
+    use egui::TextStyle;
+    let ctx = egui::Context::default();
+    configure_style(&ctx);
+    let style = ctx.style_of(egui::Theme::Dark);
+    for (role, font) in [
+        (TextStyle::Body, theme::chrome_font(theme::TYPE_BODY)),
+        (TextStyle::Button, theme::chrome_font(theme::TYPE_CONTROL)),
+        (TextStyle::Small, theme::chrome_font(theme::TYPE_CONTROL)),
+        (
+            TextStyle::Heading,
+            theme::chrome_font(theme::TYPE_DETAIL_TITLE),
+        ),
+        (TextStyle::Monospace, theme::data_font(theme::TYPE_BODY)),
+    ] {
+        assert_eq!(style.text_styles[&role], font, "{role:?}");
+    }
+}
+
+#[test]
+fn p0_muted_and_accent_ink_meet_aa_on_audited_surfaces() {
+    fn luminance(color: Color32) -> f64 {
+        let linear = |v: u8| {
+            let s = f64::from(v) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+    }
+    assert_eq!(Palette::INK_3, Palette::T_MUTED);
+    for (ink_name, ink) in [
+        ("muted", Palette::T_MUTED),
+        ("secondary", Palette::T_SECONDARY),
+        ("accent ink", Palette::ACCENT_TEXT),
+    ] {
+        for (surface_name, surface) in [
+            ("content", Palette::CONTENT_BG),
+            ("surface", Palette::SURFACE),
+            ("sidebar", Palette::SIDEBAR),
+            ("panel", Palette::PANEL_BG),
+            ("hover", Palette::SURFACE_2),
+            ("raised", Palette::SURFACE_3),
+            ("selection", Palette::SELECTION),
+            ("selection bg", Palette::SELECTION_BG),
+        ] {
+            let ratio = (luminance(ink) + 0.05) / (luminance(surface) + 0.05);
+            println!("{ink_name} on {surface_name}: {ratio:.3}:1");
+            assert!(ratio >= 4.5, "{ink_name} on {surface_name}: {ratio:.3}:1");
+        }
+    }
+}
+
+#[test]
+fn p0_repo_state_shared_mapping_is_app_wide() {
+    use turbogit_ui::theme::RepoState;
+    // One status→colour map: dots, smart groups, badges and headers agree.
+    let expected = [
+        (RepoState::Clean, Palette::AHEAD),
+        (RepoState::Unpushed, Palette::AHEAD),
+        (RepoState::Dirty, Palette::COUNTER),
+        (RepoState::Unpulled, Palette::COUNTER),
+        (RepoState::Conflict, Palette::STATUS_DIVERGED),
+        (RepoState::Diverged, Palette::STATUS_DIVERGED),
+    ];
+    for (state, color) in expected {
+        assert_eq!(state.color(), color, "{state:?}");
+    }
+    assert_eq!(
+        turbogit_ui::ui::sidebar::dot_color(RepoState::Dirty),
+        Palette::COUNTER
+    );
+    assert_eq!(
+        turbogit_ui::ui::sidebar::dot_color(RepoState::Diverged),
+        Palette::STATUS_DIVERGED
+    );
+    // Sync badge vocabulary matches the same map.
+    assert_eq!(
+        turbogit_ui::ui::components::sync_ink(turbogit_ui::ui::components::SyncKind::Diverged),
+        RepoState::Diverged.color()
+    );
+    assert_eq!(
+        turbogit_ui::ui::components::sync_ink(turbogit_ui::ui::components::SyncKind::Behind),
+        RepoState::Unpulled.color()
+    );
+    assert_eq!(
+        turbogit_ui::ui::components::sync_ink(turbogit_ui::ui::components::SyncKind::Ahead),
+        RepoState::Unpushed.color()
+    );
+    // Status-bar counters use the same family (diverged red, dirty/unpulled orange).
+    assert_eq!(RepoState::Diverged.color(), Palette::STATUS_DIVERGED);
+    assert_eq!(RepoState::Unpulled.color(), Palette::COUNTER);
+}
+
 // --- Cycle 2: dark-only Visuals derive from the central token set (spec §2.5) ---
 use egui::Color32;
 use turbogit_ui::theme::{self, Palette, configure_style};
@@ -54,7 +151,6 @@ const SURFACE: Color32 = Color32::from_rgb(0x2b, 0x2d, 0x30);
 const SURFACE_2: Color32 = Color32::from_rgb(0x31, 0x34, 0x38);
 const SURFACE_3: Color32 = Color32::from_rgb(0x3c, 0x3f, 0x41);
 const INK: Color32 = Color32::from_rgb(0xbc, 0xbe, 0xc4);
-const INK_2: Color32 = Color32::from_rgb(0xa0, 0xa3, 0xab);
 const BRAND: Color32 = Color32::from_rgb(0x35, 0x74, 0xf0);
 const STATE_WARNING: Color32 = Color32::from_rgb(0xf9, 0xa8, 0x25);
 const STATE_ERROR: Color32 = Color32::from_rgb(0xef, 0x53, 0x50);
@@ -71,7 +167,11 @@ fn dark_visuals_map_the_spec_tokens() {
     assert_eq!(v.override_text_color, Some(INK), "override_text_color");
     assert_eq!(v.faint_bg_color, SURFACE_2, "faint_bg_color");
     assert_eq!(v.code_bg_color, SURFACE_3, "code_bg_color");
-    assert_eq!(v.hyperlink_color, BRAND, "hyperlink_color");
+    assert_eq!(
+        v.hyperlink_color,
+        Palette::ACCENT_TEXT,
+        "hyperlink_color (B2: readable accent ink)"
+    );
     assert_eq!(v.warn_fg_color, STATE_WARNING, "warn_fg_color");
     assert_eq!(v.error_fg_color, STATE_ERROR, "error_fg_color");
     assert!(v.dark_mode, "dark-only app must stay in dark mode");
@@ -84,9 +184,17 @@ fn widget_states_follow_the_surface_mapping() {
     let w = &ctx.style_of(egui::Theme::Dark).visuals.widgets;
 
     assert_eq!(w.noninteractive.bg_fill, SURFACE, "noninteractive.bg_fill");
-    assert_eq!(w.noninteractive.fg_stroke.color, INK_2, "noninteractive.fg");
+    assert_eq!(
+        w.noninteractive.fg_stroke.color,
+        Palette::T_SECONDARY,
+        "noninteractive.fg (B2 lift)"
+    );
     assert_eq!(w.inactive.bg_fill, SURFACE_2, "inactive.bg_fill");
-    assert_eq!(w.inactive.fg_stroke.color, INK_2, "inactive.fg");
+    assert_eq!(
+        w.inactive.fg_stroke.color,
+        Palette::T_SECONDARY,
+        "inactive.fg (B2 lift)"
+    );
     assert_eq!(w.hovered.bg_fill, SURFACE_2, "hovered.bg_fill");
     assert_eq!(w.hovered.fg_stroke.color, INK, "hovered.fg");
     assert_eq!(w.active.bg_fill, SURFACE_3, "active.bg_fill");
