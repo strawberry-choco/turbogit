@@ -25,7 +25,7 @@ use crate::ui::branch_tree_view::{self, LocalRow, TreeEvent, TreeGroup, TreeProp
 use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches_tree::{self, BranchNode, BranchView};
 use crate::ui::components::{
-    DETAIL_W, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button,
+    DETAIL_W, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button, kit_button_at,
 };
 use crate::ui::widgets;
 
@@ -85,13 +85,11 @@ pub fn ordered_locals(locals: &[Branch], current: Option<&str>) -> Vec<Branch> {
     rest
 }
 
-/// Character budget for a branch name at `avail` pixels of row width: mono 12
-/// runs ~7px/char; names truncate in the middle so both ends stay readable.
-pub fn name_budget(avail: f32) -> usize {
-    ((avail / 7.0).floor() as usize).clamp(8, 48)
-}
-
 // --- Issue 04: row state at a glance ------------------------------------------
+
+/// Height of the lane above the list that carries "working…" and the delete-undo
+/// banner. Allocated every frame, so a quiet read never shifts the list down.
+const QUIET_LANE_H: f32 = 24.0;
 
 /// Stale threshold — a branch untouched for ~4 weeks is dimmed (never
 /// hidden). Configurable later (design doc §11 Q2).
@@ -112,9 +110,10 @@ pub struct RowMeta {
     pub stale: bool,
     /// Upstream tracking branch (e.g. `origin/main`), if any.
     pub upstream: Option<String>,
-    /// The row's sync pair (icon+count, or "gone") when the branch tracks
-    /// an upstream and has something to report; `None` when it is in sync.
-    pub badge: Option<(SyncKind, String)>,
+    /// The row's sync badges — one per direction, so a diverged row carries
+    /// both — when the branch tracks an upstream and has something to report.
+    /// Empty when there is nothing to say.
+    pub badge: Vec<(SyncKind, String)>,
 }
 
 /// Assemble the row's metadata at `now`.
@@ -125,28 +124,12 @@ pub fn row_meta(branch: &Branch, now: chrono::DateTime<chrono::Utc>) -> RowMeta 
         badge: branch
             .tracking
             .as_ref()
-            .and_then(|_| sync_badge(branch.ahead, branch.behind, branch.gone)),
+            .map(|_| sync_badge(branch.ahead, branch.behind, branch.gone))
+            .unwrap_or_default(),
     }
 }
 
 use crate::ui::components::sync_badge;
-
-/// Per-direction chips for a tracked row (issue 04): icon+count pairs or the
-/// gone marker — a branch with nothing to report is left unmarked, never
-/// labelled "in sync".
-pub fn sync_chips(ahead: usize, behind: usize, gone: bool) -> Vec<(SyncKind, String)> {
-    if gone {
-        return vec![(SyncKind::Gone, "gone".to_string())];
-    }
-    let mut v = Vec::new();
-    if ahead > 0 {
-        v.push((SyncKind::Ahead, ahead.to_string()));
-    }
-    if behind > 0 {
-        v.push((SyncKind::Behind, behind.to_string()));
-    }
-    v
-}
 
 // --- Issue 06: search & jump ------------------------------------------------------
 
@@ -201,11 +184,10 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     branch_tree_view::warm_tags(state);
     // Build the repo-grouped view model once (pure; issue 01).
     let tags_by_root = state.ui.branches_tags.clone();
-    let view = branches_tree::build_branch_view(
-        &state.multi.roots,
-        &tags_by_root,
-        state.ui.branches_tree.show_remotes,
-    );
+    let branches_tree = &state.ui.branches_tree;
+    let view = branches_tree::build_branch_view(&state.multi.roots, &tags_by_root, &|root| {
+        branch_tree_view::remotes_revealed(branches_tree, root)
+    });
 
     // Esc clears the filter first, then closes the detail area (§9). Read at
     // the very top of the frame, before any widget could consume it.
@@ -496,11 +478,24 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         collapse_remotes_by_default: false,
     };
 
-    // Issue 15: an operation in flight shows in place — a muted "working…"
-    // line above the list, never a silent wait. The busy flag is shell-global,
-    // so the mid-operation state survives switching tabs.
-    if has_any_data && state.ui.busy {
-        ui.horizontal(|ui| {
+    // Issue 15: an operation in flight and the delete-undo window both speak
+    // above the list. They share a lane that is allocated every frame, with or
+    // without content, so neither one shifts the list it reports on. The banner
+    // wins when both would speak: it is actionable and self-expiring, while the
+    // shell's activity strip already carries the in-flight state.
+    let (lane, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), QUIET_LANE_H),
+        egui::Sense::hover(),
+    );
+    let mut lane_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(lane)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+    );
+    if state.ui.branches_undo.is_some() {
+        undo_banner(&mut lane_ui, state);
+    } else if has_any_data && state.ui.busy {
+        lane_ui.horizontal(|ui| {
             ui.add_space(PAD_LIST);
             ui.label(
                 RichText::new("working…")
@@ -509,9 +504,6 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
             );
         });
     }
-    // Deleted-branch undo lives at the top of the list for a short window
-    // (issue 12).
-    undo_banner(ui, state);
 
     let events = branch_tree_view::branch_tree(ui, &props, &mut state.ui.branches_tree);
     for event in events {
@@ -601,13 +593,18 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
                 state.ui.branches_tree.collapsed_remotes.insert(key);
             }
         }
-        TreeEvent::RemotesVisibleChanged { visible } => {
-            state.ui.branches_tree.show_remotes = visible;
+        TreeEvent::RemoteRevealToggled { root, revealed } => {
+            // One repository's own reveal. `show_remotes` stays the view-wide
+            // switch the Git Log pane forces.
+            if revealed {
+                state.ui.branches_tree.remotes_revealed.insert(root);
+            } else {
+                state.ui.branches_tree.remotes_revealed.remove(&root);
+            }
         }
-        TreeEvent::FetchRequested { .. } => {
-            // The repo-level Fetch covers the narrowed repo's scope — or all
-            // in-scope repos when nothing is narrowed (issue 03).
-            fetch_scope(state);
+        TreeEvent::FetchRequested { root } => {
+            // The header belongs to one repository, and Fetch means that one.
+            fetch_root(state, &root);
         }
         TreeEvent::RenameStarted { root, branch } => {
             state.ui.branches_tree.overflow = None;
@@ -650,33 +647,38 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
     }
 }
 
-/// The view-wide Fetch (issue 03). Reachable from every repo header, it covers
-/// the narrowed repo's scope — or all in-scope repos when nothing is narrowed —
-/// so primary actions never leave reach. Each target records its pre-fetch
-/// remote snapshot so the report can say what *that* repo changed.
+/// The view-wide Fetch (issue 03): the narrowed repo's scope, or all in-scope
+/// repos when nothing is narrowed. Reachable from the topbar and the Git Log
+/// pane; a repo header uses [`fetch_root`] for just its own repository.
 pub fn fetch_scope(state: &mut AppState) {
     let targets: Vec<RootId> = match &state.ui.branches_repo_filter {
         Some(id) => vec![id.clone()],
         None => state.multi.roots.iter().map(|r| r.id.clone()).collect(),
     };
     for rid in targets {
-        let before: Vec<String> = state
-            .multi
-            .by_id(&rid)
-            .map(|r| {
-                r.branches
-                    .iter()
-                    .filter(|b| b.kind == BranchKind::Remote)
-                    .map(|b| b.name.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        state.ui.branches_fetch_before.push((rid.clone(), before));
-        let exec_rid = rid.clone();
-        state.run_git("Fetch".to_string(), Affected::Root(rid), move |v| {
-            v.fetch(&exec_rid.0, None)
-        });
+        fetch_root(state, &rid);
     }
+}
+
+/// Fetch one repository, recording its pre-fetch remote snapshot so the report
+/// can say what *that* repo changed.
+pub fn fetch_root(state: &mut AppState, rid: &RootId) {
+    let before: Vec<String> = state
+        .multi
+        .by_id(rid)
+        .map(|r| {
+            r.branches
+                .iter()
+                .filter(|b| b.kind == BranchKind::Remote)
+                .map(|b| b.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    state.ui.branches_fetch_before.push((rid.clone(), before));
+    let exec_rid = rid.clone();
+    state.run_git("Fetch".to_string(), Affected::Root(rid.clone()), move |v| {
+        v.fetch(&exec_rid.0, None)
+    });
 }
 
 /// Short-window undo affordance for a deleted branch (issue 12): rendered at
@@ -889,17 +891,11 @@ fn detail_panel(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// One quiet relationship line: the sync state vs its tracked remote
-/// ("2 ahead · 1 behind · tracks origin/main", "tracks origin/main" when in
-/// sync the row is unmarked).
+/// ("2 ahead · 1 behind · tracks origin/main"). The status words come from
+/// [`sync_badge`], the same source the row's chips read, so the panel and the
+/// list cannot drift.
 fn relationship_line(ui: &mut Ui, _branch: &Branch, meta: &RowMeta) {
-    let mut parts = Vec::new();
-    if let Some((kind, label)) = &meta.badge {
-        parts.push(match kind {
-            SyncKind::Ahead => format!("{label} ahead"),
-            SyncKind::Behind => format!("{label} behind"),
-            SyncKind::Diverged | SyncKind::InSync | SyncKind::Gone => label.clone(),
-        });
-    }
+    let mut parts: Vec<String> = meta.badge.iter().map(|(_, label)| label.clone()).collect();
     if let Some(up) = &meta.upstream {
         parts.push(format!("tracks {up}"));
     }
@@ -936,30 +932,54 @@ fn detail_actions(
         String::new()
     };
     let mut action = None;
+    // One column: every action takes the caller's full content width, whether
+    // this is the detail panel or the ⋯ menu.
+    let width = ui.available_width();
 
-    if kit_button(ui, KitButton::Primary, &format!("Checkout{scope}")).clicked() {
+    if kit_button_at(ui, KitButton::Primary, &format!("Checkout{scope}"), width).clicked() {
         action = Some(BranchAction::Checkout);
     }
     if !is_current {
         if is_local {
-            if kit_button(ui, KitButton::Secondary, &format!("Merge into {current}")).clicked() {
+            if kit_button_at(
+                ui,
+                KitButton::Secondary,
+                &format!("Merge into {current}"),
+                width,
+            )
+            .clicked()
+            {
                 action = Some(BranchAction::Merge);
             }
-            if kit_button(ui, KitButton::Secondary, &format!("Rebase onto {current}")).clicked() {
+            if kit_button_at(
+                ui,
+                KitButton::Secondary,
+                &format!("Rebase onto {current}"),
+                width,
+            )
+            .clicked()
+            {
                 action = Some(BranchAction::Rebase);
             }
         }
-        if kit_button(ui, KitButton::Secondary, &format!("Compare with {current}")).clicked() {
+        if kit_button_at(
+            ui,
+            KitButton::Secondary,
+            &format!("Compare with {current}"),
+            width,
+        )
+        .clicked()
+        {
             action = Some(BranchAction::Compare);
         }
     }
     ui.add_space(2.0);
     ui.separator();
     ui.add_space(2.0);
-    if is_local && kit_button(ui, KitButton::Quiet, "Rename").clicked() {
+    if is_local && kit_button_at(ui, KitButton::Quiet, "Rename", width).clicked() {
         action = Some(BranchAction::Rename);
     }
-    if !is_current && kit_button(ui, KitButton::Danger, "Delete").clicked() {
+    if !is_current && kit_button_at(ui, KitButton::Danger, "Delete", width).clicked() {
         action = Some(BranchAction::Delete);
     }
     action

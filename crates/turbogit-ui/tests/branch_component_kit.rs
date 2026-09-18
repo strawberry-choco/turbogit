@@ -17,8 +17,8 @@ use std::rc::Rc;
 use egui_kittest::{Harness, kittest::Queryable as _};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::components::{
-    CLICK_TARGET_MIN, KIT_ICON_LARGE, KitButton, RowState, SyncKind, middle_truncate, row_fill,
-    sync_badge,
+    CLICK_TARGET_MIN, KIT_ICON_LARGE, KitButton, RowState, SyncKind, current_row_fill,
+    middle_truncate, row_fill, sync_badge,
 };
 use turbogit_ui::ui::widgets::WidgetState;
 
@@ -110,6 +110,35 @@ fn row_fill_states_are_distinct() {
     );
 }
 
+/// The current branch is a fact about the repository, not about the pointer, so
+/// its row owns a resting band. That band must not be mistakable for either
+/// interaction state, and a current row that is also selected must not collapse
+/// into one muddy third state.
+#[test]
+fn current_row_band_is_distinct_from_hover_and_selection() {
+    let rest = current_row_fill(RowState::Default);
+    assert_ne!(
+        rest,
+        row_fill(RowState::Hover),
+        "current must not read as hover"
+    );
+    assert_ne!(
+        rest,
+        row_fill(RowState::Selected),
+        "current must not read as selection"
+    );
+    assert_ne!(
+        current_row_fill(RowState::Selected),
+        rest,
+        "current-and-selected must render differently from current alone"
+    );
+    assert_ne!(
+        current_row_fill(RowState::Hover),
+        rest,
+        "hovering a current row must still answer"
+    );
+}
+
 /// Stale rows dim (never hide); current rows keep primary ink.
 #[test]
 fn stale_rows_dim_without_hiding() {
@@ -129,36 +158,68 @@ fn mid_operation_label_is_first_class() {
 // --- §14.2 section header -----------------------------------------------------
 
 #[test]
-fn section_label_renders_uppercase_with_count() {
+fn section_label_is_uppercase_and_carries_no_count() {
     use turbogit_ui::ui::components::section_label;
-    assert_eq!(section_label("Local", 3), "LOCAL 3");
-    assert_eq!(section_label("Remote", 0), "REMOTE 0");
-    assert_eq!(section_label("Tags", 12), "TAGS 12");
+    // The live count is a badge beside the label (§3.3), never characters
+    // appended to it.
+    assert_eq!(section_label("Local"), "LOCAL");
+    assert_eq!(section_label("Remote"), "REMOTE");
+    assert_eq!(section_label("Tags"), "TAGS");
 }
 
 // --- §14.3 sync badge ----------------------------------------------------------
 
+/// A destructive action is separated at rest, not only by a divider.
+#[test]
+fn danger_rests_tinted_and_grows_stronger() {
+    use turbogit_ui::ui::widgets::WidgetState::{Active, Disabled, Hovered, Idle};
+
+    let rest = KitButton::Danger.fill(Idle);
+    assert_ne!(rest, egui::Color32::TRANSPARENT, "Delete rests tinted");
+    assert_ne!(
+        KitButton::Danger.fill(Disabled),
+        rest,
+        "a disabled destructive action does not keep the resting tint"
+    );
+    for stronger in [
+        KitButton::Danger.fill(Hovered),
+        KitButton::Danger.fill(Active),
+    ] {
+        assert_ne!(stronger, rest, "hover and press stay distinct from rest");
+    }
+    assert_ne!(
+        KitButton::Danger.fill(Hovered),
+        KitButton::Danger.fill(Active),
+        "hover and press are their own states"
+    );
+}
+
 #[test]
 fn sync_badge_contract_matches_design() {
-    // Ahead / behind render as icon + count pairs, never the bare arrow (§4).
+    // The badge states the relationship in words, one entry per direction; the
+    // arrow itself is the chip's icon, so it never duplicates it in the label.
     assert_eq!(
         sync_badge(2, 0, false),
-        Some((SyncKind::Ahead, "↑2".to_string()))
+        vec![(SyncKind::Ahead, "2 ahead".to_string())]
     );
     assert_eq!(
         sync_badge(0, 1, false),
-        Some((SyncKind::Behind, "↓1".to_string()))
+        vec![(SyncKind::Behind, "1 behind".to_string())]
     );
+    // Diverged is the pair, not one combined marker.
     assert_eq!(
         sync_badge(2, 1, false),
-        Some((SyncKind::Diverged, "↑2 ↓1".to_string()))
+        vec![
+            (SyncKind::Ahead, "2 ahead".to_string()),
+            (SyncKind::Behind, "1 behind".to_string()),
+        ]
     );
-    // In sync is left unmarked — the row shows nothing rather than a label.
-    assert_eq!(sync_badge(0, 0, false), None);
+    // In sync says nothing — an empty list, not a label.
+    assert_eq!(sync_badge(0, 0, false), vec![]);
     // A deleted upstream wins over any count.
     assert_eq!(
         sync_badge(3, 0, true),
-        Some((SyncKind::Gone, "gone".to_string()))
+        vec![(SyncKind::Gone, "gone".to_string())]
     );
 }
 
@@ -234,10 +295,12 @@ fn quiet_button_is_text_only_and_quiet() {
 }
 
 #[test]
-fn danger_button_is_red_text_only() {
+fn danger_button_keeps_red_ink_on_a_tinted_block() {
     assert_eq!(KitButton::Danger.ink(WidgetState::Idle), Palette::DANGER);
     assert_eq!(KitButton::Danger.ink(WidgetState::Hovered), Palette::DANGER);
-    assert_eq!(
+    // Ticket 07: Delete no longer rests fully transparent — a destructive
+    // action separated only by a divider was still not separated at rest.
+    assert_ne!(
         KitButton::Danger.fill(WidgetState::Idle),
         egui::Color32::TRANSPARENT
     );
@@ -312,9 +375,9 @@ fn kit_smoke_renders_and_targets_stay_clickable() {
     let mut harness = kit_harness(primary.clone(), danger.clone());
     harness.step();
 
-    // The section label paints; the strip (accessible label "Local") is the
-    // click target.
-    let _ = harness.get_by_label("LOCAL 3");
+    // The section label paints on its own; the strip (accessible label "Local")
+    // is the click target.
+    let _ = harness.get_by_label("LOCAL");
     for label in ["Local", "New Branch", "Delete", "Quiet"] {
         let node = harness.get_by_label(label);
         let rect = node.rect();

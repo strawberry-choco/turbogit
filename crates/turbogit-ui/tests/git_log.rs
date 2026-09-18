@@ -918,3 +918,42 @@ fn history_tab_is_gone_and_navigation_lands_only_on_valid_windows() {
     settle(&mut harness);
     assert_eq!(harness.state().ui.tab, Tab::Commit);
 }
+
+// --- ticket 02: the current branch's one treatment -----------------------------
+
+/// The Log pane renders the same tree component with `shows_row_actions:
+/// false`, so the current branch must be marked there too — and only there, in
+/// the branches pane, not smeared across the graph or the details column.
+#[test]
+fn the_branches_pane_marks_the_current_branch_with_its_badge() {
+    let seed = seeded_project();
+    let harness = log_harness(&seed);
+    let pane = branches_region(&harness);
+
+    let (in_pane, elsewhere) = harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Text(shape) if shape.galley.text() == "current" => Some(shape.pos),
+            _ => None,
+        })
+        .fold((0, 0), |(mut a, mut b), pos| {
+            if pane.contains(pos) {
+                a += 1;
+            } else {
+                b += 1;
+            }
+            (a, b)
+        });
+
+    assert!(
+        in_pane >= 1,
+        "the Log pane's branch rows carry the current badge; painted galleys: {:?}",
+        painted_text(&harness)
+    );
+    assert_eq!(
+        elsewhere, 0,
+        "the current badge belongs to the branches pane, not the rest of the Log window"
+    );
+}
