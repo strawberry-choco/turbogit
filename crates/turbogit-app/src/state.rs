@@ -1047,10 +1047,8 @@ pub struct AppState {
     /// Headless-harness mode: completed ops refresh root status synchronously
     /// instead of spawning background rescans (see `for_roots`).
     pub(crate) sync_refresh: bool,
-    /// In-flight worktree-list fetches per root (issue 14): guards the
-    /// fetch-on-miss trigger against re-dispatching every frame while a
-    /// fetch is in flight (the cache entry only lands with the event).
-    fetching_worktrees: HashSet<RootId>,
+    /// own worktree-list admission and freshness policy (ticket 02).
+    worktree: crate::worktree_lifecycle::WorktreeLifecycle,
     /// In-flight log fetches per root (log-open perf, D2): the tool-window
     /// body asks for the log every frame while the cache is cold, so the
     /// fetch gets the same one-per-root guard as the worktree fetches. The
@@ -1062,14 +1060,6 @@ pub struct AppState {
     /// flight; the guard releases when the `RefsLoaded` event drains, on Ok
     /// and Err alike.
     fetching_refs: HashSet<RootId>,
-    /// Worktree-list epoch per root (ticket 02): every worktree-mutating
-    /// invalidation bumps it, so a list fetch started before a mutation is
-    /// dropped when it settles (its stored epoch no longer matches).
-    worktree_epochs: HashMap<RootId, u64>,
-    /// In-flight per-worktree dirty probes keyed by worktree path (ticket 04):
-    /// guards the visibility-gated dispatch against re-firing every frame
-    /// while a probe for the same worktree is still pending.
-    fetching_worktree_dirty: HashSet<PathBuf>,
     /// In-flight submodule-list fetches per root (issue 14).
     fetching_submodules: HashSet<RootId>,
     /// Last dispatch instant of the background incoming check (issue #27);
@@ -1124,11 +1114,9 @@ impl AppState {
             recents_config_dir,
             dir_picker: None,
             sync_refresh: false,
-            fetching_worktrees: HashSet::new(),
+            worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
-            worktree_epochs: HashMap::new(),
-            fetching_worktree_dirty: HashSet::new(),
             fetching_submodules: HashSet::new(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
@@ -1203,11 +1191,9 @@ impl AppState {
             recents_config_dir: None,
             dir_picker: None,
             sync_refresh: true,
-            fetching_worktrees: HashSet::new(),
+            worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
-            worktree_epochs: HashMap::new(),
-            fetching_worktree_dirty: HashSet::new(),
             fetching_submodules: HashSet::new(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
@@ -1277,6 +1263,9 @@ impl AppState {
     }
     /// dispatch a fresh asynchronous status scan for every registered root.
     pub fn rescan(&mut self) {
+        // Ticket 02: include lists for roots that discovery no longer returns.
+        self.caches.invalidate_all_worktrees();
+        self.worktree.clear();
         let paths = turbogit_services::multi_root::discover_roots(
             self.executor.as_ref(),
             &self.project_dir,
@@ -1430,20 +1419,8 @@ impl AppState {
     /// `fetch_worktrees` is a no-op while an earlier fetch for the same
     /// root is still pending.
     pub fn fetch_worktrees(&mut self, root: RootId) {
-        if !self.fetching_worktrees.insert(root.clone()) {
-            return;
-        }
-        let epoch = self.worktree_epochs.get(&root).copied().unwrap_or(0);
-        let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
-            let res = executor.worktree_list(&root.0);
-            let _ = tx.send(AppEvent::WorktreesLoaded {
-                root,
-                worktrees: res,
-                epoch,
-            });
-        });
+        self.worktree
+            .fetch(root, self.executor.clone(), self.tx.clone());
     }
 
     /// Drop one root's cached worktree list and bump its epoch (ticket 02):
@@ -1452,21 +1429,22 @@ impl AppState {
     /// its late settlement cannot resurrect an outdated list over the fresh
     /// refetch that follows.
     fn invalidate_worktree_cache(&mut self, root: &RootId) {
-        *self.worktree_epochs.entry(root.clone()).or_default() += 1;
-        self.caches.invalidate_worktrees(root);
+        if self.worktree.on_mutation(root) {
+            self.caches.invalidate_worktrees(root);
+        }
     }
 
     /// Dispatch per-worktree dirty probes for the focused root's listed
-    /// worktrees whose flag is still unknown (ticket 04). Visibility-gated:
+    /// worktrees whose flag is still unknown (ticket 03). Visibility-gated:
     /// this is only ever called while the Worktrees tool window is open, and
-    /// it never touches the badge or eager-fill paths. Each probe runs on its
-    /// own worker and settles into exactly its own row; a missing row is a
-    /// no-op, and a worktree whose probe is already in flight is skipped.
+    /// it never touches the badge or eager-fill paths. The lifecycle module
+    /// owns admission (dedup per row), independent worker dispatch, and
+    /// settlement; this entry point only gathers the still-unknown rows.
     pub fn ensure_worktree_probes(&mut self) {
         let Some(id) = self.selected_root.clone() else {
             return;
         };
-        let probe: Vec<PathBuf> = self
+        let candidates: Vec<PathBuf> = self
             .caches
             .worktrees(&id)
             .unwrap_or(&[])
@@ -1474,18 +1452,8 @@ impl AppState {
             .filter(|w| w.dirty.is_none())
             .map(|w| w.path.clone())
             .collect();
-        for path in probe {
-            if !self.fetching_worktree_dirty.insert(path.clone()) {
-                continue;
-            }
-            let executor = self.executor.clone();
-            let tx = self.tx.clone();
-            let root = id.clone();
-            std::thread::spawn(move || {
-                let dirty = executor.worktree_dirty(&path);
-                let _ = tx.send(AppEvent::WorktreeDirty { root, path, dirty });
-            });
-        }
+        self.worktree
+            .ensure_probes(id, candidates, self.executor.clone(), self.tx.clone());
     }
 
     /// Fetch (and cache) the submodule list for a root on a worker thread
@@ -1521,6 +1489,9 @@ impl AppState {
     /// harness (`sync_refresh`) mirrors the same steps synchronously.
     pub fn refresh(&mut self, affected: Affected) {
         self.caches.invalidate(&affected);
+        if matches!(affected, Affected::All) {
+            self.worktree.clear();
+        }
         // The diff viewer caches raw patch text outside the root caches;
         // a completed op may have changed exactly what it shows (spec R2
         // story 8), so drop it and let the viewer reload asynchronously.
@@ -2198,6 +2169,7 @@ impl AppState {
         // Drop every cache entry: the old project's roots must not leak into
         // the new one (bug fix — only logs/ahead-behind were cleared before).
         self.caches.invalidate_all();
+        self.worktree.clear();
         self.rescan();
         self.ui.welcome_visible = false;
         self.record_recent(dir);
@@ -2215,6 +2187,7 @@ impl AppState {
         self.selected_root = None;
         self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
+        self.worktree.clear();
 
         let roots = turbogit_services::multi_root::scan_deep(self.executor.as_ref(), dir);
         let results = turbogit_services::multi_root::register_all(
@@ -2280,6 +2253,7 @@ impl AppState {
         self.selected_root = None;
         self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
+        self.worktree.clear();
         self.ui.welcome_visible = true;
     }
 
@@ -2552,11 +2526,7 @@ impl AppState {
                     worktrees,
                     epoch,
                 } => {
-                    self.fetching_worktrees.remove(&root);
-                    // Ticket 02: a fetch started before a worktree mutation
-                    // settles with a stale epoch — drop it rather than let it
-                    // resurrect an outdated list over the fresh refetch.
-                    if epoch != self.worktree_epochs.get(&root).copied().unwrap_or(0) {
+                    if !self.worktree.settle(&root, epoch) {
                         continue;
                     }
                     match worktrees {
@@ -2568,7 +2538,7 @@ impl AppState {
                     self.invalidate_worktree_cache(&root);
                 }
                 AppEvent::WorktreeDirty { root, path, dirty } => {
-                    self.fetching_worktree_dirty.remove(&path);
+                    self.worktree.settle_dirty(&root, &path);
                     match dirty {
                         Ok(v) => self.caches.update_worktree_dirty(&root, &path, v),
                         Err(e) => self.last_error = Some(e.to_string()),

@@ -63,6 +63,22 @@ Invalidated as one unit through one interface — per root or all roots — neve
 poked field-by-field by callers.
 _Avoid_: log cache / ref cache (as if separate concepts), cache clearing
 
+**Worktree lifecycle**:
+The app-side module that owns freshness policy for a root's worktree data:
+list request admission (one fetch per root in flight), mutation epochs,
+completion-time invalidation for worktree-mutating operations, and per-row
+dirty probe dispatch and settlement. Cached list values and the cache
+invalidation interface stay in RootCaches; when the Worktrees tool window is
+open stays with the shell.
+_Avoid_: worktree manager, cache refresher, worktree cache
+
+**Mutation epoch**:
+A per-root counter bumped whenever a root's cached worktree list is
+invalidated. A list fetch stamps the epoch at dispatch; if the epoch has moved
+by settlement time, the result is dropped rather than resurrecting a
+pre-mutation list over the fresh refetch.
+_Avoid_: generation counter, cache version
+
 **Git engine**:
 The module that talks to git. Its interface is `GitExecutor`; production uses
 the CLI adapter, tests use an in-memory adapter.
