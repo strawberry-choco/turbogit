@@ -361,7 +361,7 @@ impl RootCaches {
         self.worktree_cache.insert(root, worktrees);
     }
 
-    /// Fill in just one worktree row's dirty flag (ticket 04): the per-row
+    /// Fill in just one worktree row's dirty flag (ticket 03): the per-row
     /// probe result updates that row's entry, leaving every other row — and
     /// the rest of the list — untouched. A row whose path is no longer listed
     /// (e.g. removed mid-probe) is a no-op.
@@ -411,6 +411,11 @@ impl RootCaches {
     /// operations keep the list.
     pub fn invalidate_worktrees(&mut self, root: &RootId) {
         self.worktree_cache.remove(root);
+    }
+
+    /// clear every root's worktree list on rescan, including removed roots (ticket 02).
+    pub fn invalidate_all_worktrees(&mut self) {
+        self.worktree_cache.clear();
     }
 
     /// Drop every entry in all caches.

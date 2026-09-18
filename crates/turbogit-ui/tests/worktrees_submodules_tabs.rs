@@ -123,7 +123,7 @@ fn worktrees_tab_lists_worktrees_with_branch_without_waiting_on_dirty() {
     assert_painted(&h, "Add worktree");
 }
 
-// -- Ticket 04 — visibility-gated dirty probes fill the rows in ---------------
+// -- Ticket 03 — visibility-gated dirty probes fill the rows in ---------------
 
 /// Opening the Worktrees window starts per-worktree probes: each row's
 /// clean/dirty label appears as its own probe resolves — here the single
