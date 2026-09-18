@@ -19,7 +19,9 @@
 //! One call to [`configure_style`] maps the tokens into egui `Visuals`;
 //! [`install_fonts`] applies the embedded type stack.
 
-use egui::{Color32, Context, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Vec2, Visuals};
+use egui::{
+    Color32, Context, CornerRadius, FontFamily, FontId, Stroke, TextStyle, Ui, Vec2, Visuals,
+};
 
 /// The single central token set (spec §2, Darcula-derived dark).
 pub struct Palette;
@@ -325,6 +327,16 @@ pub fn data_font(size: f32) -> FontId {
 /// future proportional registration upgrades every chrome call site at once.
 pub fn chrome_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
+}
+
+/// Horizontal indent per tree depth — the width of two whitespace characters
+/// in the data face. Shared by the branch tree and the sidebar project tree so
+/// both hang at the same rate, off the type ramp rather than a fixed pixel.
+pub fn two_space_indent(ui: &Ui) -> f32 {
+    ui.painter()
+        .layout_no_wrap("  ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
+        .size()
+        .x
 }
 
 fn dark_visuals() -> Visuals {
