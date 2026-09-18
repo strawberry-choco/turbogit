@@ -115,6 +115,9 @@ pub struct PaintedGalley {
     pub text: String,
     /// Paint-time origin (top-left of the text).
     pub pos: Pos2,
+    /// The painted extent — origin plus the galley's laid-out size. Where a
+    /// column ends is as much a fact of the frame as where it starts.
+    pub rect: Rect,
     /// `RichText::color` / the widget's ink, from the galley's layout job.
     pub color: Color32,
     /// The resolved face — `Proportional` for chrome, `Monospace` for data
@@ -143,6 +146,7 @@ pub fn painted_galleys<S>(harness: &Harness<'_, S>) -> Vec<PaintedGalley> {
                 Some(PaintedGalley {
                     text: shape.galley.text().to_owned(),
                     pos: shape.pos,
+                    rect: Rect::from_min_size(shape.pos, shape.galley.size()),
                     color: section
                         .map(|s| s.format.color)
                         .unwrap_or(Color32::TRANSPARENT),
@@ -201,7 +205,7 @@ pub fn filled_circles<S>(harness: &Harness<'_, S>) -> Vec<(Pos2, f32, Color32)> 
 /// where the glyph actually appears on screen — which is what "does the
 /// interactive widget contain its own glyph" contracts need. Only solid
 /// strokes are reported; gradient (`ColorMode::UV`) strokes are skipped.
-pub fn painted_paths(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
+pub fn painted_paths<S>(harness: &Harness<'_, S>) -> Vec<(Rect, Color32)> {
     harness
         .output()
         .shapes

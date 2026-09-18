@@ -13,13 +13,13 @@
 //! visible control is smaller (§14).
 
 use egui::{
-    Align, Color32, CornerRadius, Layout, Response, RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
-    WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontId, Layout, Response, RichText, Sense, Stroke, StrokeKind,
+    Ui, Vec2, WidgetInfo, WidgetType,
 };
 
 use super::icons::{self, Icon};
 use super::widgets::{WidgetState, mix, tint_over_bg};
-use crate::theme::{Palette, TYPE_BODY, TYPE_SECTION, chrome_font, data_font};
+use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, TYPE_SECTION, chrome_font, data_font};
 
 // --- §12 geometry ------------------------------------------------------------
 
@@ -54,8 +54,9 @@ const KIT_BUTTON_H: f32 = 28.0;
 // --- §14.1 branch row states ------------------------------------------------
 
 /// The three fill states a branch row can be in while idle (design doc §13
-/// Selection / §7.2 hover). Current, stale and mid-operation are orthogonal
-/// markers rendered inside the row (see [`row_ink`], [`mid_op_label`]).
+/// Selection / §7.2 hover). Stale and mid-operation are orthogonal markers
+/// rendered inside the row (see [`row_ink`], [`mid_op_label`]); *current* is
+/// not — it owns its own fill, through [`current_row_fill`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RowState {
     Default,
@@ -69,6 +70,21 @@ pub fn row_fill(state: RowState) -> Color32 {
     match state {
         RowState::Default => Color32::TRANSPARENT,
         RowState::Hover => Palette::SURFACE_2,
+        RowState::Selected => Palette::SELECTION,
+    }
+}
+
+/// Fill for the row carrying the current branch, given its interaction state.
+///
+/// Which branch HEAD points at is a fact about the repository, not about the
+/// pointer, so it answers at rest rather than only on hover — and it stays
+/// *under* hover and selection instead of replacing them, so a current row that
+/// is also selected reads as both facts. The resting band is a brand tint well
+/// below [`Palette::SELECTION`]'s strength, which is what keeps the two apart.
+pub fn current_row_fill(state: RowState) -> Color32 {
+    match state {
+        RowState::Default => tint_over_bg(Palette::BRAND, 0.16),
+        RowState::Hover => tint_over_bg(Palette::BRAND, 0.24),
         RowState::Selected => Palette::SELECTION,
     }
 }
@@ -89,19 +105,101 @@ pub fn mid_op_label(op: &str) -> String {
     format!("{op}…")
 }
 
-// --- §14.2 section header ------------------------------------------------------
-
-/// Uppercase section label with the live count ("LOCAL 3"). The transform and
-/// the count are mandatory (§3.3); the label is rendered in chrome type.
-pub fn section_label(title: &str, count: usize) -> String {
-    format!("{} {count}", title.to_uppercase())
+/// The two things the one pill component states: which branch is current, and
+/// how many items a group holds. Both are the same frame, so a count never
+/// becomes a fourth counter rendering.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PillKind {
+    /// The accent pill — the `current` marker and a repo's current branch.
+    Current,
+    /// The quiet raised pill — a group's count, sized down.
+    Count,
 }
 
-/// One 26px section header: chevron, uppercase label, live count, optional
-/// right-aligned trailing action. Returns the strip's response — clicking the
-/// strip toggles expanded/collapsed. The trailing action is rendered *after*
-/// the strip's own interact target, so egui hit-testing gives it precedence
-/// and a Fetch button never toggles collapse.
+impl PillKind {
+    fn fill(self) -> Color32 {
+        match self {
+            Self::Current => Palette::ACCENT,
+            Self::Count => Palette::RAISED,
+        }
+    }
+
+    fn ink(self) -> Color32 {
+        match self {
+            Self::Current => Palette::BRAND_INK,
+            Self::Count => Palette::T_SECONDARY,
+        }
+    }
+
+    fn font(self) -> FontId {
+        match self {
+            // A current-branch label is a branch name, so it is data; a count
+            // is interface, so it is chrome and one step smaller.
+            Self::Current => data_font(TYPE_CONTROL),
+            Self::Count => chrome_font(TYPE_SECTION),
+        }
+    }
+
+    fn height(self) -> f32 {
+        match self {
+            Self::Current => 18.0,
+            Self::Count => 14.0,
+        }
+    }
+
+    fn pad_x(self) -> f32 {
+        match self {
+            Self::Current => 6.0,
+            Self::Count => 4.0,
+        }
+    }
+}
+
+/// The one pill that states a fact: the `current` badge on a row, the
+/// current-branch chip in a repo header, and a group's count badge all call this,
+/// so no call site repeats its frame, fill, radius or ink.
+pub fn pill(ui: &mut Ui, label: &str, kind: PillKind) -> Response {
+    let width = pill_width(ui, label, kind);
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, kind.height()), Sense::hover());
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(Palette::RADIUS_CHIP), kind.fill());
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), kind.font(), kind.ink());
+    ui.painter().galley(
+        egui::Pos2::new(
+            rect.center().x - galley.size().x / 2.0,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        kind.ink(),
+    );
+    response
+}
+
+/// How wide [`pill`] will paint `label`. A row or header that lays its zones out
+/// up front reserves through this instead of repeating the pill's padding.
+pub fn pill_width(ui: &Ui, label: &str, kind: PillKind) -> f32 {
+    kind.pad_x() * 2.0
+        + ui.painter()
+            .layout_no_wrap(label.to_owned(), kind.font(), Color32::WHITE)
+            .size()
+            .x
+}
+
+// --- §14.2 section header ------------------------------------------------------
+
+/// The uppercase section label ("LOCAL"). The transform is mandatory (§3.3); the
+/// live count is a [`PillKind::Count`] badge beside it, not characters inside it.
+pub fn section_label(title: &str) -> String {
+    title.to_uppercase()
+}
+
+/// One 26px section header on its own band: chevron, uppercase label, count
+/// badge, optional right-aligned trailing action. Returns the strip's response —
+/// clicking the strip toggles expanded/collapsed. The trailing action is
+/// rendered *after* the strip's own interact target, so egui hit-testing gives it
+/// precedence and a Fetch button never toggles collapse.
 pub fn section_header<R>(
     ui: &mut Ui,
     title: &str,
@@ -111,6 +209,10 @@ pub fn section_header<R>(
 ) -> Response {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, SECTION_H), Sense::hover());
+    // Scaffolding, so it sits on a band — one that is neither the repo header's
+    // SURFACE nor any row state's fill.
+    ui.painter()
+        .rect_filled(rect, CornerRadius::ZERO, Palette::SECTION_BG);
 
     // The strip's toggle target registers first; later widgets inside the
     // rect (the trailing action) hit-test on top and keep their own clicks.
@@ -123,7 +225,7 @@ pub fn section_header<R>(
             .max_rect(rect)
             .layout(Layout::left_to_right(Align::Center)),
     );
-
+    child.spacing_mut().item_spacing.x = 0.0;
     child.add_space(PAD_LIST);
     // Chevron: down when expanded, right when collapsed.
     let chevron = if expanded {
@@ -134,10 +236,12 @@ pub fn section_header<R>(
     icons::icon(&mut child, chevron, KIT_ICON, Palette::T_MUTED);
     child.add_space(6.0);
     child.add(egui::Label::new(
-        RichText::new(section_label(title, count))
+        RichText::new(section_label(title))
             .font(chrome_font(TYPE_SECTION))
             .color(Palette::T_SECONDARY),
     ));
+    child.add_space(6.0);
+    pill(&mut child, &count.to_string(), PillKind::Count);
 
     // Trailing action, right-aligned (own child scope so it stays clickable
     // inside the strip's hover band).
@@ -162,24 +266,24 @@ pub enum SyncKind {
     Gone,
 }
 
-/// The row's sync badge as `(kind, label)`. `None` means there is nothing to
-/// say — either no upstream exists, or the branch is in sync (issue: in-sync
-/// rows are unmarked rather than labelled "in sync"). Called only when the row
-/// tracks a remote.
-pub fn sync_badge(ahead: usize, behind: usize, gone: bool) -> Option<(SyncKind, String)> {
+/// The row's sync relationship as a list of `(kind, label)` badges — the one
+/// place the status words are built, so the row's chips and the detail panel's
+/// relationship line can never drift apart. Each direction gets its own badge,
+/// which is what lets a diverged row show both arrows instead of one combined
+/// marker; an empty list means there is nothing to say (no upstream, or in
+/// sync). The arrow is the chip's icon, never part of the label.
+pub fn sync_badge(ahead: usize, behind: usize, gone: bool) -> Vec<(SyncKind, String)> {
     if gone {
-        return Some((SyncKind::Gone, "gone".to_string()));
+        return vec![(SyncKind::Gone, "gone".to_string())];
     }
-    if ahead > 0 && behind > 0 {
-        return Some((SyncKind::Diverged, format!("↑{ahead} ↓{behind}")));
-    }
+    let mut badges = Vec::new();
     if ahead > 0 {
-        return Some((SyncKind::Ahead, format!("↑{ahead}")));
+        badges.push((SyncKind::Ahead, format!("{ahead} ahead")));
     }
     if behind > 0 {
-        return Some((SyncKind::Behind, format!("↓{behind}")));
+        badges.push((SyncKind::Behind, format!("{behind} behind")));
     }
-    None
+    badges
 }
 
 /// §13 meaning token for a sync badge's foreground.
@@ -281,7 +385,8 @@ impl KitButton {
             (Self::Quiet, Idle | Disabled) => Color32::TRANSPARENT,
             (Self::Quiet, Hovered) => Palette::SURFACE_2,
             (Self::Quiet, Active) => Palette::SURFACE_3,
-            (Self::Danger, Idle | Disabled) => Color32::TRANSPARENT,
+            (Self::Danger, Idle) => tint_over_bg(Palette::DANGER, 0.12),
+            (Self::Danger, Disabled) => Color32::TRANSPARENT,
             (Self::Danger, Hovered) => tint_over_bg(Palette::DANGER, 0.18),
             (Self::Danger, Active) => tint_over_bg(Palette::DANGER, 0.30),
         }
@@ -300,16 +405,26 @@ impl KitButton {
     }
 }
 
-/// Paint one kit button (28px tall — above the 24px target floor). Renders
-/// the four interactive states through [`KitButton::fill`]/[`ink`] with the
-/// §13 control radius and a brand focus ring.
+/// Paint one kit button, sized to its label (28px tall — above the 24px target
+/// floor). Renders the four interactive states through [`KitButton::fill`]/
+/// [`ink`] with the §13 control radius and a brand focus ring.
 pub fn kit_button(ui: &mut Ui, kind: KitButton, label: &str) -> Response {
+    let natural = 12.0 * 2.0
+        + ui.painter()
+            .layout_no_wrap(label.to_owned(), chrome_font(TYPE_BODY), Color32::WHITE)
+            .size()
+            .x;
+    kit_button_at(ui, kind, label, natural)
+}
+
+/// [`kit_button`] at an explicit width. A caller laying out a column of actions
+/// gives every button the same width, so the column reads as one shape instead
+/// of a stack of differently-wide buttons.
+pub fn kit_button_at(ui: &mut Ui, kind: KitButton, label: &str, width: f32) -> Response {
     let font_id = chrome_font(TYPE_BODY);
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font_id, Color32::WHITE);
-    let pad_x = 12.0;
-    let width = pad_x * 2.0 + galley.size().x;
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(width, KIT_BUTTON_H),
         if ui.is_enabled() {

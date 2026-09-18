@@ -124,6 +124,14 @@ fn p0_repo_state_shared_mapping_is_app_wide() {
         turbogit_ui::ui::sidebar::dot_color(RepoState::Diverged),
         Palette::STATUS_DIVERGED
     );
+    // The same value that colours the dot names the state in words, so the two
+    // can never disagree (§13; wording reused from the sidebar's smart groups).
+    assert_eq!(RepoState::Clean.words(), "in sync");
+    assert_eq!(RepoState::Dirty.words(), "dirty worktree");
+    assert_eq!(RepoState::Conflict.words(), "has conflicts");
+    assert_eq!(RepoState::Diverged.words(), "diverged");
+    assert_eq!(RepoState::Unpushed.words(), "unpushed commits");
+    assert_eq!(RepoState::Unpulled.words(), "unpulled commits");
     // Sync badge vocabulary matches the same map.
     assert_eq!(
         turbogit_ui::ui::components::sync_ink(turbogit_ui::ui::components::SyncKind::Diverged),
@@ -297,10 +305,16 @@ fn selection_uses_brand_with_brand_stroke() {
 use turbogit_ui::theme::font_definitions;
 
 #[test]
-fn proportional_family_is_jetbrains_mono_with_segoe_ui_fallback() {
+fn proportional_family_leads_with_the_ui_sans() {
     let defs = font_definitions();
     let fam = &defs.families.get(&egui::FontFamily::Proportional).unwrap();
-    assert_eq!(fam[0], "jetbrains-mono-regular", "primary UI font");
+    assert_eq!(fam[0], "Ubuntu-Light", "primary chrome font");
+    assert!(
+        fam.iter()
+            .any(|f| f == "emoji-icon-font" || f == "NotoEmoji-Regular"),
+        "egui's built-in glyph fallbacks stay behind the sans so chrome text \
+         outside its coverage still resolves"
+    );
     // The Segoe UI fallback is registered only when the face is actually
     // present on this machine (Windows); it degrades gracefully by
     // omission elsewhere (ADR-0002).
@@ -389,10 +403,59 @@ fn install_fonts_applies_the_embedded_stack_to_the_context() {
             .families
             .get(&egui::FontFamily::Proportional)
             .expect("proportional family registered");
-        assert_eq!(fam[0], "jetbrains-mono-regular", "UI text renders in JBM");
+        assert_eq!(fam[0], "Ubuntu-Light", "chrome text renders in the UI sans");
         let bold = egui::FontFamily::Name("jetbrains-mono-bold".into());
         assert!(defs.families.contains_key(&bold), "bold family available");
     });
+}
+
+/// The chrome/data typeface split has to be physically real, not nominal: both
+/// seams resolve to their own face. Measured on glyph advances through the
+/// public [`theme::chrome_font`] / [`theme::data_font`] seam rather than on a
+/// registered family name, because a family label can name the wrong face.
+#[test]
+fn chrome_seam_is_proportional_while_the_data_seam_is_monospaced() {
+    let ctx = egui::Context::default();
+    install_fonts(&ctx);
+
+    // Font definitions take effect at the next pass begin.
+    let mut full = ctx.run_ui(egui::RawInput::default(), |_ui| {});
+    full.textures_delta.clear();
+
+    let chrome = theme::chrome_font(12.0);
+    let data = theme::data_font(12.0);
+    // Every character the Branches view paints in chrome type. Chrome text
+    // moved onto a face this suite never relied on for Latin, so a gap here is
+    // tofu on screen rather than a wrong number.
+    let chrome_probe = "TurboGit LOCAL REMOTE TAGS origin/main 26 · … \"-+/_ .";
+    let (chrome_narrow, chrome_wide, data_narrow, data_wide, chrome_covers) = ctx.fonts_mut(|f| {
+        (
+            f.glyph_width(&chrome, 'i'),
+            f.glyph_width(&chrome, 'W'),
+            f.glyph_width(&data, 'i'),
+            f.glyph_width(&data, 'W'),
+            f.has_glyphs(&chrome, chrome_probe),
+        )
+    });
+
+    assert!(
+        chrome_covers,
+        "the chrome family cannot render some chrome text: {chrome_probe}"
+    );
+    assert!(
+        chrome_narrow > 0.0 && chrome_wide > 0.0,
+        "the chrome face resolves no glyph at all ({chrome_narrow}, {chrome_wide})"
+    );
+    assert!(
+        chrome_narrow < chrome_wide,
+        "chrome text is a proportional face: `i` ({chrome_narrow}) must be \
+         narrower than `W` ({chrome_wide})"
+    );
+    assert!(
+        (data_narrow - data_wide).abs() < f32::EPSILON,
+        "data text stays monospaced: `i` ({data_narrow}) and `W` ({data_wide}) \
+         must share one advance"
+    );
 }
 
 // --- Cycle 5: accent, risk, and status semantics (issue #01) ---

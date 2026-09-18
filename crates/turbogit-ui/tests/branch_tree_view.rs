@@ -24,14 +24,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::accesskit::Role;
+use egui::{Color32, Pos2};
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::{Harness, Node};
-use test_support::harness::{PaintedGalley, filled_circles, painted_galleys, painted_text, settle};
+use test_support::harness::{
+    PaintedGalley, filled_circles, filled_rects, painted_galleys, painted_text, settle,
+};
 use turbogit_app::state::TreeState;
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId};
 use turbogit_ui::theme::{Palette, configure_style, install_fonts};
-use turbogit_ui::ui::branch_tree_view::{TreeEvent, TreeGroup, TreeProps, branch_tree};
+use turbogit_ui::ui::branch_tree_view::{
+    TreeEvent, TreeGroup, TreeProps, branch_tree, remotes_revealed,
+};
 use turbogit_ui::ui::branches_tree::{BranchView, build_branch_view};
+use turbogit_ui::ui::components::BRANCH_ROW_H;
 
 // --- fixture model builders (same shape as the pure-builder suite) ------------
 
@@ -201,7 +207,9 @@ impl Fixture {
 
     /// The view model, rebuilt each frame exactly as the surfaces do.
     fn view(&self) -> BranchView {
-        build_branch_view(&self.roots, &self.tags, self.tree.show_remotes)
+        build_branch_view(&self.roots, &self.tags, &|root| {
+            remotes_revealed(&self.tree, root)
+        })
     }
 
     fn has_any_data(&self) -> bool {
@@ -226,8 +234,12 @@ impl Fixture {
                     self.tree.collapsed_remotes.insert(key);
                 }
             }
-            TreeEvent::RemotesVisibleChanged { visible } => {
-                self.tree.show_remotes = *visible;
+            TreeEvent::RemoteRevealToggled { root, revealed } => {
+                if *revealed {
+                    self.tree.remotes_revealed.insert(root.clone());
+                } else {
+                    self.tree.remotes_revealed.remove(root);
+                }
             }
             TreeEvent::RowClicked { root, branch } => {
                 if self.tree.selected_root.as_ref() == Some(root)
@@ -248,6 +260,11 @@ impl Fixture {
 
 /// A bare-fixture harness (seam 2): renders only the component, no shell.
 fn fixture_harness(fx: Fixture) -> Harness<'static, Fixture> {
+    fixture_harness_at(fx, 720.0)
+}
+
+/// The same fixture at an explicit width, for the narrow-list cases.
+fn fixture_harness_at(fx: Fixture, width: f32) -> Harness<'static, Fixture> {
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, fx| {
@@ -282,7 +299,7 @@ fn fixture_harness(fx: Fixture) -> Harness<'static, Fixture> {
         },
         fx,
     );
-    harness.set_size(egui::vec2(720.0, 620.0));
+    harness.set_size(egui::vec2(width, 620.0));
     harness
 }
 
@@ -347,6 +364,227 @@ fn rows_render_per_repository_with_status_dots() {
     assert_eq!(repo_dots, 2, "one status dot per repo header");
 }
 
+// --- group labels read as structure --------------------------------------------
+
+/// A section header's count is a badge beside the label, not characters inside
+/// the label string, and the header sits on a band of its own.
+#[test]
+fn a_section_header_paints_its_count_as_a_badge_on_a_band() {
+    use turbogit_ui::ui::components::{RowState, current_row_fill, row_fill};
+
+    let mut fx = Fixture::alpha_only();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    // Five local branches: the label alone, and the count as its own galley.
+    let label = galleys_for(&h, "LOCAL");
+    assert_eq!(
+        label.len(),
+        1,
+        "the label paints without its count inside it"
+    );
+    assert!(
+        painted_text(&h).iter().all(|t| t != "LOCAL 5"),
+        "the count is no longer part of the label string: {:?}",
+        painted_text(&h)
+    );
+    let badge = galleys_for(&h, "5")
+        .into_iter()
+        .find(|g| (g.pos.y - label[0].pos.y).abs() < 12.0 && g.pos.x > label[0].rect.right())
+        .expect("the count badge sits beside the label");
+    assert!(
+        badge.rect.left() - label[0].rect.right() < 24.0,
+        "the badge belongs to the label, not to the far end of the strip: {:?}",
+        badge.rect
+    );
+
+    let band = filled_rects(&h)
+        .into_iter()
+        .find(|(rect, _)| {
+            rect.contains(Pos2::new(rect.center().x, label[0].pos.y + 4.0)) && rect.width() > 600.0
+        })
+        .map(|(_, fill)| fill)
+        .expect("a full-width band under the section label");
+    assert_ne!(
+        band,
+        Palette::SURFACE,
+        "a section band is not the repo band"
+    );
+    assert_ne!(
+        band,
+        row_fill(RowState::Hover),
+        "a section band is not a row hover fill"
+    );
+    assert_ne!(
+        band,
+        current_row_fill(RowState::Default),
+        "a section band is not a current row's band"
+    );
+}
+
+/// A subgroup, a section header and a branch row are distinguishable by painted
+/// geometry — the defect this closes is that all three read as content.
+#[test]
+fn a_subgroup_a_section_and_a_row_are_distinguishable_by_geometry() {
+    use test_support::harness::painted_paths;
+
+    let mut fx = Fixture::alpha_only();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    let section = &galleys_for(&h, "LOCAL")[0];
+    let dir = &galleys_for(&h, "feature/")[0];
+    let child = &galleys_for(&h, "a")[0];
+
+    // The subgroup prints its segment as data, with a folder glyph before it.
+    assert_eq!(
+        dir.family,
+        egui::FontFamily::Monospace,
+        "a directory segment is data, like a branch name"
+    );
+    assert!(
+        painted_paths(&h).into_iter().any(|(r, _)| {
+            (r.center().y - (dir.pos.y + 6.0)).abs() < 12.0
+                && r.right() <= dir.pos.x + 1.0
+                && r.left() >= dir.pos.x - 24.0
+        }),
+        "the subgroup carries no folder glyph"
+    );
+
+    // Only the section header sits on a band.
+    let banded = |y: f32| {
+        filled_rects(&h).into_iter().any(|(rect, fill)| {
+            fill == Palette::SECTION_BG
+                && rect.width() > 600.0
+                && rect.top() <= y
+                && y <= rect.bottom()
+        })
+    };
+    assert!(banded(section.pos.y + 4.0), "the section header bands");
+    assert!(
+        !banded(dir.pos.y + 4.0),
+        "a subgroup is not the same kind of strip"
+    );
+
+    // A subgroup hangs at its section's inset and is told apart from it by the
+    // band; a branch row is told apart by hanging further in.
+    assert!(
+        child.pos.x > dir.pos.x + 1.0,
+        "the indent step between a subgroup and its children is not visible: \
+         child {:?} vs subgroup {:?}",
+        child.pos.x,
+        dir.pos.x
+    );
+    assert!(
+        child.pos.x > section.pos.x + 1.0,
+        "a branch row does not line up with its group label: child {:?} vs label {:?}",
+        child.pos.x,
+        section.pos.x
+    );
+}
+
+/// The collapsed rollup sits at `LOCAL`'s level, so it takes the same casing.
+#[test]
+fn the_collapsed_rollup_reads_as_a_section_label() {
+    let mut fx = Fixture::alpha_only();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    assert_eq!(
+        galleys_for(&h, "REMOTE").len(),
+        1,
+        "the rollup is cased like LOCAL and TAGS: {:?}",
+        painted_text(&h)
+    );
+    assert!(
+        painted_text(&h).iter().all(|t| t != "Remote"),
+        "no capitalised `Remote` label is painted at section level"
+    );
+}
+
+// --- the repo header's summary -------------------------------------------------
+
+/// A header says what state its repository is in, in words, with the current
+/// branch's counts when there are any.
+#[test]
+fn the_repo_header_names_its_status_in_words() {
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+    let texts = painted_text(&h);
+
+    // alpha: nothing to report.
+    assert!(
+        texts.iter().any(|t| t == "in sync"),
+        "a clean repo says `in sync`: {texts:#?}"
+    );
+    // beta: its current branch `wip` is 2 ahead and 1 behind.
+    assert!(
+        texts.iter().any(|t| t == "2 ahead · 1 behind · diverged"),
+        "the counts and the state both belong to the header summary: {texts:#?}"
+    );
+}
+
+/// A header is the top of a block, so it carries a resting band that is neither
+/// a row's hover fill nor a current row's band.
+#[test]
+fn the_repo_header_paints_a_resting_band() {
+    use turbogit_ui::ui::components::{RowState, current_row_fill, row_fill};
+
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+
+    let (dot, _, _) = *filled_circles(&h)
+        .iter()
+        .find(|(_, r, _)| (*r - 4.0).abs() < f32::EPSILON)
+        .expect("a repo header status dot");
+    let center_y = dot.y;
+    let band = filled_rects(&h)
+        .into_iter()
+        .find(|(rect, _)| {
+            rect.contains(Pos2::new(rect.center().x, center_y)) && rect.width() > 600.0
+        })
+        .map(|(_, fill)| fill)
+        .expect("a full-width band on the header line");
+    assert_ne!(band, Color32::TRANSPARENT, "the header strip is filled");
+    assert_ne!(
+        band,
+        row_fill(RowState::Hover),
+        "a header band is not a row hover fill"
+    );
+    assert_ne!(
+        band,
+        current_row_fill(RowState::Default),
+        "a header band is not a current row's band"
+    );
+}
+
+/// The current-branch pill is part of the repo's identity, so it rides the name
+/// rather than trailing the strip.
+#[test]
+fn the_current_branch_pill_sits_with_the_repo_name() {
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+    let galleys = painted_galleys(&h);
+
+    let name = galleys
+        .iter()
+        .find(|g| g.text == "beta")
+        .expect("the repo name");
+    let pill = galleys
+        .iter()
+        .find(|g| g.text == "wip")
+        .expect("the current-branch pill");
+    assert!(
+        pill.pos.x > name.rect.right() && pill.pos.x - name.rect.right() < 24.0,
+        "the pill sits directly after the name: name {:?}, pill {:?}",
+        name.rect,
+        pill.pos
+    );
+}
+
 // --- directory grouping and counts --------------------------------------------
 
 #[test]
@@ -380,26 +618,362 @@ fn remote_group_leaf_strips_the_remote_prefix() {
     );
 }
 
+// --- the row's zones ----------------------------------------------------------
+
+/// The tracking branch sits in a zone of its own, so it lines up down the list
+/// instead of drifting to wherever each name happens to end.
+#[test]
+fn the_tracking_zone_has_one_left_edge_regardless_of_name_length() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    fx.roots = vec![root_with(
+        "/track",
+        &[
+            local("a", false, 1, 0),
+            local("a-name-long-enough-to-push-an-inline-upstream", false, 1, 0),
+        ],
+        Some("a"),
+    )];
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    let xs: Vec<f32> = galleys_for(&h, "origin/main")
+        .iter()
+        .map(|g| g.pos.x)
+        .collect();
+    assert_eq!(xs.len(), 2, "both rows track origin/main: {xs:?}");
+    assert!(
+        (xs[0] - xs[1]).abs() < 0.5,
+        "the tracking column must not drift with the name's length: {xs:?}"
+    );
+}
+
+/// The ⋯ column belongs to every row at rest, and every row leads with an icon
+/// so the names line up — local and remote alike.
+#[test]
+fn every_row_leads_with_an_icon_and_carries_its_overflow_at_rest() {
+    use test_support::harness::painted_paths;
+
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = true;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+    // Nothing was ever hovered: `settle` only steps frames.
+
+    let rows = row_buttons(&h);
+    assert!(rows > 0, "the fixture paints branch rows");
+    let overflows = count_label(&h, "More actions");
+    assert_eq!(
+        overflows, rows,
+        "one ⋯ per branch row, at rest ({overflows} overflow vs {rows} rows)"
+    );
+
+    // Every row leads with an icon stroked in the slot before its name — local
+    // and remote alike — and rows at the same depth share one name edge.
+    for name in ["starred", "remote-only"] {
+        let galley = galleys_for(&h, name)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("{name} paints no name"));
+        let row = h
+            .get_all_by_role(Role::Button)
+            .find(|n| {
+                (n.rect().height() - BRANCH_ROW_H).abs() < 0.5
+                    && n.rect().width() > 500.0
+                    && n.rect().contains(galley.pos)
+            })
+            .expect("the row the name paints on")
+            .rect();
+        let paths = painted_paths(&h)
+            .into_iter()
+            .filter(|(r, _)| {
+                (r.center().y - (galley.pos.y + 6.0)).abs() < 12.0
+                    && r.left() >= row.left()
+                    && r.right() <= galley.pos.x + 1.0
+            })
+            .count();
+        assert!(
+            paths > 0,
+            "`{name}` paints no leading icon in the slot before its name"
+        );
+    }
+
+    let edges: Vec<f32> = ["starred", "stale-branch"]
+        .iter()
+        .map(|name| {
+            galleys_for(&h, name)
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("{name} paints no name"))
+                .pos
+                .x
+        })
+        .collect();
+    assert!(
+        (edges[0] - edges[1]).abs() < 0.5,
+        "the name column has one fixed left edge down the list: {edges:?}"
+    );
+}
+
+/// The Log pane renders the same rows without the action column; the zones stay
+/// lined up all the same.
+#[test]
+fn the_log_panes_rows_have_no_overflow_yet_still_align() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    fx.shows_row_actions = false;
+    fx.roots = vec![root_with(
+        "/track",
+        &[
+            local("a", false, 1, 0),
+            local("a-name-long-enough-to-push-an-inline-upstream", false, 1, 0),
+        ],
+        Some("a"),
+    )];
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    assert_eq!(
+        count_label(&h, "More actions"),
+        0,
+        "no ⋯ where row actions are not shown"
+    );
+
+    let xs: Vec<f32> = galleys_for(&h, "origin/main")
+        .iter()
+        .map(|g| g.pos.x)
+        .collect();
+    assert_eq!(xs.len(), 2, "both rows track origin/main: {xs:?}");
+    assert!(
+        (xs[0] - xs[1]).abs() < 0.5,
+        "the tracking zone keeps one left edge without the action column: {xs:?}"
+    );
+}
+
+/// The failure mode the column layout exists to remove: at a width where
+/// nothing fits, zones must still not sit on top of each other, and no run of
+/// text may escape the row.
+#[test]
+fn a_narrow_list_keeps_every_zone_inside_the_row() {
+    const NARROW: f32 = 300.0;
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    fx.roots = vec![root_with(
+        "/track",
+        &[
+            local("a", false, 1, 1),
+            local("a-name-long-enough-to-push-an-inline-upstream", false, 1, 1),
+        ],
+        Some("a"),
+    )];
+    let mut h = fixture_harness_at(fx, NARROW);
+    settle(&mut h);
+
+    let rows: Vec<egui::Rect> = h
+        .get_all_by_role(Role::Button)
+        .filter(|n| {
+            (n.rect().height() - BRANCH_ROW_H).abs() < 0.5
+                && n.rect().width() > 200.0
+                && !matches!(
+                    n.accesskit_node().label().as_deref(),
+                    Some("Local") | Some("Tags") | Some("Remote")
+                )
+        })
+        .map(|n| n.rect())
+        .collect();
+    assert_eq!(rows.len(), 2, "both branches paint a row");
+
+    let galleys = painted_galleys(&h);
+    for row in &rows {
+        let mut on_row: Vec<&PaintedGalley> =
+            galleys.iter().filter(|g| row.contains(g.pos)).collect();
+        on_row.sort_by(|a, b| a.rect.left().total_cmp(&b.rect.left()));
+        for pair in on_row.windows(2) {
+            assert!(
+                pair[0].rect.right() <= pair[1].rect.left() + 0.5,
+                "in a {NARROW}px list `{}` runs into `{}`: {:?}",
+                pair[0].text,
+                pair[1].text,
+                on_row.iter().map(|g| (&g.text, g.rect)).collect::<Vec<_>>()
+            );
+        }
+        for g in &on_row {
+            assert!(
+                g.rect.right() <= row.right() + 0.5,
+                "`{}` escapes its row in a {NARROW}px list: {:?}",
+                g.text,
+                g.rect
+            );
+        }
+    }
+}
+
+/// How many Buttons are branch rows: a full-width row-height strip that is not a
+/// group or section header (a remote group header is full width too, but rides a
+/// shorter section line).
+fn row_buttons(h: &Harness<'_, Fixture>) -> usize {
+    h.get_all_by_role(Role::Button)
+        .filter(|n| {
+            n.rect().width() > 500.0
+                && (n.rect().height() - BRANCH_ROW_H).abs() < 0.5
+                && !matches!(
+                    n.accesskit_node().label().as_deref(),
+                    Some("Local") | Some("Tags") | Some("Remote")
+                )
+        })
+        .count()
+}
+
+/// How many Buttons carry exactly `label`.
+fn count_label(h: &Harness<'_, Fixture>, label: &str) -> usize {
+    h.get_all_by_role(Role::Button)
+        .filter(|n| n.accesskit_node().label().as_deref() == Some(label))
+        .count()
+}
+
 // --- the active-branch marker -------------------------------------------------
 
+/// One `current` badge per repository section — the row's answer to "where am I
+/// right now", rendered by a single component rather than per call site.
 #[test]
-fn current_branch_reads_in_the_emphasis_color() {
+fn one_current_badge_per_repo_section() {
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
 
-    // The current branch's row reads in soft blue in the monospace data face.
-    let active = galleys_for(&h, "wip");
-    assert!(
-        active
-            .iter()
-            .any(|g| g.color == Palette::STATE_INFO && g.family == egui::FontFamily::Monospace),
-        "wip row must read STATE_INFO in the data face: {active:#?}"
+    // alpha is on `main`, beta on `wip`.
+    assert_eq!(
+        galleys_for(&h, "current").len(),
+        2,
+        "one current badge per repo section: {:?}",
+        painted_text(&h)
     );
-    // A plain local row does not.
-    let plain = galleys_for(&h, "starred");
+
+    let mut h = fixture_harness(Fixture::alpha_only());
+    settle(&mut h);
+    assert_eq!(
+        galleys_for(&h, "current").len(),
+        1,
+        "a single section paints a single current badge"
+    );
+}
+
+/// The current row answers "where am I" with a band across the whole list plus
+/// its badge — not with tinted name ink, which was a third marker for the same
+/// fact.
+#[test]
+fn current_row_bands_the_whole_list_and_keeps_plain_name_ink() {
+    const LIST_W: f32 = 720.0;
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+
+    // beta's current branch is `wip`; it paints twice — the repo header's chip
+    // above, the row below.
+    let row = galleys_for(&h, "wip")
+        .into_iter()
+        .max_by(|a, b| a.pos.y.total_cmp(&b.pos.y))
+        .expect("the current branch's row paints its name");
+    assert_ne!(
+        row.color,
+        Palette::STATE_INFO,
+        "the current row's name must stop carrying the marker in its ink: {row:#?}"
+    );
+
+    let center_y = row.pos.y + 6.0;
+    let spanning = filled_rects(&h)
+        .into_iter()
+        .filter(|(rect, _)| rect.top() <= center_y && center_y <= rect.bottom())
+        .map(|(rect, _)| rect.width())
+        .max_by(f32::total_cmp)
+        .unwrap_or_default();
     assert!(
-        plain.iter().all(|g| g.color != Palette::STATE_INFO),
-        "a plain local row must not read as active: {plain:#?}"
+        spanning > LIST_W * 0.85,
+        "a current row's fill must span the list, not hug its text \
+         (widest rect at y {center_y}: {spanning} of {LIST_W})"
+    );
+}
+
+/// The header's current-branch chip and the row's `current` badge are one
+/// component, so the same fact looks the same in both places.
+#[test]
+fn header_chip_and_row_badge_are_the_same_treatment() {
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+
+    let badge = galleys_for(&h, "current")
+        .into_iter()
+        .next()
+        .expect("a current badge");
+    // beta's chip is the *upper* `wip`: the repo header sits above its row.
+    let chip = galleys_for(&h, "wip")
+        .into_iter()
+        .min_by(|a, b| a.pos.y.total_cmp(&b.pos.y))
+        .expect("the repo header's current-branch chip");
+    assert_eq!(
+        chip.color, badge.color,
+        "one ink for one fact: chip {chip:#?} vs badge {badge:#?}"
+    );
+
+    let fill_at = |y: f32| {
+        filled_rects(&h)
+            .into_iter()
+            .filter(|(rect, _)| rect.top() <= y && y <= rect.bottom())
+            .min_by_key(|(rect, _)| rect.width() as i64)
+            .map(|(_, fill)| fill)
+    };
+    let chip_fill = fill_at(chip.pos.y + 6.0).expect("the chip paints a fill");
+    let badge_fill = fill_at(badge.pos.y + 6.0).expect("the badge paints a fill");
+    assert_eq!(
+        chip_fill, badge_fill,
+        "the chip and the badge share one fill"
+    );
+}
+
+/// A row that is both current and diverged keeps the status it also carries:
+/// the band must not swallow the sync chips.
+#[test]
+fn a_current_row_keeps_its_status_chips() {
+    use turbogit_ui::ui::components::{SyncKind, sync_bg};
+
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    // beta's `wip` is current *and* 2 ahead / 1 behind.
+    let row = galleys_for(&h, "wip")
+        .into_iter()
+        .max_by(|a, b| a.pos.y.total_cmp(&b.pos.y))
+        .expect("the current row");
+    let center_y = row.pos.y + 6.0;
+    let fills: Vec<egui::Color32> = filled_rects(&h)
+        .into_iter()
+        .filter(|(rect, _)| rect.top() <= center_y && center_y <= rect.bottom())
+        .map(|(_, fill)| fill)
+        .collect();
+    assert!(
+        fills.contains(&sync_bg(SyncKind::Ahead)),
+        "the ahead chip must survive the current band: {fills:#?}"
+    );
+    assert!(
+        fills.contains(&sync_bg(SyncKind::Behind)),
+        "the behind chip must survive the current band: {fills:#?}"
+    );
+}
+
+/// Revealing remote rows must not multiply the marker: one current branch is
+/// one badge, per repository section.
+#[test]
+fn revealing_remotes_does_not_add_a_second_current_badge() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = true;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    assert_eq!(
+        galleys_for(&h, "current").len(),
+        2,
+        "still one badge per section with remotes open: {:?}",
+        painted_text(&h)
     );
 }
 
@@ -525,6 +1099,135 @@ fn remote_groups_start_collapsed_when_default_is_collapsed() {
     );
 }
 
+/// Revealing one repository's remotes is that repository's own state.
+#[test]
+fn revealing_remotes_leaves_the_other_repository_rolled_up() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    // Both repos start rolled up, and no remote group is revealed.
+    assert!(
+        painted_text(&h)
+            .iter()
+            .any(|t| t == "1 remote · 0 branches"),
+        "beta's own rollup line: {:?}",
+        painted_text(&h)
+    );
+    assert!(galleys_for(&h, "origin").is_empty());
+
+    // The topmost rollup is alpha's.
+    button(&h, "Remote").click();
+    settle(&mut h);
+
+    assert_eq!(
+        galleys_for(&h, "origin").len(),
+        1,
+        "the clicked repo reveals its remote groups"
+    );
+    assert!(
+        painted_text(&h)
+            .iter()
+            .any(|t| t == "1 remote · 0 branches"),
+        "the other repo still paints its rollup line: {:?}",
+        painted_text(&h)
+    );
+}
+
+/// The reveal has a way back: one click on the header a revealed repo was given
+/// restores its rollup line.
+#[test]
+fn one_click_returns_a_revealed_repository_to_its_rollup() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    button(&h, "Remote").click();
+    settle(&mut h);
+    assert!(!galleys_for(&h, "origin").is_empty(), "revealed");
+
+    // The revealed repo is the only one still offering a `Remote` button whose
+    // click means "hide again": its header sits above beta's rollup.
+    button(&h, "Remote").click();
+    settle(&mut h);
+    assert!(
+        galleys_for(&h, "origin").is_empty(),
+        "the click hid the remote groups"
+    );
+    assert!(
+        painted_text(&h)
+            .iter()
+            .any(|t| t == "1 remote · 2 branches"),
+        "and the rollup line came back: {:?}",
+        painted_text(&h)
+    );
+    assert!(
+        h.state().tree.remotes_revealed.is_empty(),
+        "and left nothing revealed"
+    );
+}
+
+/// Revealing a repository does not disturb the per-remote collapse that already
+/// works inside it.
+#[test]
+fn per_remote_collapse_still_works_inside_a_revealed_repository() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    fx.tree
+        .remotes_revealed
+        .insert(RootId(Arc::from(PathBuf::from("/alpha"))));
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    assert!(
+        !galleys_for(&h, "remote-only").is_empty(),
+        "the revealed group is open"
+    );
+    let events = click_events(&mut h, "origin");
+    assert!(
+        events.contains(&TreeEvent::RemoteToggled {
+            root: RootId(Arc::from(PathBuf::from("/alpha"))),
+            remote: "origin".to_string(),
+        }),
+        "{events:#?}"
+    );
+    settle(&mut h);
+    assert!(
+        galleys_for(&h, "remote-only").is_empty(),
+        "collapsing that remote still hides its branches"
+    );
+}
+
+/// A reveal is tree state, so searching and clearing must not lose it.
+#[test]
+fn a_reveal_survives_a_filter_round_trip() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    fx.tree
+        .remotes_revealed
+        .insert(RootId(Arc::from(PathBuf::from("/alpha"))));
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    h.state_mut().filter = "starred".to_string();
+    settle(&mut h);
+    h.state_mut().filter = String::new();
+    settle(&mut h);
+
+    assert_eq!(
+        h.state().tree.remotes_revealed.len(),
+        1,
+        "the reveal is untouched by filtering"
+    );
+    assert!(
+        !galleys_for(&h, "origin").is_empty(),
+        "and the repo is still revealed afterwards: {:?}",
+        painted_text(&h)
+    );
+}
+
 // --- the remotes-visible switch -------------------------------------------------
 
 #[test]
@@ -534,7 +1237,7 @@ fn remote_rollup_click_emits_the_visibility_switch() {
 
     // Collapsed by default: the rollup states the real hidden counts.
     let texts = painted_text(&h);
-    assert!(texts.iter().any(|t| t.contains("Remote")), "{texts:#?}");
+    assert!(texts.iter().any(|t| t.contains("REMOTE")), "{texts:#?}");
     assert!(
         texts.iter().any(|t| t.contains("1 remote · 2 branches")),
         "the rollup count is derived, never estimated: {texts:#?}"
@@ -542,8 +1245,11 @@ fn remote_rollup_click_emits_the_visibility_switch() {
 
     let events = click_events(&mut h, "Remote");
     assert!(
-        events.contains(&TreeEvent::RemotesVisibleChanged { visible: true }),
-        "{events:#?}"
+        events.contains(&TreeEvent::RemoteRevealToggled {
+            root: RootId(Arc::from(PathBuf::from("/alpha"))),
+            revealed: true,
+        }),
+        "the rollup reveals the repository it belongs to: {events:#?}"
     );
     settle(&mut h);
     assert!(

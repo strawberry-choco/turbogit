@@ -55,10 +55,34 @@ fn rollup_pluralizes_zero_one_and_many_remotes_and_branches() {
     ] {
         let roots = [root_with_counts("/repo", remotes, branches)];
         for show_remotes in [false, true] {
-            let view = build_branch_view(&roots, &HashMap::new(), show_remotes);
+            let view = build_branch_view(&roots, &HashMap::new(), &|_| show_remotes);
             assert_eq!(view.repos[0].remote_rollup().as_deref(), expected);
         }
     }
+}
+
+/// The builder is asked per repository, so a rolled-up repo contributes no
+/// remote nodes while its neighbour's are built.
+#[test]
+fn the_reveal_predicate_is_asked_per_repository() {
+    let roots = [
+        root_with_counts("/revealed", 1, 26),
+        root_with_counts("/rolled-up", 1, 6_739),
+    ];
+    let view = build_branch_view(&roots, &HashMap::new(), &|root| {
+        root.0.to_string_lossy() == "/revealed"
+    });
+
+    assert_eq!(
+        view.repos[0].remote_groups.len(),
+        1,
+        "the revealed repo builds its groups"
+    );
+    assert!(
+        view.repos[1].remote_groups.is_empty(),
+        "the rolled-up repo builds none"
+    );
+    assert_eq!(view.repos[1].remote_branch_count, 6_739);
 }
 
 #[test]
@@ -70,8 +94,8 @@ fn rollup_counts_all_old_remote_leaves_without_cross_repo_totals() {
         root_with_counts("/long-lived", 3, 6_739),
         root_with_counts("/retained-refs", 0, 1),
     ];
-    let hidden = build_branch_view(&roots, &HashMap::new(), false);
-    let expanded = build_branch_view(&roots, &HashMap::new(), true);
+    let hidden = build_branch_view(&roots, &HashMap::new(), &|_| false);
+    let expanded = build_branch_view(&roots, &HashMap::new(), &|_| true);
 
     for ((root, hidden), expanded) in roots.iter().zip(&hidden.repos).zip(&expanded.repos) {
         let snapshot_count = root

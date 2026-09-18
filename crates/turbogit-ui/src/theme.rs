@@ -115,6 +115,11 @@ impl Palette {
     pub const RAISED: Color32 = Self::SURFACE;
     /// Selection (`#2E4369`): the active row/pill.
     pub const SELECTION: Color32 = Color32::from_rgb(0x2e, 0x43, 0x69);
+    /// Group-label band (`#1F232C`): the scaffolding strip a `LOCAL` / `REMOTE`
+    /// header sits on. A faint cool lift where the repo header, the hover fill
+    /// and the raised surfaces are all neutral grey, and far weaker than a
+    /// current row's band — so group labels never read as a row state.
+    pub const SECTION_BG: Color32 = Color32::from_rgb(0x1f, 0x23, 0x2c);
     /// Divider (`#2B2D30`): 1px separators. An equal-valued semantic alias of
     /// the raised surface (RAISED/SURFACE) — separators read as hairline
     /// relief against the raised tone, not as the stronger LINE border.
@@ -210,6 +215,21 @@ pub enum RepoState {
 }
 
 impl RepoState {
+    /// The state in words, beside [`RepoState::color`] so a dot and the summary
+    /// next to it can never disagree. The wording is the sidebar's smart-group
+    /// vocabulary where the states overlap; `in sync` is new, and is what a
+    /// repository with nothing to report says.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Clean => "in sync",
+            Self::Dirty => "dirty worktree",
+            Self::Conflict => "has conflicts",
+            Self::Diverged => "diverged",
+            Self::Unpushed => "unpushed commits",
+            Self::Unpulled => "unpulled commits",
+        }
+    }
+
     pub fn color(self) -> Color32 {
         match self {
             Self::Clean | Self::Unpushed => Palette::AHEAD,
@@ -320,11 +340,15 @@ pub fn data_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Monospace)
 }
 
-/// Chrome font face — the shared proportional face for shell chrome (buttons,
-/// tabs, section headers, labels). Per ADR-0002 both logical families
-/// currently prioritize the embedded JetBrains Mono Regular, so this resolves
-/// through the same installed stack as data text; keeping the seam means a
-/// future proportional registration upgrades every chrome call site at once.
+/// Chrome font face — the embedded UI sans, so interface labels (repo names,
+/// section labels, buttons, counts) read in a proportional face while data
+/// (branch and remote names, hashes, upstreams) stays monospaced. Which face
+/// sits here is decided once, in [`font_definitions`]; a different chrome
+/// family upgrades every call site at once.
+///
+/// Bold chrome has no bold member in this family, so emphasised labels keep
+/// rendering through the embedded mono bold (`ui::widgets`'s bold-font path)
+/// rather than a synthesised weight of the sans.
 pub fn chrome_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
 }
@@ -337,6 +361,16 @@ pub fn two_space_indent(ui: &Ui) -> f32 {
         .layout_no_wrap("  ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
         .size()
         .x
+}
+
+/// How many [`two_space_indent`] steps a tree level hangs its children on. Two,
+/// so a directory subgroup and the branches under it are not read as siblings.
+pub const INDENT_STEPS_PER_LEVEL: f32 = 2.0;
+
+/// The horizontal indent of one tree level — twice the two-space width, off the
+/// data face.
+pub fn indent_step(ui: &Ui) -> f32 {
+    two_space_indent(ui) * INDENT_STEPS_PER_LEVEL
 }
 
 fn dark_visuals() -> Visuals {
@@ -420,6 +454,9 @@ pub const JETBRAINS_MONO_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrains
 /// Registry keys used in [`font_definitions`].
 const JBM_REGULAR_KEY: &str = "jetbrains-mono-regular";
 const JBM_BOLD_KEY: &str = "jetbrains-mono-bold";
+/// egui's built-in proportional face, already carried in
+/// `FontDefinitions::default()`'s font data. Leads the chrome chain.
+const UI_SANS_KEY: &str = "Ubuntu-Light";
 
 /// Load a system font file, if present on this machine. System faces are
 /// fallback-only chain entries (ADR-0002): when the file cannot be found the
@@ -443,14 +480,15 @@ fn system_font_data(file_names: &[&str]) -> Option<std::borrow::Cow<'static, [u8
     None
 }
 
-/// Build the design font stack: embedded JetBrains Mono Regular+Bold as the
-/// primary faces, followed by egui's built-in glyph fallbacks and — when
-/// present on this machine — the Windows system faces (`Segoe UI`,
-/// `Consolas`). System faces are consulted only for glyphs missing from JBM
-/// (e.g. CJK) and degrade gracefully by omission when absent.
+/// Build the design font stack: the Monospace (data) family leads with embedded
+/// JetBrains Mono Regular+Bold, the Proportional (chrome) family leads with
+/// egui's embedded UI sans, and both keep egui's built-in glyph fallbacks plus —
+/// when present on this machine — the Windows system faces (`Segoe UI`,
+/// `Consolas`). System faces are consulted only for glyphs missing from the
+/// leading faces and degrade gracefully by omission when absent.
 ///
-/// Per ADR-0002 the primary faces are always embedded binary includes so text
-/// metrics are deterministic across machines; system lookup would vary layout.
+/// Per ADR-0002 every leading face is embedded binary so text metrics are
+/// deterministic across machines; system lookup would vary layout.
 pub fn font_definitions() -> FontDefinitions {
     let mut defs = egui::FontDefinitions::default();
     defs.font_data.insert(
@@ -494,14 +532,20 @@ pub fn font_definitions() -> FontDefinitions {
         );
     }
 
-    // Proportional = mono-everything look of the mockups; keep egui's
-    // built-in glyph fallbacks behind JBM, then the optional system face.
-    let mut proportional = vec![JBM_REGULAR_KEY.to_owned()];
+    // Proportional = the embedded UI sans, so chrome labels stop painting in
+    // the data face. Ubuntu-Light ships inside egui (`epaint_default_fonts`),
+    // which keeps ADR-0002's rule intact: an embedded binary leads the chain,
+    // never a system lookup, so metrics are identical across machines.
+    // egui's built-in glyph fallbacks stay behind it, so a chrome label
+    // carrying a character the sans lacks still resolves to an embedded face.
+    let mut proportional = vec![UI_SANS_KEY.to_owned()];
     proportional.extend(
         defs.families
             .get(&egui::FontFamily::Proportional)
             .cloned()
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|face| face != UI_SANS_KEY),
     );
     if segoe_ui_available.is_some() {
         proportional.push("Segoe UI".to_owned());

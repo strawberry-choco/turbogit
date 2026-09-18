@@ -88,6 +88,11 @@ pub struct RepoSection {
     /// The repo's checked-out branch, if any.
     pub current_branch: Option<String>,
     pub status: RepoStatus,
+    /// The current branch's commits ahead of / behind its upstream. The header's
+    /// summary states these as words; they come from the same snapshot as
+    /// `status`, never a second read.
+    pub ahead: usize,
+    pub behind: usize,
     /// Local branches as a tree (directory subgroups + stripped labels).
     pub locals: Vec<BranchNode>,
     /// Total remote-branch count across all remotes (the rollup's `M branches`;
@@ -263,15 +268,17 @@ fn build_tree(
     convert(forest)
 }
 
-/// Derive a repo's header status from its snapshot (issue 01 §6).
-fn repo_status(root: &Root) -> RepoStatus {
+/// Derive a repo's header status from its snapshot (issue 01 §6), together with
+/// the current branch's ahead/behind counts it was derived from — the header's
+/// summary needs the numbers, and they must come from this same read.
+fn header_status(root: &Root) -> (RepoStatus, usize, usize) {
     let current = root.current_branch.as_ref().and_then(|name| {
         root.branches
             .iter()
             .find(|b| b.kind == BranchKind::Local && b.name == *name)
     });
     let (ahead, behind) = current.map_or((0, 0), |b| (b.ahead, b.behind));
-    RepoStatus::from_root(root, ahead, behind)
+    (RepoStatus::from_root(root, ahead, behind), ahead, behind)
 }
 
 /// Count the leaf branches beneath a node forest (the count invariant source).
@@ -292,13 +299,14 @@ pub fn leaf_count(nodes: &[BranchNode]) -> usize {
 ///
 /// `roots` are the in-scope repositories; `tags_by_root` carries each repo's
 /// already-classified tag list (tags live outside the `Root` branch snapshot
-/// and are supplied pre-read). `show_remotes` controls whether remote branches
-/// expand into per-remote groups (`true`) or collapse into a single rollup
-/// (`false`, the default).
+/// and are supplied pre-read). `show_remotes` is asked per repository whether
+/// that repo's remotes are showing, so a rolled-up repo is skipped while its
+/// tree is built rather than built and then hidden — which is why this is a
+/// predicate and not a flag.
 pub fn build_branch_view(
     roots: &[Root],
     tags_by_root: &HashMap<RootId, Vec<(String, RefState)>>,
-    show_remotes: bool,
+    show_remotes: &dyn Fn(&RootId) -> bool,
 ) -> BranchView {
     let single_repo = roots.len() == 1;
     let all_repos_count = if roots.len() > 1 {
@@ -311,7 +319,7 @@ pub fn build_branch_view(
     for root in roots {
         let repo_name = root.id.name();
         let current = &root.current_branch;
-        let status = repo_status(root);
+        let (status, ahead, behind) = header_status(root);
 
         let locals: Vec<Branch> = root
             .branches
@@ -344,7 +352,8 @@ pub fn build_branch_view(
         }
         by_remote.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let remote_groups = if show_remotes {
+        let revealed = show_remotes(&root.id);
+        let remote_groups = if revealed {
             by_remote
                 .iter()
                 .map(|(remote, list)| {
@@ -373,6 +382,8 @@ pub fn build_branch_view(
             repo_name,
             current_branch: current.clone(),
             status,
+            ahead,
+            behind,
             locals: locals_tree,
             remote_branch_count: remotes.len(),
             remote_count: root.remotes.len(),
@@ -519,7 +530,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), false);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
 
         let section = &view.repos[0];
         // Remotes collapse: no per-remote groups, but the rollup count is exact.
@@ -549,7 +560,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), true);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| true);
 
         let section = &view.repos[0];
         assert_eq!(section.remote_groups.len(), 2);
@@ -573,7 +584,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), false);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
         let section = &view.repos[0];
 
         // One directory node "feature" with two leaves, count == 2.
@@ -603,7 +614,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), true);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| true);
         let section = &view.repos[0];
         let origin = &section.remote_groups[0];
 
@@ -635,7 +646,7 @@ mod tests {
             Some("top"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), false);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
         let section = &view.repos[0];
 
         fn check(nodes: &[BranchNode]) {
@@ -673,7 +684,7 @@ mod tests {
             RootId(Arc::from(PathBuf::from("/alpha"))),
             vec![("v1.0".to_string(), RefState::Default)],
         );
-        let view = build_branch_view(&[repo], &tags, true);
+        let view = build_branch_view(&[repo], &tags, &|_| true);
         let section = &view.repos[0];
 
         let sum: usize = section.remote_groups.iter().map(|g| g.count).sum();
@@ -693,7 +704,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), false);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
         let section = &view.repos[0];
         let labels = leaf_labels(&section.locals);
         assert!(
@@ -718,7 +729,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), true);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| true);
         let section = &view.repos[0];
         let origin = &section.remote_groups[0];
         let labels: Vec<String> = leaf_labels(&origin.children);
@@ -745,7 +756,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), false);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
         let section = &view.repos[0];
         let main = section
             .locals
@@ -779,7 +790,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), false);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
         let section = &view.repos[0];
         // The favorite "zebra" sits first among locals (above main/feature-a).
         match &section.locals[0] {
@@ -802,7 +813,7 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), true);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| true);
         let section = &view.repos[0];
         let origin = &section.remote_groups[0];
         // "starred" leads its group though "plain" sorts first alphabetically.
@@ -821,10 +832,10 @@ mod tests {
         let unpushed = root_with("/u", &[local("main", false, 2, 0)], Some("main"), false);
         let unpulled = root_with("/p", &[local("main", false, 0, 3)], Some("main"), false);
 
-        let view_clean = build_branch_view(&[clean], &HashMap::new(), false);
-        let view_dirty = build_branch_view(&[dirty], &HashMap::new(), false);
-        let view_push = build_branch_view(&[unpushed], &HashMap::new(), false);
-        let view_pull = build_branch_view(&[unpulled], &HashMap::new(), false);
+        let view_clean = build_branch_view(&[clean], &HashMap::new(), &|_| false);
+        let view_dirty = build_branch_view(&[dirty], &HashMap::new(), &|_| false);
+        let view_push = build_branch_view(&[unpushed], &HashMap::new(), &|_| false);
+        let view_pull = build_branch_view(&[unpulled], &HashMap::new(), &|_| false);
 
         assert_eq!(view_clean.repos[0].status, RepoStatus::Clean);
         assert_eq!(view_dirty.repos[0].status, RepoStatus::Dirty);
@@ -837,7 +848,7 @@ mod tests {
     #[test]
     fn single_repo_emits_invisible_section_and_no_all_repos_count() {
         let repo = root_with("/alpha", &[local("main", false, 0, 0)], Some("main"), false);
-        let view = build_branch_view(&[repo], &HashMap::new(), false);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
         assert!(view.single_repo, "one repo → invisible section");
         assert_eq!(
             view.all_repos_count, None,
@@ -851,7 +862,7 @@ mod tests {
     fn multi_repo_exposes_all_n_count_and_per_repo_sections() {
         let a = root_with("/alpha", &[local("main", false, 0, 0)], Some("main"), false);
         let b = root_with("/beta", &[local("main", false, 0, 0)], Some("main"), false);
-        let view = build_branch_view(&[a, b], &HashMap::new(), false);
+        let view = build_branch_view(&[a, b], &HashMap::new(), &|_| false);
         assert!(!view.single_repo);
         assert_eq!(view.all_repos_count, Some(2));
         assert_eq!(view.repos.len(), 2);
@@ -872,7 +883,7 @@ mod tests {
                 ("v2.0".to_string(), RefState::LocalOnly),
             ],
         );
-        let view = build_branch_view(&[repo], &tags, false);
+        let view = build_branch_view(&[repo], &tags, &|_| false);
         assert_eq!(
             view.repos[0].tags,
             vec![
@@ -900,7 +911,7 @@ mod tests {
             time: ts(1000),
         });
         let repo = root_with("/alpha", &[b], Some("main"), false);
-        let view = build_branch_view(&[repo], &HashMap::new(), false);
+        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
         let leaf = match &view.repos[0].locals[0] {
             BranchNode::Leaf(l) => l,
             _ => panic!("leaf"),

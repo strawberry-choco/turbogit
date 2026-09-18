@@ -353,8 +353,13 @@ pub struct TreeState {
     /// Expand/collapse of Local / Remote / Tags.
     pub groups: BranchesGroups,
     /// View-wide remotes-on/off switch: when `false`, remote branches
-    /// collapse into the per-repo rollup.
+    /// collapse into the per-repo rollup. The Git Log pane forces this on; the
+    /// Branches surface reveals remotes per repository instead.
     pub show_remotes: bool,
+    /// Repositories whose remotes the person has revealed from the rollup.
+    /// Per-root, the same shape as `collapsed_remotes` below, so one repo's
+    /// reveal never shows another's branches.
+    pub remotes_revealed: HashSet<RootId>,
     /// Per-remote collapse within the expanded remote groups: each entry is
     /// `(root, remote)` whose group is collapsed.
     pub collapsed_remotes: HashSet<(RootId, String)>,
