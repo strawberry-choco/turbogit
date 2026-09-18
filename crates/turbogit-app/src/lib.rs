@@ -23,3 +23,4 @@ pub mod recents;
 pub mod root_caches;
 pub mod smart_rules;
 pub mod state;
+pub mod worktree_lifecycle;

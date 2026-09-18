@@ -123,7 +123,7 @@ pub enum AppEvent {
     /// for `root`: invalidate the cached list and bump its epoch so the next
     /// fill refetches the post-mutation list.
     WorktreesMutated { root: RootId },
-    /// One linked worktree's dirty probe settled (ticket 04): the row at
+    /// One linked worktree's dirty probe settled (ticket 03): the row at
     /// `path` updates independently of every other row.
     WorktreeDirty {
         root: RootId,
