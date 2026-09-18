@@ -38,6 +38,7 @@ use turbogit_domain::model::{Branch, BranchKind, RootId};
 
 use crate::theme::{
     Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_SECTION, chrome_font, data_font,
+    two_space_indent,
 };
 use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches::{branch_matches, matches_query, name_budget, row_meta, sync_chips};
@@ -52,16 +53,6 @@ use crate::ui::icons::{self, Icon};
 
 /// Height of one repo section header (status dot + repo name + current chip).
 const REPO_HEADER_H: f32 = 30.0;
-
-/// Width of two whitespace characters in the data face — the per-level indent
-/// for directory subgroups under "Local" (branch names are monospace, so the
-/// hierarchy hangs two spaces per depth).
-fn two_space_indent(ui: &Ui) -> f32 {
-    ui.painter()
-        .layout_no_wrap("  ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
-        .size()
-        .x
-}
 
 /// Width of one whitespace character in the data face — the inline gap between
 /// a branch name and the current-branch marker after it.
