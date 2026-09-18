@@ -25,7 +25,7 @@ use super::project_tree::{self, ProjectNode, iter_repos};
 use super::smart_groups::{self, GroupFilter};
 use super::tree_selection::{self};
 use super::widgets;
-use crate::theme::Palette;
+use crate::theme::{Palette, two_space_indent};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::smart_rules::SmartGroupRule;
 use turbogit_app::state::{AppState, Dialog, Toast};
@@ -35,14 +35,27 @@ pub const SIDEBAR_WIDTH: f32 = 280.0;
 
 const ROW_HEIGHT: f32 = 26.0;
 const GROUP_HEIGHT: f32 = 24.0;
-/// Horizontal indent per tree depth (sidebar-project-tree issue 03).
-const INDENT: f32 = 14.0;
 /// Right zone of a rule row reserved for its edit/delete affordances;
 /// the row's click target shrinks by the same amount.
 const RULE_BUTTONS_ZONE: f32 = 56.0;
 /// Height of the bottom selection bar (issue #08), shown only while a
 /// selection is live.
 const SELECTION_BAR_HEIGHT: f32 = 36.0;
+
+// --- Project-tree left column -------------------------------------------
+// The checkbox column ends at 21.5; the 12px expander takes 22..34 and the
+// 14px folder icon follows immediately, so a folder's label hangs at 54 and a
+// repo's (no icon column) at 44. Every offset below is from the row's left
+// edge plus the depth indent.
+
+/// Center of the 12px expand/collapse chevron.
+const EXPANDER_X: f32 = 28.0;
+/// Center of the 14px folder glyph.
+const FOLDER_ICON_X: f32 = 42.0;
+/// Leading x of a folder row's name.
+const FOLDER_NAME_X: f32 = 54.0;
+/// Leading x of a repo row's label, with or without an expander.
+const REPO_NAME_X: f32 = 44.0;
 
 /// Paint one icon primitive centered at `origin` without disturbing layout
 /// (mirrors `shell::paint_icon_centered`).
@@ -719,7 +732,7 @@ fn render_folder_row(
         painter.rect_filled(header, CornerRadius::same(4), Palette::SURFACE_2);
     }
     let cy = header.center().y;
-    let indent = depth as f32 * INDENT;
+    let indent = depth as f32 * two_space_indent(ui);
     let chevron = if expanded {
         Icon::CHEVRON_DOWN
     } else {
@@ -728,14 +741,14 @@ fn render_folder_row(
     icon_at(
         ui,
         chevron,
-        Pos2::new(header.left() + 28.0 + indent, cy),
+        Pos2::new(header.left() + EXPANDER_X + indent, cy),
         12.0,
         Palette::INK_3,
     );
     icon_at(
         ui,
         Icon::FOLDER,
-        Pos2::new(header.left() + 46.0 + indent, cy),
+        Pos2::new(header.left() + FOLDER_ICON_X + indent, cy),
         14.0,
         if expanded {
             Palette::BRAND
@@ -750,7 +763,7 @@ fn render_folder_row(
     );
     painter.galley_with_override_text_color(
         Pos2::new(
-            header.left() + 60.0 + indent,
+            header.left() + FOLDER_NAME_X + indent,
             cy - name_galley.size().y / 2.0,
         ),
         name_galley,
@@ -845,10 +858,10 @@ fn render_repo_node(
     // A repo-with-children is expanded by default; the expander chevron
     // toggles only the collapse, the row itself keeps focusing the repo.
     let expanded = !has_children || !state.ui.sidebar_collapsed.contains(&rel);
-    let indent = depth as f32 * INDENT;
+    let indent = depth as f32 * two_space_indent(ui);
     if has_children {
         let chevron_rect = Rect::from_center_size(
-            Pos2::new(row.left() + 28.0 + indent, row.center().y),
+            Pos2::new(row.left() + EXPANDER_X + indent, row.center().y),
             Vec2::splat(26.0),
         );
         let chevron = ui.interact(
@@ -887,8 +900,6 @@ fn render_repo_node(
         painter.rect_filled(row, CornerRadius::same(0), Palette::SURFACE_2);
     }
 
-    // Preserve label offsets for rows with and without an expander.
-    let name_x = if has_children { 58.0 } else { 44.0 };
     let cy = row.center().y;
     if has_children {
         icon_at(
@@ -898,13 +909,13 @@ fn render_repo_node(
             } else {
                 Icon::CHEVRON_RIGHT
             },
-            Pos2::new(row.left() + 28.0 + indent, cy),
+            Pos2::new(row.left() + EXPANDER_X + indent, cy),
             12.0,
             Palette::INK_3,
         );
     }
     // Keep controls and a minimum name column even when counters are huge.
-    let left = (row.left() + name_x + indent).min(row.right());
+    let left = (row.left() + REPO_NAME_X + indent).min(row.right());
     let mut right = row.right() - 12.0;
     let badge_left = left + ((right - left).max(0.0) * 0.52).max(24.0);
     if repo.behind > 0 {
