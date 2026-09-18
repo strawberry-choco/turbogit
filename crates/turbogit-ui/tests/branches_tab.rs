@@ -1,6 +1,6 @@
 //! Issue 03 — Branches tab frame + warm grouped list (spine, design doc §12–§16).
 //!
-//! The empty Branches tab becomes the screen: a 44px toolbar, the grouped
+//! The empty Branches tab becomes the screen: a one-row toolbar, the grouped
 //! branch list (Local expanded, Remote expanded, Tags collapsed, each header
 //! carrying its live count), and the 280px right-hand detail panel showing a
 //! quiet selection prompt. Branch data is warm from repo open; slow reads show
@@ -2497,6 +2497,38 @@ fn toolbar_composes_scope_and_new_branch_without_remotes_toggle() {
         .into_iter()
         .any(|(r, f)| f == turbogit_ui::theme::Palette::ACCENT && r.intersects(new_branch));
     assert!(brand, "New Branch paints on an accent-filled surface");
+}
+
+/// The search input shares the toolbar row with the action cluster and stays
+/// inside the window. It used to be added *after* a `with_layout` cluster,
+/// which leaves the parent's cursor at the band's right edge: the box painted
+/// off-screen — invisible and unreachable, with the toolbar's whole left half
+/// empty above the tree.
+#[test]
+fn toolbar_search_shares_the_row_and_stays_in_the_window() {
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    open_branches_tab(&mut harness);
+
+    let win = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1024.0, 768.0));
+    let search = harness.get_by_label("Search branches").rect();
+    let scope = harness.get_by_label("Scope…").rect();
+    assert!(
+        win.contains_rect(search),
+        "the search box is inside the window: {search:?}"
+    );
+    assert!(
+        search.width() > 100.0,
+        "the box takes the left space: {search:?}"
+    );
+    assert!(
+        search.max.x <= scope.min.x,
+        "the search box precedes the scope chip: {search:?} vs {scope:?}"
+    );
+    assert!(
+        search.y_range().intersects(scope.y_range()),
+        "both halves share one toolbar row: {search:?} vs {scope:?}"
+    );
 }
 
 #[test]

@@ -327,7 +327,7 @@ fn geometry_constants_match_spec() {
     };
     assert_eq!(BRANCH_ROW_H, 30.0); // dense IDE list row
     assert_eq!(SECTION_H, 26.0); // Local / Remote / Tags header
-    assert_eq!(TOOLBAR_H, 44.0); // branch toolbar
+    assert_eq!(TOOLBAR_H, 36.0); // branch toolbar: one centered row of controls
     assert_eq!(DETAIL_W, 280.0); // branch detail panel
     assert_eq!(SIDE_PANEL_W, 220.0); // left repo tree / metadata panel
     assert_eq!(KIT_ICON, 12.0); // icons draw at 12–13px (§14)

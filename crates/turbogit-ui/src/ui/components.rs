@@ -23,8 +23,8 @@ use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, TYPE_SECTION, chrome_font, 
 
 // --- §12 geometry ------------------------------------------------------------
 
-/// Branch toolbar height (search + actions).
-pub const TOOLBAR_H: f32 = 44.0;
+/// Branch toolbar height: one centered row of controls (search + actions).
+pub const TOOLBAR_H: f32 = 36.0;
 /// Section header height (Local / Remote / Tags).
 pub const SECTION_H: f32 = 26.0;
 /// Branch row height — dense IDE list row.
@@ -48,8 +48,9 @@ pub const KIT_ICON_LARGE: f32 = 13.0;
 /// Every clickable target is at least this tall (§14), even when the visible
 /// control is smaller.
 pub const CLICK_TARGET_MIN: f32 = 24.0;
-/// Kit button height (on the dense scale; still ≥ the 24px target floor).
-const KIT_BUTTON_H: f32 = 28.0;
+/// Kit button height (on the dense scale; still ≥ the 24px target floor). Also
+/// the height of one toolbar row.
+pub const KIT_BUTTON_H: f32 = 28.0;
 
 // --- §14.1 branch row states ------------------------------------------------
 
