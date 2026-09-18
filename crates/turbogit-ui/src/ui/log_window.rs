@@ -7,7 +7,7 @@
 //! 1. **Branches** (left, 210px): live search; LOCAL / REMOTE / TAGS groups
 //!    fed by ref decorations; a bottom `ROOTS` filter for multi-root projects.
 //! 2. **Graph** (center): live search toolbar, root-stripe legend, and the
-//!    commit table (Graph | Hash | Author | Date | Message) with one collapsed
+//!    commit table (Graph | Hash | Author | Message | Date) with one collapsed
 //!    `.tg-label` pill per decorated commit — the ref names (branch=brand,
 //!    remote=success, tag=warning) are revealed in its hover tooltip — and a
 //!    translucent `SELECTION_BG` row highlight that keeps lane colors readable.
@@ -64,12 +64,18 @@ const CHIP_PAD_X: f32 = 6.0;
 /// edge, plus the root stripe in multi-root views). The micro column headers
 /// and the row cells share these offsets so they stay vertically aligned.
 /// `COL_GRAPH` is the graph node's center x (no header is drawn for it); the
-/// remaining headers left-align with their cell text.
+/// remaining columns left-align with their cell text, except the date, which
+/// trails the row right-aligned to `rect.right() - DATE_RIGHT_PAD`.
 const COL_GRAPH: f32 = 10.0;
 const COL_HASH: f32 = 26.0;
 const COL_AUTHOR: f32 = 84.0;
-const COL_DATE: f32 = 164.0;
-const COL_MESSAGE: f32 = 236.0;
+/// Message column left edge — the wide column, sitting where the date used to.
+const COL_MESSAGE: f32 = 164.0;
+/// Gap between the right-aligned date and the row's trailing edge.
+const DATE_RIGHT_PAD: f32 = 8.0;
+/// Space held back from the message for a label pill (icon + padding + gap)
+/// so it never runs under the right-aligned date on decorated rows.
+const PILL_RESERVE: f32 = 30.0;
 
 /// Distinct lane colors for the commit graph (Epic D1). Also reused as the
 /// deterministic per-root stripe palette.
@@ -790,28 +796,36 @@ fn paint_row_fill(ui: &Ui, rect: &Rect, active: bool, hovered: bool) {
 fn header_cells(ui: &mut Ui, multi_root: bool) {
     let top = ui.cursor().top();
     ui.add_space(16.0);
-    let content_left = ui.cursor().left() + if multi_root { STRIPE_WIDTH + 2.0 } else { 0.0 };
-    let headers = [
+    let left = ui.cursor().left();
+    let content_left = left + if multi_root { STRIPE_WIDTH + 2.0 } else { 0.0 };
+    let micro = FontId::new(MICRO_TEXT, FontFamily::Proportional);
+    for (title, dx) in [
         ("HASH", COL_HASH),
         ("AUTHOR", COL_AUTHOR),
-        ("DATE", COL_DATE),
         ("MESSAGE", COL_MESSAGE),
-    ];
-    for (title, dx) in headers {
-        let galley = ui.painter().layout_no_wrap(
-            title.to_owned(),
-            FontId::new(MICRO_TEXT, FontFamily::Proportional),
-            Palette::INK_3,
-        );
+    ] {
+        let galley = ui
+            .painter()
+            .layout_no_wrap(title.to_owned(), micro.clone(), Palette::INK_3);
         ui.painter().galley(
             Pos2::new(content_left + dx, top + 2.0),
             galley,
             Palette::INK_3,
         );
     }
+    // The date trails the row, so its header right-aligns to the same edge.
+    let date = ui
+        .painter()
+        .layout_no_wrap("DATE".to_owned(), micro, Palette::INK_3);
+    let right = left + ui.available_width();
+    ui.painter().galley(
+        Pos2::new(right - DATE_RIGHT_PAD - date.size().x, top + 2.0),
+        date,
+        Palette::INK_3,
+    );
 }
 
-/// One commit-table row: stripe | node | hash | author | date | message(+chips).
+/// One commit-table row: stripe | node | hash | author | message(+chips) | date.
 /// Renders against a shared [`AppState`] (the displayed union borrows the
 /// caches) and reports whether the row was clicked; the caller applies the
 /// selection after rendering (plan §1.3 defer pattern).
@@ -868,7 +882,7 @@ fn commit_row(
         ui.painter().circle_filled(center, 4.0, lane);
     }
 
-    // Hash | Author | Date cells.
+    // Hash | Author cells.
     let painter = ui.painter().clone();
     let cy = rect.center().y;
     let hash_galley = painter.layout_no_wrap(short(&c.id), mono_font(), Palette::BRAND);
@@ -884,34 +898,44 @@ fn commit_row(
         author_galley,
         Palette::INK_2,
     );
+
+    // Date cell: the trailing column, right-aligned to the row's edge.
     let date_galley =
         painter.layout_no_wrap(fmt_date(c.time, date_mode), body_font(), Palette::INK_3);
+    let date_x = rect.right() - DATE_RIGHT_PAD - date_galley.size().x;
     painter.galley(
-        Pos2::new(content_left + COL_DATE, cy - date_galley.size().y / 2.0),
+        Pos2::new(date_x, cy - date_galley.size().y / 2.0),
         date_galley,
         Palette::INK_3,
     );
 
-    // Message cell with one collapsed label pill. Everything is painted
-    // directly (galleys + the pill, no child widgets) so the row itself
-    // stays the only interactive surface — a child `ui.label` here would sit
-    // on top of the row in hit-testing and swallow its clicks.
-    let painter = ui.painter().clone();
-    let mut mx = content_left + COL_MESSAGE;
+    // Message cell with one collapsed label pill — the wide column, sitting
+    // left of the date. Everything is painted directly (galleys + the pill,
+    // no child widgets) so the row itself stays the only interactive surface;
+    // a child `ui.label` here would sit on top of the row in hit-testing and
+    // swallow its clicks.
+    let labels = state.caches.refs_for(&c.root, &c.id);
+    let message_left = content_left + COL_MESSAGE;
+    let budget = (date_x - 8.0 - if labels.is_empty() { 0.0 } else { PILL_RESERVE } - message_left)
+        .max(24.0);
     let subject = c.message.lines().next().unwrap_or("");
-    let subject_galley = painter.layout_no_wrap(truncate(subject, 44), body_font(), Palette::INK);
+    let mut fit = truncate(subject, 44);
+    let mut subject_galley = painter.layout_no_wrap(fit.clone(), body_font(), Palette::INK);
+    while subject_galley.size().x > budget && fit.chars().count() > 1 {
+        fit.pop();
+        subject_galley = painter.layout_no_wrap(fit.clone(), body_font(), Palette::INK);
+    }
     let subject_w = subject_galley.size().x;
     painter.galley(
-        Pos2::new(mx, cy - subject_galley.size().y / 2.0),
+        Pos2::new(message_left, cy - subject_galley.size().y / 2.0),
         subject_galley,
         Palette::INK,
     );
-    mx += subject_w + 6.0;
+    let mx = message_left + subject_w + 6.0;
 
     // Refs collapse into one ".tg-label" pill, shown only when the commit
     // actually carries labels (branch / remote / tag); the individual names
     // are revealed in a hover tooltip so decorated rows stay scannable.
-    let labels = state.caches.refs_for(&c.root, &c.id);
     if !labels.is_empty() {
         let pill = paint_label_pill(&painter, mx, cy);
         if ui.rect_contains_pointer(pill) {
