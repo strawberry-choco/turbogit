@@ -1,4 +1,4 @@
-//! Branches tab (issues 03+): the three-zone screen — a 44px toolbar, the
+//! Branches tab (issues 03+): the three-zone screen — a one-row toolbar, the
 //! grouped branch list (Local / Remote / Tags with live counts), and the 280px
 //! right-hand detail panel. Behavior follows `docs/branches-screen-behavior.md`
 //! (§12–§16): branch data is warm from repo open, the current branch sits
@@ -25,7 +25,8 @@ use crate::ui::branch_tree_view::{self, LocalRow, TreeEvent, TreeGroup, TreeProp
 use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches_tree::{self, BranchNode, BranchView};
 use crate::ui::components::{
-    DETAIL_W, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button, kit_button_at,
+    DETAIL_W, KIT_BUTTON_H, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button,
+    kit_button_at,
 };
 use crate::ui::widgets;
 
@@ -361,36 +362,58 @@ fn handle_keys(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     }
 }
 
-/// Toolbar (44px, §12): scope chip and New Branch sit right-aligned.
-/// The search input takes the remaining left space; remote visibility is
-/// controlled by the tree rollups.
+/// Toolbar (one row, §12): the search input takes the left space and the
+/// action cluster (New Branch, then the scope chip in multi-repo) the right
+/// edge. Each half is painted into an explicit rect of the shared row: a
+/// `with_layout` cluster spans everything the parent has left, so anything
+/// added after it lands at the band's right edge — off-screen. Remote
+/// visibility is controlled by the tree rollups.
 fn toolbar(ui: &mut Ui, state: &mut AppState) {
-    ui.add_space(PAD_STRIP);
-    // Right-aligned cluster, painted right→left: New Branch (rightmost), then
-    // the scope chip (multi-repo only).
-    let _ = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        ui.add_space(PAD_STRIP);
-        // Primary action: New Branch (issue 04 — blue).
-        if kit_button(ui, KitButton::Primary, "New Branch").clicked() {
-            state.ui.dlg.new_branch_name.clear();
-            state.ui.dlg.new_branch_start.clear();
-            state.ui.dlg.new_branch_base.clear();
-            state.ui.dlg.new_branch_base_picker_open = false;
-            state.ui.dlg.new_branch_checkout = true;
-            state.ui.dialog = Some(Dialog::NewBranch);
-        }
-        // Scope chip (issue 04): only when several repos are in scope.
-        if state.multi.roots.len() > 1 {
-            ui.add_space(PAD_STRIP);
-            scope_chip(ui, state);
-        }
-    });
-    let search = widgets::search_input(ui, "Search branches", &mut state.ui.branches_filter);
+    let band = ui.available_rect_before_wrap();
+    let row = Rect::from_center_size(band.center(), egui::vec2(band.width(), KIT_BUTTON_H));
+
+    // The cluster is measured by painting it: its used left edge is where the
+    // search input stops.
+    let mut actions_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(row)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    actions_ui.add_space(PAD_STRIP);
+    // Primary action: New Branch (issue 04 — blue).
+    if kit_button(&mut actions_ui, KitButton::Primary, "New Branch").clicked() {
+        state.ui.dlg.new_branch_name.clear();
+        state.ui.dlg.new_branch_start.clear();
+        state.ui.dlg.new_branch_base.clear();
+        state.ui.dlg.new_branch_base_picker_open = false;
+        state.ui.dlg.new_branch_checkout = true;
+        state.ui.dialog = Some(Dialog::NewBranch);
+    }
+    // Scope chip (issue 04): only when several repos are in scope.
+    if state.multi.roots.len() > 1 {
+        actions_ui.add_space(PAD_STRIP);
+        scope_chip(&mut actions_ui, state);
+    }
+    let actions_left = actions_ui.min_rect().min.x;
+
+    let search_right = (actions_left - PAD_STRIP).max(row.min.x + PAD_STRIP);
+    let mut search_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                Pos2::new(row.min.x + PAD_STRIP, row.min.y),
+                Pos2::new(search_right, row.max.y),
+            ))
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let search = widgets::search_input(
+        &mut search_ui,
+        "Search branches",
+        &mut state.ui.branches_filter,
+    );
     if state.ui.branches_focus_search {
         search.request_focus();
         state.ui.branches_focus_search = false;
     }
-    ui.add_space(PAD_STRIP);
 }
 
 /// The scope chip (issue 04): "all N repos" when nothing is narrowed, or
