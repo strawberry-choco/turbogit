@@ -482,7 +482,8 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
             }
         }
     }
-    let view = build_branch_view(&roots, &tags_by_root, state.ui.log_tree.show_remotes);
+    // This pane shows remotes for every repository alike.
+    let view = build_branch_view(&roots, &tags_by_root, &|_| state.ui.log_tree.show_remotes);
 
     // The shared tree component with the pane's narrower capability set
     // (plan D7): no inline rename, no per-row actions, no repo-scope picker.
@@ -544,8 +545,9 @@ fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
                 state.ui.log_tree.collapsed_remotes.insert(key);
             }
         }
-        TreeEvent::RemotesVisibleChanged { visible } => {
-            state.ui.log_tree.show_remotes = visible;
+        TreeEvent::RemoteRevealToggled { .. } => {
+            // The pane forces remotes on every frame, so no repository here is
+            // ever rolled up and nothing reveals.
         }
         TreeEvent::FetchRequested { .. } => fetch_scope(state),
         _ => {}

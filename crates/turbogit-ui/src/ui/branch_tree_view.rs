@@ -37,31 +37,32 @@ use turbogit_app::state::TreeState;
 use turbogit_domain::model::{Branch, BranchKind, RootId};
 
 use crate::theme::{
-    Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_SECTION, chrome_font, data_font,
-    two_space_indent,
+    Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_SECTION, chrome_font, data_font, indent_step,
 };
 use crate::ui::branch_widget::stale_badge;
-use crate::ui::branches::{branch_matches, matches_query, name_budget, row_meta, sync_chips};
+use crate::ui::branches::{branch_matches, matches_query, row_meta};
 use crate::ui::branches_tree::{
     self, BranchNode, BranchView, RemoteGroup, RepoSection, RepoStatus,
 };
 use crate::ui::components::{
-    BRANCH_ROW_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H, kit_button, middle_truncate,
-    overflow_button, row_fill, row_ink, section_header, sync_bg, sync_ink,
+    BRANCH_ROW_H, CLICK_TARGET_MIN, KIT_ICON, KitButton, PAD_LIST, PillKind, RowState, SECTION_H,
+    current_row_fill, kit_button, middle_truncate_to_width, overflow_button, pill, pill_width,
+    row_fill, row_ink, section_header, sync_badge, sync_bg, sync_ink,
 };
 use crate::ui::icons::{self, Icon};
 
 /// Height of one repo section header (status dot + repo name + current chip).
 const REPO_HEADER_H: f32 = 30.0;
 
-/// Width of one whitespace character in the data face — the inline gap between
-/// a branch name and the current-branch marker after it.
-fn space_width(ui: &Ui) -> f32 {
-    ui.painter()
-        .layout_no_wrap(" ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
-        .size()
-        .x
-}
+/// Share of a branch row's content width held by the icon + name zone; the
+/// tracking branch starts on the other side of that line. A fraction of the
+/// row — not a pixels-per-character reserve — so the tracking column keeps one
+/// left edge whatever the names do.
+const NAME_ZONE_SHARE: f32 = 0.5;
+
+/// Share of a repo header held by its identity cluster (dot, name, current
+/// branch); the status summary and Fetch take the rest.
+const HEADER_IDENTITY_SHARE: f32 = 0.45;
 
 /// What the user did to the tree (plan D4). Plain data — every action target
 /// arrives as `(owning repository, branch)` so no surface re-derives it and no
@@ -80,8 +81,10 @@ pub enum TreeEvent {
     GroupToggled(TreeGroup),
     /// A remote group header was clicked: collapse/expand that remote.
     RemoteToggled { root: RootId, remote: String },
-    /// The collapsed Remote rollup (or a header switch) set remotes visibility.
-    RemotesVisibleChanged { visible: bool },
+    /// One repository's collapsed REMOTE rollup was clicked, or its REMOTE
+    /// header used to hide them again. Root-bearing: revealing one repo's
+    /// remotes never reveals another's.
+    RemoteRevealToggled { root: RootId, revealed: bool },
     /// A repository header's Fetch button was clicked.
     FetchRequested { root: RootId },
     /// The inline rename started from a row action.
@@ -215,9 +218,9 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
         .show(ui, |ui| {
             // A dead end turns into the likely next intent.
             if filtering
-                && in_scope
-                    .iter()
-                    .all(|s| section_match_count(s, &filter, tree.show_remotes) == 0)
+                && in_scope.iter().all(|s| {
+                    section_match_count(s, &filter, remotes_revealed(tree, &s.root_id)) == 0
+                })
             {
                 no_match_state(ui, filter.trim(), &mut events);
                 return;
@@ -250,10 +253,12 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
 }
 
 /// Total visible branches/tags in a section under the current filter — used to
-/// decide the no-match state and to size group headers.
-fn section_match_count(section: &RepoSection, filter: &str, show_remotes: bool) -> usize {
+/// decide the no-match state and to size group headers. `remotes` is this
+/// section's own reveal, so a hidden remote branch cannot suppress the
+/// no-match state.
+fn section_match_count(section: &RepoSection, filter: &str, remotes: bool) -> usize {
     let locals = leaf_count(&filter_nodes(&section.locals, filter));
-    let remotes = if show_remotes {
+    let remotes = if remotes {
         section
             .remote_groups
             .iter()
@@ -350,7 +355,20 @@ fn paint_repo_section(
     }
 
     // --- Remote area ---
-    if tree.show_remotes {
+    if remotes_revealed(tree, &section.root_id) {
+        // A repo revealed from its own rollup gets one header that puts it back.
+        // The view-wide surface (`show_remotes`) has no such control and paints
+        // no such row, so its rendering is unchanged.
+        if !tree.show_remotes {
+            let header = section_header(ui, "Remote", section.remote_branch_count, true, |_| {});
+            if header.clicked() {
+                events.push(TreeEvent::RemoteRevealToggled {
+                    root: section.root_id.clone(),
+                    revealed: false,
+                });
+            }
+            *y_cursor += SECTION_H;
+        }
         for rg in &section.remote_groups {
             let children = filter_nodes(&rg.children, filter);
             if leaf_count(&children) == 0 && !filter.trim().is_empty() {
@@ -418,7 +436,7 @@ fn paint_nodes(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    let step = two_space_indent(ui);
+    let step = indent_step(ui);
     for n in nodes {
         match n {
             BranchNode::Leaf(l) => {
@@ -471,48 +489,71 @@ fn repo_header(
 ) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, REPO_HEADER_H), Sense::hover());
-    let mut child = ui.new_child(
+    // A repository reads as a block, and its header is the one strip that says
+    // so. SURFACE, so the band is neither a row's hover fill nor a current row's
+    // brand tint.
+    ui.painter()
+        .rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
+    // Identity on the left, summary and Fetch on the right. Without an explicit
+    // split a truncating repo name consumes the whole strip.
+    let split_x = rect.left() + rect.width() * HEADER_IDENTITY_SHARE;
+    let pill_w = section
+        .current_branch
+        .as_deref()
+        .map(|cur| pill_width(ui, cur, PillKind::Current) + 8.0)
+        .unwrap_or(0.0);
+    let mut left = ui.new_child(
         UiBuilder::new()
-            .max_rect(rect)
+            .max_rect(Rect::from_min_max(
+                Pos2::new(rect.left(), rect.top()),
+                Pos2::new(split_x, rect.bottom()),
+            ))
             .layout(Layout::left_to_right(Align::Center)),
     );
-    child.add_space(PAD_LIST);
+    left.spacing_mut().item_spacing.x = 0.0;
+    left.add_space(PAD_LIST);
     if show_identity {
         // Status dot.
-        let (dot_rect, _) = child.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-        child
-            .painter()
+        let (dot_rect, _) = left.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
+        left.painter()
             .circle_filled(dot_rect.center(), 4.0, repo_status_color(section.status));
-        child.add_space(8.0);
-        // Repo name (UI sans, section-ish weight).
-        child.add(
+        left.add_space(8.0);
+        // Repo name (UI sans), fitted to what is left of its current-branch
+        // pill so neither can be pushed off the line.
+        let name_w = (split_x - (dot_rect.right() + 16.0 + pill_w) - PAD_LIST).max(24.0);
+        let name = middle_truncate_to_width(
+            &left,
+            &section.repo_name,
+            &chrome_font(TYPE_CONTROL),
+            name_w,
+        );
+        left.add(
             egui::Label::new(
-                RichText::new(section.repo_name.clone())
+                RichText::new(name)
                     .font(chrome_font(TYPE_CONTROL))
                     .color(Palette::T_PRIMARY),
             )
-            .truncate(),
+            .selectable(false),
         );
-    }
-    // Right-aligned cluster: current-branch chip (rightmost), then Fetch.
-    child.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        ui.add_space(PAD_LIST);
-        if show_identity && let Some(cur) = &section.current_branch {
-            let _ = egui::Frame::new()
-                .fill(Palette::selection_bg())
-                .corner_radius(Palette::RADIUS_CHIP)
-                .inner_margin(egui::Margin::symmetric(6, 2))
-                .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(cur.clone())
-                                .font(data_font(TYPE_CONTROL))
-                                .color(Palette::STATE_INFO),
-                        )
-                        .truncate(),
-                    );
-                });
+        // The current branch is part of the repo's identity, so it rides the
+        // name rather than trailing the strip.
+        if let Some(cur) = &section.current_branch {
+            left.add_space(8.0);
+            pill(&mut left, cur, PillKind::Current);
         }
+    }
+
+    // Right cluster: the repo's Fetch, with the status words in front of it.
+    let mut right = ui.new_child(
+        UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                Pos2::new(split_x, rect.top()),
+                Pos2::new(rect.right(), rect.bottom()),
+            ))
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    right.spacing_mut().item_spacing.x = 0.0;
+    right.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.add_space(PAD_LIST);
         // Repo-level Fetch (issue 03): one click away even with remotes hidden,
         // because the old Remote group header is gone.
@@ -521,7 +562,31 @@ fn repo_header(
                 root: section.root_id.clone(),
             });
         }
+        if show_identity {
+            ui.add_space(PAD_LIST);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(header_summary(section))
+                        .font(chrome_font(TYPE_CONTROL))
+                        .color(section.status.color()),
+                )
+                .selectable(false)
+                .truncate(),
+            );
+        }
     });
+}
+
+/// The header's status in words: the current branch's upstream counts, then the
+/// repository's state — both read off the section the builder already derived,
+/// so the numbers and the dot can never disagree.
+fn header_summary(section: &RepoSection) -> String {
+    let mut parts: Vec<String> = sync_badge(section.ahead, section.behind, false)
+        .into_iter()
+        .map(|(_, words)| words)
+        .collect();
+    parts.push(section.status.words().to_string());
+    parts.join(" · ")
 }
 
 /// Shared semantic colors, identical to the sidebar and sync badges.
@@ -539,21 +604,34 @@ fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize, step: f32) {
             .max_rect(rect)
             .layout(Layout::left_to_right(Align::Center)),
     );
+    child.spacing_mut().item_spacing.x = 0.0;
     child.add_space(PAD_LIST + depth as f32 * step);
+    // A subgroup is scaffolding with a name, so it shows the folder it stands
+    // for before the name.
+    icons::icon(&mut child, Icon::FOLDER, KIT_ICON, Palette::T_MUTED);
+    child.add_space(6.0);
+    // The segment is data, like a branch name (spec §19) — and a larger step
+    // than a section label's, so the two cannot be confused at a glance.
     child.add(
         egui::Label::new(
             RichText::new(format!("{label}/"))
-                .font(chrome_font(TYPE_CONTROL))
+                .font(data_font(TYPE_CONTROL))
                 .color(Palette::T_SECONDARY),
         )
-        .truncate(),
+        .selectable(false),
     );
-    child.add_space(6.0);
+    child.add_space(8.0);
     child.add(egui::Label::new(
         RichText::new(count.to_string())
             .font(chrome_font(TYPE_CONTROL))
             .color(Palette::T_MUTED),
     ));
+}
+
+/// Whether one repository shows its remote groups: the view-wide switch (the Git
+/// Log pane forces it) or that repository's own reveal from the rollup.
+pub fn remotes_revealed(tree: &TreeState, root: &RootId) -> bool {
+    tree.show_remotes || tree.remotes_revealed.contains(root)
 }
 
 /// Whether a remote group is effectively collapsed. The per-surface default
@@ -646,9 +724,9 @@ fn remote_group_header(
     }
 }
 
-/// The collapsed per-repo "Remote" rollup row: a chevron, the word "Remote",
-/// and a count like "3 remotes · 41 branches". Clicking it reveals the remote
-/// groups for the whole view (issue 03).
+/// The collapsed per-repo "REMOTE" rollup row: a chevron, the section-cased
+/// label, and a count like "3 remotes · 41 branches". Clicking it reveals the
+/// remote groups for the whole view (issue 03).
 fn remote_rollup_row(
     ui: &mut Ui,
     tree: &mut TreeState,
@@ -670,7 +748,7 @@ fn remote_rollup_row(
             .layout(Layout::left_to_right(Align::Center)),
     );
     child.add_space(PAD_LIST);
-    let chevron = if tree.show_remotes {
+    let chevron = if remotes_revealed(tree, &section.root_id) {
         Icon::CHEVRON_DOWN
     } else {
         Icon::CHEVRON_RIGHT
@@ -679,7 +757,7 @@ fn remote_rollup_row(
     child.add_space(6.0);
     child.add(
         egui::Label::new(
-            RichText::new("Remote")
+            RichText::new("REMOTE")
                 .font(chrome_font(TYPE_SECTION))
                 .color(Palette::T_SECONDARY),
         )
@@ -700,14 +778,19 @@ fn remote_rollup_row(
         );
     }
     if response.clicked() {
-        events.push(TreeEvent::RemotesVisibleChanged { visible: true });
+        events.push(TreeEvent::RemoteRevealToggled {
+            root: section.root_id.clone(),
+            revealed: true,
+        });
     }
 }
 
-/// One 30px branch row: current marker, middle-truncated mono name, upstream,
-/// and sync chips (icon+count / in-sync / gone). Hover and selection fills
-/// come from the §14.1 row states; clicking reports [`TreeEvent::RowClicked`]
-/// (never checks out — the caller decides).
+/// One 30px branch row, laid out as four measured zones — icon + name, tracking
+/// branch, status badges, ⋯ overflow — each painted at an explicit x so the
+/// columns line up down the list. Its fill comes from [`row_fill`], or from
+/// [`current_row_fill`] when it carries the current branch, which also takes the
+/// `current` badge. Clicking reports [`TreeEvent::RowClicked`] (never checks out —
+/// the caller decides).
 #[allow(clippy::too_many_arguments)]
 fn branch_row(
     ui: &mut Ui,
@@ -734,6 +817,9 @@ fn branch_row(
     let now = props.now;
     let meta = row_meta(branch, now);
     let is_current = section.current_branch.as_deref() == Some(branch.name.as_str());
+    // Remote rows are reference material (issue 13): quieter, labelled with
+    // their remote's name, and never carrying the current marker.
+    let is_remote = branch.kind == BranchKind::Remote;
     let selected = tree.selected_root.as_ref() == Some(id)
         && tree.selected.as_deref() == Some(branch.name.as_str());
     let width = ui.available_width();
@@ -754,7 +840,11 @@ fn branch_row(
     } else {
         RowState::Default
     };
-    let fill = row_fill(row_state);
+    let fill = if is_current && !is_remote {
+        current_row_fill(row_state)
+    } else {
+        row_fill(row_state)
+    };
     if fill != Color32::TRANSPARENT {
         // Paint on the row's own layer, before the row content: a dedicated
         // `Order::Background` layer renders *above* the scroll content in the
@@ -763,13 +853,11 @@ fn branch_row(
         ui.painter().rect_filled(rect, CornerRadius::same(3), fill);
     }
 
-    // Right cluster: on hover the row reveals its actions (Checkout + the ⋯
-    // overflow) — design doc §4 "Actions live on the row"; otherwise the sync
-    // chips and relative time. Rendered first so name+upstream take the rest.
-    let chips = branch
-        .tracking
-        .as_ref()
-        .map(|_| sync_chips(branch.ahead, branch.behind, branch.gone));
+    // --- The row's four zones, laid out once over the full rect ----------------
+    // icon + name | tracking branch | status badges | overflow. Every boundary
+    // comes from measuring what actually paints there, so nothing drifts with
+    // the length of a branch name.
+    let chips = &meta.badge;
     let overflow_id = egui::Id::new(("branches_overflow_anchor", id, &branch.name));
     // The action names its repo's scope in multi-repo projects so a bare
     // "Checkout" never applies to an ambiguous repo (issue 14).
@@ -778,46 +866,111 @@ fn branch_row(
     } else {
         String::new()
     };
+
+    let name_x = rect.left() + PAD_LIST + indent;
+    let text_x = name_x + KIT_ICON + 6.0;
+    let shows_pill = is_current && !is_remote;
+    let pill_w = if shows_pill {
+        pill_width(ui, "current", PillKind::Current)
+    } else {
+        0.0
+    };
+    // The ⋯ column belongs to every row at rest, so its space is reserved
+    // whether or not the pointer is on the row.
+    let shows_overflow = props.shows_row_actions;
+    let overflow_x = rect.right() - PAD_LIST - CLICK_TARGET_MIN;
+    let content_right = if shows_overflow {
+        overflow_x - 8.0
+    } else {
+        rect.right() - PAD_LIST
+    };
+    let mut badges_w: f32 = chips
+        .iter()
+        .map(|(_kind, label)| sync_chip_width(ui, label) + 4.0)
+        .sum();
+
+    // The name/tracking split reads off the row's own width and nothing else —
+    // not this row's badges, not its current marker — which is what gives the
+    // tracking column one left edge down the whole list.
+    let share_x = text_x + (content_right - 8.0 - text_x).max(0.0) * NAME_ZONE_SHARE;
+    let name_w = (share_x - 8.0 - text_x).max(0.0);
+
+    // Space is then yielded in a stated order: the ⋯ column and the `current`
+    // badge never give way and the name keeps its share; the tracking line
+    // shrinks to whatever lies between the name zone and the group, and the
+    // status badges give up entirely before they would cross into the name zone.
+    // In the ~210px Git Log pane this ordering is the difference between marking
+    // the current branch and not marking it.
+    let name_right = share_x - 8.0;
+    let shows_badges = name_right - badges_w - pill_w >= text_x;
+    if !shows_badges {
+        badges_w = 0.0;
+    }
+    // Right to left: ⋯, then the current badge, then the status badges.
+    let pill_x = content_right - pill_w;
+    let badges_right = pill_x - if shows_pill { 6.0 } else { 0.0 };
+    let badges_x = badges_right - badges_w;
+    let track_x = share_x;
+    let track_w = (badges_x - 8.0 - share_x).max(0.0);
+
     let mut activated = false;
-    if hovered && props.shows_row_actions {
+    if shows_overflow {
+        let overflow_rect = Rect::from_min_max(
+            Pos2::new(overflow_x, rect.top()),
+            Pos2::new(overflow_x + CLICK_TARGET_MIN, rect.bottom()),
+        );
         ui.new_child(
             UiBuilder::new()
-                .max_rect(rect)
-                .layout(Layout::right_to_left(Align::Center)),
+                .max_rect(overflow_rect)
+                .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
         )
-        .with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(8.0);
-            let more = overflow_button(ui, "More actions");
-            ui.ctx()
-                .memory_mut(|m| m.data.insert_temp(overflow_id, more.rect));
-            if more.clicked() {
-                events.push(TreeEvent::OverflowToggled {
-                    root: section.root_id.clone(),
-                    branch: branch.name.clone(),
-                });
-            }
+        .with_layout(
+            Layout::centered_and_justified(egui::Direction::LeftToRight),
+            |ui| {
+                let more = overflow_button(ui, "More actions");
+                ui.ctx()
+                    .memory_mut(|m| m.data.insert_temp(overflow_id, more.rect));
+                if more.clicked() {
+                    events.push(TreeEvent::OverflowToggled {
+                        root: section.root_id.clone(),
+                        branch: branch.name.clone(),
+                    });
+                }
+            },
+        );
+    }
+
+    // The badges zone. Hover reveals the row's Checkout button, which takes the
+    // same right-anchored slot the badges rest in.
+    let actions_rect = Rect::from_min_max(
+        Pos2::new(rect.left(), rect.top()),
+        Pos2::new(badges_right, rect.bottom()),
+    );
+    let mut zone = ui.new_child(
+        UiBuilder::new()
+            .max_rect(actions_rect)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    zone.spacing_mut().item_spacing.x = 0.0;
+    if hovered && shows_overflow {
+        zone.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if kit_button(ui, KitButton::Quiet, &format!("Checkout{scope}")).clicked() {
                 activated = true;
             }
         });
     } else {
-        ui.new_child(
-            UiBuilder::new()
-                .max_rect(rect)
-                .layout(Layout::right_to_left(Align::Center)),
-        )
-        .with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(12.0);
+        zone.with_layout(Layout::right_to_left(Align::Center), |ui| {
             // Mid-operation state is first-class on the row (issue 09): a
             // merge in progress reads "merging…" and survives tab switches.
             if is_current && props.merge_in_progress {
+                ui.add_space(8.0);
                 ui.label(
                     RichText::new(crate::ui::components::mid_op_label("merging"))
                         .font(data_font(TYPE_CONTROL))
                         .color(Palette::STATE_WARNING),
                 );
             }
-            if let Some(chips) = &chips {
+            if shows_badges {
                 for (kind, label) in chips.iter().rev() {
                     sync_chip(ui, *kind, label);
                     ui.add_space(4.0);
@@ -827,6 +980,7 @@ fn branch_row(
             // carried over from the Log pane's decoration states via the
             // branch snapshot the caller assembles).
             if branch.kind == BranchKind::Remote && branch.gone {
+                ui.add_space(8.0);
                 ui.label(
                     RichText::new("gone")
                         .font(chrome_font(TYPE_CHIP))
@@ -836,26 +990,36 @@ fn branch_row(
         });
     }
 
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    child.add_space(PAD_LIST + indent);
-    // Remote rows are reference material (issue 13): quieter, labelled with
-    // their remote's name, and never carrying the current marker.
-    let is_remote = branch.kind == BranchKind::Remote;
-    let budget = name_budget(rect.width() - PAD_LIST - KIT_ICON - 6.0 - 130.0);
-    // Display the leaf's own label: remote leaves carry the prefix-stripped
-    // name because their group header already names the remote (issue 03), so
-    // "origin/" is never re-printed here.
-    let label = middle_truncate(label, budget);
+    // The tracking zone: its own left edge, its own truncation budget, and no
+    // zone at all when the row is too narrow to hold one.
+    if let Some(up) = &meta.upstream
+        && track_w > 8.0
+    {
+        let track_rect = Rect::from_min_max(
+            Pos2::new(track_x, rect.top()),
+            Pos2::new(track_x + track_w, rect.bottom()),
+        );
+        ui.new_child(
+            UiBuilder::new()
+                .max_rect(track_rect)
+                .layout(Layout::left_to_right(Align::Center)),
+        )
+        .add(
+            egui::Label::new(
+                RichText::new(up.clone())
+                    .font(data_font(TYPE_CONTROL))
+                    .color(Palette::T_MUTED),
+            )
+            .truncate()
+            .selectable(false),
+        );
+    }
+
+    // The name zone: a leading icon so the column has a fixed left edge, then
+    // the label fitted to what is actually left of the tracking zone.
     let ink = if is_remote {
         // Remote rows are reference material: quiet by design.
         Palette::T_SECONDARY
-    } else if is_current {
-        // Active/current branch reads in soft blue (issue 04).
-        Palette::STATE_INFO
     } else if branch.ahead > 0 && branch.behind > 0 {
         // Diverged from upstream: red (issue 04).
         Palette::STATUS_DIVERGED
@@ -866,29 +1030,43 @@ fn branch_row(
         // Plain local branch: stale-aware primary (preserves §14.1 dimming).
         row_ink(meta.stale)
     };
-    // No repo prefix on the row: the section header directly above already
-    // names the repo, so repeating it on every row under that header is noise
-    // (and it would push the branch name past its truncation budget). Rows stay
-    // distinguishable because each one lives inside exactly one repo's section.
-    child.add(
-        egui::Label::new(RichText::new(label).font(data_font(TYPE_BODY)).color(ink)).truncate(),
+    // Display the leaf's own label: remote leaves carry the prefix-stripped
+    // name because their group header already names the remote (issue 03), so
+    // "origin/" is never re-printed here.
+    let name = middle_truncate_to_width(ui, label, &data_font(TYPE_BODY), name_w);
+    let name_rect = Rect::from_min_max(
+        Pos2::new(name_x, rect.top()),
+        Pos2::new(share_x - 8.0, rect.bottom()),
     );
-    // The current-branch marker reads inline right after the name, one
-    // whitespace apart — not a leading column, and not right-aligned.
-    if is_current && !is_remote {
-        child.add_space(space_width(ui));
-        icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, Palette::AHEAD);
-    }
-    if let Some(up) = &meta.upstream {
-        child.add_space(6.0);
-        child.add(
-            egui::Label::new(
-                RichText::new(up.clone())
-                    .font(data_font(TYPE_CONTROL))
-                    .color(Palette::T_MUTED),
-            )
-            .truncate(),
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(name_rect)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    // The zone's gaps are stated below, so egui's own inter-item spacing must
+    // not add an unstated one on top of them.
+    child.spacing_mut().item_spacing.x = 0.0;
+    icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, ink);
+    child.add_space(6.0);
+    child.add(
+        egui::Label::new(RichText::new(name).font(data_font(TYPE_BODY)).color(ink))
+            .selectable(false),
+    );
+    // The `current` badge takes the slot the group maths reserved for it, so it
+    // lines up down the list and is never the thing a narrow row squeezes out.
+    if shows_pill {
+        let pill_rect = Rect::from_min_max(
+            Pos2::new(pill_x, rect.top()),
+            Pos2::new(pill_x + pill_w, rect.bottom()),
         );
+        ui.new_child(
+            UiBuilder::new()
+                .max_rect(pill_rect)
+                .layout(Layout::left_to_right(Align::Center)),
+        )
+        .with_layout(Layout::left_to_right(Align::Center), |ui| {
+            pill(ui, "current", PillKind::Current);
+        });
     }
 
     if activated {
@@ -967,8 +1145,21 @@ fn rename_editor(
     }
 }
 
-/// One tinted sync chip: 10px icon + count (or the "gone" label) on the §13
-/// meaning-color tint. 18px tall, radius 3, mono data type.
+/// How wide [`sync_chip`] will paint one badge — the row measures its badge
+/// zone with this before painting anything. Every kind carries an icon, so only
+/// the label's measured width varies.
+fn sync_chip_width(ui: &Ui, label: &str) -> f32 {
+    let font = data_font(TYPE_CHIP);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Color32::WHITE);
+    let icon_s = 10.0;
+    let pad = 5.0;
+    pad * 2.0 + icon_s + 2.0 + galley.size().x
+}
+
+/// One tinted sync chip: 10px icon + words (issue 03) on the §13 meaning-color
+/// tint. 18px tall, radius 3, mono data type.
 fn sync_chip(ui: &mut Ui, kind: crate::ui::components::SyncKind, label: &str) {
     let fg = sync_ink(kind);
     let bg = sync_bg(kind);
@@ -976,34 +1167,28 @@ fn sync_chip(ui: &mut Ui, kind: crate::ui::components::SyncKind, label: &str) {
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, fg);
     let icon_s = 10.0;
     let pad = 5.0;
-    let w = pad * 2.0 + icon_s + 2.0 + galley.size().x;
+    let w = sync_chip_width(ui, label);
     let h = 18.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     ui.painter()
         .rect_filled(rect, CornerRadius::same(Palette::RADIUS_CHIP), bg);
 
     let icon = match kind {
-        crate::ui::components::SyncKind::Ahead => Some(Icon::ARROW_UP),
-        crate::ui::components::SyncKind::Behind => Some(Icon::ARROW_DOWN),
-        crate::ui::components::SyncKind::InSync => Some(Icon::CHECK),
-        crate::ui::components::SyncKind::Gone => Some(Icon::ALERT_TRIANGLE),
-        crate::ui::components::SyncKind::Diverged => None,
+        crate::ui::components::SyncKind::Ahead => Icon::ARROW_UP,
+        crate::ui::components::SyncKind::Behind => Icon::ARROW_DOWN,
+        crate::ui::components::SyncKind::InSync => Icon::CHECK,
+        crate::ui::components::SyncKind::Gone => Icon::ALERT_TRIANGLE,
+        crate::ui::components::SyncKind::Diverged => Icon::ARROW_RIGHT_LEFT,
     };
     let mut x = rect.left() + pad;
-    if let Some(ic) = icon {
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(Rect::from_min_size(
-                    Pos2::new(x, rect.center().y - icon_s / 2.0),
-                    Vec2::splat(icon_s),
-                ))
-                .layout(egui::Layout::centered_and_justified(
-                    egui::Direction::LeftToRight,
-                )),
-        );
-        icons::icon(&mut child, ic, icon_s, fg);
-        x += icon_s + 2.0;
-    }
+    icons::paint_icon(
+        ui.painter(),
+        Pos2::new(x, rect.center().y - icon_s / 2.0),
+        icon_s,
+        icon,
+        fg,
+    );
+    x += icon_s + 2.0;
     ui.painter().galley_with_override_text_color(
         Pos2::new(x, rect.center().y - galley.size().y / 2.0),
         galley,
