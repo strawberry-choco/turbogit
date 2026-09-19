@@ -87,10 +87,29 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 /// Q1). The gradient is one subtle overlay rect; if it ever reads as a blob at
 /// some width, drop it — the hero stands without it.
 fn hero(ui: &mut Ui, state: &mut AppState) {
+    let pad = 16.0;
+    let gap = 10.0;
     let avail = ui.available_width();
-    let (band, _) = ui.allocate_exact_size(Vec2::new(avail, HERO_TILE), Sense::hover());
 
+    // Size the band to its content, not to the 64px tile: the 42px wordmark
+    // stacked over a 14px tagline is taller than the tile, so a tile-height band
+    // let the text overflow the gradient vertically and touch its top edge.
+    // Measure both lines, then pad every side so the headline keeps clearance.
     let painter = ui.painter().clone();
+    let wm_font = crate::theme::chrome_font(crate::theme::TYPE_WORDMARK);
+    let wm = painter.layout_no_wrap("TurboGit".to_owned(), wm_font.clone(), Palette::INK);
+    let inner_w = (avail - 2.0 * pad).max(HERO_TILE + 2.0 * gap + 80.0);
+    let text_w = (inner_w - HERO_TILE - gap).max(80.0);
+    let tg = painter.layout(
+        "A fast, keyboard-friendly Git client for your desktop.".to_owned(),
+        crate::theme::chrome_font(crate::theme::TYPE_TAGLINE),
+        Palette::INK_3,
+        text_w,
+    );
+    let text_h = wm.size().y + ui.spacing().item_spacing.y + tg.size().y;
+    let band_h = HERO_TILE.max(text_h) + 2.0 * pad;
+    let (band, _) = ui.allocate_exact_size(Vec2::new(avail, band_h), Sense::hover());
+
     let radius = CornerRadius::same(crate::theme::CARD_RADIUS);
     painter.rect_filled(
         band,
@@ -98,10 +117,13 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
         widgets::mix(Palette::BG, Palette::BRAND, GRADIENT_ALPHA),
     );
 
+    // Content inset from every band edge so nothing sits flush on the gradient.
+    let inner = band.shrink(pad);
+
     // Left cluster: brand tile, then the wordmark/tagline stack.
     let mut left = ui.new_child(
         UiBuilder::new()
-            .max_rect(band)
+            .max_rect(inner)
             .layout(Layout::left_to_right(Align::Center)),
     );
     let (tile, _) = left.allocate_exact_size(Vec2::splat(HERO_TILE), Sense::hover());
@@ -117,12 +139,12 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
         icon_size,
         Palette::BRAND_INK,
     );
-    left.add_space(10.0);
+    left.add_space(gap);
     left.vertical(|ui| {
         ui.label(
             RichText::new("TurboGit")
                 .strong()
-                .font(crate::theme::chrome_font(crate::theme::TYPE_WORDMARK))
+                .font(wm_font)
                 .color(Palette::INK),
         );
         ui.label(
@@ -132,14 +154,13 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
         );
     });
 
-    // Right: the "What's new" ghost button, opening the changelog overlay
-    // exactly as the retired centered link did (same `state.ui` flag).
+    // Right: the "What's new" ghost button (SPACE_BETWEEN), opening the same
+    // changelog overlay the retired centered link did.
     let mut right = ui.new_child(
         UiBuilder::new()
-            .max_rect(band)
+            .max_rect(inner)
             .layout(Layout::right_to_left(Align::Center)),
     );
-    right.add_space(4.0);
     if widgets::ghost_button(&mut right, Some(Icon::STAR), "What's new").clicked() {
         state.ui.show_changelog = true;
     }
