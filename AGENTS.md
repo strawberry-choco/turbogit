@@ -75,6 +75,16 @@ call git only through the `GitExecutor` trait; UI code never calls the CLI. Keep
 git mutations in the engine layer. Preserve the `TgError` / `TgResult` error
 patterns defined in `crates/turbogit-domain/src/error.rs`.
 
+## Design system
+
+The design system is `crates/turbogit-ui/src/theme.rs`: every shared presentation
+token (surfaces, ink, severity, radius, spacing, type scale, fonts) is defined,
+consumed and changed there, not at call sites. The shared widgets that paint
+those tokens are `crates/turbogit-ui/src/ui/components.rs` and `ui/widgets.rs`.
+`docs/design-system-roles.md` records which name owns which role, and
+`crates/turbogit-ui/tests/` (`design_tokens.rs`, `widget_library.rs`,
+`branch_component_kit.rs`) pins these contracts.
+
 ## Testing Guidelines
 
 Prefer headless integration tests that create temporary repositories with
