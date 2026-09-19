@@ -391,9 +391,9 @@ fn details_show_committer_copy_hash_and_clickable_parents() {
         .click();
     settle(&mut harness);
 
-    // Committer line (screen 09) — and an unsigned commit must not claim a
-    // signature.
-    assert_painted(&harness, "Committer:");
+    // Committer row (screen 09) — and an unsigned commit must not claim a
+    // signature. The redesign's meta grid labels without the trailing colon.
+    assert_painted(&harness, "Committer");
     assert_not_painted(&harness, "signed ✓");
 
     // Copy hash affordance with painted feedback (the toast).

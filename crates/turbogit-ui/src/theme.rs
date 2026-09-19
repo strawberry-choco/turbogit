@@ -36,6 +36,10 @@ impl Palette {
     pub const SURFACE_2: Color32 = Color32::from_rgb(0x31, 0x34, 0x38);
     /// Inputs, popovers (`--tg-surface-3`).
     pub const SURFACE_3: Color32 = Color32::from_rgb(0x3c, 0x3f, 0x41);
+    /// Contained warning surface — the guardrail alert (logs-panels redesign
+    /// issue 03). `STATE_WARNING` at 12% over `SURFACE`, the same derivation
+    /// the badge tints use, so an alert can never read as a foreign hue.
+    pub const SURFACE_WARNING: Color32 = Color32::from_rgb(0x44, 0x3c, 0x2f);
     /// Primary borders (`--tg-line`).
     pub const LINE: Color32 = Color32::from_rgb(0x4e, 0x51, 0x57);
     /// Subtle row separators (`--tg-line-subtle`).

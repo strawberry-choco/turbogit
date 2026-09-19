@@ -209,6 +209,32 @@ fn empty_tree(repo: &git2::Repository) -> Result<git2::Tree<'_>, git2::Error> {
     repo.find_tree(oid)
 }
 
+/// The tree-vs-parent diff of `commit`, with rename detection on — libgit2's
+/// reading of `git diff-tree -r --root -M <commit>`. The CLI treats the parent
+/// as an empty tree when the commit has none (`--root`), and post-processes
+/// renames at git's default similarity; both are mirrored here so
+/// `commit_files` and `commit_file_stats` describe the same delta and can
+/// never disagree about the paths a commit touched.
+fn commit_tree_diff<'a>(repo: &'a git2::Repository, commit: &str) -> TgResult<git2::Diff<'a>> {
+    let commit = repo
+        .revparse_single(commit)
+        .map_err(err)?
+        .peel_to_commit()
+        .map_err(err)?;
+    let new_tree = commit.tree().map_err(err)?;
+    let old_tree = match commit.parent(0) {
+        Ok(parent) => parent.tree().map_err(err)?,
+        Err(_) => empty_tree(repo).map_err(err)?,
+    };
+    let mut diff = repo
+        .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)
+        .map_err(err)?;
+    let mut find_opts = git2::DiffFindOptions::new();
+    find_opts.renames(true);
+    diff.find_similar(Some(&mut find_opts)).map_err(err)?;
+    Ok(diff)
+}
+
 impl GitExecutor for Git2Executor {
     // ---------------------------------------------------------------- read ----
     // Reads stay on the CLI until the read-only migration phases land.
@@ -325,35 +351,9 @@ impl GitExecutor for Git2Executor {
 
     fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
         // libgit2 parity for `git diff-tree --no-commit-id --name-status -r
-        // --root -M <commit>`. The CLI treats the parent as an empty tree
-        // when the commit has none (--root), and post-processes for renames
-        // at the default similarity. We mirror both: `diff_tree_to_tree`
-        // against an empty builder for the root case, then `find_similar`
-        // with `renames(true)` to surface R<score> entries.
+        // --root -M <commit>`; see `commit_tree_diff` for the diff itself.
         let repo = self.open(root)?;
-        let commit = repo
-            .revparse_single(commit)
-            .map_err(err)?
-            .peel_to_commit()
-            .map_err(err)?;
-        let new_tree = commit.tree().map_err(err)?;
-        let old_tree = match commit.parent(0) {
-            Ok(parent) => parent.tree().map_err(err)?,
-            // `--root` parity: an empty tree stands in for the missing
-            // parent. `TreeBuilder::write` materializes the (currently
-            // empty) builder into an OID, which we resolve back into a
-            // `Tree` for `diff_tree_to_tree`.
-            Err(_) => {
-                let oid = repo.treebuilder(None).map_err(err)?.write().map_err(err)?;
-                repo.find_tree(oid).map_err(err)?
-            }
-        };
-        let mut diff = repo
-            .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)
-            .map_err(err)?;
-        let mut find_opts = git2::DiffFindOptions::new();
-        find_opts.renames(true);
-        diff.find_similar(Some(&mut find_opts)).map_err(err)?;
+        let diff = commit_tree_diff(&repo, commit)?;
 
         let mut changes = Vec::new();
         for delta in diff.deltas() {
@@ -398,6 +398,58 @@ impl GitExecutor for Git2Executor {
             });
         }
         Ok(changes)
+    }
+
+    fn commit_file_stats(
+        &self,
+        root: &Path,
+        commit: &str,
+    ) -> TgResult<Vec<(PathBuf, usize, usize)>> {
+        // libgit2 has no numstat: walk the line events of the very diff
+        // `commit_files` reports and count each delta's `+` / `-` side, so the
+        // two lists can never disagree about which paths a commit touched. The
+        // file callback opens one `0/0` row per delta and the line callback
+        // fills it in, which is also what a binary file stays at — libgit2
+        // emits no line events for one, matching git's `-` `-` columns.
+        let repo = self.open(root)?;
+        let diff = commit_tree_diff(&repo, commit)?;
+        let counts = std::cell::RefCell::new(Vec::<(PathBuf, usize, usize)>::new());
+        let row_of = |delta: &git2::DiffDelta<'_>| -> Option<usize> {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())?;
+            let mut counts = counts.borrow_mut();
+            match counts.iter().position(|(p, _, _)| p.as_path() == path) {
+                Some(idx) => Some(idx),
+                None => {
+                    counts.push((path.to_path_buf(), 0, 0));
+                    Some(counts.len() - 1)
+                }
+            }
+        };
+        diff.foreach(
+            &mut |delta, _progress| {
+                row_of(&delta);
+                true
+            },
+            None,
+            None,
+            Some(&mut |delta, _hunk, line| {
+                let Some(idx) = row_of(&delta) else {
+                    return true;
+                };
+                let mut counts = counts.borrow_mut();
+                match line.origin() {
+                    '+' => counts[idx].1 += 1,
+                    '-' => counts[idx].2 += 1,
+                    _ => {}
+                }
+                true
+            }),
+        )
+        .map_err(err)?;
+        Ok(counts.into_inner())
     }
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {

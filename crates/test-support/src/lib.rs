@@ -137,6 +137,10 @@ pub struct RecordingExecutor {
     /// `ref_decorations` invocation counter (log-open perf: the refs
     /// in-flight guard releases on Ok and Err alike).
     ref_calls: Mutex<usize>,
+    /// `commit_file_stats` invocation counter (logs-panels redesign issue 02:
+    /// the per-commit stats request must fire once per commit id, never once
+    /// per frame).
+    stats_calls: Mutex<usize>,
 }
 
 impl RecordingExecutor {
@@ -146,6 +150,7 @@ impl RecordingExecutor {
             calls: Mutex::new(Vec::new()),
             log_calls: Mutex::new(0),
             ref_calls: Mutex::new(0),
+            stats_calls: Mutex::new(0),
         }
     }
 
@@ -157,6 +162,11 @@ impl RecordingExecutor {
     /// How many `ref_decorations` invocations have been made so far.
     pub fn ref_call_count(&self) -> usize {
         *self.ref_calls.lock().expect("ref mutex")
+    }
+
+    /// How many `commit_file_stats` invocations have been made so far.
+    pub fn stats_call_count(&self) -> usize {
+        *self.stats_calls.lock().expect("stats mutex")
     }
 
     /// Snapshot of every recorded call so far, in order.
@@ -258,6 +268,15 @@ impl GitExecutor for RecordingExecutor {
 
     fn commit_files(&self, root: &Path, commit: &str) -> TgResult<Vec<Change>> {
         self.inner.commit_files(root, commit)
+    }
+
+    fn commit_file_stats(
+        &self,
+        root: &Path,
+        commit: &str,
+    ) -> TgResult<Vec<(PathBuf, usize, usize)>> {
+        *self.stats_calls.lock().expect("stats mutex") += 1;
+        self.inner.commit_file_stats(root, commit)
     }
 
     fn push(

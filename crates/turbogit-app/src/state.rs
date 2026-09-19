@@ -749,6 +749,12 @@ pub struct UiState {
     pub log_root_filter: Option<RootId>,
     /// File selected in the changed-files pane.
     pub log_selected_file: Option<PathBuf>,
+    /// The changed-files pane's own filter (logs-panels redesign issue 02): a
+    /// case-insensitive substring over the selected commit's paths. Distinct
+    /// from [`UiState::file_filter`], which belongs to the Commit tab. It
+    /// survives a selection change on purpose — a filter that matches nothing
+    /// renders as "no match", not as a commit with no files.
+    pub log_file_filter: String,
     /// Active path scope in Git Log (issue #19): `Some(path)` narrows the
     /// graph to only the commits touching that path (set from the
     /// changed-files pane's "Show history for file..." context menu).
@@ -1065,6 +1071,11 @@ pub struct AppState {
     /// flight; the guard releases when the `RefsLoaded` event drains, on Ok
     /// and Err alike.
     fetching_refs: HashSet<RootId>,
+    /// In-flight per-commit file-stat fetches (logs-panels redesign issue 02):
+    /// the changed-files pane asks every frame while the counts are missing, so
+    /// the guard holds one worker per (root, commit). It releases when the
+    /// `FileStatsLoaded` event drains, on Ok and Err alike.
+    fetching_stats: HashSet<(RootId, CommitId)>,
     /// In-flight submodule-list fetches per root (issue 14).
     fetching_submodules: HashSet<RootId>,
     /// Last dispatch instant of the background incoming check (issue #27);
@@ -1122,6 +1133,7 @@ impl AppState {
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
+            fetching_stats: HashSet::new(),
             fetching_submodules: HashSet::new(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
@@ -1199,6 +1211,7 @@ impl AppState {
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
+            fetching_stats: HashSet::new(),
             fetching_submodules: HashSet::new(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
@@ -1359,6 +1372,28 @@ impl AppState {
         std::thread::spawn(move || {
             let res = executor.ref_decorations(&root.0);
             let _ = tx.send(AppEvent::RefsLoaded { root, deco: res });
+        });
+    }
+
+    /// Load one commit's per-file line counts off the render thread
+    /// (logs-panels redesign issue 02). A cache hit and an in-flight request
+    /// both return without dispatching, so the Log pane may ask every frame;
+    /// the guard releases when the `FileStatsLoaded` event drains.
+    pub fn fetch_file_stats(&mut self, root: RootId, commit: CommitId) {
+        if self.caches.file_stats_loaded(&root, &commit)
+            || !self.fetching_stats.insert((root.clone(), commit.clone()))
+        {
+            return;
+        }
+        let executor = self.executor.clone();
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let res = executor.commit_file_stats(&root.0, &commit);
+            let _ = tx.send(AppEvent::FileStatsLoaded {
+                root,
+                commit,
+                stats: res,
+            });
         });
     }
 
@@ -2329,6 +2364,25 @@ impl AppState {
                     match deco {
                         Ok(d) => self.caches.store_refs(root, d),
                         Err(e) => self.last_error = Some(e.to_string()),
+                    }
+                }
+                AppEvent::FileStatsLoaded {
+                    root,
+                    commit,
+                    stats,
+                } => {
+                    // Release the in-flight guard first (log-open perf, D2).
+                    self.fetching_stats.remove(&(root.clone(), commit.clone()));
+                    match stats {
+                        Ok(s) => self.caches.store_file_stats(root, commit, s),
+                        // A failed load stores "no counts" rather than staying
+                        // unloaded: the pane asks every frame, so an unloaded
+                        // entry would re-dispatch the failing call forever.
+                        // Rows render without numbers either way.
+                        Err(e) => {
+                            self.last_error = Some(e.to_string());
+                            self.caches.store_file_stats(root, commit, Vec::new());
+                        }
                     }
                 }
                 AppEvent::OpCompleted {

@@ -60,6 +60,15 @@ pub enum AppEvent {
         root: RootId,
         deco: TgResult<Vec<(CommitId, Vec<CommitRef>)>>,
     },
+    /// One commit's per-file line counts were loaded off the UI thread
+    /// (logs-panels redesign issue 02): a success is stored into the stats
+    /// cache; an error lands in the last-error surface and the rows keep
+    /// rendering without numbers.
+    FileStatsLoaded {
+        root: RootId,
+        commit: CommitId,
+        stats: TgResult<Vec<(PathBuf, usize, usize)>>,
+    },
     /// Generic asynchronous completion (e.g. push/pull finished). `affected`
     /// declares which roots the op touched so the post-op refresh can be
     /// scoped (root-caches deepening, decision 6).

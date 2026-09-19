@@ -25,11 +25,12 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::{self, BadgeKind, RefKind};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Frame, Layout, Margin, Panel, Popup,
-    PopupKind, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2, WidgetInfo,
-    WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Frame, Galley, Grid, Layout, Margin, Panel,
+    Popup, PopupKind, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2,
+    WidgetInfo, WidgetType,
 };
 use std::path::PathBuf;
+use turbogit_app::root_caches::file_stat;
 use turbogit_app::state::{AppState, BlameTarget, Dialog, DiffTarget, PendingConfirm, Toast};
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
@@ -41,15 +42,26 @@ use turbogit_services::sync_service;
 
 /// Branches pane width.
 const BRANCHES_WIDTH: f32 = 210.0;
-/// Right column (changed files + details) width.
-const FILES_WIDTH: f32 = 320.0;
-/// Commit details pane height (grew from the §8.3 200px in issue 15 to fit
-/// the Actions section, and to 340px in issue 17 for the committer/signature
-/// row plus the Copy-hash header): cherry-pick / revert / create branch here,
-/// plus the guardrail explanation when one is blocked.
-const DETAILS_HEIGHT: f32 = 340.0;
+/// Right column (changed files + details) width. Widened from the §8.3 320px
+/// for the redesigned two-line file rows (decision D3): name, directory and
+/// the `+N −M` column need the room.
+const FILES_WIDTH: f32 = 344.0;
+/// Commit details pane height. Grew from the §8.3 200px in issue 15 for the
+/// Actions section, to 340px in issue 17 for the committer row and Copy-hash
+/// header, and to 440px for the redesigned blocks (decision D4, raised from its
+/// 400px once the capture showed the guardrail alert clipping): subject, hash
+/// chip, author card, meta grid, churn summary, the primary verb plus the
+/// two-row ghost grid, and a two-line alert. The short-window yield below still
+/// applies.
+const DETAILS_HEIGHT: f32 = 440.0;
 /// Commit table row height.
 const ROW_HEIGHT: f32 = 24.0;
+/// Changed-file row height (redesign issue 04): a name line with its directory
+/// underneath. Deliberately separate from [`ROW_HEIGHT`], which the commit
+/// table shares — two-line rows must not retarget the graph's geometry.
+const LOG_FILE_ROW_HEIGHT: f32 = 40.0;
+/// Gap between the two churn numbers at the right edge of a file row.
+const STAT_GAP: f32 = 6.0;
 /// Root stripe width on multi-root rows.
 const STRIPE_WIDTH: f32 = 3.0;
 /// Uppercase micro text (§3.3) — shared control role (T2).
@@ -222,6 +234,11 @@ fn ensure_log_data(state: &mut AppState) {
         state
             .caches
             .ensure_files(state.executor.as_ref(), &root, &cid);
+        // Per-file line counts (redesign issue 02) load off the render thread:
+        // the in-flight guard makes a repeat ask a no-op, so rows render
+        // without numbers for the frames a request is open rather than the
+        // pane waiting on git.
+        state.fetch_file_stats(root, cid);
     }
     // Path-scoped history (issue #19): fill the scoped cache through the
     // engine seam's `LogOpts::path` support (`git log -- <path>`).
@@ -776,6 +793,41 @@ fn allocate_row(ui: &mut Ui) -> (Rect, Response) {
     ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::click())
 }
 
+/// One two-line changed-file row (redesign issue 04).
+fn allocate_file_row(ui: &mut Ui) -> (Rect, Response) {
+    let width = ui.available_width();
+    ui.allocate_exact_size(Vec2::new(width, LOG_FILE_ROW_HEIGHT), Sense::click())
+}
+
+/// Lay `text` out no wider than `max_width`, dropping characters from the tail
+/// and marking the cut with an ellipsis — a name is never trimmed in the
+/// middle (redesign issue 04).
+fn elide(
+    painter: &egui::Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    max_width: f32,
+) -> std::sync::Arc<Galley> {
+    let full = painter.layout_no_wrap(text.to_owned(), font.clone(), color);
+    if text.is_empty() || full.size().x <= max_width {
+        return full;
+    }
+    // Start from a proportional guess and step down: this paints for every
+    // row on every frame, so one layout per character is not affordable.
+    let chars = text.chars().count();
+    let guess = (chars as f32 * (max_width / full.size().x)) as usize;
+    let mut keep = guess.saturating_sub(1).min(chars).max(1);
+    loop {
+        let cut: String = text.chars().take(keep).collect();
+        let galley = painter.layout_no_wrap(format!("{cut}…"), font.clone(), color);
+        if galley.size().x <= max_width || keep <= 1 {
+            return galley;
+        }
+        keep -= 1;
+    }
+}
+
 /// Row fill decision: active rows keep the translucent selection token,
 /// hovered rows take SURFACE_2, idle rows stay transparent.
 fn paint_row_fill(ui: &Ui, rect: &Rect, active: bool, hovered: bool) {
@@ -1032,8 +1084,20 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
     let files = selection
         .and_then(|(root, cid)| state.caches.files_for(root, cid))
         .unwrap_or(&[]);
+    // Line counts arrive one worker round-trip behind the file list (redesign
+    // issue 02); until they land, the rows simply carry no numbers.
+    let stats = selection
+        .and_then(|(root, cid)| state.caches.file_stats_for(root, cid))
+        .unwrap_or(&[]);
 
-    widgets::toolwindow_header(ui, &format!("Changed files ({})", files.len()), |_ui| {});
+    // Header: the count is a chip of its own (redesign issue 04), not a suffix
+    // on the title. Without a selection there is no count to state.
+    ui.horizontal(|ui| {
+        widgets::group_title(ui, "Changed files");
+        if selection.is_some() {
+            widgets::badge(ui, &files.len().to_string(), BadgeKind::Neutral);
+        }
+    });
 
     let Some((root_id, cid)) = selection else {
         ui.label(
@@ -1046,14 +1110,45 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
 
     let parent = find_commit(state, root_id, cid).and_then(|c| c.parents.first().cloned());
 
+    // Filter row (redesign issue 04): the pane's own narrowing of a long
+    // change list, matched case-insensitively against the path.
+    widgets::search_input(ui, "Filter changed files", &mut state.ui.log_file_filter);
+    let filter = state.ui.log_file_filter.trim().to_lowercase();
+    let row_shown = |change: &turbogit_domain::model::Change| {
+        filter.is_empty()
+            || change
+                .path
+                .to_string_lossy()
+                .to_lowercase()
+                .contains(&filter)
+    };
+    let shown = files.iter().filter(|c| row_shown(c)).count();
+
     let mut action = FileAction::None;
     ScrollArea::vertical().show(ui, |ui| {
         for ch in files {
-            action = file_row(ui, state, ch);
+            if !row_shown(ch) {
+                continue;
+            }
+            let row_action = file_row(ui, state, ch, file_stat(stats, &ch.path));
+            // The first row that reports an intent owns the frame: a later
+            // non-clicked row must not clear it (only one row can be clicked
+            // per frame, but the loop keeps painting after it).
+            if matches!(action, FileAction::None) {
+                action = row_action;
+            }
         }
         if files.is_empty() {
             ui.label(
                 RichText::new("No changed files.")
+                    .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                    .color(Palette::INK_3),
+            );
+        } else if shown == 0 {
+            // A filter that hides every row is its own state — never the
+            // "this commit changed nothing" message (issue 02).
+            ui.label(
+                RichText::new("No file matches the filter.")
                     .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
                     .color(Palette::INK_3),
             );
@@ -1115,14 +1210,20 @@ fn badge_kind(status: ChangeStatus) -> BadgeKind {
     }
 }
 
-/// One changed-file row: status badge + path, click opens the diff preview,
-/// context menu scopes the workspace to the file's history (issue #19).
+/// One changed-file row (redesign issue 04): status badge, file name on the
+/// first line, its directory underneath, and the commit's `+N −M` for this
+/// path at the right. Click opens the diff preview, context menu scopes the
+/// workspace to the file's history (issue #19).
 /// Renders against a shared [`AppState`] and reports its intent; the caller
 /// applies it after rendering (plan §1.3 defer pattern).
-fn file_row(ui: &mut Ui, state: &AppState, change: &turbogit_domain::model::Change) -> FileAction {
-    let path_str = change.path.display().to_string();
+fn file_row(
+    ui: &mut Ui,
+    state: &AppState,
+    change: &turbogit_domain::model::Change,
+    stat: Option<(usize, usize)>,
+) -> FileAction {
     let selected = state.ui.log_selected_file.as_ref() == Some(&change.path);
-    let (rect, response) = allocate_row(ui);
+    let (rect, response) = allocate_file_row(ui);
     paint_row_fill(ui, &rect, selected, response.hovered());
 
     // Painter-only contents so the row owns the pointer (see commit_row).
@@ -1153,14 +1254,64 @@ fn file_row(ui: &mut Ui, state: &AppState, change: &turbogit_domain::model::Chan
     );
     mx = badge_rect.right() + 6.0;
 
-    let path_galley =
-        painter.layout_no_wrap(truncate(&path_str, 34), body_font(), row_ink(selected));
-    painter.galley(
-        Pos2::new(mx, cy - path_galley.size().y / 2.0),
-        path_galley,
-        row_ink(selected),
-    );
+    // Right-aligned churn (redesign issue 04): each number paints only when
+    // git counted it, so a pure addition shows no `−0`, and a row measured
+    // nothing at all — a binary file, or counts still in flight — shows
+    // neither.
+    let added = stat.filter(|(ins, _)| *ins > 0).map(|(ins, _)| {
+        painter.layout_no_wrap(format!("+{ins}"), mono_font(), Palette::STATE_SUCCESS)
+    });
+    let removed = stat.filter(|(_, dels)| *dels > 0).map(|(_, dels)| {
+        painter.layout_no_wrap(format!("−{dels}"), mono_font(), Palette::STATE_ERROR)
+    });
+    let mut text_right = rect.right() - 4.0;
+    for galley in added.iter().chain(removed.iter()) {
+        text_right -= galley.size().x + STAT_GAP;
+    }
 
+    // Line 1: the file name, tail-elided only when the pane cannot fit it.
+    let ink = row_ink(selected);
+    let name = change
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| change.path.to_string_lossy().into_owned());
+    let name_galley = elide(&painter, &name, body_font(), ink, text_right - mx);
+    painter.galley(Pos2::new(mx, rect.top() + 7.0), name_galley, ink);
+
+    // Line 2: the directory it lives in, de-emphasized. A file at the repo
+    // root has none, so that row carries the name line alone.
+    if let Some(dir) = change.path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let dir_font = FontId::new(MICRO_TEXT, FontFamily::Proportional);
+        let dir_text = dir.to_string_lossy().replace('\\', "/");
+        let dir_galley = elide(
+            &painter,
+            &dir_text,
+            dir_font,
+            Palette::INK_3,
+            text_right - mx,
+        );
+        painter.galley(Pos2::new(mx, rect.top() + 22.0), dir_galley, Palette::INK_3);
+    }
+
+    let mut churn_right = rect.right() - 4.0;
+    if let Some(galley) = removed {
+        churn_right -= galley.size().x;
+        painter.galley(
+            Pos2::new(churn_right, rect.top() + 7.0),
+            galley,
+            Palette::STATE_ERROR,
+        );
+        churn_right -= STAT_GAP;
+    }
+    if let Some(galley) = added {
+        churn_right -= galley.size().x;
+        painter.galley(
+            Pos2::new(churn_right, rect.top() + 7.0),
+            galley,
+            Palette::STATE_SUCCESS,
+        );
+    }
     response.widget_info(|| {
         WidgetInfo::labeled(WidgetType::Button, true, change.path.display().to_string())
     });
@@ -1245,93 +1396,145 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
 
-    // Key-value block (compact single rows — the pane is ~300px tall).
-    ui.horizontal(|ui| {
-        kv_label(ui, "Hash:");
-        ui.label(
-            RichText::new(short(&commit.id))
-                .font(mono_font())
-                .color(Palette::BRAND),
-        );
-    });
-    kv_value(
-        ui,
-        "Author:",
-        format!("{} <{}>", commit.author.name, commit.author.email),
+    // Subject first (redesign issue 05): the commit's identity, taking over
+    // the top of the key-value wall it replaces.
+    ui.label(
+        RichText::new(commit.message.lines().next().unwrap_or_default())
+            .font(widgets::bold_font_if_available(ui))
+            .color(Palette::INK),
     );
-    // Committer + signature state (issue 17, screen 09).
+
+    // Hash: a chip whose click defers the copy; the mockup's caption states
+    // what the click does, since there is no copy glyph in the icon set.
+    ui.horizontal(|ui| {
+        if widgets::hash_chip(ui, &short(&commit.id), "Click to copy the full hash").clicked() {
+            action = DetailAction::CopyHash;
+        }
+        ui.label(micro_text("click to copy full hash"));
+    });
+
+    // Author card: initials, name, email, and the day on the trailing edge.
+    ui.horizontal(|ui| {
+        widgets::avatar_initials(ui, &commit.author.name);
+        ui.vertical(|ui| {
+            ui.label(
+                RichText::new(&commit.author.name)
+                    .font(body_font())
+                    .color(Palette::INK),
+            );
+            ui.label(micro_text(&commit.author.email));
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(micro_text(
+                fmt_time(commit.time)
+                    .split(' ')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+            ));
+        });
+    });
+
+    // Meta grid on a quiet container: one shared label column keeps the values
+    // aligned (issue 05). The committer keeps its signature suffix (issue 17)
+    // and the parents stay links that jump the selection.
     let sig_suffix = match commit.signature {
         SignatureState::Unsigned => String::new(),
         SignatureState::Good => " · signed ✓".to_string(),
         SignatureState::Bad => " · signature BAD".to_string(),
         SignatureState::Unverified => " · signed (unverified)".to_string(),
     };
-    kv_value(
-        ui,
-        "Committer:",
-        format!(
-            "{} <{}>{}",
-            commit.committer.name, commit.committer.email, sig_suffix
-        ),
-    );
-    kv_value(ui, "Date:", fmt_time(commit.time));
-
-    ui.horizontal(|ui| {
-        kv_label(ui, "Parents:");
-        if commit.parents.is_empty() {
-            ui.label(RichText::new("—").font(body_font()).color(Palette::INK_3));
-        } else {
-            for p in &commit.parents {
-                // Parent hashes are links (issue 17): clicking jumps to the
-                // parent — deferred like every other pane action.
-                if ui
-                    .link(
-                        RichText::new(short(p))
-                            .font(mono_font())
+    ui.add_space(4.0);
+    Frame::new()
+        .fill(Palette::SURFACE_3)
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::same(8))
+        .show(ui, |ui| {
+            Grid::new("log_commit_meta")
+                .num_columns(2)
+                .spacing([10.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(micro_text("Committer"));
+                    ui.label(
+                        RichText::new(format!(
+                            "{} <{}>{}",
+                            commit.committer.name, commit.committer.email, sig_suffix
+                        ))
+                        .font(body_font())
+                        .color(Palette::INK),
+                    );
+                    ui.end_row();
+                    ui.label(micro_text("Date"));
+                    ui.label(
+                        RichText::new(fmt_time(commit.time))
+                            .font(body_font())
                             .color(Palette::INK),
-                    )
-                    .clicked()
-                {
-                    action = DetailAction::SelectParent(p.clone());
-                }
+                    );
+                    ui.end_row();
+                    ui.label(micro_text("Parents"));
+                    if commit.parents.is_empty() {
+                        ui.label(RichText::new("—").font(body_font()).color(Palette::INK_3));
+                    } else {
+                        ui.horizontal(|ui| {
+                            for p in &commit.parents {
+                                if ui
+                                    .link(
+                                        RichText::new(short(p))
+                                            .font(mono_font())
+                                            .color(Palette::INK),
+                                    )
+                                    .clicked()
+                                {
+                                    action = DetailAction::SelectParent(p.clone());
+                                }
+                            }
+                        });
+                    }
+                    ui.end_row();
+                });
+        });
+
+    // Churn: the bar git measured, then the file count and the `+X −Y` totals.
+    // Before the stats land only the file count is known, so that is all that
+    // shows (issue 02's "no stat" rule, applied to the aggregate too).
+    let files = state.caches.files_for(root_id, &commit.id).unwrap_or(&[]);
+    let stats = state
+        .caches
+        .file_stats_for(root_id, &commit.id)
+        .unwrap_or(&[]);
+    let added: usize = stats.iter().map(|(_, ins, _)| *ins).sum();
+    let removed: usize = stats.iter().map(|(_, _, dels)| *dels).sum();
+    ui.add_space(6.0);
+    widgets::churn_bar(ui, added, removed);
+    ui.horizontal(|ui| {
+        ui.label(micro_text(format!(
+            "{} {} changed",
+            files.len(),
+            if files.len() == 1 { "file" } else { "files" }
+        )));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if removed > 0 {
+                ui.label(
+                    RichText::new(format!("−{removed}"))
+                        .font(mono_font())
+                        .color(Palette::STATE_ERROR),
+                );
             }
-        }
+            if added > 0 {
+                ui.label(
+                    RichText::new(format!("+{added}"))
+                        .font(mono_font())
+                        .color(Palette::STATE_SUCCESS),
+                );
+            }
+        });
     });
 
-    // File summary badges ("2 modified · 1 added").
-    let files = state.caches.files_for(root_id, &commit.id).unwrap_or(&[]);
-    let modified = files
-        .iter()
-        .filter(|f| f.status == ChangeStatus::Modified)
-        .count();
-    let added = files
-        .iter()
-        .filter(|f| f.status == ChangeStatus::Added)
-        .count();
-    let deleted = files
-        .iter()
-        .filter(|f| f.status == ChangeStatus::Deleted)
-        .count();
-    let summary = [modified, added, deleted]
-        .into_iter()
-        .zip(["modified", "added", "deleted"])
-        .filter(|(n, _)| *n > 0)
-        .map(|(n, w)| format!("{n} {w}"))
-        .collect::<Vec<_>>()
-        .join(" · ");
-    if !summary.is_empty() {
-        ui.label(
-            RichText::new(summary)
-                .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                .color(Palette::INK_3),
-        );
-    }
-
-    // Actions section (issue 15, screen 09): stacked full-width buttons —
-    // cherry-pick (primary), revert, create branch here. Guarded by the
-    // protected-branch and dirty-worktree guardrails: a blocked action is
-    // disabled and its reason is painted (visible without hover, so the
-    // explanation is always discoverable).
+    // Actions section (redesign decision D2): one primary verb on its own row,
+    // then the three secondary verbs as a ghost grid — every verb the pane had
+    // before stays reachable, none is silently dropped. Guarded by the
+    // protected-branch and dirty-worktree rules: a blocked action is disabled
+    // and its reason is painted, so the explanation is always discoverable.
     widgets::group_title(ui, "Actions");
     let snapshot = state.multi.by_id(root_id);
     let dirty = snapshot.is_some_and(|r| !r.status.changes.is_empty());
@@ -1354,12 +1557,8 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     let commit_id = commit.id.clone();
     let pick = widgets::action_button(ui, "Cherry-pick to…", true, !dirty)
         .on_disabled_hover_text("Resolve the uncommitted changes first");
-    if pick.clicked() {
-        action = DetailAction::CherryPick;
-    }
-    // The two secondary git actions share a row: the pane is 200px tall and
-    // a fourth stacked button would push the full message below the fold.
-    let (across, revert) = ui.columns(2, |columns| {
+    ui.add_space(2.0);
+    let (across, revert, branch) = ui.columns(2, |columns| {
         let across = widgets::action_button(&mut columns[0], "Cherry-pick across…", false, !dirty);
         let revert = widgets::action_button(
             &mut columns[1],
@@ -1367,38 +1566,50 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
             false,
             !dirty && !current_protected,
         );
-        (across, revert)
+        // The grid's second row: the left cell carries the last verb, the
+        // right one stays empty.
+        let branch = widgets::action_button(&mut columns[0], "Create branch here", false, true);
+        (across, revert, branch)
     });
     let revert = revert.on_disabled_hover_text("Resolve the guardrail below first");
+    if pick.clicked() {
+        action = DetailAction::CherryPick;
+    }
     if across.clicked() {
         action = DetailAction::CherryPickAcross;
     }
     if revert.clicked() {
         action = DetailAction::Revert;
     }
-    if widgets::action_button(ui, "Create branch here", false, true).clicked() {
+    if branch.clicked() {
         action = DetailAction::NewBranchHere;
     }
     if !reasons.is_empty() {
-        ui.label(
-            RichText::new(reasons.join(" · "))
-                .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                .color(Palette::STATE_WARNING),
-        );
+        ui.add_space(2.0);
+        widgets::alert_box(ui, &reasons.join(" · "));
     }
 
-    // Full message below the key-value block. The viewport is capped to
-    // the remaining pane height — a `ScrollArea` would otherwise claim all
-    // of it and push past the fixed pane, clipping the message when the
-    // metadata block grows (issue 17 added the committer row).
-    let message_height = ui.available_height().max(40.0);
-    ScrollArea::vertical()
-        .max_height(message_height)
-        .show(ui, |ui| {
-            for line in commit.message.lines().filter(|l| !l.trim().is_empty()) {
-                ui.label(RichText::new(line).font(body_font()).color(Palette::INK));
-            }
-        });
+    // The message body: everything under the subject, which now leads the
+    // pane (issue 05) — repeating it here would spend the pane's last inches
+    // on a line the user has already read. This stays the pane's only
+    // scrolling region, with the viewport capped to what is left so the
+    // `ScrollArea` cannot claim the whole pane and clip the metadata above.
+    let body: Vec<&str> = commit
+        .message
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if !body.is_empty() {
+        let message_height = ui.available_height().max(40.0);
+        ScrollArea::vertical()
+            .max_height(message_height)
+            .show(ui, |ui| {
+                for line in body {
+                    ui.label(RichText::new(line).font(body_font()).color(Palette::INK));
+                }
+            });
+    }
 
     // Deferred action application (plan §1.3): the borrow of the cached
     // commit ended above, so `state.ui` is free to mutate here.
@@ -1434,21 +1645,9 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-fn kv_label(ui: &mut Ui, key: &str) {
-    ui.label(
-        RichText::new(key)
-            .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-            .color(Palette::INK_3),
-    );
-}
-
-fn kv_value(ui: &mut Ui, key: &str, value: impl Into<String>) {
-    ui.horizontal(|ui| {
-        kv_label(ui, key);
-        ui.label(
-            RichText::new(value.into())
-                .font(body_font())
-                .color(Palette::INK),
-        );
-    });
+/// Muted micro label — the details pane's secondary text role (issue 05).
+fn micro_text(text: impl Into<String>) -> RichText {
+    RichText::new(text)
+        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+        .color(Palette::INK_3)
 }

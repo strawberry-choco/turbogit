@@ -17,7 +17,7 @@ use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
 use turbogit_app::events::AppEvent;
-use turbogit_app::state::{AppState, Tab};
+use turbogit_app::state::{AppState, Dialog, Tab};
 use turbogit_domain::model::{LogOpts, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -189,6 +189,16 @@ fn seeded_project() -> Seed {
 
     // Docs-only HEAD commit: touches neither file.txt nor feature.txt, so a
     // path-scoped history for those files has something to hide (issue #19).
+    // Two paths, one of them nested, so the redesigned row has a directory
+    // line to show and the pane's filter has rows to narrow. Plus a binary
+    // file, whose numstat row carries no line counts at all.
+    std::fs::create_dir_all(alpha.join("src/main")).expect("src dir");
+    std::fs::write(alpha.join("src/main/app.rs"), "fn main() {}\n").expect("app file");
+    std::fs::write(
+        alpha.join("logo.png"),
+        [0x89, b'P', b'N', b'G', 0x00, 0xFF, 0xFE],
+    )
+    .expect("logo file");
     let c3 = commit_file(&alpha, "README.md", "alpha: docs commit");
 
     // --- beta: an independent second root ---
@@ -276,6 +286,63 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
+/// The same harness at an explicit window size, for the narrow/short cases.
+fn harness_sized(state: AppState, size: egui::Vec2) -> Harness<'static, AppState> {
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, state| {
+            configure_style(ui.ctx());
+            if !fonts_installed {
+                install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            turbogit_ui::ui::render(ui, state);
+        },
+        state,
+    );
+    harness.set_size(size);
+    settle(&mut harness);
+    harness
+}
+
+/// Issue #23's guard, re-checked against the widened 344px column and the
+/// 400px details pane: at 560×380 every pane must still render its own
+/// content, the graph must keep a band of its own, and the details pane must
+/// yield so the changed-files pane above it does not collapse.
+#[test]
+fn a_narrow_and_short_window_still_yield_without_swallowing_the_graph() {
+    let seed = seeded_project();
+    let mut state = AppState::new(seed.project.clone());
+    warm_log_and_refs(&mut state);
+    state.ui.tab = Tab::Log;
+    state.ui.selected_commit = Some(seed.c2.clone());
+    let harness = harness_sized(state, egui::vec2(560.0, 380.0));
+
+    assert_painted(&harness, "CHANGED FILES");
+    assert_painted(&harness, "COMMIT DETAILS");
+    // The graph still owns a band: its column headers paint, with the message
+    // column squeezed to whatever is left at this width.
+    assert_painted(&harness, "HASH");
+    assert_painted(&harness, "DATE");
+
+    let graph_head = galley_origin(&harness, "HASH").expect("graph column header paints");
+    let files = galley_origin(&harness, "CHANGED FILES").expect("files header");
+    let details = galley_origin(&harness, "COMMIT DETAILS").expect("details header");
+
+    assert!(
+        graph_head.x < files.x,
+        "the graph band must sit left of the right column: header at {}, column at {}",
+        graph_head.x,
+        files.x
+    );
+    assert!(
+        details.y - files.y >= 24.0,
+        "the details pane must yield height to the changed-files pane, got a \
+         {}px gap between their headers",
+        details.y - files.y
+    );
+}
+
 /// Number of galleys painting exactly `text` (tooltips included).
 fn count_exact(harness: &Harness<'_, AppState>, text: &str) -> usize {
     harness
@@ -334,10 +401,11 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
         branches.0.left()
     );
 
-    // Right column: ~320px wide band reaching the body's right edge. The
-    // metadata rail that once occupied the last 260px was removed in the
-    // local-changes redesign (issue 03), so the right column extends to
-    // the window edge like the pre-rail layout.
+    // Right column: ~344px wide band reaching the body's right edge (decision
+    // D3 widened the §8.3 320px for the two-line file rows). The metadata rail
+    // that once occupied the last 260px was removed in the local-changes
+    // redesign (issue 03), so the right column extends to the window edge like
+    // the pre-rail layout.
     let body_right = filled_rects(&harness)
         .iter()
         .map(|(r, _)| r.right())
@@ -346,17 +414,18 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
     let right_col = rects
         .iter()
         .find(|(r, _)| {
-            r.width() >= 310.0 && r.width() <= 330.0 && (body_right - r.right()).abs() <= 12.0
+            r.width() >= 334.0 && r.width() <= 354.0 && (body_right - r.right()).abs() <= 12.0
         })
-        .expect("right column (~320px, reaching the body's right edge) not painted");
+        .expect("right column (~344px, reaching the body's right edge) not painted");
 
-    // Details pane: ~340px tall SURFACE band at the bottom of the right
-    // column (grew from the §8.3 200px in issue 15 for the Actions section,
-    // and again in issue 17 for the committer row + Copy-hash header).
+    // Details pane: ~440px tall SURFACE band at the bottom of the right
+    // column (grew from the §8.3 200px in issue 15 for the Actions section, to
+    // 340px in issue 17, and to decision D4's 440px for the redesigned subject
+    // / author card / meta grid / churn / actions / alert stack).
     let details = filled_rects(&harness)
         .into_iter()
-        .find(|(r, c)| *c == Palette::SURFACE && r.height() >= 330.0 && r.height() <= 350.0)
-        .expect("details pane band (~340px SURFACE) not painted");
+        .find(|(r, c)| *c == Palette::SURFACE && r.height() >= 430.0 && r.height() <= 450.0)
+        .expect("details pane band (~440px SURFACE) not painted");
     assert!(
         details.0.bottom() >= right_col.0.bottom() - 8.0,
         "details pane must sit at the bottom of the right column"
@@ -588,13 +657,14 @@ fn details_pane_shows_hash_author_date_parents_message_for_selection() {
         "clicking a log row must select the commit"
     );
 
-    // Key-value block.
-    assert_painted(&harness, "Hash:");
+    // The redesigned blocks: a copyable hash chip, an author card, and the
+    // meta grid's aligned labels.
     assert_painted(&harness, &short(&seed.c2));
-    assert_painted(&harness, "Author:");
+    assert_painted(&harness, "click to copy full hash");
     assert_painted(&harness, "Test");
-    assert_painted(&harness, "Date:");
-    assert_painted(&harness, "Parents:");
+    assert_painted(&harness, "test@example.com");
+    assert_painted(&harness, "Date");
+    assert_painted(&harness, "Parents");
     assert_painted(&harness, &short(&seed.c1));
 
     // The FULL message (including the body line) is painted below the kv
@@ -782,7 +852,7 @@ fn changed_files_pane_lists_selected_commit_files_with_status_badges() {
     harness.get_by_label(&row_label).click();
     settle(&mut harness);
 
-    assert_painted(&harness, "CHANGED FILES (1)");
+    assert_painted(&harness, "CHANGED FILES");
     assert_painted(&harness, "file.txt");
 
     // Modified badge: tinted pill carrying exactly "M".
@@ -793,6 +863,327 @@ fn changed_files_pane_lists_selected_commit_files_with_status_badges() {
         .find(|(r, c)| *c == expected && r.contains(pos))
         .expect("modified badge pill not painted with its token tint");
     assert!(badge.0.width() < 40.0, "badges are compact pills");
+}
+
+// --- Redesign issue 04: the changed-files pane --------------------------------
+
+/// Step frames until the painted output settles, pumping the worker channel
+/// between them the way `src/app.rs` pumps it before rendering. The per-commit
+/// file stats are a worker event, so a pane that shows them only settles this
+/// way.
+fn settle_pumped(harness: &mut Harness<'_, AppState>) {
+    let mut prev = String::new();
+    for _ in 0..10 {
+        harness.state_mut().drain_events();
+        harness.step();
+        let fingerprint = format!("{:?}", painted_text(harness));
+        if fingerprint == prev {
+            return;
+        }
+        prev = fingerprint;
+    }
+    panic!("log layout did not settle within 10 pumped frames");
+}
+
+/// Pump the worker channel until the selected commit's line counts have
+/// landed. The stats request is asynchronous, and a pixels-only settle can
+/// stabilise in the two frames before the git call returns.
+fn wait_for_file_stats(harness: &mut Harness<'_, AppState>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        harness.state_mut().drain_events();
+        harness.step();
+        let loaded = harness
+            .state()
+            .ui
+            .selected_commit
+            .as_ref()
+            .is_some_and(|cid| {
+                harness
+                    .state()
+                    .selected_root
+                    .as_ref()
+                    .is_some_and(|root| harness.state().caches.file_stats_loaded(root, cid))
+            });
+        if loaded {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the selected commit's file stats never landed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Select `alpha`'s second commit (one changed file) and settle with its
+/// counts in hand.
+fn select_second_commit(harness: &mut Harness<'_, AppState>, seed: &Seed) {
+    let row_label = format!("{} alpha: second commit", short(&seed.c2));
+    harness.get_by_label(&row_label).click();
+    wait_for_file_stats(harness);
+    settle_pumped(harness);
+}
+
+/// Select `alpha`'s docs commit (`README.md`, the nested `src/main/app.rs`, and
+/// a binary `logo.png`) and settle with its counts in hand.
+fn select_docs_commit(harness: &mut Harness<'_, AppState>, seed: &Seed) {
+    let row_label = format!("{} alpha: docs commit", short(&seed.c3));
+    harness.get_by_label(&row_label).click();
+    wait_for_file_stats(harness);
+    settle_pumped(harness);
+}
+
+#[test]
+fn the_files_pane_names_its_three_empty_states_apart() {
+    let seed = seeded_project();
+    // A commit that genuinely changes nothing, so "no files" has a real owner.
+    run_git(
+        &seed.alpha,
+        &["commit", "--allow-empty", "-q", "-m", "nothing changed"],
+    );
+    let mut harness = log_harness(&seed);
+
+    // 1. Nothing selected.
+    assert_painted(&harness, "Select a commit to see its changed files.");
+
+    // 2. A filter that hides every row of a commit that has rows.
+    select_docs_commit(&mut harness, &seed);
+    harness.get_by_label("Filter changed files").click();
+    harness
+        .get_by_label("Filter changed files")
+        .type_text("zzz");
+    settle_pumped(&mut harness);
+    assert_painted(&harness, "No file matches the filter.");
+    assert_not_painted(&harness, "No changed files.");
+
+    // 3. A commit with no changed files at all.
+    let head = head_of(&seed);
+    harness
+        .get_by_label(&format!("{} nothing changed", short(&head)))
+        .click();
+    settle_pumped(&mut harness);
+    assert_painted(&harness, "No changed files.");
+    assert_not_painted(&harness, "No file matches the filter.");
+}
+
+/// `alpha`'s current HEAD — the commit the fixture appends after `seeded_project`.
+fn head_of(seed: &Seed) -> String {
+    run_git(&seed.alpha, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string()
+}
+
+// --- Redesign issue 05: the commit-details pane ------------------------------
+
+/// The bottom band of the right column — the commit-details pane. Its SURFACE
+/// fill at the right column's width is the only rect of that shape.
+fn details_region(harness: &Harness<'_, AppState>) -> Rect {
+    filled_rects(harness)
+        .into_iter()
+        .filter(|(r, c)| *c == Palette::SURFACE && r.width() >= 334.0 && r.width() <= 354.0)
+        .map(|(r, _)| r)
+        .max_by(|a, b| a.top().total_cmp(&b.top()))
+        .expect("details pane band not painted")
+}
+
+#[test]
+fn the_details_pane_leads_with_the_subject_and_drops_the_kv_wall() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_second_commit(&mut harness, &seed);
+
+    let painted = painted_in_region(&harness, details_region(&harness));
+    assert!(
+        painted.iter().any(|t| t == "COMMIT DETAILS"),
+        "the pane keeps its header: {painted:?}"
+    );
+    assert!(
+        painted.iter().any(|t| t == "alpha: second commit"),
+        "the subject is the pane's identity: {painted:?}"
+    );
+    for gone in ["Hash:", "Author:"] {
+        assert!(
+            !painted.iter().any(|t| t.starts_with(gone)),
+            "`{gone}` belonged to the kv wall the redesign replaces: {painted:?}"
+        );
+    }
+}
+
+#[test]
+fn the_author_card_replaces_the_combined_author_row() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_second_commit(&mut harness, &seed);
+
+    let painted = painted_in_region(&harness, details_region(&harness));
+    assert!(
+        painted.iter().any(|t| t == "T"),
+        "the avatar carries the author's initials: {painted:?}"
+    );
+    assert!(painted.iter().any(|t| t == "Test"), "name: {painted:?}");
+    assert!(
+        painted.iter().any(|t| t == "test@example.com"),
+        "email: {painted:?}"
+    );
+    assert_eq!(
+        painted.iter().filter(|t| t.starts_with("Test <")).count(),
+        1,
+        "the committer grid row is the only `Name <email>` value left: {painted:?}"
+    );
+}
+
+#[test]
+fn the_churn_summary_replaces_the_status_count_string() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_second_commit(&mut harness, &seed);
+
+    let painted = painted_in_region(&harness, details_region(&harness));
+    assert!(
+        painted.iter().any(|t| t == "1 file changed"),
+        "the file count leads the summary: {painted:?}"
+    );
+    assert!(painted.iter().any(|t| t == "+1"), "totals: {painted:?}");
+    assert!(painted.iter().any(|t| t == "−1"), "totals: {painted:?}");
+    assert!(
+        !painted.iter().any(|t| t == "1 modified"),
+        "the old status-count string is gone: {painted:?}"
+    );
+    // The bar itself: a filled track carrying a success segment.
+    let region = details_region(&harness);
+    assert!(
+        filled_rects(&harness)
+            .iter()
+            .any(|(r, c)| *c == Palette::STATE_SUCCESS && region.contains(r.center())),
+        "the churn bar paints its added segment"
+    );
+}
+
+#[test]
+fn all_four_detail_verbs_stay_reachable_and_the_guardrail_still_gates_them() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_second_commit(&mut harness, &seed);
+
+    let painted = painted_in_region(&harness, details_region(&harness));
+    for verb in [
+        "Cherry-pick to…",
+        "Cherry-pick across…",
+        "Revert commit",
+        "Create branch here",
+    ] {
+        assert!(
+            painted.iter().any(|t| t == verb),
+            "`{verb}` must stay reachable (decision D2): {painted:?}"
+        );
+    }
+
+    // The guardrail still gates the disabled verb…
+    harness.get_by_label("Revert commit").click();
+    settle_pumped(&mut harness);
+    assert!(
+        harness.state().ui.confirm.is_none(),
+        "revert stays gated while the current branch is protected"
+    );
+
+    // …and the ghost grid's other verbs still land as deferred dialogs.
+    harness.get_by_label("Create branch here").click();
+    settle_pumped(&mut harness);
+    assert!(
+        matches!(harness.state().ui.dialog, Some(Dialog::NewBranch)),
+        "the click must still open the new-branch dialog"
+    );
+}
+
+#[test]
+fn the_guardrail_reason_renders_inside_an_alert_box() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_second_commit(&mut harness, &seed);
+
+    // `main` is protected by the default settings, so a reason is always on.
+    let pos = galley_origin(&harness, "'main' is a protected branch — revert blocked")
+        .expect("the guardrail text is still stated");
+    assert!(
+        filled_rects(&harness)
+            .iter()
+            .any(|(rect, fill)| *fill == Palette::SURFACE_WARNING && rect.contains(pos)),
+        "the reason must sit on the warning surface, not float as a bare label"
+    );
+}
+
+#[test]
+fn rows_carry_their_line_counts_and_a_binary_row_carries_none() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_docs_commit(&mut harness, &seed);
+
+    // README.md and src/main/app.rs each add one line; logo.png is binary, so
+    // git's numstat has no counts for it and the row shows none.
+    assert_painted(&harness, "logo.png");
+    assert_eq!(
+        count_exact(&harness, "+1"),
+        2,
+        "both text rows carry their insertion count"
+    );
+    assert_eq!(count_exact(&harness, "+0"), 0, "an unmeasured row is blank");
+    assert_eq!(count_exact(&harness, "−0"), 0, "an unmeasured row is blank");
+}
+
+#[test]
+fn a_changed_file_row_puts_its_directory_under_its_name() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_docs_commit(&mut harness, &seed);
+
+    // The name is a line of its own and the directory is the line under it —
+    // the path is never cut in the middle of a name.
+    let name = galley_origin(&harness, "app.rs").expect("file name on its own line");
+    let dir = galley_origin(&harness, "src/main").expect("directory under the name");
+    assert!(dir.y > name.y, "the directory sits below the name");
+    assert!(dir.x >= name.x, "and starts no further left than it");
+}
+
+#[test]
+fn the_changed_files_filter_narrows_rows_by_path() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_docs_commit(&mut harness, &seed);
+
+    assert_painted(&harness, "README.md");
+    assert_painted(&harness, "app.rs");
+
+    harness.get_by_label("Filter changed files").click();
+    harness
+        .get_by_label("Filter changed files")
+        .type_text("app");
+    settle(&mut harness);
+
+    assert_painted(&harness, "app.rs");
+    assert_not_painted(&harness, "README.md");
+    assert!(
+        harness.state().ui.log_file_filter == "app",
+        "the pane's filter is its own state, not the Commit tab's"
+    );
+}
+
+#[test]
+fn changed_files_count_is_its_own_pill_not_part_of_the_title() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_second_commit(&mut harness, &seed);
+
+    assert_painted(&harness, "CHANGED FILES");
+    assert_not_painted(&harness, "CHANGED FILES (1)");
+    // The count is a chip of its own: a "1" galley sitting on a filled pill.
+    let pos = galley_origin(&harness, "1").expect("count pill painted");
+    assert!(
+        filled_rects(&harness)
+            .into_iter()
+            .any(|(rect, _)| rect.contains(pos)),
+        "the count must sit on a filled chip"
+    );
 }
 
 // --- Issue #19: path-scoped file history from the log context menu ------------
@@ -858,13 +1249,13 @@ fn scoped_history_keeps_graph_and_details_functional() {
         Some(seed.c1.as_str()),
         "rows inside the scope must stay selectable"
     );
-    assert_painted(&harness, "Hash:");
     assert_painted(&harness, &short(&seed.c1));
-    assert_painted(&harness, "Author:");
-    assert_painted(&harness, "Parents:");
+    assert_painted(&harness, "click to copy full hash");
+    assert_painted(&harness, "Test");
+    assert_painted(&harness, "Parents");
 
     // …and the changed-files pane still lists the selected commit's files.
-    assert_painted(&harness, "CHANGED FILES (1)");
+    assert_painted(&harness, "CHANGED FILES");
     assert_painted(&harness, "file.txt");
 }
 

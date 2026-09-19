@@ -176,6 +176,18 @@ fn acceptance_matrix_screenshots() {
     );
     snap(&mut h, "03-git-log");
 
+    // The same page with a commit selected, so the redesigned changed-files
+    // rows and the commit-details blocks carry content (logs-panels redesign).
+    // The line counts are a worker round-trip, so the pump pauses for them
+    // rather than racing them.
+    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_owned();
+    h.state_mut().ui.selected_commit = Some(head);
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        h.step();
+    }
+    snap(&mut h, "03-git-log-selected");
+
     // Diff viewer over the working-tree change.
     h.state_mut().ui.preview_change = Some(repo.join("lib.txt"));
     settle(&mut h);
