@@ -33,11 +33,6 @@ use turbogit_services::changes;
 /// a flexible diff preview on the right.
 pub const COMMIT_PANEL_WIDTH: f32 = 340.0;
 
-/// Height of the bottom action row (issue 07): the single primary `Commit ▾`
-/// split button plus the grey `Shelve…` / `Stash…` beside it. Pinned to the
-/// panel bottom via a [`egui::Panel`] so the tree scrolls above it.
-pub const COMMIT_ACTION_ROW_HEIGHT: f32 = 44.0;
-
 /// Canonical bucket names. The staging sections (issue 20, screen 06) mirror
 /// Git's index: files with unstaged content under UNSTAGED, fully staged
 /// files under STAGED; conflicts keep their own group. The Unversioned Files
@@ -182,7 +177,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         state.caches.ensure_hunk_stats(exec.as_ref(), &root_id);
     }
     sub_tab_strip(ui, state);
-    file_filter_row(ui, state);
     match state.ui.commit_subtab {
         CommitSubTab::LocalChanges => local_changes_body(ui, state),
         // Phase-J scope: clickable tabs with labeled placeholder panes
@@ -230,9 +224,9 @@ fn sub_tab_strip(ui: &mut Ui, state: &mut AppState) {
 
 // ------------------------------------------------------------ file filter --
 
-/// Inline file filter over the changed-file list (spec R7, CONTEXT.md "File
-/// filter"): one header input shared by both active sub-tabs, matched
-/// case-insensitively against file paths. `/` focuses it (via
+/// The changes card header's file filter (spec R7, CONTEXT.md "File filter"):
+/// one input over the changed-file list, matched case-insensitively against
+/// file paths. `/` focuses it (via
 /// `focus_file_filter`, armed by the shell or the Filter Files palette
 /// action); Esc while focused clears focus and text; otherwise the text
 /// persists across root switches and refreshes within the session.
@@ -336,51 +330,52 @@ fn placeholder_pane(ui: &mut Ui, name: &str) {
 // ------------------------------------------------------- changelist pane --
 
 fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
-    // Issue 07: one set of commit controls. The message box + Amend sit at the
-    // TOP (one box for the whole view), and the single action row — primary
-    // `Commit ▾` split button plus grey `Shelve…` / `Stash…` — sits at the
-    // bottom. The tree's ScrollArea is height-capped so it never grows onto
-    // the action row below it; this pane keeps reporting its real content
-    // height, so sections the two-zone body renders after it (e.g. conflict
-    // resolution tools) keep their layout.
-    ui.heading("Commit");
-    // Issue 07: one set of commit controls at the top of the panel — the
-    // single commit message box + Amend were moved out of the preview pane's
-    // bottom margin into this panel's header area.
-    commit_message_box(ui, state);
-    recent_messages_row(ui, state);
-    tree_toolbar_row(ui, state);
-
-    let Some(root_id) = state.selected_root.clone() else {
-        ui.colored_label(Color32::GRAY, "Select a repository to see changes.");
+    // Issue 07: one set of commit controls — the message box + Amend, then the
+    // single action row (primary `Commit ▾` plus grey `Shelve…` / `Stash…`).
+    // Redesign Phase 1/2: they share one bordered card, which is what groups
+    // them now that the heading and separators are gone, and the action row is
+    // that card's footer.
+    widgets::card(ui, |ui| {
+        commit_message_box(ui, state);
+        recent_messages_row(ui, state);
+        // The mockup rules the footer off from the message controls above it.
+        ui.separator();
         commit_action_row(ui, state);
-        return;
-    };
-    if state.multi.by_id(&root_id).is_none() {
-        commit_action_row(ui, state);
-        return;
-    }
+    });
 
-    // Focus = expand (issue 04): whenever the selected root moves, manual
-    // expansions reset so only the newly focused repo's files are visible.
-    // Normalized before the buckets borrow the status snapshots (plan §1.4).
-    if state.ui.changes_focus != state.selected_root {
-        state.ui.changes_focus = state.selected_root.clone();
-        state.ui.changes_expanded.clear();
-    }
+    // Redesign Phase 3: the file list is its own card, headed by the toolbar,
+    // so the toolbar icons read as acting on this list rather than as
+    // commit-box chrome.
+    widgets::card(ui, |ui| {
+        changes_card_header(ui, state);
 
-    let (buckets, no_match) = filter_buckets(state, staging_buckets(state));
-    let (unversioned, _) = filter_buckets(state, unversioned_buckets(state));
-    let empty_text = if no_match.is_empty() {
-        "No local changes."
-    } else {
-        &no_match
-    };
-    let mut actions = Vec::new();
-    changes_tree(ui, state, &buckets, &unversioned, empty_text, &mut actions);
-    apply_actions(state, actions);
+        let Some(root_id) = state.selected_root.clone() else {
+            ui.colored_label(Color32::GRAY, "Select a repository to see changes.");
+            return;
+        };
+        if state.multi.by_id(&root_id).is_none() {
+            return;
+        }
 
-    commit_action_row(ui, state);
+        // Focus = expand (issue 04): whenever the selected root moves, manual
+        // expansions reset so only the newly focused repo's files are visible.
+        // Normalized before the buckets borrow the status snapshots (plan §1.4).
+        if state.ui.changes_focus != state.selected_root {
+            state.ui.changes_focus = state.selected_root.clone();
+            state.ui.changes_expanded.clear();
+        }
+
+        let (buckets, no_match) = filter_buckets(state, staging_buckets(state));
+        let (unversioned, _) = filter_buckets(state, unversioned_buckets(state));
+        let empty_text = if no_match.is_empty() {
+            "No local changes."
+        } else {
+            &no_match
+        };
+        let mut actions = Vec::new();
+        changes_tree(ui, state, &buckets, &unversioned, empty_text, &mut actions);
+        apply_actions(state, actions);
+    });
 }
 
 /// The one tree (issue 04, visual doc §3): every repository renders as a
@@ -399,12 +394,14 @@ fn changes_tree(
     empty_text: &str,
     actions: &mut Vec<RowAction>,
 ) {
-    // Height-capped (issue 07): the pane's action row sits below the tree, so
-    // the scroll area must never grow onto it. Uses the available rect
-    // instead of the capped pane height so sections rendered after the
-    // two-zone body (e.g. conflict resolution tools) keep real geometry.
+    // Height-capped: the tree is the last region inside its card, so it fills
+    // the rest of the pane rather than growing the card past the window
+    // (redesign risk R1 — the action row it used to reserve room for now
+    // heads the card above it). Uses the available rect instead of the capped
+    // pane height so sections rendered after the two-zone body (e.g. conflict
+    // resolution tools) keep real geometry.
     let remaining = ui.available_rect_before_wrap();
-    let max_h = (remaining.height() - COMMIT_ACTION_ROW_HEIGHT).max(COMMIT_ACTION_ROW_HEIGHT);
+    let max_h = remaining.height().max(crate::theme::FILE_ROW_HEIGHT);
     egui::ScrollArea::vertical()
         .id_salt("changes_tree")
         .max_height(max_h)
@@ -579,6 +576,31 @@ fn repo_group(
     }
 }
 
+/// Paint one tree indent guide (redesign Phase 5): a 1px `LINE_SUBTLE`
+/// vertical connector down an expanded block, so a file row reads as hanging
+/// off its repo group instead of floating beside it.
+///
+/// `block` is the row block's own rect, so the guide spans exactly the rows it
+/// ties to and stops there. It lands in the gap between the row checkbox and
+/// the status letter — never left of the checkbox, whose column it would
+/// otherwise cut through (risk R3).
+///
+/// Drawn as a hairline fill rather than a stroked `line_segment`: the two are
+/// indistinguishable on screen, but the harness's painted-path query reports
+/// icon and focus-ring paths only, so a stroked segment would be invisible to
+/// the test that owns this behaviour.
+fn indent_guide(ui: &Ui, block: Rect) {
+    let x = block.left() + ROW_PAD_X + ROW_CHECKBOX + ROW_GAP / 2.0;
+    ui.painter().rect_filled(
+        Rect::from_min_max(
+            Pos2::new(x, block.top()),
+            Pos2::new(x + 1.0, block.bottom()),
+        ),
+        CornerRadius::ZERO,
+        Palette::LINE_SUBTLE,
+    );
+}
+
 /// Paint one icon primitive centered at `origin` without disturbing layout
 /// (mirrors the sidebar's helper of the same name).
 fn icon_at(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
@@ -597,7 +619,7 @@ fn group_section(ui: &mut Ui, state: &AppState, bucket: &Bucket<'_>, actions: &m
     if bucket.name == MERGE_CONFLICTS {
         ui.strong(format!("{} ({})", bucket.name, bucket.changes.len()));
     }
-    ui.indent(
+    let body = ui.indent(
         ui.id()
             .with(("group_section", &bucket.root.id, bucket.name)),
         |ui| {
@@ -606,6 +628,8 @@ fn group_section(ui: &mut Ui, state: &AppState, bucket: &Bucket<'_>, actions: &m
             }
         },
     );
+    // The indented rect is the rows' own block, hung at their left edge.
+    indent_guide(ui, body.response.rect);
 }
 
 /// Untracked files of every root as one canonical bucket per root (issue #18:
@@ -1041,16 +1065,16 @@ fn recent_messages_row(ui: &mut Ui, state: &mut AppState) {
             }
         }
     });
-    ui.separator();
 }
 
-/// The one-tree toolbar row (issue 04, visual doc §3): the `Changes` label
-/// with the total change count, then small icon-only controls — expand /
-/// collapse all groups, group-by (inert, ADR-0010), rollback (discard, via
-/// the destructive confirm), and refresh. The old `Stage selected` /
-/// `Unstage selected` / `Discard` text buttons are gone (issue 05 completes
-/// the per-file checkbox staging; this ticket already ships the icon row).
-fn tree_toolbar_row(ui: &mut Ui, state: &mut AppState) {
+/// The changes card's header strip (issue 04, visual doc §3, redesign Phase
+/// 3): the `Changes` label with the total change count, then small icon-only
+/// controls — expand / collapse all groups, group-by (inert, ADR-0010),
+/// rollback (discard, via the destructive confirm), refresh, and the inert
+/// commit-options gear. The old `Stage selected` / `Unstage selected` /
+/// `Discard` text buttons are gone (issue 05 completes the per-file checkbox
+/// staging; this ticket already ships the icon row).
+fn changes_card_header(ui: &mut Ui, state: &mut AppState) {
     let total = state
         .multi
         .roots
@@ -1058,70 +1082,81 @@ fn tree_toolbar_row(ui: &mut Ui, state: &mut AppState) {
         .flat_map(|r| &r.status.changes)
         .filter(|c| !matches!(c.status, ChangeStatus::Ignored))
         .count();
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!("Changes ({total})"))
-                .strong()
-                .font(FontId::new(12.0, FontFamily::Proportional))
-                .color(Palette::INK),
-        );
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            // Commit options gear (issue 07): the `advanced options…` link
-            // collapsed into this panel icon. Deliberately inert in v1 — the
-            // options surface has no backing feature yet (ADR-0010).
-            let gear = widgets::icon_button(ui, Icon::SETTINGS);
-            gear.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Commit options"));
-            // Refresh: the full scoped refresh (same as the shell button).
-            let refresh = widgets::icon_button(ui, Icon::REFRESH_CW);
-            refresh
-                .widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Refresh changes"));
-            if refresh.clicked() {
-                state.refresh(Affected::All);
-            }
-            // Rollback (discard): destructive, confirmation-gated.
-            let rollback = widgets::icon_button(ui, Icon::UNDO);
-            rollback.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Rollback"));
-            if rollback.clicked() {
-                let ch = selected_changes(state);
-                if ch.is_empty() {
-                    state.ui.toast = Some(Toast::warning("Select files to discard."));
-                } else {
-                    state.ui.confirm = Some(PendingConfirm::Discard { changes: ch });
+    widgets::card_header(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Changes ({total})"))
+                    .strong()
+                    .font(FontId::new(
+                        crate::theme::TYPE_BODY,
+                        FontFamily::Proportional,
+                    ))
+                    .color(Palette::INK),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Commit options gear (issue 07): the `advanced options…` link
+                // collapsed into this panel icon. Deliberately inert in v1 — the
+                // options surface has no backing feature yet (ADR-0010).
+                let gear = widgets::icon_button(ui, Icon::SETTINGS);
+                gear.widget_info(|| {
+                    WidgetInfo::labeled(WidgetType::Button, true, "Commit options")
+                });
+                // Refresh: the full scoped refresh (same as the shell button).
+                let refresh = widgets::icon_button(ui, Icon::REFRESH_CW);
+                refresh.widget_info(|| {
+                    WidgetInfo::labeled(WidgetType::Button, true, "Refresh changes")
+                });
+                if refresh.clicked() {
+                    state.refresh(Affected::All);
                 }
-            }
-            // Group-by: rendered per the mockup, deliberately inert in v1
-            // (the same ADR-0010 pattern as the Commit options gear).
-            let group_by = widgets::icon_button(ui, Icon::LAYERS);
-            group_by.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Group by"));
-            // Expand / collapse all non-focused groups; the focused repo
-            // stays expanded either way ("focus = expand").
-            let all_expanded = state
-                .multi
-                .roots
-                .iter()
-                .filter(|r| state.selected_root.as_ref() != Some(&r.id))
-                .all(|r| state.ui.changes_expanded.contains(&r.id));
-            let (icon, label) = if all_expanded {
-                (Icon::CHEVRON_UP, "Collapse all groups")
-            } else {
-                (Icon::CHEVRON_DOWN, "Expand all groups")
-            };
-            let expand_all = widgets::icon_button(ui, icon);
-            expand_all.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
-            if expand_all.clicked() {
-                if all_expanded {
-                    state.ui.changes_expanded.clear();
+                // Rollback (discard): destructive, confirmation-gated.
+                let rollback = widgets::icon_button(ui, Icon::UNDO);
+                rollback.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Rollback"));
+                if rollback.clicked() {
+                    let ch = selected_changes(state);
+                    if ch.is_empty() {
+                        state.ui.toast = Some(Toast::warning("Select files to discard."));
+                    } else {
+                        state.ui.confirm = Some(PendingConfirm::Discard { changes: ch });
+                    }
+                }
+                // Group-by: rendered per the mockup, deliberately inert in v1
+                // (the same ADR-0010 pattern as the Commit options gear).
+                let group_by = widgets::icon_button(ui, Icon::LAYERS);
+                group_by.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Group by"));
+                // Expand / collapse all non-focused groups; the focused repo
+                // stays expanded either way ("focus = expand").
+                let all_expanded = state
+                    .multi
+                    .roots
+                    .iter()
+                    .filter(|r| state.selected_root.as_ref() != Some(&r.id))
+                    .all(|r| state.ui.changes_expanded.contains(&r.id));
+                let (icon, label) = if all_expanded {
+                    (Icon::CHEVRON_UP, "Collapse all groups")
                 } else {
-                    for r in &state.multi.roots {
-                        if state.selected_root.as_ref() != Some(&r.id) {
-                            state.ui.changes_expanded.insert(r.id.clone());
+                    (Icon::CHEVRON_DOWN, "Expand all groups")
+                };
+                let expand_all = widgets::icon_button(ui, icon);
+                expand_all.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
+                if expand_all.clicked() {
+                    if all_expanded {
+                        state.ui.changes_expanded.clear();
+                    } else {
+                        for r in &state.multi.roots {
+                            if state.selected_root.as_ref() != Some(&r.id) {
+                                state.ui.changes_expanded.insert(r.id.clone());
+                            }
                         }
                     }
                 }
-            }
+            });
         });
+        // The commit panel is only COMMIT_PANEL_WIDTH wide: the title plus the
+        // five icon buttons leave the filter ~24px on that first row, so it
+        // takes the header's second row, at the card's full inner width.
+        file_filter_row(ui, state);
     });
-    ui.separator();
 }
 
 // --------------------------------------------- preview + editor pane ------
@@ -1189,49 +1224,84 @@ fn staged_hunks_rail(ui: &mut Ui, state: &mut AppState) {
 
 fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
     staged_hunks_rail(ui, state);
-    ui.heading("Preview");
-    match state.ui.preview_change.clone() {
-        Some(path) => {
-            diff_header(ui, state, &path);
-            crate::ui::diff::render_diff(ui, state, &None, &None, &Some(path));
+    // Redesign Phase 4 (mockup): the preview is a full-height card whose
+    // header states what is previewed and in which mode, so the
+    // selection→preview link reads off the frame instead of hiding in the
+    // empty state.
+    widgets::card(ui, |ui| {
+        let preview = state.ui.preview_change.clone();
+        preview_header(ui, state, preview.as_deref());
+        match preview {
+            Some(path) => {
+                diff_stats(ui, state, &path);
+                crate::ui::diff::render_diff(ui, state, &None, &None, &Some(path));
+            }
+            None => {
+                ui.colored_label(
+                    Color32::GRAY,
+                    "Select a changed file to preview its unified diff.",
+                );
+            }
         }
-        None => {
-            ui.colored_label(
-                Color32::GRAY,
-                "Select a changed file to preview its unified diff.",
-            );
-        }
-    }
+    });
 }
 
-/// The diff preview header (issue 06, design doc §5): the previewed file's
-/// path, a status chip (Modified / Added / …), the `+N −M` change-size
-/// stats, and prev/next change navigation over the active sub-tab's
-/// changed-file list. Renders from `ui.preview_change` every frame, so
-/// selecting a row updates the header immediately. The nav buttons retarget
-/// the preview to the adjacent changed file — the same path a file-row click
-/// uses, so `ensure_diff` loads the new diff. The diff modes, hunk nav, and
-/// whitespace switches below are untouched (issue 06 checklist).
-fn diff_header(ui: &mut Ui, state: &mut AppState, path: &Path) {
-    ui.horizontal(|ui| {
-        let path_text = path.display().to_string();
-        let path_resp = ui.label(
-            RichText::new(&path_text)
-                .font(FontId::new(13.0, FontFamily::Proportional))
-                .color(Palette::INK),
-        );
-        path_resp.widget_info(|| {
-            WidgetInfo::labeled(WidgetType::Label, true, format!("Previewing {path_text}"))
+/// The preview card's header strip (issue 06, design doc §5; redesign Phase
+/// 4): the zone title, then the previewed file's path and its status pill,
+/// with the active diff mode and the prev/next change navigation
+/// right-aligned. Renders from `ui.preview_change` every frame, so selecting a
+/// row updates the header immediately. The nav buttons retarget the preview to
+/// the adjacent changed file — the same path a file-row click uses, so
+/// `ensure_diff` loads the new diff. The interactive mode toggle, hunk nav and
+/// whitespace switches stay in the diff toolbar below (issue 06 checklist);
+/// the mode pill here only states which mode that toolbar currently shows.
+fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {
+    widgets::card_header(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Preview")
+                    .strong()
+                    .font(FontId::new(
+                        crate::theme::TYPE_BODY,
+                        FontFamily::Proportional,
+                    ))
+                    .color(Palette::INK),
+            );
+            if let Some(path) = path {
+                let path_text = path.display().to_string();
+                let path_resp = ui.label(
+                    RichText::new(&path_text)
+                        .font(FontId::new(13.0, FontFamily::Proportional))
+                        .color(Palette::INK),
+                );
+                path_resp.widget_info(|| {
+                    WidgetInfo::labeled(WidgetType::Label, true, format!("Previewing {path_text}"))
+                });
+                let status = crate::ui::diff::preview_status(state, Some(path));
+                pill(ui, status_chip_label(status), status_color(status));
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if let Some(path) = path {
+                    change_nav(ui, state, path);
+                }
+                let mode = if state.ui.diff_side_by_side {
+                    "Side-by-side diff"
+                } else {
+                    "Unified diff"
+                };
+                pill(ui, mode, Palette::INK_2);
+            });
         });
+    });
+}
 
-        // Status chip, tinted with the row's status colour.
-        let status = crate::ui::diff::preview_status(state, Some(path));
-        status_chip(ui, status);
-
-        // `+N −M` change-size stats: counts land once the async diff text
-        // is cached, so they read 0 while loading.
-        let (added, removed) = crate::ui::diff::preview_line_counts(state, path);
-        let stat_font = FontId::new(12.0, FontFamily::Proportional);
+/// The `+N −M` change-size stats (issue 06), in the preview card's body above
+/// the diff. Counts land once the async diff text is cached, so they read 0
+/// while loading.
+fn diff_stats(ui: &mut Ui, state: &AppState, path: &Path) {
+    let (added, removed) = crate::ui::diff::preview_line_counts(state, path);
+    let stat_font = FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional);
+    ui.horizontal(|ui| {
         ui.label(
             RichText::new(format!("+{added}"))
                 .font(stat_font.clone())
@@ -1242,44 +1312,41 @@ fn diff_header(ui: &mut Ui, state: &mut AppState, path: &Path) {
                 .font(stat_font)
                 .color(Palette::DIFF_DEL_ACCENT),
         );
-
-        // Prev/next change navigation, right-aligned to the pane edge.
-        let files = active_subtab_files(state);
-        let current = files.iter().position(|p| p.as_path() == path);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let prev_enabled = current.is_some_and(|i| i > 0);
-            let next_enabled = current.is_some_and(|i| i + 1 < files.len());
-            // Right-to-left: the Next chevron is allocated first so it sits
-            // at the pane edge, with Previous to its left.
-            let next = icon_button_enabled(ui, Icon::CHEVRON_RIGHT, next_enabled);
-            next.widget_info(|| {
-                WidgetInfo::labeled(WidgetType::Button, next_enabled, "Next change")
-            });
-            if next_enabled && next.clicked() {
-                state.ui.preview_change = current.and_then(|i| files.get(i + 1)).cloned();
-            }
-            let prev = icon_button_enabled(ui, Icon::CHEVRON_LEFT, prev_enabled);
-            prev.widget_info(|| {
-                WidgetInfo::labeled(WidgetType::Button, prev_enabled, "Previous change")
-            });
-            if prev_enabled && prev.clicked() {
-                state.ui.preview_change = current.and_then(|i| files.get(i - 1)).cloned();
-            }
-        });
     });
 }
 
-/// The status chip of the diff header (issue 06, design doc §5): a small
-/// pill carrying the full status word, tinted with the row's status colour
-/// (the same mapping the file rows use, issue 05).
-fn status_chip(ui: &mut Ui, status: ChangeStatus) {
-    let label = status_chip_label(status);
-    let tint = status_color(status);
+/// Prev/next change navigation over the active sub-tab's changed-file list,
+/// right-aligned to the card's edge.
+fn change_nav(ui: &mut Ui, state: &mut AppState, path: &Path) {
+    let files = active_subtab_files(state);
+    let current = files.iter().position(|p| p.as_path() == path);
+    let prev_enabled = current.is_some_and(|i| i > 0);
+    let next_enabled = current.is_some_and(|i| i + 1 < files.len());
+    // Right-to-left: the Next chevron is allocated first so it sits at the
+    // card edge, with Previous to its left.
+    let next = icon_button_enabled(ui, Icon::CHEVRON_RIGHT, next_enabled);
+    next.widget_info(|| WidgetInfo::labeled(WidgetType::Button, next_enabled, "Next change"));
+    if next_enabled && next.clicked() {
+        state.ui.preview_change = current.and_then(|i| files.get(i + 1)).cloned();
+    }
+    let prev = icon_button_enabled(ui, Icon::CHEVRON_LEFT, prev_enabled);
+    prev.widget_info(|| WidgetInfo::labeled(WidgetType::Button, prev_enabled, "Previous change"));
+    if prev_enabled && prev.clicked() {
+        state.ui.preview_change = current.and_then(|i| files.get(i - 1)).cloned();
+    }
+}
+
+/// A small non-interactive pill: `label` centred on a `SURFACE_3` roundel,
+/// tinted with `tint`. The preview header uses it for the change status
+/// (issue 06, design doc §5 — tinted with the row's status colour, the same
+/// mapping the file rows use) and for the active diff mode, so neither
+/// pretends to be a button.
+fn pill(ui: &mut Ui, label: &str, tint: Color32) {
     const CHIP_H: f32 = 18.0;
     const PAD_X: f32 = 8.0;
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        FontId::new(11.0, FontFamily::Proportional),
+        FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional),
         tint,
     );
     let size = Vec2::new(galley.size().x + PAD_X * 2.0, CHIP_H);
@@ -1297,11 +1364,7 @@ fn status_chip(ui: &mut Ui, status: ChangeStatus) {
         galley,
         tint,
     );
-    let resp = ui.interact(
-        rect,
-        ui.auto_id_with(("status_chip", label)),
-        Sense::hover(),
-    );
+    let resp = ui.interact(rect, ui.auto_id_with(("pill", label)), Sense::hover());
     resp.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, label));
 }
 
