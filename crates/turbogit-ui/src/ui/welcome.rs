@@ -1,13 +1,15 @@
-//! Welcome page (issue #10, spec §8.1).
+//! Welcome page (issue #10; redesign spec §3).
 //!
 //! Shown instead of the active tool window whenever no project is open or the
-//! user returned to it via File → Welcome (`AppState::show_welcome`,
-//! ADR-0004). Full-window, scrollable, centered content (max-width 980px):
+//! user returned to it via the command palette's Open Welcome (`AppState::
+//! show_welcome`, ADR-0004). Full-window, scrollable, left-aligned content
+//! (max-width 980px), one dominant region down to a two-column footer:
 //!
-//! 1. Brand header: logo icon + "TurboGit" + tagline.
-//! 2. Two-column grid: three action cards (Clone / Open / Initialize) and the
-//!    inline clone form on the left; recent projects on the right (ADR-0005).
-//! 3. Getting-started hints.
+//! 1. Hero: brand tile + wordmark + tagline, with the "What's new" trigger.
+//! 2. Clone panel: the one clone door (URL input + shallow checkbox + Clone).
+//! 3. Quick actions: three cards — Open / Initialize / Attach workspace.
+//! 4. Lower (two columns, left wider): the recents card (ADR-0005) and the
+//!    getting-started card, side by side.
 //!
 //! Branch indicators on recent rows are computed live at render time through
 //! the engine seam and cached in memory only (never persisted).
@@ -28,12 +30,14 @@ use super::widgets;
 const CONTENT_WIDTH: f32 = 980.0;
 /// Hero brand-tile edge (spec §5.1: a 64px rounded tile).
 const HERO_TILE: f32 = 64.0;
-/// Right column (recent projects) fixed width (spec §8.1).
-const RECENTS_WIDTH: f32 = 260.0;
+/// Right column (getting-started card) fixed width in the `lower` band.
+const GETTING_STARTED_W: f32 = 300.0;
 const COLUMN_GAP: f32 = 16.0;
 const CARD_GAP: f32 = 12.0;
 /// Quick-action card icon tile edge (spec §5.3: a 30px `SURFACE_3` tile).
 const ICON_TILE: f32 = 30.0;
+/// Getting-started step pill edge (spec §5.5: a 20px `SURFACE_3` numeral).
+const STEP_PILL: f32 = 20.0;
 /// A recent-project row: name, path and last-opened on three lines, so the row
 /// is three text lines plus leading rather than a step on the 24/26 px single-line
 /// ramp — which is why it stays here rather than joining `theme`'s row heights.
@@ -53,17 +57,20 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         let avail = ui.available_width();
         let margin = ((avail - CONTENT_WIDTH) / 2.0).max(0.0);
-        ui.add_space(28.0);
+        ui.add_space(20.0);
         ui.horizontal(|ui| {
             ui.add_space(margin);
             ui.vertical(|ui| {
                 ui.set_max_width(CONTENT_WIDTH.min(avail));
+                // Left-aligned vertical rhythm (spec §5.6): hero → clone panel →
+                // quick actions → lower, uniform 20px between sections.
                 hero(ui, state);
-                ui.add_space(22.0);
-                columns(ui, state);
-                ui.add_space(28.0);
-                getting_started(ui);
-                ui.add_space(24.0);
+                ui.add_space(20.0);
+                clone_box(ui, state);
+                ui.add_space(20.0);
+                quick_actions(ui, state);
+                ui.add_space(20.0);
+                lower(ui, state);
             });
         });
     });
@@ -138,32 +145,29 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-// --- Two-column grid -----------------------------------------------------------
+// --- Lower band: recents + getting started -----------------------------------
 
-fn columns(ui: &mut Ui, state: &mut AppState) {
-    // Spacing-aware split guaranteed to fit: auto item spacing around the
-    // explicit gap plus both columns never exceeds the viewport, so neither
-    // column is ever clipped out of reach (issue #23).
+fn lower(ui: &mut Ui, state: &mut AppState) {
+    // Two columns, left wider (spec §5.6): the recents card fills the container,
+    // the getting-started card is a fixed ~300px on the right. Spacing-aware
+    // split so neither column is ever clipped out of reach at narrow widths
+    // (issue #23).
     let avail = ui.available_width();
     let gaps = COLUMN_GAP + 2.0 * ui.style().spacing.item_spacing.x;
-    let usable = (avail - gaps).max(160.0);
-    let recents_w = RECENTS_WIDTH.min(usable * 0.4);
-    let left_w = (usable - recents_w).max(usable * 0.5);
+    let usable = (avail - gaps).max(320.0);
+    let getting_w = GETTING_STARTED_W.min(usable * 0.4);
+    let recents_w = (usable - getting_w).max(usable * 0.5);
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            // Pin exactly: inputs size themselves from available width, so
-            // an uncapped column would grow frame over frame (issue #23).
-            ui.set_min_width(left_w);
-            ui.set_max_width(left_w);
-            action_cards(ui, state, left_w);
-            ui.add_space(20.0);
-            clone_box(ui, state);
-        });
-        ui.add_space(COLUMN_GAP);
         ui.vertical(|ui| {
             ui.set_min_width(recents_w);
             ui.set_max_width(recents_w);
             recents_column(ui, state);
+        });
+        ui.add_space(COLUMN_GAP);
+        ui.vertical(|ui| {
+            ui.set_min_width(getting_w);
+            ui.set_max_width(getting_w);
+            getting_started(ui);
         });
     });
 }
@@ -181,11 +185,11 @@ enum CardAction {
     AttachWorkspace,
 }
 
-fn action_cards(ui: &mut Ui, state: &mut AppState, left_w: f32) {
+fn quick_actions(ui: &mut Ui, state: &mut AppState) {
     // Exactly three equal-width cards in one row (spec §5.3): Open / Initialize
     // / Attach. The old fourth "Clone from URL" card is gone — its door merged
-    // into the clone panel below, so there is no 2×2 grid and no compact strip.
-    let card_w = (left_w - 2.0 * CARD_GAP) / 3.0;
+    // into the clone panel, so there is no 2×2 grid and no compact strip.
+    let card_w = (ui.available_width() - 2.0 * CARD_GAP) / 3.0;
     ui.horizontal(|ui| {
         action_card_title(ui, state, CardAction::OpenProject, card_w);
         ui.add_space(CARD_GAP);
@@ -651,24 +655,54 @@ const HINTS: [&str; 5] = [
     "Browse history in the Git Log tool window.",
 ];
 
-/// Numbered getting-started tips (spec §8.1 item 3).
+/// Numbered getting-started tips as a `SURFACE` card (spec §5.5): the group
+/// title plus five steps, each a `STEP_PILL` numeral pill before its body text.
 fn getting_started(ui: &mut Ui) {
-    widgets::group_title(ui, "Getting Started");
-    ui.add_space(6.0);
-    for (i, hint) in HINTS.iter().enumerate() {
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("{}. ", i + 1))
-                    .size(crate::theme::TYPE_BODY)
-                    .color(Palette::BRAND),
-            );
-            ui.label(
-                RichText::new(*hint)
-                    .size(crate::theme::TYPE_BODY)
-                    .color(Palette::INK_2),
-            );
+    Frame::new()
+        .fill(Palette::SURFACE)
+        .stroke(Stroke::new(1.0, Palette::LINE))
+        .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
+        .inner_margin(Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            widgets::group_title(ui, "Getting Started");
+            ui.add_space(6.0);
+            for (i, hint) in HINTS.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    step_pill(ui, i + 1);
+                    ui.label(
+                        RichText::new(*hint)
+                            .size(crate::theme::TYPE_BODY)
+                            .color(Palette::INK_2),
+                    );
+                });
+                ui.add_space(4.0);
+            }
         });
-    }
+}
+
+/// A getting-started step numeral: a `STEP_PILL` `SURFACE_3` pill
+/// (`PILL_RADIUS`) carrying a mono `ACCENT_TEXT` digit (spec §5.5).
+fn step_pill(ui: &mut Ui, n: usize) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(STEP_PILL), Sense::hover());
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(crate::theme::PILL_RADIUS),
+        Palette::SURFACE_3,
+    );
+    let galley = ui.painter().layout_no_wrap(
+        n.to_string(),
+        crate::theme::data_font(crate::theme::TYPE_CONTROL),
+        Palette::ACCENT_TEXT,
+    );
+    ui.painter().galley(
+        Pos2::new(
+            rect.center().x - galley.size().x / 2.0,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        Palette::ACCENT_TEXT,
+    );
 }
 
 // --- What's new / changelog ------------------------------------------------------
