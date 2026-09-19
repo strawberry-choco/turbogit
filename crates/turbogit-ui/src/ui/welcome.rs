@@ -30,10 +30,11 @@ use super::widgets;
 const CONTENT_WIDTH: f32 = 980.0;
 /// Hero brand-tile edge (spec §5.1: a 64px rounded tile).
 const HERO_TILE: f32 = 64.0;
-/// Right column (getting-started card) fixed width in the `lower` band.
-const GETTING_STARTED_W: f32 = 300.0;
-const COLUMN_GAP: f32 = 16.0;
-const CARD_GAP: f32 = 12.0;
+/// Right column (getting-started card) width in the `lower` band.
+const GETTING_STARTED_W: f32 = 340.0;
+/// Uniform horizontal gutter: the gap between the three quick-action cards and
+/// between the two `lower` columns, matching the 20px vertical section rhythm.
+const GUTTER: f32 = 20.0;
 /// Quick-action card icon tile edge (spec §5.3: a 30px `SURFACE_3` tile).
 const ICON_TILE: f32 = 30.0;
 /// Getting-started step pill edge (spec §5.5: a 20px `SURFACE_3` numeral).
@@ -169,22 +170,21 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
 // --- Lower band: recents + getting started -----------------------------------
 
 fn lower(ui: &mut Ui, state: &mut AppState) {
-    // Two columns, left wider (spec §5.6): the recents card fills the container,
-    // the getting-started card is a fixed ~300px on the right. Spacing-aware
-    // split so neither column is ever clipped out of reach at narrow widths
-    // (issue #23).
+    // Two columns (spec §5.6): recents fills the left, getting-started a fixed
+    // width on the right. `item_spacing.x` is pinned to 0 so `add_space(GUTTER)`
+    // is the exact gap — otherwise egui's auto spacing around the explicit gap
+    // makes the pair wider than the content column and overhangs the right edge.
     let avail = ui.available_width();
-    let gaps = COLUMN_GAP + 2.0 * ui.style().spacing.item_spacing.x;
-    let usable = (avail - gaps).max(320.0);
-    let getting_w = GETTING_STARTED_W.min(usable * 0.4);
-    let recents_w = (usable - getting_w).max(usable * 0.5);
+    let getting_w = GETTING_STARTED_W.min((avail - GUTTER) * 0.5);
+    let recents_w = (avail - GUTTER) - getting_w;
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         ui.vertical(|ui| {
             ui.set_min_width(recents_w);
             ui.set_max_width(recents_w);
             recents_column(ui, state);
         });
-        ui.add_space(COLUMN_GAP);
+        ui.add_space(GUTTER);
         ui.vertical(|ui| {
             ui.set_min_width(getting_w);
             ui.set_max_width(getting_w);
@@ -207,15 +207,18 @@ enum CardAction {
 }
 
 fn quick_actions(ui: &mut Ui, state: &mut AppState) {
-    // Exactly three equal-width cards in one row (spec §5.3): Open / Initialize
-    // / Attach. The old fourth "Clone from URL" card is gone — its door merged
-    // into the clone panel, so there is no 2×2 grid and no compact strip.
-    let card_w = (ui.available_width() - 2.0 * CARD_GAP) / 3.0;
+    // Exactly three equal-width cards in one row (spec §5.3). `item_spacing.x`
+    // is pinned to 0 so `add_space(GUTTER)` is the exact gap and the three cards
+    // span precisely the content column — their right edge lines up with the
+    // hero and clone panel instead of overhanging it.
+    let width = ui.available_width();
+    let card_w = (width - 2.0 * GUTTER) / 3.0;
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
         action_card_title(ui, state, CardAction::OpenProject, card_w);
-        ui.add_space(CARD_GAP);
+        ui.add_space(GUTTER);
         action_card_title(ui, state, CardAction::InitRepo, card_w);
-        ui.add_space(CARD_GAP);
+        ui.add_space(GUTTER);
         action_card_title(ui, state, CardAction::AttachWorkspace, card_w);
     });
 }

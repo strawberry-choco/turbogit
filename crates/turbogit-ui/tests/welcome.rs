@@ -660,6 +660,44 @@ fn lower_puts_recents_left_and_getting_started_right() {
     assert_painted(&harness, "Stage files in the Commit tool window.");
 }
 
+/// The three quick-action cards must share ONE row (left→right, same top). The
+/// egui auto `item_spacing.x` around each explicit gap made the old width math
+/// overflow, wrapping the third card ("Attach Workspace Root") onto its own
+/// line — so its title painted far below the other two and its right edge no
+/// longer aligned with the hero / clone panel.
+#[test]
+fn welcome_quick_actions_share_one_row() {
+    let mut fx = bare_fixture();
+    settle(&mut fx.harness);
+
+    let mut centers = Vec::new();
+    for title in [
+        "Open Project",
+        "Initialize Repository",
+        "Attach Workspace Root",
+    ] {
+        let c = painted_text_centers(&fx.harness, title)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("{title} card title not painted"));
+        centers.push((title, c));
+    }
+    let y0 = centers[0].1.y;
+    for (title, c) in &centers {
+        assert!(
+            (c.y - y0).abs() <= 4.0,
+            "all three cards share one row: {title} y={} vs Open Project y={y0}",
+            c.y
+        );
+    }
+    // Left → right order.
+    assert!(
+        centers[0].1.x < centers[1].1.x && centers[1].1.x < centers[2].1.x,
+        "cards must run left→right: {:?}",
+        centers.iter().map(|(_, c)| c.x).collect::<Vec<_>>()
+    );
+}
+
 // ----------------------------------- issue: shared typography roles (T2) ----
 
 /// Paint-time font sizes (points) of every galley carrying exactly `text`.
