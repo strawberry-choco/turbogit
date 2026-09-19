@@ -509,6 +509,101 @@ fn recent_branch_text_is_readable_on_its_painted_chip() {
     );
 }
 
+/// Ticket 03: the recents card's branch chip now paints the deliberate
+/// `SELECTION` fill (spec §4 contrast change) — the ink stays `ACCENT_TEXT`.
+#[test]
+fn recent_branch_chip_paints_the_selection_fill() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let repo = seed_repo(project.path(), "alpha");
+
+    seed_recents(
+        config.path(),
+        &[RecentProject {
+            path: repo.clone(),
+            name: "alpha".into(),
+            last_opened: 1_755_000_000_000,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
+        }],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = Harness::new_ui_state(
+        move |ui, state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
+        },
+        AppState::launch_in(None, Some(cfg)),
+    );
+    harness.set_size(egui::vec2(1024.0, 768.0));
+    settle(&mut harness);
+    wait_painted(&mut harness, "main", "current branch");
+
+    let (foreground, background) = painted_fg_bg_pair(&harness, "main");
+    assert_eq!(
+        background,
+        turbogit_ui::theme::Palette::SELECTION,
+        "the recent-row branch chip must paint the SELECTION fill"
+    );
+    assert_eq!(
+        foreground,
+        turbogit_ui::theme::Palette::ACCENT_TEXT,
+        "branch chip text ink is unchanged"
+    );
+}
+
+/// Ticket 03: the recents card is enclosed and footers a "Show all projects"
+/// affordance. It is a v1 no-op (no recents browser to route to — plan §4), so
+/// the screen still simply paints the Welcome page.
+#[test]
+fn recents_card_is_enclosed_and_footers_show_all_projects() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let repo = seed_repo(project.path(), "alpha");
+
+    seed_recents(
+        config.path(),
+        &[RecentProject {
+            path: repo.clone(),
+            name: "alpha".into(),
+            last_opened: 1_755_000_000_050,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
+        }],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = Harness::new_ui_state(
+        move |ui, state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
+        },
+        AppState::launch_in(None, Some(cfg)),
+    );
+    harness.set_size(egui::vec2(1024.0, 768.0));
+    settle(&mut harness);
+
+    // Enclosed card: header, a seeded row, and the footer all paint together.
+    assert_painted(&harness, "RECENT PROJECTS");
+    assert_painted(&harness, "alpha");
+    assert_painted(&harness, "Show all projects");
+    // A recents card fill on CONTENT_BG backs the rows.
+    let card_fill = harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            Shape::Rect(r) => r.fill == turbogit_ui::theme::Palette::CONTENT_BG,
+            _ => false,
+        });
+    assert!(card_fill, "the recents card must paint a CONTENT_BG frame");
+}
+
 // ----------------------------------- issue: shared typography roles (T2) ----
 
 /// Paint-time font sizes (points) of every galley carrying exactly `text`.
