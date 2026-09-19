@@ -22,7 +22,8 @@ use egui::{Key, Modifiers, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
 use tempfile::TempDir;
 use test_support::harness::{
-    assert_painted, filled_rects, galley_origin, painted_text, settle, shell_harness,
+    assert_painted, filled_rects, galley_origin, painted_galleys, painted_text, settle,
+    shell_harness,
 };
 use turbogit_app::events::{AppEvent, LogPageMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
@@ -329,10 +330,12 @@ fn welcome_action_card_paints_brand_focus_ring() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    harness.get_by_label("Clone from URL").focus();
+    // The welcome quick actions are three cards (the old fourth "Clone from
+    // URL" card merged into the clone panel); any of them carries the ring.
+    harness.get_by_label("Open Project").focus();
     settle(&mut harness);
 
-    let center = harness.get_by_label("Clone from URL").rect().center();
+    let center = harness.get_by_label("Open Project").rect().center();
     assert_ring_covers(&harness, center, "focused welcome action card");
 }
 
@@ -494,33 +497,44 @@ fn welcome_page_stays_reachable_at_small_window_sizes() {
     settle(&mut harness);
 
     let vp = viewport(520.0, 440.0);
-    for card in ["Clone from URL", "Open Project", "Initialize Repository"] {
+
+    // The redesign stacks hero → clone panel → quick actions → lower, so at a
+    // short height the cards and the recents column sit below the fold and must
+    // scroll into view. First: the three quick-action cards (no fourth clone
+    // card any more) each reach the viewport.
+    for card in [
+        "Open Project",
+        "Initialize Repository",
+        "Attach Workspace Root",
+    ] {
+        harness.get_by_label(card).scroll_to_me();
+        steps(&mut harness, 4);
+        settle(&mut harness);
         assert_visible(&harness, card, vp, "welcome cards");
     }
 
-    // Vertical reachability: the clone form sits below the fold and scrolls
-    // into view.
+    // Vertical reachability: the clone input (in the merged panel) scrolls in.
     harness.get_by_label("Repository URL").scroll_to_me();
     steps(&mut harness, 4);
     settle(&mut harness);
     assert_visible(&harness, "Repository URL", vp, "scrolled-to clone input");
 
-    // Horizontal reachability: the responsive grid guarantees the recents
-    // column fits the viewport by construction — nothing clips out of
-    // reach. Asserted over PAINTED output (clipped content is never
-    // painted), since accesskit bounding boxes of fully-clipped nodes are
-    // unreliable.
-    // Horizontal reachability: the responsive grid guarantees the recents
-    // column fits the viewport by construction — nothing clips out of
-    // reach horizontally. Asserted over PAINTED output (clipped content is
-    // never painted); the empty-recents label shares the column's x origin
-    // with its title, which may legally rest just above the fold after the
-    // scroll above.
-    let label_pos = galley_origin(&harness, "No recent projects yet.")
-        .unwrap_or_else(|| panic!("recents column content not painted — clipped away at {vp:?}"));
+    // Horizontal reachability (issue #23): the responsive `lower` split always
+    // fits the recents column inside the viewport width — never clipped out to
+    // the right. Scroll the last band into view and assert the recents empty
+    // label's x sits within the viewport over PAINTED output (clipped content
+    // is never painted).
+    harness.get_by_label("Attach Workspace Root").scroll_to_me();
+    steps(&mut harness, 6);
+    settle(&mut harness);
+    let label = painted_galleys(&harness)
+        .into_iter()
+        .find(|g| g.text == "No recent projects yet.")
+        .unwrap_or_else(|| panic!("recents column content not painted at {vp:?}"));
     assert!(
-        vp.contains(label_pos),
-        "recents column painted outside the viewport ({label_pos:?} vs {vp:?})"
+        label.rect.max.x <= vp.max.x + 1.0 && label.rect.min.x >= vp.min.x - 1.0,
+        "recents column painted outside the viewport width ({:?} vs {vp:?})",
+        label.rect
     );
 }
 

@@ -695,6 +695,24 @@ fn painted_text_centers(harness: &Harness<'_, AppState>, text: &str) -> Vec<egui
         .collect()
 }
 
+/// How many painted galleys carry exactly `text` — used to prove an element is
+/// painted once (no duplicated brand, no fourth card), not merely present.
+fn count_painted(harness: &Harness<'_, AppState>, text: &str) -> usize {
+    painted_text_centers(harness, text).len()
+}
+
+/// Whether any painted rect carries exactly `fill` (a card/frame surface check).
+fn paints_rect_with_fill(harness: &Harness<'_, AppState>, fill: Color32) -> bool {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            Shape::Rect(r) => r.fill == fill,
+            _ => false,
+        })
+}
+
 /// T2: the welcome wordmark is a distinct display role that renders through
 /// the shared named size — never a local literal that central changes miss.
 #[test]
@@ -1274,4 +1292,93 @@ fn hero_whats_new_opens_and_closes_the_changelog_overlay() {
     fx.harness.get_by_label("Close").click();
     settle(&mut fx.harness);
     assert_not_painted(&fx.harness, "What's New");
+}
+
+// --- Ticket 06: the redesigned structure, asserted not assumed -----------------
+
+/// Freeze the new layout end-to-end through the painted seam (spec §9). Uses
+/// only strings the Welcome panel itself paints (never the shell's shared
+/// "TurboGit" brand) so counts prove single-instance-ness of each region.
+#[test]
+fn welcome_locks_the_redesigned_structure() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let repo = seed_repo(project.path(), "alpha");
+
+    seed_recents(
+        config.path(),
+        &[RecentProject {
+            path: repo.clone(),
+            name: "alpha".into(),
+            last_opened: 1_755_000_000_050,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
+        }],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = Harness::new_ui_state(
+        move |ui, state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
+        },
+        AppState::launch_in(None, Some(cfg)),
+    );
+    harness.set_size(egui::vec2(1024.0, 768.0));
+    settle(&mut harness);
+
+    // Hero: wordmark + tagline + "What's new" trigger all paint.
+    assert_painted(&harness, "TurboGit");
+    assert_painted(
+        &harness,
+        "A fast, keyboard-friendly Git client for your desktop.",
+    );
+    assert_painted(&harness, "What's new");
+
+    // Exactly ONE clone door: the merged panel header paints once, the retired
+    // "Clone from URL" card is gone.
+    assert_eq!(
+        count_painted(&harness, "Clone a repository"),
+        1,
+        "there is exactly one clone panel"
+    );
+    assert_not_painted(&harness, "Clone from URL");
+
+    // Exactly three quick-action cards, each title a single galley.
+    for title in [
+        "Open Project",
+        "Initialize Repository",
+        "Attach Workspace Root",
+    ] {
+        assert_eq!(
+            count_painted(&harness, title),
+            1,
+            "quick-action card {title:?} should paint exactly once"
+        );
+    }
+
+    // Recents card: header, a seeded row, and the footer.
+    assert_painted(&harness, "RECENT PROJECTS");
+    assert_painted(&harness, "alpha");
+    assert_painted(&harness, "Show all projects");
+
+    // Getting-started card: header + at least one hint body.
+    assert_painted(&harness, "GETTING STARTED");
+    assert_painted(&harness, "Browse history in the Git Log tool window.");
+
+    // Token fills the harness can observe at the painted seam: the CONTENT_BG
+    // cards (clone panel / quick actions / recents) and the SURFACE
+    // getting-started card both paint their frame. The SELECTION branch chip is
+    // pinned separately by recent_branch_chip_paints_the_selection_fill.
+    use turbogit_ui::theme::Palette;
+    assert!(
+        paints_rect_with_fill(&harness, Palette::CONTENT_BG),
+        "a CONTENT_BG card frame must paint"
+    );
+    assert!(
+        paints_rect_with_fill(&harness, Palette::SURFACE),
+        "the getting-started SURFACE card must paint"
+    );
 }
