@@ -698,6 +698,53 @@ fn welcome_quick_actions_share_one_row() {
     );
 }
 
+/// The getting-started card is one column of the shared 3-up card grid: its
+/// width and left/right edges must line up with the third quick-action card
+/// ("Attach Workspace Root"), and the recents↔getting gap stays one gutter.
+#[test]
+fn welcome_getting_started_aligns_under_the_attach_card() {
+    let mut fx = bare_fixture();
+    settle(&mut fx.harness);
+
+    let attach = fx.harness.get_by_label("Attach Workspace Root").rect();
+
+    // The getting-started card is the only narrow SURFACE-filled rect (the shell
+    // top/status bars are full-width SURFACE bands).
+    let getting = fx
+        .harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            Shape::Rect(r)
+                if r.fill == turbogit_ui::theme::Palette::SURFACE && r.rect.width() < 600.0 =>
+            {
+                Some(r.rect)
+            }
+            _ => None,
+        })
+        .next()
+        .expect("the getting-started card must paint a SURFACE frame");
+
+    let (aw, gw) = (attach.width(), getting.width());
+    assert!(
+        (aw - gw).abs() <= 3.0,
+        "getting-started width {gw} should match the attach card width {aw}"
+    );
+    assert!(
+        (attach.min.x - getting.min.x).abs() <= 3.0,
+        "getting-started left {} must align under attach left {}",
+        getting.min.x,
+        attach.min.x
+    );
+    assert!(
+        (attach.max.x - getting.max.x).abs() <= 3.0,
+        "getting-started right {} must align under attach right {}",
+        getting.max.x,
+        attach.max.x
+    );
+}
+
 // ----------------------------------- issue: shared typography roles (T2) ----
 
 /// Paint-time font sizes (points) of every galley carrying exactly `text`.

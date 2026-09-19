@@ -30,8 +30,6 @@ use super::widgets;
 const CONTENT_WIDTH: f32 = 980.0;
 /// Hero brand-tile edge (spec §5.1: a 64px rounded tile).
 const HERO_TILE: f32 = 64.0;
-/// Right column (getting-started card) width in the `lower` band.
-const GETTING_STARTED_W: f32 = 340.0;
 /// Uniform horizontal gutter: the gap between the three quick-action cards and
 /// between the two `lower` columns, matching the 20px vertical section rhythm.
 const GUTTER: f32 = 20.0;
@@ -170,12 +168,13 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
 // --- Lower band: recents + getting started -----------------------------------
 
 fn lower(ui: &mut Ui, state: &mut AppState) {
-    // Two columns (spec §5.6): recents fills the left, getting-started a fixed
-    // width on the right. `item_spacing.x` is pinned to 0 so `add_space(GUTTER)`
-    // is the exact gap — otherwise egui's auto spacing around the explicit gap
-    // makes the pair wider than the content column and overhangs the right edge.
+    // Two columns on the shared card grid (spec §5.6): the getting-started card
+    // is exactly one card module (sitting directly under the third quick-action
+    // card), recents fills the remaining two modules, and the gap between them
+    // stays one `GUTTER`. `item_spacing.x` is pinned to 0 so `add_space(GUTTER)`
+    // is exact — otherwise egui's auto spacing overhangs the content column.
     let avail = ui.available_width();
-    let getting_w = GETTING_STARTED_W.min((avail - GUTTER) * 0.5);
+    let getting_w = card_module(avail).min((avail - GUTTER) * 0.5);
     let recents_w = (avail - GUTTER) - getting_w;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -206,13 +205,19 @@ enum CardAction {
     AttachWorkspace,
 }
 
+/// One column of the shared 3-up card grid: the content width split into three
+/// equal modules with `GUTTER` gaps. `lower` reuses this so the getting-started
+/// card is exactly one module wide — aligned under the third quick-action card.
+fn card_module(width: f32) -> f32 {
+    (width - 2.0 * GUTTER) / 3.0
+}
+
 fn quick_actions(ui: &mut Ui, state: &mut AppState) {
     // Exactly three equal-width cards in one row (spec §5.3). `item_spacing.x`
     // is pinned to 0 so `add_space(GUTTER)` is the exact gap and the three cards
     // span precisely the content column — their right edge lines up with the
     // hero and clone panel instead of overhanging it.
-    let width = ui.available_width();
-    let card_w = (width - 2.0 * GUTTER) / 3.0;
+    let card_w = card_module(ui.available_width());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         action_card_title(ui, state, CardAction::OpenProject, card_w);
