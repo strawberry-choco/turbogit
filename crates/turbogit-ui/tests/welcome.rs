@@ -244,10 +244,14 @@ fn welcome_paints_hero_and_three_action_cards() {
     assert_painted(&fx.harness, "A fast, keyboard-friendly Git client");
     // The hero carries the "What's new" trigger.
     assert_painted(&fx.harness, "What's new");
-    // Three action cards (spec §8.1).
-    assert_painted(&fx.harness, "Clone from URL");
+    // Exactly three quick-action cards — the old "Clone from URL" card is gone,
+    // its door merged into the clone panel below.
+    assert_not_painted(&fx.harness, "Clone from URL");
     assert_painted(&fx.harness, "Open Project");
     assert_painted(&fx.harness, "Initialize Repository");
+    assert_painted(&fx.harness, "Attach Workspace Root");
+    // The single merged clone panel is titled "Clone a repository".
+    assert_painted(&fx.harness, "Clone a repository");
     // Recents column exists even when empty.
     assert_painted(&fx.harness, "RECENT PROJECTS");
     assert_painted(&fx.harness, "No recent projects yet.");
@@ -289,6 +293,8 @@ fn clone_box_offers_url_input_and_clone_action() {
     let mut fx = bare_fixture();
     settle(&mut fx.harness);
 
+    // The merged clone panel: titled header + one door, not a card + a box.
+    assert_painted(&fx.harness, "Clone a repository");
     assert_painted(&fx.harness, "Repository URL");
     assert_painted(&fx.harness, "Clone");
     assert_painted(&fx.harness, "Shallow clone");

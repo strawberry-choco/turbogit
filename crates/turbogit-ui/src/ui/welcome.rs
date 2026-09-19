@@ -32,27 +32,12 @@ const HERO_TILE: f32 = 64.0;
 const RECENTS_WIDTH: f32 = 260.0;
 const COLUMN_GAP: f32 = 16.0;
 const CARD_GAP: f32 = 12.0;
-const CARD_HEIGHT: f32 = 120.0;
-const CARD_PADDING: f32 = 18.0;
-/// Compact strip height for the Attach card in the narrow layout.
-const CARD_HEIGHT_COMPACT: f32 = 64.0;
-/// Left-column width at which the four cards switch to the 2×2 grid
-/// (narrower columns keep one row so the clone form stays high).
-const CARD_GRID_MIN_W: f32 = 560.0;
+/// Quick-action card icon tile edge (spec §5.3: a 30px `SURFACE_3` tile).
+const ICON_TILE: f32 = 30.0;
 /// A recent-project row: name, path and last-opened on three lines, so the row
 /// is three text lines plus leading rather than a step on the 24/26 px single-line
 /// ramp — which is why it stays here rather than joining `theme`'s row heights.
 const RECENT_ROW_HEIGHT: f32 = 64.0;
-/// Corner radius of the four action cards.
-///
-/// **Open D3 question, not a token to copy.** These are cards, and
-/// [`crate::theme::CARD_RADIUS`] is the radius the rest of the app gives a card
-/// — but that is 8 and welcome has always painted 6, one step below, equal to
-/// `MENU_RADIUS`'s value without being a menu. Rounding the cards up to the card
-/// role is a visible change to the launch screen, so it is left as-is and flagged
-/// in the conformance issue rather than silently repainted. Adding a
-/// `WELCOME_CARD_RADIUS` would only grow the alias pile for one screen.
-const RADIUS_MD: u8 = 6;
 
 /// Paint alpha of the hero's soft `BRAND` gradient overlay (spec §5.1). A mix
 /// fraction, not a design token — egui has no linear-gradient fill, so the halo
@@ -173,13 +158,6 @@ fn columns(ui: &mut Ui, state: &mut AppState) {
             action_cards(ui, state, left_w);
             ui.add_space(20.0);
             clone_box(ui, state);
-            // Narrow layout: the fourth card renders below the clone form
-            // so the clone input keeps its height and the recents column
-            // stays reachable at small window sizes (r4_polish).
-            if left_w < CARD_GRID_MIN_W {
-                ui.add_space(12.0);
-                attach_compact_card(ui, state, left_w);
-            }
         });
         ui.add_space(COLUMN_GAP);
         ui.vertical(|ui| {
@@ -194,8 +172,6 @@ fn columns(ui: &mut Ui, state: &mut AppState) {
 
 #[derive(Clone, Copy)]
 enum CardAction {
-    /// Focus the inline clone URL input.
-    FocusClone,
     /// Pick a folder and open it as a project (end-to-end).
     OpenProject,
     /// Pick a folder, `git init` it, and enter it (end-to-end).
@@ -206,111 +182,26 @@ enum CardAction {
 }
 
 fn action_cards(ui: &mut Ui, state: &mut AppState, left_w: f32) {
-    // Wide column: a 2×2 grid of the four cards (issue #34) so the fourth
-    // "Attach workspace root" entry sits alongside the original three.
-    if left_w >= CARD_GRID_MIN_W {
-        let card_w = (left_w - CARD_GAP) / 2.0;
-        let mut row = |ui: &mut Ui, first: CardAction, second: CardAction| {
-            ui.horizontal(|ui| {
-                action_card_title(ui, state, first, card_w);
-                ui.add_space(CARD_GAP);
-                action_card_title(ui, state, second, card_w);
-            });
-            ui.add_space(CARD_GAP);
-        };
-        row(ui, CardAction::FocusClone, CardAction::OpenProject);
-        row(ui, CardAction::InitRepo, CardAction::AttachWorkspace);
-        return;
-    }
-    // Narrow column: the original three cards stay in one row and the
-    // fourth renders as a compact full-width strip BELOW the clone form
-    // (see `columns`), so the clone input keeps its height and the recents
-    // column stays reachable at small window sizes (r4_polish).
+    // Exactly three equal-width cards in one row (spec §5.3): Open / Initialize
+    // / Attach. The old fourth "Clone from URL" card is gone — its door merged
+    // into the clone panel below, so there is no 2×2 grid and no compact strip.
     let card_w = (left_w - 2.0 * CARD_GAP) / 3.0;
     ui.horizontal(|ui| {
-        action_card_title(ui, state, CardAction::FocusClone, card_w);
-        ui.add_space(CARD_GAP);
         action_card_title(ui, state, CardAction::OpenProject, card_w);
         ui.add_space(CARD_GAP);
         action_card_title(ui, state, CardAction::InitRepo, card_w);
+        ui.add_space(CARD_GAP);
+        action_card_title(ui, state, CardAction::AttachWorkspace, card_w);
     });
 }
 
-/// Full-width compact card for the Attach action, used only when the narrow
-/// layout has already placed the three original cards in one row above the
-/// clone form (see [`action_cards`] / [`columns`]).
-fn attach_compact_card(ui: &mut Ui, state: &mut AppState, width: f32) {
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(width, CARD_HEIGHT_COMPACT), Sense::click());
-    let hovered = response.hovered();
-    let painter = ui.painter().clone();
-    let radius = CornerRadius::same(RADIUS_MD);
-    painter.rect_filled(
-        rect,
-        radius,
-        if hovered {
-            Palette::SURFACE_2
-        } else {
-            Palette::SURFACE
-        },
-    );
-    painter.rect_stroke(
-        rect,
-        radius,
-        Stroke::new(
-            1.0,
-            if hovered {
-                Palette::BRAND
-            } else {
-                Palette::LINE
-            },
-        ),
-        StrokeKind::Outside,
-    );
-    let pad = CARD_PADDING;
-    paint_icon_at(
-        ui,
-        Icon::FOLDER,
-        Pos2::new(rect.left() + pad, rect.top() + pad),
-        22.0,
-        Palette::BRAND,
-    );
-    let title_galley = painter.layout_no_wrap(
-        "Attach Workspace Root".to_owned(),
-        crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE),
-        Palette::INK,
-    );
-    let body_galley = painter.layout(
-        "Scan a folder tree and index every repository in it as a workspace.".to_owned(),
-        crate::theme::chrome_font(crate::theme::TYPE_BODY),
-        Palette::INK_3,
-        width - 2.0 * pad - 22.0 - 10.0,
-    );
-    let x = rect.left() + pad + 22.0 + 10.0;
-    let title_y = rect.top() + pad - 12.0;
-    painter.galley(Pos2::new(x, title_y), title_galley, Palette::INK);
-    painter.galley(Pos2::new(x, title_y + 17.0), body_galley, Palette::INK_3);
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Attach Workspace Root"));
-    widgets::focus_ring(ui, &response);
-    if response.clicked()
-        && let Some(dir) = pick_dir(state, "Attach Workspace Root")
-    {
-        state.attach_workspace(&dir);
-    }
-}
-
-/// Dispatch-layer wrapper: yields the card's title so the shared painter can
-/// stay single-purpose.
+/// Dispatch-layer wrapper: yields the card's copy so the shared painter can
+/// stay single-purpose. Descriptions are the spec-Q3 tightened wording.
 fn action_card_title(ui: &mut Ui, state: &mut AppState, action: CardAction, width: f32) {
     let (title, body, icon) = match action {
-        CardAction::FocusClone => (
-            "Clone from URL",
-            "Fetch an existing repository from a remote provider.",
-            Icon::BOOK_OPEN,
-        ),
         CardAction::OpenProject => (
             "Open Project",
-            "Browse for a folder and open it as a TurboGit project.",
+            "Open a folder as a TurboGit project.",
             Icon::FOLDER_OPEN,
         ),
         CardAction::InitRepo => (
@@ -320,16 +211,18 @@ fn action_card_title(ui: &mut Ui, state: &mut AppState, action: CardAction, widt
         ),
         CardAction::AttachWorkspace => (
             "Attach Workspace Root",
-            "Scan a folder tree and index every repository in it as a workspace.",
+            "Index every repo in a folder tree.",
             Icon::FOLDER,
         ),
     };
     action_card(ui, state, icon, title, body, width, action);
 }
 
-/// One action card (spec §8.1): SURFACE bg, LINE border, radius-md, 18px
-/// padding, icon 22px BRAND, title 13px, body 12px INK_3. Hover: SURFACE_2
-/// bg + BRAND border.
+/// One quick-action card (spec §5.3): a `CONTENT_BG` fill, `LINE` border and
+/// `CARD_RADIUS`, content-hugging — its height derives from its own galleys
+/// rather than a fixed box. A 30px `SURFACE_3` tile (`CONTROL_RADIUS`) carries a
+/// 15px `ACCENT_TEXT` icon; title `TYPE_DETAIL_TITLE` `INK`, description
+/// `TYPE_BODY` `INK_2`. Hover brightens the fill and border.
 fn action_card(
     ui: &mut Ui,
     state: &mut AppState,
@@ -339,17 +232,32 @@ fn action_card(
     width: f32,
     action: CardAction,
 ) {
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, CARD_HEIGHT), Sense::click());
-    let hovered = response.hovered();
+    let pad = 16.0;
+    let gap = 8.0;
+    let icon_size = 15.0;
     let painter = ui.painter().clone();
-    let radius = CornerRadius::same(RADIUS_MD);
+    let title_galley = painter.layout_no_wrap(
+        title.to_owned(),
+        crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE),
+        Palette::INK,
+    );
+    let body_galley = painter.layout(
+        body.to_owned(),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
+        Palette::INK_2,
+        (width - 2.0 * pad).max(40.0),
+    );
+    let height = 2.0 * pad + ICON_TILE + gap + title_galley.size().y + gap + body_galley.size().y;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    let hovered = response.hovered();
+    let radius = CornerRadius::same(crate::theme::CARD_RADIUS);
     painter.rect_filled(
         rect,
         radius,
         if hovered {
             Palette::SURFACE_2
         } else {
-            Palette::SURFACE
+            Palette::CONTENT_BG
         },
     );
     painter.rect_stroke(
@@ -366,33 +274,34 @@ fn action_card(
         StrokeKind::Outside,
     );
 
-    let pad = CARD_PADDING;
+    let tile = Rect::from_min_size(
+        Pos2::new(rect.left() + pad, rect.top() + pad),
+        Vec2::splat(ICON_TILE),
+    );
+    painter.rect_filled(
+        tile,
+        CornerRadius::same(crate::theme::CONTROL_RADIUS),
+        Palette::SURFACE_3,
+    );
     paint_icon_at(
         ui,
         icon,
-        Pos2::new(rect.left() + pad, rect.top() + pad),
-        22.0,
-        Palette::BRAND,
+        Pos2::new(
+            tile.center().x - icon_size / 2.0,
+            tile.center().y - icon_size / 2.0,
+        ),
+        icon_size,
+        Palette::ACCENT_TEXT,
     );
 
-    let title_galley = painter.layout_no_wrap(
-        title.to_owned(),
-        crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE),
-        Palette::INK,
-    );
-    let body_galley = painter.layout(
-        body.to_owned(),
-        crate::theme::chrome_font(crate::theme::TYPE_BODY),
-        Palette::INK_3,
-        width - 2.0 * pad,
-    );
     let x = rect.left() + pad;
-    let title_y = rect.top() + pad + 22.0 + 10.0;
+    let title_y = tile.bottom() + gap;
+    let title_h = title_galley.size().y;
     painter.galley(Pos2::new(x, title_y), title_galley, Palette::INK);
     painter.galley(
-        Pos2::new(x, title_y + 19.0 + 6.0),
+        Pos2::new(x, title_y + title_h + gap),
         body_galley,
-        Palette::INK_3,
+        Palette::INK_2,
     );
 
     // Accessibility / headless-test queryability.
@@ -402,7 +311,6 @@ fn action_card(
         return;
     }
     match action {
-        CardAction::FocusClone => state.ui.welcome_focus_clone = true,
         CardAction::OpenProject => {
             if let Some(dir) = pick_dir(state, "Open Project") {
                 state.open_project(&dir);
@@ -445,21 +353,75 @@ pub fn pick_dir_public(state: &mut AppState, purpose: &str) -> Option<std::path:
 
 // --- Clone box ----------------------------------------------------------------------
 
-/// Inline clone form below the cards (spec §8.1): URL input + Clone primary
-/// button + shallow checkbox row.
+/// The one clone door (spec §5.2): a full-width `CONTENT_BG` card merging the
+/// old "Clone from URL" card and the inline clone box. A header row carries the
+/// `DOWNLOAD` accent icon + "Clone a repository" with the shallow checkbox
+/// right-aligned; the body row is the URL input (filling) plus a primary Clone
+/// button. Input and checkbox keep their exact kittest labels ("Repository URL",
+/// "Shallow clone (--depth 1)"), so the clone flow's headless coverage is
+/// untouched.
 fn clone_box(ui: &mut Ui, state: &mut AppState) {
-    widgets::group_title(ui, "Clone Repository");
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        let response = widgets::text_input(ui, "Repository URL", &mut state.ui.welcome_clone_url);
-        if std::mem::take(&mut state.ui.welcome_focus_clone) {
-            response.request_focus();
-        }
-        if widgets::primary_button(ui, Some(Icon::DOWNLOAD), "Clone").clicked() {
-            clone_from_url(state);
-        }
-    });
-    ui.checkbox(&mut state.ui.welcome_shallow, "Shallow clone (--depth 1)");
+    Frame::new()
+        .fill(Palette::CONTENT_BG)
+        .stroke(Stroke::new(1.0, Palette::LINE))
+        .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
+        .inner_margin(Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                icons::icon(ui, Icon::DOWNLOAD, 16.0, Palette::ACCENT_TEXT);
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Clone a repository")
+                        .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
+                        .color(Palette::INK),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.checkbox(
+                        &mut state.ui.welcome_shallow,
+                        RichText::new("Shallow clone (--depth 1)")
+                            .size(crate::theme::TYPE_CONTROL)
+                            .color(Palette::INK_2),
+                    );
+                });
+            });
+            ui.add_space(10.0);
+
+            // Body: URL input fills the row; the Clone button is pinned right.
+            // Reserve the button's width first so `text_input` doesn't swallow
+            // the whole line (spec §5.2: input + button on one row).
+            let label_w = ui
+                .painter()
+                .layout_no_wrap(
+                    "Clone".to_owned(),
+                    crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
+                    Color32::WHITE,
+                )
+                .size()
+                .x;
+            let btn_w = 2.0 * ui.spacing().button_padding.x + (16.0 + 6.0) + label_w;
+            let input_w = (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(120.0);
+            let mut input_ui = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(Rect::from_min_size(
+                        ui.cursor().min,
+                        Vec2::new(input_w, 32.0),
+                    ))
+                    .layout(*ui.layout()),
+            );
+            let response = widgets::text_input(
+                &mut input_ui,
+                "Repository URL",
+                &mut state.ui.welcome_clone_url,
+            );
+            ui.advance_cursor_after_rect(input_ui.min_rect());
+            if std::mem::take(&mut state.ui.welcome_focus_clone) {
+                response.request_focus();
+            }
+            if widgets::primary_button(ui, Some(Icon::DOWNLOAD), "Clone").clicked() {
+                clone_from_url(state);
+            }
+        });
 }
 
 /// Clone the entered URL into a picked parent folder and enter the result.
