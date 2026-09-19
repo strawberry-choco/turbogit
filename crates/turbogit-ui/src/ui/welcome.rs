@@ -738,7 +738,7 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
             Frame::new()
                 .fill(Palette::SURFACE)
                 .stroke(Stroke::new(1.0, Palette::LINE))
-                .corner_radius(8)
+                .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
                 .inner_margin(Margin::same(20))
                 .show(ui, |ui| {
                     ui.set_min_width(420.0);
