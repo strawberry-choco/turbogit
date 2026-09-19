@@ -804,6 +804,41 @@ pub fn dialog_footer<R>(ui: &mut Ui, buttons: impl FnOnce(&mut Ui) -> R) -> Inne
 
 // --- Section chrome ----------------------------------------------------------
 
+/// Bordered card surface (Local Changes redesign): the containment the
+/// mockup gives every region, so neighbouring controls read as one group
+/// instead of as a flat stack of headings and separators.
+///
+/// The fill is [`Palette::CONTENT_BG`], deliberately *not* `BG` — the panel
+/// behind a card is `BG`, so a `BG` card would be invisible (risk R2). The
+/// body lays out inside the frame's margin and is stretched to the caller's
+/// full available width, so a card spans its pane rather than hugging its
+/// content. The returned rect is the card's outer edge, which is what a
+/// caller capping a scroll area against its own container needs (risk R1).
+pub fn card<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
+    Frame::new()
+        .fill(Palette::CONTENT_BG)
+        .stroke(Stroke::new(1.0, Palette::LINE))
+        .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
+        .inner_margin(Margin::same(crate::theme::PANEL_PADDING as i8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add_contents(ui)
+        })
+}
+
+/// Header strip inside a [`card`]: the caller's own header rows, ruled off
+/// from the body below by a hairline. Shared so every carded region gets
+/// identical containment while each states what it holds.
+///
+/// The row layout is the caller's, not this function's, because a header is
+/// not always one line — the changes card puts its title and icon cluster on
+/// one row and its filter on the next, since the commit panel is too narrow to
+/// hold both on a single line.
+pub fn card_header(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
+    contents(ui);
+    ui.separator();
+}
+
 /// Tool-window header (28px): 11px uppercase muted title left, right-aligned
 /// actions slot (§7.1, §3.3).
 pub fn toolwindow_header<R>(

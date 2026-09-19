@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_text,
+    stroked_rects,
 };
 use turbogit_app::state::{AppState, CommitSubTab, Dialog};
 use turbogit_ui::theme::Palette;
@@ -1343,6 +1344,274 @@ fn short_file_names_keep_the_single_line_row_height() {
         turbogit_ui::theme::FILE_ROW_HEIGHT,
         "a single-line row keeps the 24 px file-row height"
     );
+}
+
+// -------------------------------- local changes redesign: card containment --
+
+/// The mockup's card surface, as hexes from the design export — deliberately
+/// literals rather than `Palette` references, so the assertion cannot be
+/// satisfied by re-aliasing a token onto something else.
+const CARD_FILL: egui::Color32 = egui::Color32::from_rgb(0x23, 0x25, 0x29);
+const CARD_LINE: egui::Color32 = egui::Color32::from_rgb(0x4e, 0x51, 0x57);
+
+/// The bordered card containing `point`, identified by the signature the
+/// mockup gives every card: the same rect painted once as a `#232529` content
+/// fill and once as a 1px `#4E5157` stroke.
+#[track_caller]
+fn card_rect(h: &Harness<'_, AppState>, point: egui::Pos2) -> egui::Rect {
+    let stroked = stroked_rects(h);
+    filled_rects(h)
+        .into_iter()
+        .filter(|(rect, fill)| *fill == CARD_FILL && rect.contains(point))
+        .find(|(rect, _)| {
+            stroked.iter().any(|(sr, sc, sw)| {
+                *sc == CARD_LINE
+                    && *sw == 1.0
+                    && (sr.min - rect.min).length() < 0.5
+                    && (sr.max - rect.max).length() < 0.5
+            })
+        })
+        .unwrap_or_else(|| {
+            panic!("no card (a {CARD_FILL:?} fill stroked 1px {CARD_LINE:?}) contains {point:?}")
+        })
+        .0
+}
+
+#[test]
+fn commit_message_controls_sit_inside_one_bordered_card() {
+    // Redesign Phase 1/2: the flat `ui.heading` + `ui.separator` regions get
+    // real containment, so "Commit commits the message above it" is readable
+    // from the frame rather than inferred. The message label and the Amend
+    // option are the region's top and bottom; one card must hold both.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "card-msg-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    let message = galley_origin(&h, "Commit message:").expect("the message label paints");
+    let amend = galley_origin(&h, "Amend").expect("the Amend option paints");
+    let card = card_rect(&h, message);
+    assert!(
+        card.contains(amend),
+        "the message label and Amend must sit in the same card, card is {card:?}"
+    );
+}
+
+#[test]
+fn commit_action_row_is_the_commit_card_s_pinned_footer() {
+    // Redesign Phase 2 (mockup): the message editor, its meta row and the
+    // action bar share ONE card, so "Commit commits the message above it" is
+    // readable from containment rather than from adjacency. The action row is
+    // the card's footer — inside the border, below the message controls.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "card-footer-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("base.txt").click();
+    h.state_mut().ui.commit_message = "footer subject".into();
+    h.run();
+
+    let message = galley_origin(&h, "Commit message:").expect("the message label paints");
+    let card = card_rect(&h, message);
+    let commit = commit_action_button(&h);
+    assert!(
+        card.contains_rect(commit.rect()),
+        "the primary Commit action must sit inside the commit card {card:?}, \
+         got {:?}",
+        commit.rect()
+    );
+    let stash = h.get_by_label("Stash…");
+    assert!(
+        card.contains_rect(stash.rect()),
+        "the whole action row is the footer, so `Stash…` is inside the card too, \
+         got {:?}",
+        stash.rect()
+    );
+    assert!(
+        commit.rect().top() > message.y,
+        "the action row sits below the message controls (message y={}, row top={})",
+        message.y,
+        commit.rect().top()
+    );
+}
+
+#[test]
+fn changes_tree_sits_in_a_card_with_its_toolbar_as_the_header() {
+    // Redesign Phase 3 (mockup): the file list gets its own bordered card,
+    // and the toolbar stops being a loose row over the panel — its title and
+    // icon cluster become the card's header strip, so the icons read as
+    // "act on this list" rather than as commit-box chrome.
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "card-changes-a");
+    let b = temp_repo(parent.path(), "card-changes-b");
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+
+    let h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+
+    let title = galley_origin(&h, "Changes (2)").expect("the header title paints");
+    let card = card_rect(&h, title);
+
+    // The tree's rows are inside the same card as its header. Only the
+    // focused repo's rows show ("focus = expand").
+    let row = galley_origin(&h, "a.txt").expect("the focused repo's file row paints");
+    assert!(
+        card.contains(row),
+        "the changes tree must sit inside the card {card:?} headed at {title:?}"
+    );
+
+    // Every toolbar control is in the card, in the header strip above the rows.
+    for label in [
+        "Expand all groups",
+        "Group by",
+        "Rollback",
+        "Refresh changes",
+        "Commit options",
+    ] {
+        let rect = h.get_by_label(label).rect();
+        assert!(
+            card.contains_rect(rect),
+            "`{label}` must sit inside the changes card {card:?}, got {rect:?}"
+        );
+        assert!(
+            rect.bottom() <= row.y,
+            "`{label}` belongs to the header strip, above the first row \
+             (row y={}, control bottom={})",
+            row.y,
+            rect.bottom()
+        );
+    }
+}
+
+#[test]
+fn file_filter_sits_in_the_changes_card_header() {
+    // ADR-0016 (mockup wins over the execution plan here): `Filter files`
+    // belongs to the list it filters, so it is part of the changes card's
+    // header rather than a full-width row floating above both zones. The
+    // 340px panel cannot hold title + five icon buttons + a usable filter on
+    // one line, so the filter takes the header's second row.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "card-filter-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    let title = galley_origin(&h, "Changes (1)").expect("the header title paints");
+    let card = card_rect(&h, title);
+    let row = h.get_by_label("base.txt").rect();
+
+    let filter = h.get_by_label("Filter files").rect();
+    assert!(
+        card.contains_rect(filter),
+        "the file filter must sit inside the changes card {card:?}, got {filter:?}"
+    );
+    assert!(
+        filter.top() > title.y && filter.bottom() <= row.top() + 1.0,
+        "the filter must stay in the header block — below the title row and \
+         above the list it filters (title y={}, filter {filter:?}, row {row:?})",
+        title.y
+    );
+    // The commit panel is only COMMIT_PANEL_WIDTH wide; the filter must not be
+    // squeezed past the point of showing its own hint.
+    assert!(
+        filter.width() >= 96.0,
+        "`Filter files` must stay wide enough to be usable, got {:.1}px ({filter:?})",
+        filter.width()
+    );
+}
+
+#[test]
+fn preview_is_a_card_headered_by_the_path_status_and_diff_mode() {
+    // Redesign Phase 4 (mockup): the flat "Preview" heading becomes a
+    // full-height card whose header states what is being previewed and in
+    // which mode — the selection→preview link the empty state used to hide.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "card-preview-repo");
+    std::fs::write(repo.path.join("base.txt"), "a\nb\nc\n").unwrap();
+    git(&repo.path, &["add", "base.txt"]);
+    git(&repo.path, &["commit", "-q", "-m", "three lines"]);
+    std::fs::write(repo.path.join("base.txt"), "a\nx\ny\nc\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("base.txt").click();
+    h.run();
+
+    let heading = galley_origin(&h, "Preview").expect("the preview zone keeps its heading");
+    let card = card_rect(&h, heading);
+    let heading_band = heading.y + 8.0;
+
+    let path = h.get_by_label("Previewing base.txt").rect();
+    assert!(
+        card.contains_rect(path),
+        "the previewed path must sit inside the preview card {card:?}, got {path:?}"
+    );
+
+    for label in ["Modified", "Unified diff", "Previous change", "Next change"] {
+        let rect = h.get_by_label(label).rect();
+        assert!(
+            card.contains_rect(rect),
+            "`{label}` must sit inside the preview card {card:?}, got {rect:?}"
+        );
+        assert!(
+            (rect.center().y - heading_band).abs() < 12.0,
+            "`{label}` belongs to the header strip beside the heading \
+             (band y={heading_band}, control centre {})",
+            rect.center().y
+        );
+    }
+}
+
+#[test]
+fn expanded_repo_group_paints_one_indent_guide_over_its_file_block() {
+    // Redesign Phase 5: file rows hang off their repo group but nothing
+    // connected them. One 1px `LINE_SUBTLE` guide now spans exactly the
+    // expanded block — and per risk R3 it sits in the gutter between the
+    // row checkbox and the status letter, never over either.
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "guide-repo");
+    // Both tracked then edited, so both land in the focused repo group's one
+    // row block — an untracked file would sit in the Unversioned group instead.
+    seed_tracked(&repo.path, "base.txt");
+    seed_tracked(&repo.path, "other.txt");
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    let first = h.get_by_label("base.txt").rect();
+    let last = h.get_by_label("other.txt").rect();
+    let block_top = first.top().min(last.top());
+    let block_bottom = first.bottom().max(last.bottom());
+
+    let guides: Vec<egui::Rect> = filled_rects(&h)
+        .into_iter()
+        // The guide is a 1px-wide LINE_SUBTLE sliver; no other hairline fill in
+        // the tree carries that token.
+        .filter(|(_, c)| *c == Palette::LINE_SUBTLE)
+        .map(|(r, _)| r)
+        .filter(|r| r.width() <= 2.0 && r.height() >= turbogit_ui::theme::FILE_ROW_HEIGHT)
+        .collect();
+    let guide = guides
+        .iter()
+        .find(|r| r.top() <= block_top + 1.0 && r.bottom() >= block_bottom - 1.0)
+        .unwrap_or_else(|| {
+            panic!(
+                "no vertical LINE_SUBTLE guide spans the file block \
+                 y={block_top}..{block_bottom}; guides: {guides:?}"
+            )
+        });
+
+    // Clear of the checkbox column, and not so far right it cuts the name.
+    for name in ["base.txt", "other.txt"] {
+        let checkbox = h.get_by_label(&format!("Select {name}")).rect();
+        assert!(
+            guide.center().x >= checkbox.right() && guide.center().x <= checkbox.right() + 8.0,
+            "the guide must sit in the gutter after `{name}`'s checkbox \
+             (checkbox right {}, guide x {})",
+            checkbox.right(),
+            guide.center().x
+        );
+    }
 }
 
 // ------------------------------ issue: severity vocabulary (C2) -------------

@@ -302,6 +302,10 @@ pub const PILL_RADIUS: u8 = 9;
 pub const WINDOW_RADIUS: u8 = 8;
 /// Menu corner radius (6 px).
 pub const MENU_RADIUS: u8 = 6;
+/// Card corner radius (8 px) — the bordered content regions of the Local
+/// Changes redesign, one step above the 4 px control radius so a card reads
+/// as a container rather than as a large control.
+pub const CARD_RADIUS: u8 = 8;
 
 /// Accent (selection / primary action) color — the brand token.
 pub fn accent() -> Color32 {
