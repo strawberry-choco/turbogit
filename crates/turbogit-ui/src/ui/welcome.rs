@@ -473,33 +473,56 @@ fn clone_from_url(state: &mut AppState) {
 
 // --- Recent projects column ------------------------------------------------------------
 
-/// Recent projects (spec §8.1 right column): group title + count badge, then
-/// one clickable row per entry with name, path, last-opened meta, and a live
-/// branch indicator. Clicking a row reopens that project.
+/// Recent projects as a real card (spec §5.4): a `CONTENT_BG` frame holding the
+/// "RECENT PROJECTS" group title + a right-aligned count badge, one clickable
+/// row per entry, and a "Show all projects" footer. `recent_row`'s internals are
+/// unchanged apart from the branch chip fill. Clicking a row reopens that project.
 fn recents_column(ui: &mut Ui, state: &mut AppState) {
-    ui.horizontal(|ui| {
-        widgets::group_title(ui, "Recent Projects");
-        ui.add_space(4.0);
-        let count = state.ui.recent_projects.len();
-        if count > 0 {
-            widgets::badge(ui, &count.to_string(), widgets::BadgeKind::Neutral);
-        }
-    });
-    ui.add_space(4.0);
+    Frame::new()
+        .fill(Palette::CONTENT_BG)
+        .stroke(Stroke::new(1.0, Palette::LINE))
+        .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
+        .inner_margin(Margin::same(16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
 
-    let recents = state.ui.recent_projects.clone();
-    if recents.is_empty() {
-        ui.label(
-            RichText::new("No recent projects yet.")
-                .size(crate::theme::TYPE_BODY)
-                .color(Palette::INK_3),
-        );
-        return;
-    }
-    for r in &recents {
-        recent_row(ui, state, r);
-        ui.add_space(4.0);
-    }
+            let count = state.ui.recent_projects.len();
+            ui.horizontal(|ui| {
+                widgets::group_title(ui, "Recent Projects");
+                if count > 0 {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        widgets::badge(ui, &count.to_string(), widgets::BadgeKind::Neutral);
+                    });
+                }
+            });
+            ui.add_space(4.0);
+
+            let recents = state.ui.recent_projects.clone();
+            if recents.is_empty() {
+                ui.label(
+                    RichText::new("No recent projects yet.")
+                        .size(crate::theme::TYPE_BODY)
+                        .color(Palette::INK_3),
+                );
+                return;
+            }
+            for r in &recents {
+                recent_row(ui, state, r);
+                ui.add_space(4.0);
+            }
+
+            // Footer: a visually-honest v1 no-op — there is no recents browser
+            // to route to yet (recorded as a follow-up in plan §4).
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Show all projects")
+                        .size(crate::theme::TYPE_CONTROL)
+                        .color(Palette::ACCENT_TEXT),
+                );
+                icons::icon(ui, Icon::CHEVRON_RIGHT, 14.0, Palette::ACCENT_TEXT);
+            });
+        });
 }
 
 fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents::RecentProject) {
@@ -534,8 +557,10 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
 
     // Live branch indicator (ADR-0005): computed at render time, cached in
     // memory, never stored. Small text on the chip uses the readable accent
-    // ink (ACCENT_TEXT), not the action-fill BRAND — BRAND-on-SURFACE_3 only
-    // reaches 2.479:1 (C1 audit); ACCENT_TEXT clears 4.5:1 on the same chip.
+    // ink (ACCENT_TEXT), not the action-fill BRAND — BRAND-on-SELECTION only
+    // clears ~2.5:1, while ACCENT_TEXT reaches 4.5:1 on the SELECTION chip
+    // (see the design_tokens audit). The SELECTION fill is the deliberate
+    // brand-warm contrast change from spec §4.
     if let Some(branch) = cached_branch(state, &project.path) {
         let branch_galley = painter.layout_no_wrap(
             truncate(&branch, 18),
@@ -548,7 +573,7 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
             &painter,
             chip_rect,
             branch_galley,
-            Palette::SURFACE_3,
+            Palette::SELECTION,
             Palette::ACCENT_TEXT,
         );
     }
