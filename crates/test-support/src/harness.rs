@@ -179,6 +179,33 @@ pub fn filled_rects<S>(harness: &Harness<'_, S>) -> Vec<(Rect, Color32)> {
         .collect()
 }
 
+/// Every stroked rectangle painted by the last frame as `(rect, stroke, width)`.
+///
+/// [`filled_rects`] reports only shapes with a fill, so a surface defined by
+/// its outline — a card border, a divider box — is invisible to it. This is
+/// the sibling that sees the stroke itself. A bordered card is then asserted
+/// by its signature: one rect present in both lists at the same geometry.
+pub fn stroked_rects<S>(harness: &Harness<'_, S>) -> Vec<(Rect, Color32, f32)> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Rect(rect_shape)
+                if rect_shape.stroke.color != Color32::TRANSPARENT
+                    && rect_shape.stroke.width > 0.0 =>
+            {
+                Some((
+                    rect_shape.rect,
+                    rect_shape.stroke.color,
+                    rect_shape.stroke.width,
+                ))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Every filled circle painted by the last frame as `(center, radius, fill)`.
 ///
 /// Status dots are painted as circles rather than rects, so [`filled_rects`]
