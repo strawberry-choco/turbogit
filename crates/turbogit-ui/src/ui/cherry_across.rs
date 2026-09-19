@@ -63,7 +63,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
                 selected.len(),
                 candidates.len()
             ))
-            .font(FontId::new(11.0, FontFamily::Proportional))
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
             .color(Palette::INK_3),
         );
     });
@@ -210,7 +210,7 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
                 file.hunks,
                 if file.hunks == 1 { "" } else { "s" }
             ))
-            .font(FontId::new(11.0, FontFamily::Proportional)),
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL)),
         );
         if ui
             .add_enabled(idx + 1 < files.len(), egui::Button::new("›"))
@@ -221,7 +221,7 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(short(&focus))
-                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                     .color(Palette::INK_3),
             );
         });
@@ -246,7 +246,7 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
             ui.label(
                 egui::RichText::new(format!("{line} "))
                     .monospace()
-                    .font(FontId::new(11.0, FontFamily::Monospace))
+                    .font(crate::theme::data_font(crate::theme::TYPE_CONTROL))
                     .color(color),
             );
         }
@@ -265,7 +265,9 @@ fn targets_table(
     rows: &[(turbogit_domain::model::RootId, String, bool)],
     forecast: &Option<Vec<TargetForecast>>,
 ) {
-    const HEADER: FontId = FontId::new(11.0, FontFamily::Proportional);
+    // `chrome_font` is not a `const fn`, so the token goes in as the size
+    // argument rather than through the helper.
+    const HEADER: FontId = FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional);
     let header = |ui: &mut Ui, text: &str| {
         ui.label(egui::RichText::new(text).font(HEADER).color(Palette::INK_3));
     };
@@ -294,7 +296,7 @@ fn targets_table(
                         ui.label(egui::RichText::new(risk_text(t)).color(risk_color(t)));
                         ui.label(
                             egui::RichText::new(outcome_text(t))
-                                .font(FontId::new(11.0, FontFamily::Proportional))
+                                .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                                 .color(Palette::INK_2),
                         );
                     }

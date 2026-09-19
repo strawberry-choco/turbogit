@@ -18,6 +18,7 @@ use std::rc::Rc;
 use egui::{Color32, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use turbogit_ui::theme::Palette;
+use turbogit_ui::ui::components::{self, RowState};
 use turbogit_ui::ui::icons::Icon;
 use turbogit_ui::ui::widgets::{self, BadgeKind, ButtonVariant, RefKind, WidgetState};
 
@@ -190,11 +191,26 @@ fn compact_and_icon_variants_share_ghost_color_decisions() {
 
 #[test]
 fn tree_row_selection_logic_paints_brand_over_hover() {
-    // Selected wins over hover; unselected rows only fill on hover.
-    assert_eq!(widgets::row_fill(true, false), Palette::BRAND);
-    assert_eq!(widgets::row_fill(true, true), Palette::BRAND);
-    assert_eq!(widgets::row_fill(false, true), Palette::SURFACE_2);
-    assert_eq!(widgets::row_fill(false, false), Color32::TRANSPARENT);
+    // Selected wins over hover; unselected rows only fill on hover. These are
+    // the shared tree/list row fills, i.e. `RowState::from_flags`' mapping of
+    // a selected row onto the solid BRAND role rather than the §13
+    // `RowState::Selected` band — see `components::RowState`.
+    assert_eq!(
+        components::row_fill(RowState::from_flags(true, false)),
+        Palette::BRAND
+    );
+    assert_eq!(
+        components::row_fill(RowState::from_flags(true, true)),
+        Palette::BRAND
+    );
+    assert_eq!(
+        components::row_fill(RowState::from_flags(false, true)),
+        Palette::SURFACE_2
+    );
+    assert_eq!(
+        components::row_fill(RowState::from_flags(false, false)),
+        Color32::TRANSPARENT
+    );
 }
 
 /// Status badges from the screens-gap vocabulary (issue #01): direction-tagged
@@ -297,16 +313,12 @@ fn widgets_harness(
                 widgets::tree_row(ui, false, |ui| {
                     ui.label("unselected branch row");
                 });
-                widgets::selectable_row(ui, |ui| {
-                    ui.label("plain selectable row");
-                });
 
                 // Inputs.
                 widgets::search_input(ui, "Search commits", &mut search_buf);
                 widgets::text_input(ui, "Branch name", &mut name_buf);
 
                 // Dialog chrome.
-                widgets::dialog_header(ui, "Push Confirmation");
                 widgets::dialog_footer(ui, |ui| {
                     widgets::primary_button(ui, None, "Footer OK");
                 });
@@ -372,20 +384,22 @@ fn smoke_render_paints_the_widget_vocabulary_together() {
     assert_painted(&harness, "origin/main");
     assert_painted(&harness, "v1.0");
 
-    // Rows.
+    // Rows. `selectable_row` was deleted by conformance issue 18 (no caller,
+    // and no migration adopted it: it is `tree_row` with `selected = false`), so
+    // this gallery shows the selection pair only.
     assert_painted(&harness, "selected branch row");
     assert_painted(&harness, "unselected branch row");
-    assert_painted(&harness, "plain selectable row");
 
     // Inputs paint their placeholder hint when empty.
     assert_painted(&harness, "Search commits");
     assert_painted(&harness, "Branch name");
 
-    // Chrome: group titles and tool-window headers uppercase (§3.3);
-    // dialog header titles stay title-case.
+    // Chrome: group titles and tool-window headers uppercase (§3.3).
+    // The dialog header strip is gone (conformance issue 18 deleted
+    // `dialog_header`, which no dialog ever called — every one hand-rolls its
+    // own), so its title-case behaviour is no longer something to pin here.
     assert_painted(&harness, "RECENT");
     assert_painted(&harness, "CHANGED FILES");
-    assert_painted(&harness, "Push Confirmation");
 }
 
 #[test]

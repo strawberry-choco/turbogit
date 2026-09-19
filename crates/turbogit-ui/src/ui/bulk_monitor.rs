@@ -8,9 +8,7 @@
 //! advanced by the event pump — rendered here; it never derives run state
 //! from git itself.
 
-use egui::{
-    Align, Align2, Color32, FontFamily, FontId, Layout, Pos2, ProgressBar, Rect, Sense, Ui, Vec2,
-};
+use egui::{Align, Align2, Color32, Layout, Pos2, ProgressBar, Rect, Sense, Ui, Vec2};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 use turbogit_services::bulk_ops::BulkOp;
@@ -18,6 +16,12 @@ use turbogit_services::bulk_run::RowState;
 
 use crate::theme::Palette;
 use crate::ui::conflicts;
+
+/// One row of the running-operation table, where both copies of this literal
+/// said 26.0 (conformance issue 13). Local rather than
+/// [`crate::theme::GROUP_ROW_HEIGHT`], which happens to be 26 too but names the
+/// changes tree's group band, not a monitor row.
+const ROW_H: f32 = 26.0;
 
 /// Render the monitor while a cascade run is live or just finished
 /// (`ui.bulk_run` is `Some`).
@@ -141,7 +145,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     ] {
         let galley = hp.layout_no_wrap(
             label.to_string(),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::INK_3,
         );
         hp.galley_with_override_text_color(
@@ -154,7 +158,6 @@ fn body(ui: &mut Ui, state: &mut AppState) {
         );
     }
 
-    const ROW_H: f32 = 26.0;
     for (name, state_text, color, detail, duration, resolve) in rows {
         ui.horizontal(|ui| {
             let left = ui.cursor().left();
@@ -168,7 +171,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
             let cell = |x: f32, text: String, color: Color32| {
                 let galley = ui.painter().layout_no_wrap(
                     text,
-                    FontId::new(12.0, FontFamily::Proportional),
+                    crate::theme::chrome_font(crate::theme::TYPE_BODY),
                     color,
                 );
                 ui.painter().galley_with_override_text_color(
@@ -383,7 +386,7 @@ fn cherry_body(ui: &mut Ui, state: &mut AppState) {
     ] {
         let galley = hp.layout_no_wrap(
             label.to_string(),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::INK_3,
         );
         hp.galley_with_override_text_color(
@@ -396,7 +399,6 @@ fn cherry_body(ui: &mut Ui, state: &mut AppState) {
         );
     }
 
-    const ROW_H: f32 = 26.0;
     for (name, state_text, color, detail, duration, resolve) in rows {
         ui.horizontal(|ui| {
             let left = ui.cursor().left();
@@ -410,7 +412,7 @@ fn cherry_body(ui: &mut Ui, state: &mut AppState) {
             let cell = |x: f32, text: String, color: Color32| {
                 let galley = ui.painter().layout_no_wrap(
                     text,
-                    FontId::new(12.0, FontFamily::Proportional),
+                    crate::theme::chrome_font(crate::theme::TYPE_BODY),
                     color,
                 );
                 ui.painter().galley_with_override_text_color(

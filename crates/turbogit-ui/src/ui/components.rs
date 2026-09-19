@@ -54,24 +54,57 @@ pub const KIT_BUTTON_H: f32 = 28.0;
 
 // --- §14.1 branch row states ------------------------------------------------
 
-/// The three fill states a branch row can be in while idle (design doc §13
-/// Selection / §7.2 hover). Stale and mid-operation are orthogonal markers
-/// rendered inside the row (see [`row_ink`], [`mid_op_label`]); *current* is
-/// not — it owns its own fill, through [`current_row_fill`].
+/// The fill states a row can be in while idle (design doc §13 Selection /
+/// §7.2 hover). Stale and mid-operation are orthogonal markers rendered inside
+/// the row (see [`row_ink`], [`mid_op_label`]); *current* is not — it owns its
+/// own fill, through [`current_row_fill`].
+///
+/// Three of these are a selection and they are deliberately different fills:
+/// [`RowState::Selected`] is the §13 tool-window active row — the quiet
+/// [`Palette::SELECTION`] band the row keeps its own ink on;
+/// [`RowState::BrandSelected`] is the shared tree/list vocabulary's chosen row,
+/// a solid [`Palette::BRAND`] whose content flips to [`Palette::BRAND_INK`];
+/// [`RowState::FocusSelected`] is the translucent [`Palette::selection_bg()`]
+/// focus band the log table, the sidebar tree and blame paint.
+///
+/// The three come from three generations of the design and the roles doc keeps
+/// them apart ("Selection"), so which one a call site picks is a visible
+/// decision, not a cleanup. Conformance issue 07 names the third because
+/// `selection_bg()` was being re-derived inline at three different corner radii
+/// with no role to point at.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RowState {
     Default,
     Hover,
     Selected,
+    BrandSelected,
+    FocusSelected,
+}
+
+impl RowState {
+    /// The state of a row that tracks selection and hover as two booleans —
+    /// every hand-painted row in this crate. `selected` resolves to
+    /// [`RowState::BrandSelected`], which is what those rows have always
+    /// painted; a row that wants one of the other selection bands builds that
+    /// variant itself.
+    pub fn from_flags(selected: bool, hovered: bool) -> Self {
+        match (selected, hovered) {
+            (true, _) => Self::BrandSelected,
+            (false, true) => Self::Hover,
+            (false, false) => Self::Default,
+        }
+    }
 }
 
 /// Row fill decision: transparent at rest, the app-wide SURFACE_2 hover fill,
-/// then the §13 Selection token for the active row.
+/// then whichever of the three selection roles the row is in.
 pub fn row_fill(state: RowState) -> Color32 {
     match state {
         RowState::Default => Color32::TRANSPARENT,
         RowState::Hover => Palette::SURFACE_2,
         RowState::Selected => Palette::SELECTION,
+        RowState::BrandSelected => Palette::BRAND,
+        RowState::FocusSelected => Palette::selection_bg(),
     }
 }
 
@@ -82,11 +115,17 @@ pub fn row_fill(state: RowState) -> Color32 {
 /// *under* hover and selection instead of replacing them, so a current row that
 /// is also selected reads as both facts. The resting band is a brand tint well
 /// below [`Palette::SELECTION`]'s strength, which is what keeps the two apart.
+///
+/// A branch row is only ever in [`RowState::Selected`] when it is selected; the
+/// other two selection roles belong to surfaces that have no current-branch
+/// concept, and they resolve the same way here so no state can fall through.
 pub fn current_row_fill(state: RowState) -> Color32 {
     match state {
         RowState::Default => tint_over_bg(Palette::BRAND, 0.16),
         RowState::Hover => tint_over_bg(Palette::BRAND, 0.24),
-        RowState::Selected => Palette::SELECTION,
+        RowState::Selected | RowState::BrandSelected | RowState::FocusSelected => {
+            Palette::SELECTION
+        }
     }
 }
 
@@ -143,14 +182,16 @@ impl PillKind {
 
     fn height(self) -> f32 {
         match self {
-            Self::Current => 18.0,
+            // The `current` marker is the shared chip; a group's count badge is
+            // deliberately smaller, so it is the one member with its own size.
+            Self::Current => super::widgets::CHIP_HEIGHT,
             Self::Count => 14.0,
         }
     }
 
     fn pad_x(self) -> f32 {
         match self {
-            Self::Current => 6.0,
+            Self::Current => super::widgets::CHIP_PAD_X,
             Self::Count => 4.0,
         }
     }
@@ -162,8 +203,11 @@ impl PillKind {
 pub fn pill(ui: &mut Ui, label: &str, kind: PillKind) -> Response {
     let width = pill_width(ui, label, kind);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, kind.height()), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(Palette::RADIUS_CHIP), kind.fill());
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(crate::theme::CHIP_RADIUS),
+        kind.fill(),
+    );
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_owned(), kind.font(), kind.ink());
@@ -448,7 +492,7 @@ pub fn kit_button_at(ui: &mut Ui, kind: KitButton, label: &str, width: f32) -> R
     };
 
     let painter = ui.painter().clone();
-    let radius = CornerRadius::same(Palette::RADIUS_CONTROL);
+    let radius = CornerRadius::same(crate::theme::CONTROL_RADIUS);
     let fill = kind.fill(state);
     if fill != Color32::TRANSPARENT {
         painter.rect_filled(rect, radius, fill);
@@ -522,22 +566,4 @@ pub fn detail_panel_header(ui: &mut Ui, title: &str) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 1.0), Sense::hover());
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::DIVIDER);
-}
-
-/// A key/value row in the detail panel: muted 11px key, primary 12px value.
-pub fn key_value_row(ui: &mut Ui, key: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.add_space(PAD_PANEL);
-        ui.add(egui::Label::new(
-            RichText::new(key)
-                .font(chrome_font(crate::theme::TYPE_CONTROL))
-                .color(Palette::T_MUTED),
-        ));
-        ui.add(egui::Label::new(
-            RichText::new(value)
-                .font(data_font(TYPE_BODY))
-                .color(Palette::T_PRIMARY),
-        ));
-    });
-    ui.add_space(2.0);
 }

@@ -1,7 +1,7 @@
 //! Diff display model: row parsing, per-file section metadata, and the
 //! memoized display-row model the view pages over (ADR-0014, spec R8).
 
-use egui::{FontFamily, FontId};
+use egui::FontId;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -18,8 +18,15 @@ pub(super) const NUM_W: f32 = 40.0;
 /// X offset of the code text within a unified row.
 pub(super) const TEXT_X: f32 = SIGN_W + NUM_W + 12.0;
 
+/// The diff family's monospaced code face, at the shared body size.
+///
+/// A display-model module has no business choosing a typeface, and it no longer
+/// does: this is `pub(super)` only so `diff/`'s three painters ask one question,
+/// and every value in it comes from a `theme` role rather than a pixel (the
+/// conformance sweep's issue 17). A call site outside `diff/` should use
+/// [`crate::theme::data_font`] directly.
 pub(super) fn mono_font() -> FontId {
-    FontId::new(12.0, FontFamily::Monospace)
+    crate::theme::data_font(crate::theme::TYPE_BODY)
 }
 // --- row model ---------------------------------------------------------------
 

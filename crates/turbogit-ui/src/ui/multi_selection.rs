@@ -87,6 +87,7 @@ use egui::{
     UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 
+use super::components;
 use super::icons::{self, Icon};
 use super::project_tree;
 use super::tree_selection;
@@ -110,7 +111,7 @@ const COL_COMMIT: f32 = 545.0;
 pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(0), Palette::BG);
+        .rect_filled(rect, CornerRadius::ZERO, Palette::BG);
     let mut col = ui.new_child(
         UiBuilder::new()
             .max_rect(rect)
@@ -150,7 +151,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     );
     let title = hp.layout_no_wrap(
         "Multi-repo selection".to_string(),
-        FontId::new(16.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_PANE_TITLE),
         Palette::INK,
     );
     hp.galley_with_override_text_color(
@@ -273,7 +274,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     ] {
         let galley = thp.layout_no_wrap(
             label.to_string(),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::INK_3,
         );
         thp.galley_with_override_text_color(
@@ -293,6 +294,10 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
         Stroke::new(1.0, Palette::LINE_SUBTLE),
     );
 
+    /// One repo row of the selection summary. Taller than the 24/26 px ramp
+    /// because the row is single-line but carries a state dot and two count
+    /// cells that need breathing room; it is this surface's own row, so it stays
+    /// here (conformance issue 09).
     const ROW_H: f32 = 34.0;
     let row_h = ROW_H;
     for row in &summary.rows {
@@ -308,10 +313,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             WidgetInfo::labeled(WidgetType::Button, true, format!("Focus {}", row.name))
         });
         let hovered = response.hovered();
-        if hovered {
-            body.painter()
-                .rect_filled(r, CornerRadius::same(4), Palette::SURFACE_2);
-        }
+        widgets::paint_row(&body, r, components::RowState::from_flags(false, hovered));
         let cy = r.center().y;
         let cell = |x: f32, text: String, color: Color32| {
             let galley = body.painter().layout_no_wrap(
@@ -359,7 +361,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     let tp = body.painter().clone();
     let title = tp.layout_no_wrap(
         "OPERATIONS".to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     tp.galley_with_override_text_color(
@@ -369,7 +371,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     );
     let hint = tp.layout_no_wrap(
         format!("· RUNS ON ALL {}", summary.repos),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     tp.galley_with_override_text_color(
@@ -379,7 +381,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     );
     let hint_right = tp.layout_no_wrap(
         "every op shows a preflight matrix first".to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     tp.galley_with_override_text_color(
@@ -471,7 +473,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     let hp = body.painter().clone();
     let title = hp.layout_no_wrap(
         "RECENT BULK OPERATIONS".to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     hp.galley_with_override_text_color(
@@ -481,7 +483,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     );
     let hint_right = hp.layout_no_wrap(
         "per-row drill-down · rollback where reversible".to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     hp.galley_with_override_text_color(

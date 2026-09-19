@@ -13,6 +13,29 @@
 //! - Selected tree/list rows get a solid `BRAND` fill with brand ink.
 //! - Disabled controls keep their idle fill and drop to `INK_3` ink.
 //! - Focused inputs/buttons get a 1px `BRAND` focus ring.
+//!
+//! ## Who owns which title band
+//!
+//! Three names cover "the label that heads a group" and each owns a different
+//! job (conformance issue 07); a screen picking the wrong one is a visible
+//! layout change, not a style preference:
+//!
+//! - [`group_title`] — a plain uppercase section *title* in a dialog, panel or
+//!   list: text only, no band, no chevron. The 11 px `INK_3` micro-header. This
+//!   is the one to reach for unless a bullet below applies.
+//! - [`components::section_header`] — a *toggleable group band*: the
+//!   `SECTION_BG` strip a `LOCAL` / `REMOTE` / smart-group header sits on, with
+//!   a chevron, a live count pill and a click target that collapses the group.
+//!   Its uppercase text comes through [`components::section_label`], the shared
+//!   transform, which is not itself a widget.
+//! - A region header that is neither — the `SURFACE` strip over the diff panes,
+//!   a repo block in the branch tree — is not a title widget at all. It is a
+//!   painted band whose fill, radius and height belong to that screen
+//!   (theme.rs's G1 boundary); only its literals get tokenised.
+//!
+//! Row fills likewise have one decision function, [`components::row_fill`] over
+//! [`components::RowState`], and [`paint_row`] is its painter-level form for the
+//! hand-painted tables.
 
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Frame, InnerResponse, Layout, Margin, Pos2,
@@ -20,27 +43,34 @@ use egui::{
     WidgetInfo, WidgetType,
 };
 
+use super::components::{RowState, row_fill};
 use super::icons::{self, Icon};
-use crate::theme::Palette;
+use crate::theme::{CHIP_RADIUS, CONTROL_RADIUS, FILE_ROW_HEIGHT, Palette, TYPE_BODY, chrome_font};
 
 // --- Metrics (spec §4.2 fixed heights) -------------------------------------
 
 /// Alpha used when tinting an accent over [`Palette::BG`] for badge fills.
 pub const BADGE_TINT: f32 = 0.18;
-/// Tree row height (`.tg-tree-row`).
-pub const ROW_HEIGHT: f32 = 24.0;
-/// Badge / ref-label chip height (pill).
+/// Badge / ref-label chip height (pill). This is THE chip height: every chip
+/// and pill in the crate takes it from here rather than declaring its own, and
+/// the corner radius is always derived from it (half the height) so a chip
+/// reads as a pill at any size the role changes to.
 pub const CHIP_HEIGHT: f32 = 18.0;
 
-const RADIUS_SM: u8 = 4; // --tg-radius-sm
 const BUTTON_HEIGHT: f32 = 32.0; // .tg-btn
 const COMPACT_BUTTON_HEIGHT: f32 = 28.0; // h-7 compact variants
 const ICON_BUTTON_SIZE: f32 = 28.0; // square ghost (dialog close X)
 const BUTTON_ICON_SIZE: f32 = 16.0; // §5.3: 16×16 in buttons
-pub const TOOLBAR_BUTTON_HEIGHT: f32 = 26.0; // §4.2: toolbar buttons
-const TOOLBAR_ICON_SIZE: f32 = 14.0; // §5.3/§6.2: 14×14 in the toolbar
-const CHIP_PAD_X: f32 = 6.0;
-const DIALOG_HEADER_HEIGHT: f32 = 40.0;
+/// Horizontal padding of the shared chip ([`chip`], [`badge`], [`ref_label`]) and
+/// of every pill that mirrors it.
+///
+/// Three chip paddings exist in the app and each is a distinct existing role,
+/// so none of them collapses into another (conformance issue 05): 6 px here is
+/// the non-interactive chip, `theme::DENSITY_COMPACT_BUTTON.x` (8 px) is the
+/// commit window's quiet label roundel, and `theme::BUTTON_PADDING.x` (10 px)
+/// is the interactive selectable chip — padded like every other button and like
+/// [`segmented_control`]'s segments.
+pub const CHIP_PAD_X: f32 = 6.0;
 const TOOLWINDOW_HEADER_HEIGHT: f32 = 28.0;
 const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL; // uppercase micro-headers (§3.3)
 const INPUT_ICON_SIZE: f32 = 14.0; // §5.3: 14×14 in inputs/badges
@@ -244,7 +274,23 @@ impl StatusBadge {
 /// CASCADE accent — distinct from BRAND/STATE_* so cascade operations never
 /// read as focus, success, warning, info, or error. Reused by chips and any
 /// other cascade surface.
+///
+/// Kept, with no `src` consumer (conformance issue 18): `status_badge` below is
+/// the only thing that reads it, the cascade run screens render their status
+/// through `RepoState` instead, and `widget_library.rs` pins the whole
+/// `StatusBadge` vocabulary by painting it. Deleting the enum means deleting
+/// that contract in the same change, which is its own review.
 pub const CASCADE_ACCENT: Color32 = Color32::from_rgb(0xa7, 0x8b, 0xfa);
+
+/// Status badge from the screens-gap vocabulary (issue #01): count chips,
+/// lock, stale-age, FOCUSED, and CASCADE markers. Paints the same 18px pill
+/// shape as [`badge`] so any chip carrying these states matches the rest of
+/// the badge vocabulary at every callsite.
+pub fn status_badge(ui: &mut Ui, text: &str, kind: StatusBadge) -> Response {
+    let fg = kind.accent();
+    let bg = tint_over_bg(fg, BADGE_TINT);
+    chip(ui, text, ChipColors { bg, fg })
+}
 
 // --- Focus -------------------------------------------------------------------
 
@@ -259,24 +305,10 @@ pub fn focus_ring(ui: &Ui, response: &Response) {
     if response.has_focus() {
         ui.painter().rect_stroke(
             response.rect.expand(1.0),
-            CornerRadius::same(RADIUS_SM),
+            CornerRadius::same(CONTROL_RADIUS),
             Stroke::new(1.0, Palette::BRAND),
             StrokeKind::Outside,
         );
-    }
-}
-
-// --- Row decisions -----------------------------------------------------------
-
-/// Tree/list row fill decision (§7.2): a selected row paints solid BRAND no
-/// matter what; unselected rows only pick up the SURFACE_2 hover fill.
-pub fn row_fill(selected: bool, hovered: bool) -> Color32 {
-    if selected {
-        Palette::BRAND
-    } else if hovered {
-        Palette::SURFACE_2
-    } else {
-        Color32::TRANSPARENT
     }
 }
 
@@ -355,27 +387,6 @@ pub fn action_button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> 
     );
     ui.advance_cursor_after_rect(child.min_rect());
     response
-}
-
-/// Toolbar button (spec §4.2/§6.2): 26px tall, 0×8 padding, 14×14 icon +
-/// label. `primary = true` renders the solid-brand variant — the toolbar's
-/// single primary action (Commit).
-pub fn toolbar_button(ui: &mut Ui, icon: Icon, label: &str, primary: bool) -> Response {
-    let variant = if primary {
-        ButtonVariant::Primary
-    } else {
-        ButtonVariant::Ghost
-    };
-    button_response_sized(
-        ui,
-        variant,
-        Some(icon),
-        Some(label),
-        Some(TOOLBAR_BUTTON_HEIGHT),
-        Some(8.0),
-        Some(TOOLBAR_ICON_SIZE),
-        None,
-    )
 }
 
 fn button_response(
@@ -464,7 +475,7 @@ fn button_response_sized(
     };
 
     let painter = ui.painter().clone();
-    let radius = CornerRadius::same(RADIUS_SM);
+    let radius = CornerRadius::same(CONTROL_RADIUS);
     let fill = variant.fill(state);
     if fill != Color32::TRANSPARENT {
         painter.rect_filled(rect, radius, fill);
@@ -529,14 +540,52 @@ pub fn ref_label(ui: &mut Ui, text: &str, kind: RefKind) -> Response {
     chip(ui, text, kind.colors())
 }
 
-/// Status badge from the screens-gap vocabulary (issue #01): count chips,
-/// lock, stale-age, FOCUSED, and CASCADE markers. Paints the same 18px pill
-/// shape as [`badge`] so any chip carrying these states matches the rest of
-/// the badge vocabulary at every callsite.
-pub fn status_badge(ui: &mut Ui, text: &str, kind: StatusBadge) -> Response {
-    let fg = kind.accent();
-    let bg = tint_over_bg(fg, BADGE_TINT);
-    chip(ui, text, ChipColors { bg, fg })
+/// The chip's corner radius, derived from [`CHIP_HEIGHT`] rather than fixed.
+/// Half the height is what makes these read as pills — which is also where
+/// `theme`'s old 9 px `PILL_RADIUS` token got its number from, and why that
+/// token was redundant once every pill derived its own (conformance issue 18).
+pub fn chip_radius() -> CornerRadius {
+    CornerRadius::same((CHIP_HEIGHT / 2.0) as u8)
+}
+
+/// The rect a [`paint_chip`] of `galley` occupies when its right edge is at
+/// `right_edge` and it is vertically centred on `cy`.
+///
+/// A surface that stacks two chips in one row asks this for the first so it
+/// knows where the second may sit without colliding (welcome's recent-project
+/// row does exactly that).
+pub fn chip_rect_right(right_edge: f32, cy: f32, galley: &egui::Galley) -> Rect {
+    let width = galley.size().x + CHIP_PAD_X * 2.0;
+    Rect::from_min_size(
+        Pos2::new(right_edge - width, cy - CHIP_HEIGHT / 2.0),
+        Vec2::new(width, CHIP_HEIGHT),
+    )
+}
+
+/// Paint one chip of the shared geometry into a rect the caller already placed:
+/// `bg` at [`chip_radius`], then `galley` centred in `ink`.
+///
+/// [`chip`] is the layout-level form and the one to reach for; this exists for
+/// surfaces that position a chip by coordinate, which no layout child can do —
+/// the welcome screen's recent-project row paints a branch chip and a repo-count
+/// chip at the right edge of a hand-painted row (conformance issue 09). Both
+/// forms go through here, so height, pad and radius are defined once.
+pub fn paint_chip(
+    painter: &egui::Painter,
+    rect: Rect,
+    galley: std::sync::Arc<egui::Galley>,
+    bg: Color32,
+    ink: Color32,
+) {
+    painter.rect_filled(rect, chip_radius(), bg);
+    painter.galley(
+        Pos2::new(
+            rect.center().x - galley.size().x / 2.0,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        ink,
+    );
 }
 
 fn chip(ui: &mut Ui, text: &str, colors: ChipColors) -> Response {
@@ -547,20 +596,7 @@ fn chip(ui: &mut Ui, text: &str, colors: ChipColors) -> Response {
     let size = Vec2::new(galley.size().x + CHIP_PAD_X * 2.0, CHIP_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
 
-    let painter = ui.painter();
-    painter.rect_filled(
-        rect,
-        CornerRadius::same((CHIP_HEIGHT / 2.0) as u8),
-        colors.bg,
-    );
-    painter.galley(
-        Pos2::new(
-            rect.center().x - galley.size().x / 2.0,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        colors.fg,
-    );
+    paint_chip(ui.painter(), rect, galley, colors.bg, colors.fg);
 
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, text));
     response
@@ -579,8 +615,9 @@ fn chip(ui: &mut Ui, text: &str, colors: ChipColors) -> Response {
 /// the widget instead of inventing a second variant.
 pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Option<usize> {
     const SEGMENT_H: f32 = 24.0;
-    const PAD_X: f32 = 10.0;
-    let font_id = FontId::new(12.0, FontFamily::Proportional);
+    // Segments are controls, so they take the shared button padding.
+    let pad_x = crate::theme::BUTTON_PADDING.x;
+    let font_id = chrome_font(TYPE_BODY);
 
     let widths: Vec<f32> = options
         .iter()
@@ -588,14 +625,17 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Opti
             let g = ui
                 .painter()
                 .layout_no_wrap((*o).to_owned(), font_id.clone(), Color32::WHITE);
-            g.size().x + PAD_X * 2.0
+            g.size().x + pad_x * 2.0
         })
         .collect();
     let track_w: f32 = widths.iter().sum();
 
     let (track, _) = ui.allocate_exact_size(Vec2::new(track_w, SEGMENT_H), Sense::hover());
-    ui.painter()
-        .rect_filled(track, CornerRadius::same(4), Palette::SURFACE_2);
+    ui.painter().rect_filled(
+        track,
+        CornerRadius::same(CONTROL_RADIUS),
+        Palette::SURFACE_2,
+    );
 
     let mut clicked = None;
     let mut x = track.left();
@@ -605,8 +645,10 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Opti
         let resp = ui.interact(seg, id, Sense::click());
         let is_selected = i == selected;
         if is_selected {
+            // The inset step inside a CONTROL_RADIUS track is the compact chip
+            // radius — the same 3 px a badge rounds at, not a new role.
             ui.painter()
-                .rect_filled(seg, CornerRadius::same(3), Palette::SURFACE_3);
+                .rect_filled(seg, CornerRadius::same(CHIP_RADIUS), Palette::SURFACE_3);
         }
         let ink = if is_selected || resp.hovered() {
             Palette::INK
@@ -636,22 +678,18 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Opti
 
 // --- Trees & lists -----------------------------------------------------------
 
-/// Fixed-height tree row (24px): hover SURFACE_2, selected = BRAND fill with
-/// brand-ink content (§7.1/§7.2).
+/// Fixed-height tree row: hover SURFACE_2, selected = BRAND fill with
+/// brand-ink content (§7.1/§7.2). The height is the shared
+/// [`FILE_ROW_HEIGHT`], so a vocabulary row and a changes-tree row are one row.
 pub fn tree_row(ui: &mut Ui, selected: bool, contents: impl FnOnce(&mut Ui)) -> Response {
     row_impl(ui, selected, contents)
-}
-
-/// Generic list row with hover feedback only — no persistent selection.
-pub fn selectable_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) -> Response {
-    row_impl(ui, false, contents)
 }
 
 fn row_impl(ui: &mut Ui, selected: bool, contents: impl FnOnce(&mut Ui)) -> Response {
     let width = ui.available_width();
     // Reserve the exact row space up-front so the centered cross-layout can
     // never swallow the parent's remaining height.
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, FILE_ROW_HEIGHT), Sense::hover());
 
     // Contents live strictly inside the reserved rect.
     let mut child = ui.new_child(
@@ -670,17 +708,35 @@ fn row_impl(ui: &mut Ui, selected: bool, contents: impl FnOnce(&mut Ui)) -> Resp
     let id = ui.auto_id_with("tree_row");
     let response = ui.interact(rect, id, Sense::click());
 
-    let fill = row_fill(selected, response.hovered());
+    let fill = row_fill(RowState::from_flags(selected, response.hovered()));
     if fill != Color32::TRANSPARENT {
         // Paint behind the already-emitted content shapes.
         let mut bg = ui.painter().clone();
         bg.set_layer_id(egui::LayerId::new(egui::Order::Background, response.id));
-        bg.rect_filled(rect, CornerRadius::same(RADIUS_SM), fill);
+        bg.rect_filled(rect, CornerRadius::same(CONTROL_RADIUS), fill);
     }
     focus_ring(ui, &response);
 
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, ui.is_enabled(), ""));
     response
+}
+
+/// Paint one row's fill for a [`RowState`] in a rect the caller already
+/// allocated.
+///
+/// [`tree_row`] lays its own row out and needs nothing here; this is for the
+/// hand-painted tables — the settings category rail, the rebase todo, the commit
+/// window's file rows — that allocate a rect, paint behind their content and
+/// still want the one row-state decision. The corner is [`CONTROL_RADIUS`],
+/// which is what every such row has always used; a surface that rounds its rows
+/// differently (the sidebar's full-bleed band, blame's dense rows) is a real
+/// geometry difference and stays local rather than being flattened by this call.
+pub fn paint_row(ui: &Ui, rect: Rect, state: RowState) {
+    let fill = row_fill(state);
+    if fill != Color32::TRANSPARENT {
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(CONTROL_RADIUS), fill);
+    }
 }
 
 // --- Inputs ------------------------------------------------------------------
@@ -708,7 +764,7 @@ fn input_frame(ui: &mut Ui, placeholder: &str, buf: &mut String, search_icon: bo
     let frame = Frame::new()
         .fill(Palette::SURFACE_3)
         .stroke(Stroke::new(1.0, Palette::LINE))
-        .corner_radius(CornerRadius::same(RADIUS_SM))
+        .corner_radius(CornerRadius::same(CONTROL_RADIUS))
         .inner_margin(Margin::symmetric(8, 4));
 
     let outer = frame.show(ui, |ui| {
@@ -733,7 +789,7 @@ fn input_frame(ui: &mut Ui, placeholder: &str, buf: &mut String, search_icon: bo
     if edit_response.has_focus() {
         ui.painter().rect_stroke(
             outer.response.rect.expand(1.0),
-            CornerRadius::same(RADIUS_SM),
+            CornerRadius::same(CONTROL_RADIUS),
             Stroke::new(1.0, Palette::BRAND),
             StrokeKind::Outside,
         );
@@ -742,36 +798,6 @@ fn input_frame(ui: &mut Ui, placeholder: &str, buf: &mut String, search_icon: bo
 }
 
 // --- Dialog chrome -----------------------------------------------------------
-
-/// Result of [`dialog_header`]: the whole header strip plus the close (X)
-/// button response.
-pub struct DialogHeader {
-    /// Response covering the full header strip.
-    pub response: Response,
-    /// The trailing X button — `.clicked()` means "close me".
-    pub close: Response,
-}
-
-/// Dialog header strip (40px): title left, close X right (§7.1).
-pub fn dialog_header(ui: &mut Ui, title: &str) -> DialogHeader {
-    let width = ui.available_width();
-    let title_font = bold_font_if_available(ui);
-    let inner = ui.allocate_ui_with_layout(
-        Vec2::new(width, DIALOG_HEADER_HEIGHT),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.label(RichText::new(title).font(title_font).color(Palette::INK));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                icon_button(ui, Icon::X)
-            })
-            .inner
-        },
-    );
-    DialogHeader {
-        response: inner.response,
-        close: inner.inner,
-    }
-}
 
 /// Bold body font via the named family registered by `install_fonts`,
 /// falling back to the regular proportional face when fonts are not
@@ -839,6 +865,29 @@ pub fn card_header(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
     ui.separator();
 }
 
+/// An inset note well: [`Palette::SURFACE_2`] at the control radius with 8 px of
+/// padding, the containment a dialog hands a preview, a summary or a banner.
+///
+/// This is the *unbordered* sibling of [`card`], which is a bordered content
+/// region on `CONTENT_BG`. Pass a colour in `severity` for a note that is also a
+/// warning — the merge-cascade and rebase banners, which must read as attention
+/// without becoming the app's contained alert ([`alert_box`] is filled rather
+/// than stroked, and is the other one).
+pub fn note<R>(
+    ui: &mut Ui,
+    severity: Option<Color32>,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> InnerResponse<R> {
+    let mut frame = Frame::new()
+        .fill(Palette::SURFACE_2)
+        .corner_radius(CornerRadius::same(CONTROL_RADIUS))
+        .inner_margin(Margin::same(8));
+    if let Some(ink) = severity {
+        frame = frame.stroke(Stroke::new(1.0, ink));
+    }
+    frame.show(ui, add_contents)
+}
+
 /// Tool-window header (28px): 11px uppercase muted title left, right-aligned
 /// actions slot (§7.1, §3.3).
 pub fn toolwindow_header<R>(
@@ -891,7 +940,7 @@ pub fn hash_chip(ui: &mut Ui, hash: &str, hint: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         ui.painter()
-            .rect_filled(rect, CornerRadius::same(RADIUS_SM), Palette::SURFACE_3);
+            .rect_filled(rect, CornerRadius::same(CONTROL_RADIUS), Palette::SURFACE_3);
         ui.painter().galley(
             Pos2::new(
                 rect.center().x - galley.size().x / 2.0,
@@ -951,7 +1000,7 @@ fn initials_of(name: &str) -> String {
 pub fn alert_box(ui: &mut Ui, text: &str) {
     Frame::new()
         .fill(Palette::SURFACE_WARNING)
-        .corner_radius(CornerRadius::same(RADIUS_SM))
+        .corner_radius(CornerRadius::same(CONTROL_RADIUS))
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.horizontal(|ui| {

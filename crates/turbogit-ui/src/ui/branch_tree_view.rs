@@ -850,7 +850,8 @@ fn branch_row(
         // `Order::Background` layer renders *above* the scroll content in the
         // final pass, so a fill parked there would bury the branch name. Same
         // layer + insertion order keeps the fill behind the row's own text.
-        ui.painter().rect_filled(rect, CornerRadius::same(3), fill);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(crate::theme::CHIP_RADIUS), fill);
     }
 
     // --- The row's four zones, laid out once over the full rect ----------------
@@ -1168,10 +1169,10 @@ fn sync_chip(ui: &mut Ui, kind: crate::ui::components::SyncKind, label: &str) {
     let icon_s = 10.0;
     let pad = 5.0;
     let w = sync_chip_width(ui, label);
-    let h = 18.0;
+    let h = crate::ui::widgets::CHIP_HEIGHT;
     let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(Palette::RADIUS_CHIP), bg);
+        .rect_filled(rect, CornerRadius::same(crate::theme::CHIP_RADIUS), bg);
 
     let icon = match kind {
         crate::ui::components::SyncKind::Ahead => Icon::ARROW_UP,

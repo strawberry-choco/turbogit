@@ -170,11 +170,17 @@ fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str) -> bool {
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::click());
 
     if line.commit == rev {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(2), Palette::selection_bg());
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::MARK_RADIUS),
+            Palette::selection_bg(),
+        );
     } else if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(2), Palette::SURFACE_2);
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::MARK_RADIUS),
+            Palette::SURFACE_2,
+        );
     }
 
     let painter = ui.painter().clone();

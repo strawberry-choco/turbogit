@@ -15,13 +15,23 @@
 //! drift from the repos' actual state.
 
 use egui::{
-    Align, Align2, Color32, FontFamily, FontId, Key, Layout, Pos2, Rect, Sense, TextEdit, Ui, Vec2,
-    WidgetInfo, WidgetType,
+    Align, Align2, Color32, Key, Layout, Pos2, Rect, Sense, TextEdit, Ui, Vec2, WidgetInfo,
+    WidgetType,
 };
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::{BranchAction, BulkOp, BulkPlan, PreflightRow, SkipReason};
 
 use crate::theme::Palette;
+
+/// One row of a preflight / affected-repo list, at the height every such list in
+/// this family uses. Three call sites in this file each re-declared the same
+/// 30.0 until the conformance sweep collapsed them (issue 13).
+///
+/// It is *not* [`crate::ui::components::BRANCH_ROW_H`], which is also 30.0: a
+/// branch row and a bulk row agree on a number for unrelated reasons, and
+/// sharing a token between them would couple two screens that change separately.
+/// Neither joins the `theme` ramp, which offers 24 and 26 (issue 06's decision).
+const ROW_H: f32 = 30.0;
 
 /// Render the modal when a bulk operation is awaiting preflight
 /// confirmation (`ui.bulk_op` is `Some`).
@@ -102,7 +112,7 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
     ] {
         let galley = hp.layout_no_wrap(
             label.to_string(),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::INK_3,
         );
         hp.galley_with_override_text_color(
@@ -115,7 +125,6 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
         );
     }
 
-    const ROW_H: f32 = 30.0;
     for row in &pf.rows {
         let r = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, ROW_H));
         ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
@@ -123,7 +132,7 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
         let cell = |x: f32, text: String, color: Color32| {
             let galley = ui.painter().layout_no_wrap(
                 text,
-                FontId::new(12.0, FontFamily::Proportional),
+                crate::theme::chrome_font(crate::theme::TYPE_BODY),
                 color,
             );
             ui.painter().galley_with_override_text_color(
@@ -347,7 +356,7 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
     ] {
         let galley = hp.layout_no_wrap(
             label.to_string(),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::INK_3,
         );
         hp.galley_with_override_text_color(
@@ -360,7 +369,6 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
         );
     }
 
-    const ROW_H: f32 = 30.0;
     for row in &pf.rows {
         let r = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, ROW_H));
         ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
@@ -368,7 +376,7 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
         let cell = |x: f32, text: String, color: Color32| {
             let galley = ui.painter().layout_no_wrap(
                 text,
-                FontId::new(12.0, FontFamily::Proportional),
+                crate::theme::chrome_font(crate::theme::TYPE_BODY),
                 color,
             );
             ui.painter().galley_with_override_text_color(
@@ -522,7 +530,7 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
     ] {
         let galley = hp.layout_no_wrap(
             label.to_string(),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::INK_3,
         );
         hp.galley_with_override_text_color(
@@ -535,7 +543,6 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
         );
     }
 
-    const ROW_H: f32 = 30.0;
     for row in &bpf.rows {
         let r = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, ROW_H));
         ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
@@ -543,7 +550,7 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
         let cell = |x: f32, text: String, color: Color32| {
             let galley = ui.painter().layout_no_wrap(
                 text,
-                FontId::new(12.0, FontFamily::Proportional),
+                crate::theme::chrome_font(crate::theme::TYPE_BODY),
                 color,
             );
             ui.painter().galley_with_override_text_color(

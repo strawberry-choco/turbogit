@@ -6,8 +6,8 @@ use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Response, Sense, Ui,
-    UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Response, Sense, Ui, UiBuilder, Vec2,
+    WidgetInfo, WidgetType,
 };
 use std::collections::BTreeSet;
 use turbogit_app::granular::{self, comparison_triple, diff_key};
@@ -196,9 +196,11 @@ pub(super) fn comparison_chips(ui: &mut Ui, state: &mut AppState) {
 /// unselected = SURFACE_3 with muted ink that brightens on hover. Also
 /// serves the staged-hunk chip rail (issue 20).
 pub(crate) fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response {
-    const CHIP_H: f32 = 18.0;
-    const PAD_X: f32 = 10.0;
-    let font_id = FontId::new(11.0, FontFamily::Proportional);
+    // The shared chip height at button padding: this one is clickable, so it
+    // takes the same horizontal padding as every other control and as
+    // `widgets::segmented_control` (conformance issue 05).
+    let pad_x = crate::theme::BUTTON_PADDING.x;
+    let font_id = crate::theme::chrome_font(crate::theme::TYPE_CONTROL);
 
     let idle_fg = if selected {
         Palette::BRAND_INK
@@ -208,7 +210,7 @@ pub(crate) fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response 
     let measured = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font_id.clone(), idle_fg);
-    let size = Vec2::new(measured.size().x + PAD_X * 2.0, CHIP_H);
+    let size = Vec2::new(measured.size().x + pad_x * 2.0, widgets::CHIP_HEIGHT);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let id = ui.id().with(("diff-chip", label));
     let response = ui.interact(rect, id, Sense::click());
@@ -227,8 +229,7 @@ pub(crate) fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response 
     } else {
         Palette::INK_2
     };
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(CHIP_H as u8 / 2), bg);
+    ui.painter().rect_filled(rect, widgets::chip_radius(), bg);
     paint_centered(ui.painter(), rect, label, font_id, fg);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
     widgets::focus_ring(ui, &response);
@@ -280,7 +281,8 @@ fn nav_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
         Color32::TRANSPARENT
     };
     if fill != Color32::TRANSPARENT {
-        ui.painter().rect_filled(rect, CornerRadius::same(4), fill);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(crate::theme::CONTROL_RADIUS), fill);
     }
     let ink = if !enabled {
         Palette::INK_3
@@ -329,7 +331,8 @@ fn gutter_button(
         Color32::TRANSPARENT
     };
     if fill != Color32::TRANSPARENT {
-        ui.painter().rect_filled(rect, CornerRadius::same(4), fill);
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(crate::theme::CONTROL_RADIUS), fill);
     }
     let ink = if !enabled {
         Palette::INK_3
@@ -517,8 +520,11 @@ pub(super) fn hunk_header_extras(
         Color32::TRANSPARENT
     };
     if fill != Color32::TRANSPARENT {
-        ui.painter()
-            .rect_filled(btn_rect, CornerRadius::same(4), fill);
+        ui.painter().rect_filled(
+            btn_rect,
+            CornerRadius::same(crate::theme::CONTROL_RADIUS),
+            fill,
+        );
     }
     paint_icon_at(ui, icon, btn_rect.center(), 12.0, Palette::INK_2);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));

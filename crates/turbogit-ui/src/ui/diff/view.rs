@@ -15,8 +15,8 @@ use super::panes::{
 use crate::theme::Palette;
 use crate::ui::widgets;
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Response, RichText, ScrollArea,
-    Sense, Ui, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontId, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui,
+    Vec2, WidgetInfo, WidgetType,
 };
 use std::ops::Range;
 use turbogit_app::granular::{self, comparison_triple, diff_key};
@@ -100,7 +100,7 @@ pub fn render_diff(
                 .circle_filled(dot.center(), 2.5, Palette::BRAND);
             ui.label(
                 RichText::new(readout)
-                    .font(FontId::new(11.0, FontFamily::Proportional))
+                    .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                     .color(Palette::INK_2),
             );
         });
@@ -443,7 +443,7 @@ fn paint_char_highlight(
             Pos2::new(x0, rect.top()),
             Pos2::new(x1.max(x0), rect.bottom()),
         ),
-        CornerRadius::same(2),
+        CornerRadius::same(crate::theme::MARK_RADIUS),
         Palette::BRAND.gamma_multiply(0.35),
     );
 }
@@ -700,13 +700,16 @@ fn unified_row(
 /// Side-by-side pane header band (SURFACE, spec §8.4).
 fn header_band(ui: &mut Ui, width: f32, label: &str) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, PANE_HEADER_H), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(4), Palette::SURFACE);
+    ui.painter().rect_filled(
+        rect,
+        CornerRadius::same(crate::theme::CONTROL_RADIUS),
+        Palette::SURFACE,
+    );
     paint_centered(
         ui.painter(),
         rect,
         label,
-        FontId::new(12.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
         Palette::INK,
     );
 }

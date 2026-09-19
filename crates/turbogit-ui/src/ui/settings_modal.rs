@@ -16,10 +16,11 @@
 //! visible-but-disabled with tooltips and never persist.
 
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, RichText, Sense, TextEdit, Ui,
-    UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Align2, CornerRadius, Pos2, RichText, Sense, TextEdit, Ui, UiBuilder, Vec2, WidgetInfo,
+    WidgetType,
 };
 
+use super::components;
 use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::state::{AppState, SettingsCategory, Toast};
@@ -37,7 +38,6 @@ const CATEGORY_WIDTH: f32 = 176.0;
 const PANEL_WIDTH: f32 = MODAL_WIDTH - CATEGORY_WIDTH - 40.0;
 /// Fixed body height so both columns align and the window keeps its size.
 const PANEL_HEIGHT: f32 = 420.0;
-const ROW_HEIGHT: f32 = 26.0;
 const INPUT_WIDTH: f32 = 300.0;
 
 const CATEGORIES: [SettingsCategory; 7] = [
@@ -131,13 +131,15 @@ fn category_row(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool
     } else {
         Sense::hover()
     };
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), sense);
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, crate::theme::GROUP_ROW_HEIGHT), sense);
 
     let hovered = enabled && response.hovered();
-    let fill = widgets::row_fill(selected, hovered);
-    if fill != Color32::TRANSPARENT {
-        ui.painter().rect_filled(rect, CornerRadius::same(4), fill);
-    }
+    widgets::paint_row(
+        ui,
+        rect,
+        components::RowState::from_flags(selected, hovered),
+    );
     let ink = if selected {
         Palette::BRAND_INK
     } else if !enabled {
@@ -151,7 +153,7 @@ fn category_row(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool
         Pos2::new(rect.left() + 12.0, rect.center().y),
         Align2::LEFT_CENTER,
         label,
-        FontId::new(13.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE),
         ink,
     );
 
@@ -229,7 +231,11 @@ fn refresh_version_badge(state: &mut AppState) {
 
 fn page_title(ui: &mut Ui, title: &str) {
     ui.add_space(2.0);
-    ui.label(RichText::new(title).strong().size(16.0));
+    ui.label(
+        RichText::new(title)
+            .strong()
+            .size(crate::theme::TYPE_PANE_TITLE),
+    );
     ui.add_space(6.0);
 }
 
@@ -441,12 +447,19 @@ fn pattern_chip(ui: &mut Ui, pattern: &str, draft: &mut VcsSettings) {
     ui.scope(|ui| {
         let frame = egui::Frame::new()
             .fill(Palette::SURFACE_2)
-            .corner_radius(CornerRadius::same(4))
+            .corner_radius(CornerRadius::same(crate::theme::CONTROL_RADIUS))
             .inner_margin(egui::Margin::symmetric(6, 2));
         frame.show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(pattern).monospace().size(12.0));
-                let remove = ui.add(egui::Button::new(RichText::new("×").size(11.0)).frame(false));
+                ui.label(
+                    RichText::new(pattern)
+                        .monospace()
+                        .size(crate::theme::TYPE_BODY),
+                );
+                let remove = ui.add(
+                    egui::Button::new(RichText::new("×").size(crate::theme::TYPE_CONTROL))
+                        .frame(false),
+                );
                 remove.widget_info(|| {
                     WidgetInfo::labeled(WidgetType::Button, true, format!("Remove {pattern}"))
                 });

@@ -9,7 +9,7 @@
 //! window X) discards. Save is disabled until the label is non-empty;
 //! blank patterns store as "any" (`None`).
 
-use egui::{FontFamily, FontId, RichText, TextEdit, Ui, WidgetInfo, WidgetType};
+use egui::{RichText, TextEdit, Ui, WidgetInfo, WidgetType};
 
 use super::widgets;
 use crate::theme::Palette;
@@ -57,7 +57,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     ui.label(
         RichText::new("NAME")
             .strong()
-            .font(FontId::new(11.0, FontFamily::Proportional))
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
             .color(Palette::INK_3),
     );
     labeled_text_input(ui, "Rule name", &mut draft.label, MODAL_WIDTH - 40.0);
@@ -66,7 +66,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     ui.label(
         RichText::new("PREDICATES — BLANK MEANS ANY")
             .strong()
-            .font(FontId::new(11.0, FontFamily::Proportional))
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
             .color(Palette::INK_3),
     );
     pattern_row(

@@ -18,6 +18,7 @@ use turbogit_domain::model::RebaseAction;
 use turbogit_services::history_editor;
 
 use crate::theme::Palette;
+use crate::ui::components;
 use crate::ui::widgets;
 
 /// The action chips a plan row offers (screen 17). `edit` stays parseable in
@@ -336,10 +337,11 @@ fn plan_rows(
         // win clicks over the full-row hit area.
         let width = ui.available_width();
         let (rect, row) = ui.allocate_exact_size(egui::vec2(width, 26.0), Sense::click_and_drag());
-        let fill = widgets::row_fill(selected, row.hovered());
-        if fill != egui::Color32::TRANSPARENT {
-            ui.painter().rect_filled(rect, 4.0, fill);
-        }
+        widgets::paint_row(
+            ui,
+            rect,
+            components::RowState::from_flags(selected, row.hovered()),
+        );
         let mut child = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(rect)
@@ -410,46 +412,41 @@ fn preview_tab(ui: &mut Ui, plan: &[turbogit_domain::model::RebasePlanEntry]) {
             );
         });
     });
-    egui::Frame::new()
-        .fill(Palette::SURFACE_2)
-        .inner_margin(8.0)
-        .corner_radius(4.0)
-        .show(ui, |ui| {
-            for e in &preview.kept {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(verb(&e.action)).color(Palette::INK_3));
-                    ui.monospace(short(&e.commit));
-                    ui.label(&e.subject);
-                });
-            }
-            ui.add_space(4.0);
-            for fold in &preview.folds {
-                let folded: Vec<String> =
-                    fold.folded.iter().map(|s| short(s).to_string()).collect();
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} folded into {}",
-                        folded.join(" + "),
-                        short(&fold.into)
-                    ))
-                    .color(Palette::INK_3),
-                );
-            }
-            if preview.dropped > 0 {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} {} dropped",
-                        preview.dropped,
-                        if preview.dropped == 1 {
-                            "commit"
-                        } else {
-                            "commits"
-                        }
-                    ))
-                    .color(Palette::STATE_WARNING),
-                );
-            }
-        });
+    widgets::note(ui, None, |ui| {
+        for e in &preview.kept {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(verb(&e.action)).color(Palette::INK_3));
+                ui.monospace(short(&e.commit));
+                ui.label(&e.subject);
+            });
+        }
+        ui.add_space(4.0);
+        for fold in &preview.folds {
+            let folded: Vec<String> = fold.folded.iter().map(|s| short(s).to_string()).collect();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} folded into {}",
+                    folded.join(" + "),
+                    short(&fold.into)
+                ))
+                .color(Palette::INK_3),
+            );
+        }
+        if preview.dropped > 0 {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} {} dropped",
+                    preview.dropped,
+                    if preview.dropped == 1 {
+                        "commit"
+                    } else {
+                        "commits"
+                    }
+                ))
+                .color(Palette::STATE_WARNING),
+            );
+        }
+    });
 }
 
 /// The lowercase verb a plan action renders as.

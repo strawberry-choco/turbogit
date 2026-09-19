@@ -44,7 +44,7 @@ pub fn kind_color(kind: ActivityKind) -> Color32 {
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(0), Palette::SURFACE);
+        .rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
     ui.painter().line_segment(
         [
             Pos2::new(rect.left(), rect.top() + 0.5),
@@ -169,7 +169,11 @@ fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
     if response.hovered() {
         ui.painter().set(
             hover_tint,
-            Shape::rect_filled(chip, CornerRadius::same(3), Palette::SURFACE_2),
+            Shape::rect_filled(
+                chip,
+                CornerRadius::same(crate::theme::CHIP_RADIUS),
+                Palette::SURFACE_2,
+            ),
         );
     }
     widgets::focus_ring(ui, &response);

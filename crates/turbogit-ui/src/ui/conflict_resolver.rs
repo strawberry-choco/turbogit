@@ -16,6 +16,7 @@
 //! (`diff_engine::merge_segments`) is unchanged.
 
 use crate::theme::Palette;
+use crate::ui::widgets::tint_over_bg;
 use egui::{
     Color32, CornerRadius, Frame, Key, Margin, Modifiers, Rect, RichText, ScrollArea, Stroke,
     TextEdit, Ui, Vec2,
@@ -81,25 +82,14 @@ fn compose(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
     out
 }
 
-/// Per-channel linear blend of `accent` over [`Palette::BG`] at opacity `t`.
-fn tint_over_bg(accent: Color32, t: f32) -> Color32 {
-    let bg = Palette::BG;
-    let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
-    Color32::from_rgb(
-        mix(bg.r(), accent.r()),
-        mix(bg.g(), accent.g()),
-        mix(bg.b(), accent.b()),
-    )
-}
-
 fn yours_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_INFO, 0.12)
+    tint_over_bg(Palette::STATE_INFO, crate::theme::SECTION_TINT)
 }
 fn theirs_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_ERROR, 0.12)
+    tint_over_bg(Palette::STATE_ERROR, crate::theme::SECTION_TINT)
 }
 fn marker_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_WARNING, 0.15)
+    tint_over_bg(Palette::STATE_WARNING, crate::theme::MARKER_TINT)
 }
 
 fn pane_header(ui: &mut Ui, title: &str, focused: bool) {
@@ -109,12 +99,17 @@ fn pane_header(ui: &mut Ui, title: &str, focused: bool) {
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.set_min_height(16.0);
-            ui.label(RichText::new(title).strong().size(12.0).color(Palette::INK));
+            ui.label(
+                RichText::new(title)
+                    .strong()
+                    .size(crate::theme::TYPE_BODY)
+                    .color(Palette::INK),
+            );
         });
     if focused {
         ui.painter().rect_stroke(
             resp.response.rect,
-            CornerRadius::same(2),
+            CornerRadius::same(crate::theme::MARK_RADIUS),
             Stroke::new(2.0, Palette::BRAND),
             egui::StrokeKind::Inside,
         );
@@ -130,7 +125,7 @@ fn marker_strip(ui: &mut Ui, glyph: &str) {
             ui.label(
                 RichText::new(glyph)
                     .monospace()
-                    .size(10.0)
+                    .size(crate::theme::TYPE_CHIP)
                     .color(Palette::STATE_WARNING),
             );
         });
@@ -170,7 +165,7 @@ fn result_cell(ui: &mut Ui, chosen: Option<u8>, ours: &str, theirs: &str) {
         });
     ui.painter().rect_stroke(
         resp.response.rect,
-        CornerRadius::same(2),
+        CornerRadius::same(crate::theme::MARK_RADIUS),
         Stroke::new(2.0, Palette::BRAND),
         egui::StrokeKind::Inside,
     );
@@ -391,7 +386,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 fn render_file_list(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf]) {
     ui.label(
         RichText::new("CONFLICTED FILES")
-            .size(11.0)
+            .size(crate::theme::TYPE_CONTROL)
             .color(Palette::INK_2),
     );
     ui.label(RichText::new(format!("{} / {} resolved", 0, conflicted.len())).color(Palette::INK_2));
@@ -410,7 +405,7 @@ fn render_file_list(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf]) {
     let n_auto = state.ui.auto_merged_files.len();
     ui.label(
         RichText::new("AUTO-MERGED")
-            .size(11.0)
+            .size(crate::theme::TYPE_CONTROL)
             .color(Palette::INK_2),
     );
     ui.label(RichText::new(format!("{n_auto} files")).color(Palette::INK_2));
@@ -526,7 +521,7 @@ fn render_resolver_body(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf
     let n_auto = state.ui.auto_merged_files.len();
     ui.label(
         RichText::new("AUTO-MERGED")
-            .size(11.0)
+            .size(crate::theme::TYPE_CONTROL)
             .color(Palette::INK_2),
     );
     ui.label(RichText::new(format!("{n_auto} files")).color(Palette::INK_2));

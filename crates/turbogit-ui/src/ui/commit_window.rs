@@ -16,6 +16,7 @@
 //! User-created changelists remain backlog.
 
 use crate::theme::Palette;
+use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
@@ -446,7 +447,7 @@ fn unversioned_group(
                 if multi_root {
                     ui.label(
                         RichText::new(bucket.root.id.name())
-                            .font(FontId::new(11.0, FontFamily::Proportional))
+                            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                             .color(Palette::INK_3),
                     );
                 }
@@ -491,14 +492,16 @@ fn repo_group(
     }
 
     let painter = ui.painter().clone();
-    if focused || response.hovered() {
-        let fill = if focused {
-            Palette::selection_bg()
-        } else {
-            Palette::SURFACE_2
-        };
-        painter.rect_filled(row, egui::CornerRadius::same(4), fill);
-    }
+    // A focused repo group takes the translucent focus band; any other row
+    // answers hover the way every shared row does (conformance issue 10).
+    let row_state = if focused {
+        components::RowState::FocusSelected
+    } else if response.hovered() {
+        components::RowState::Hover
+    } else {
+        components::RowState::Default
+    };
+    widgets::paint_row(ui, row, row_state);
     let cy = row.center().y;
     icon_at(
         ui,
@@ -524,7 +527,7 @@ fn repo_group(
     );
     let name_galley = painter.layout_no_wrap(
         name.clone(),
-        FontId::new(12.5, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_GROUP_NAME),
         Palette::INK,
     );
     let name_w = name_galley.size().x;
@@ -540,7 +543,7 @@ fn repo_group(
         .unwrap_or_else(|| "<detached>".to_owned());
     let branch_galley = painter.layout_no_wrap(
         branch,
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     painter.galley_with_override_text_color(
@@ -555,7 +558,7 @@ fn repo_group(
     let count: usize = buckets.iter().map(|b| b.changes.len()).sum();
     let count_galley = painter.layout_no_wrap(
         count.to_string(),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_2,
     );
     painter.galley_with_override_text_color(
@@ -755,7 +758,7 @@ fn partially_staged_dot_at(ui: &mut Ui, center: Pos2, salt: &PathBuf) {
 /// filled BRAND with an INK check when checked, else an INK_3 border over the
 /// row's transparent background.
 fn paint_checkbox(ui: &Ui, rect: Rect, checked: bool, resp: &egui::Response) {
-    let radius = CornerRadius::same(3);
+    let radius = CornerRadius::same(crate::theme::CHIP_RADIUS);
     let border = if checked || resp.hovered() {
         Palette::BRAND
     } else {
@@ -927,9 +930,11 @@ fn change_row(
 
     // Selected row: solid design-blue fill under the content — the checkbox
     // and the background derive from the same selection, which also drives
-    // the diff preview.
+    // the diff preview. `SELECTION_BG` is `Palette::SELECTION` by definition,
+    // so this row is the §13 selected role and says so through the shared
+    // row-state API (conformance issue 10).
     if included {
-        painter.rect_filled(row, CornerRadius::same(4), Palette::SELECTION_BG);
+        widgets::paint_row(ui, row, components::RowState::Selected);
     }
 
     // The text block is centred in the row; the checkbox, the status letter
@@ -1271,7 +1276,7 @@ fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {
                 let path_text = path.display().to_string();
                 let path_resp = ui.label(
                     RichText::new(&path_text)
-                        .font(FontId::new(13.0, FontFamily::Proportional))
+                        .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
                         .color(Palette::INK),
                 );
                 path_resp.widget_info(|| {
@@ -1342,20 +1347,19 @@ fn change_nav(ui: &mut Ui, state: &mut AppState, path: &Path) {
 /// mapping the file rows use) and for the active diff mode, so neither
 /// pretends to be a button.
 fn pill(ui: &mut Ui, label: &str, tint: Color32) {
-    const CHIP_H: f32 = 18.0;
-    const PAD_X: f32 = 8.0;
+    // The shared chip height at the compact-density padding: this roundel is a
+    // quiet label, not a control, so it is tighter than `chip_button` and
+    // looser than a badge (conformance issue 05).
+    let pad_x = crate::theme::DENSITY_COMPACT_BUTTON.x;
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
         FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional),
         tint,
     );
-    let size = Vec2::new(galley.size().x + PAD_X * 2.0, CHIP_H);
+    let size = Vec2::new(galley.size().x + pad_x * 2.0, widgets::CHIP_HEIGHT);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(CHIP_H as u8 / 2),
-        Palette::SURFACE_3,
-    );
+    ui.painter()
+        .rect_filled(rect, widgets::chip_radius(), Palette::SURFACE_3);
     ui.painter().galley(
         Pos2::new(
             rect.center().x - galley.size().x / 2.0,

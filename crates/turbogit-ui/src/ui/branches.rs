@@ -806,7 +806,7 @@ fn detail_panel(ui: &mut Ui, state: &mut AppState) {
     ui.set_max_width(rect.width().max(0.0));
     ui.painter().rect_filled(
         rect,
-        CornerRadius::same(Palette::RADIUS_CONTROL),
+        CornerRadius::same(crate::theme::CONTROL_RADIUS),
         Palette::PANEL_BG,
     );
     ui.painter().rect_filled(

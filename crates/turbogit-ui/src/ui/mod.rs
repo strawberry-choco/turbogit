@@ -151,8 +151,11 @@ fn render_toast(ui: &mut Ui, state: &mut AppState) {
             ui.horizontal(|ui| {
                 // Kind-colored accent bar along the message (spec §10).
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), egui::Sense::hover());
-                ui.painter()
-                    .rect_filled(rect, egui::CornerRadius::same(2), color);
+                ui.painter().rect_filled(
+                    rect,
+                    egui::CornerRadius::same(crate::theme::MARK_RADIUS),
+                    color,
+                );
                 icons::icon(ui, icon, 16.0, color);
                 ui.colored_label(color, &toast.message);
                 // Retry button (issue #02): only painted when the toast
