@@ -236,12 +236,14 @@ fn bare_fixture() -> Fixture {
 // --- Cycle 1: the page paints -------------------------------------------------
 
 #[test]
-fn welcome_paints_brand_and_three_action_cards() {
+fn welcome_paints_hero_and_three_action_cards() {
     let mut fx = bare_fixture();
     settle(&mut fx.harness);
 
     assert_painted(&fx.harness, "TurboGit");
     assert_painted(&fx.harness, "A fast, keyboard-friendly Git client");
+    // The hero carries the "What's new" trigger.
+    assert_painted(&fx.harness, "What's new");
     // Three action cards (spec §8.1).
     assert_painted(&fx.harness, "Clone from URL");
     assert_painted(&fx.harness, "Open Project");
@@ -249,6 +251,37 @@ fn welcome_paints_brand_and_three_action_cards() {
     // Recents column exists even when empty.
     assert_painted(&fx.harness, "RECENT PROJECTS");
     assert_painted(&fx.harness, "No recent projects yet.");
+}
+
+/// Ticket 01: the hero is ONE row — the "What's new" trigger is vertically
+/// centred against the wordmark+tagline brand block, not stacked on its own
+/// centered line beneath it the way `what_new_link` placed it.
+#[test]
+fn hero_keeps_whats_new_on_the_brand_row() {
+    let mut fx = bare_fixture();
+    settle(&mut fx.harness);
+
+    let wordmark = painted_text_centers(&fx.harness, "TurboGit")
+        .into_iter()
+        .next()
+        .expect("the hero wordmark must be painted");
+    let tagline = painted_text_centers(
+        &fx.harness,
+        "A fast, keyboard-friendly Git client for your desktop.",
+    )
+    .into_iter()
+    .next()
+    .expect("the hero tagline must be painted");
+    let whats_new = painted_text_centers(&fx.harness, "What's new")
+        .into_iter()
+        .next()
+        .expect("the hero 'What's new' trigger must be painted");
+    let (w_y, t_y, n_y) = (wordmark.y, tagline.y, whats_new.y);
+    assert!(
+        w_y < n_y && n_y < t_y,
+        "'What's new' must sit within the hero brand row between the wordmark \
+         (y={w_y}) and the tagline (y={t_y}); got y={n_y}"
+    );
 }
 
 #[test]
@@ -486,6 +519,20 @@ fn painted_font_sizes(harness: &Harness<'_, AppState>, text: &str) -> Vec<f32> {
                     .first()
                     .map_or(0.0, |s| s.format.font_id.size),
             ),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Vertical centers (screen points) of every text galley whose text is
+/// exactly `text`. Used to assert which *row* an element sits on.
+fn painted_text_centers(harness: &Harness<'_, AppState>, text: &str) -> Vec<egui::Pos2> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Text(t) if t.galley.text() == text => Some(t.pos + t.galley.size() / 2.0),
             _ => None,
         })
         .collect()
@@ -1052,11 +1099,15 @@ fn header_paints_version_line_with_app_version_git_version_and_repo_count() {
     assert_painted(&fx.harness, "0 repos indexed");
 }
 
+/// Ticket 01: the hero's "What's new" ghost button opens and closes the same
+/// changelog overlay the retired `what_new_link` drove — unchanged behaviour,
+/// new trigger.
 #[test]
-fn whats_new_link_opens_and_closes_the_changelog_overlay() {
+fn hero_whats_new_opens_and_closes_the_changelog_overlay() {
     let mut fx = bare_fixture();
     settle(&mut fx.harness);
 
+    assert_painted(&fx.harness, "What's new");
     assert_not_painted(&fx.harness, "What's New");
 
     fx.harness.get_by_label("What's new").click();

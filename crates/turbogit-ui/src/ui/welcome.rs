@@ -14,8 +14,8 @@
 
 use crate::theme::Palette;
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontFamily, FontId, Frame, Id, Layout, Margin, Order,
-    Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Align2, Color32, CornerRadius, Frame, Id, Layout, Margin, Order, Pos2, Rect, RichText,
+    Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::time::{Duration, Instant};
 use turbogit_app::state::{AppState, Toast};
@@ -26,6 +26,8 @@ use super::widgets;
 
 /// Content column width (spec §8.1: max-width 980px).
 const CONTENT_WIDTH: f32 = 980.0;
+/// Hero brand-tile edge (spec §5.1: a 64px rounded tile).
+const HERO_TILE: f32 = 64.0;
 /// Right column (recent projects) fixed width (spec §8.1).
 const RECENTS_WIDTH: f32 = 260.0;
 const COLUMN_GAP: f32 = 16.0;
@@ -52,6 +54,11 @@ const RECENT_ROW_HEIGHT: f32 = 64.0;
 /// `WELCOME_CARD_RADIUS` would only grow the alias pile for one screen.
 const RADIUS_MD: u8 = 6;
 
+/// Paint alpha of the hero's soft `BRAND` gradient overlay (spec §5.1). A mix
+/// fraction, not a design token — egui has no linear-gradient fill, so the halo
+/// is one `BRAND`-tinted rect blended over [`Palette::BG`].
+const GRADIENT_ALPHA: f32 = 0.22;
+
 /// Branch indicators recompute at most this often (ADR-0005: computed live
 /// at render with in-memory caching — never stored).
 const BRANCH_TTL: Duration = Duration::from_secs(5);
@@ -66,9 +73,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             ui.add_space(margin);
             ui.vertical(|ui| {
                 ui.set_max_width(CONTENT_WIDTH.min(avail));
-                brand_header(ui);
-                ui.add_space(6.0);
-                what_new_link(ui, state);
+                hero(ui, state);
                 ui.add_space(22.0);
                 columns(ui, state);
                 ui.add_space(28.0);
@@ -80,30 +85,72 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     changelog_overlay(ui, state);
 }
 
-// --- Brand header ------------------------------------------------------------
+// --- Hero --------------------------------------------------------------------
 
-fn brand_header(ui: &mut Ui) {
-    ui.with_layout(Layout::top_down(Align::Center), |ui| {
-        ui.horizontal(|ui| {
-            icons::icon(ui, Icon::FOLDER_GIT, 38.0, Palette::BRAND);
-            ui.add_space(10.0);
-            ui.label(
-                RichText::new("TurboGit")
-                    .strong()
-                    .font(FontId::new(
-                        crate::theme::TYPE_WORDMARK,
-                        FontFamily::Proportional,
-                    ))
-                    .color(Palette::INK),
-            );
-        });
-        ui.add_space(6.0);
+/// The screen's one dominant region (spec §5.1): a soft `BRAND` gradient band
+/// carrying the 64px brand tile + white `FOLDER_GIT`, the wordmark and tagline
+/// beside it, and the "What's new" ghost trigger on the right (SPACE_BETWEEN).
+/// It replaces the old centered `brand_header` + `what_new_link`. No top bar is
+/// painted here — the shell already renders one over this panel (plan decision
+/// Q1). The gradient is one subtle overlay rect; if it ever reads as a blob at
+/// some width, drop it — the hero stands without it.
+fn hero(ui: &mut Ui, state: &mut AppState) {
+    let avail = ui.available_width();
+    let (band, _) = ui.allocate_exact_size(Vec2::new(avail, HERO_TILE), Sense::hover());
+
+    let painter = ui.painter().clone();
+    let radius = CornerRadius::same(crate::theme::CARD_RADIUS);
+    painter.rect_filled(
+        band,
+        radius,
+        widgets::mix(Palette::BG, Palette::BRAND, GRADIENT_ALPHA),
+    );
+
+    // Left cluster: brand tile, then the wordmark/tagline stack.
+    let mut left = ui.new_child(
+        UiBuilder::new()
+            .max_rect(band)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let (tile, _) = left.allocate_exact_size(Vec2::splat(HERO_TILE), Sense::hover());
+    left.painter().rect_filled(tile, radius, Palette::BRAND);
+    let icon_size = HERO_TILE / 2.0;
+    paint_icon_at(
+        &mut left,
+        Icon::FOLDER_GIT,
+        Pos2::new(
+            tile.center().x - icon_size / 2.0,
+            tile.center().y - icon_size / 2.0,
+        ),
+        icon_size,
+        Palette::BRAND_INK,
+    );
+    left.add_space(10.0);
+    left.vertical(|ui| {
+        ui.label(
+            RichText::new("TurboGit")
+                .strong()
+                .font(crate::theme::chrome_font(crate::theme::TYPE_WORDMARK))
+                .color(Palette::INK),
+        );
         ui.label(
             RichText::new("A fast, keyboard-friendly Git client for your desktop.")
                 .size(crate::theme::TYPE_TAGLINE)
                 .color(Palette::INK_3),
         );
     });
+
+    // Right: the "What's new" ghost button, opening the changelog overlay
+    // exactly as the retired centered link did (same `state.ui` flag).
+    let mut right = ui.new_child(
+        UiBuilder::new()
+            .max_rect(band)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    right.add_space(4.0);
+    if widgets::ghost_button(&mut right, Some(Icon::STAR), "What's new").clicked() {
+        state.ui.show_changelog = true;
+    }
 }
 
 // --- Two-column grid -----------------------------------------------------------
@@ -655,21 +702,6 @@ const CHANGELOG: &[(&str, &str)] = &[
     ),
     ("v0.9.0", "• A “What's new” link opens this changelog."),
 ];
-
-/// Centered "What's new" link that opens the changelog overlay.
-fn what_new_link(ui: &mut Ui, state: &mut AppState) {
-    ui.with_layout(Layout::top_down(Align::Center), |ui| {
-        let resp = ui.button(
-            RichText::new("What's new")
-                .size(crate::theme::TYPE_BODY)
-                .color(Palette::BRAND),
-        );
-        widgets::focus_ring(ui, &resp);
-        if resp.clicked() {
-            state.ui.show_changelog = true;
-        }
-    });
-}
 
 /// Center-anchored changelog overlay (issue #34): a framed panel listing
 /// [`CHANGELOG`] entries with a Close button. Painted above the Welcome page
