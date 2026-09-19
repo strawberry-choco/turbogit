@@ -4,7 +4,7 @@
 //! submodule list (`RootCaches::submodules`), which the shell keeps filled
 //! for the focused root.
 
-use egui::{Align, FontFamily, FontId, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Layout, RichText, ScrollArea, Ui};
 use turbogit_app::state::{AppState, PendingConfirm};
 use turbogit_domain::model::{Submodule, SubmoduleState};
 
@@ -15,7 +15,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     ui.label(
         RichText::new("SUBMODULES")
             .strong()
-            .font(FontId::new(11.0, FontFamily::Proportional))
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
             .color(Palette::INK_3),
     );
     ui.add_space(4.0);
@@ -53,7 +53,7 @@ fn submodule_row(ui: &mut Ui, state: &mut AppState, sub: &Submodule) {
         ui.add_space(8.0);
         ui.label(
             RichText::new(sub.path.display().to_string())
-                .font(FontId::new(12.0, FontFamily::Proportional))
+                .font(crate::theme::chrome_font(crate::theme::TYPE_BODY))
                 .color(Palette::INK),
         );
         commit_summary(ui, sub);
@@ -87,7 +87,7 @@ fn commit_summary(ui: &mut Ui, sub: &Submodule) {
     if !text.is_empty() {
         ui.label(
             RichText::new(text)
-                .font(FontId::new(11.0, FontFamily::Monospace))
+                .font(crate::theme::data_font(crate::theme::TYPE_CONTROL))
                 .color(Palette::INK_2),
         );
     }
@@ -103,7 +103,7 @@ fn status_chip(ui: &mut Ui, state: SubmoduleState) {
     };
     ui.label(
         RichText::new(text)
-            .font(FontId::new(11.0, FontFamily::Proportional))
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
             .color(color),
     );
 }

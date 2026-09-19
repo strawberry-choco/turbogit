@@ -4,7 +4,7 @@
 //! Reads the cached worktree list (`RootCaches::worktrees`), which the
 //! shell keeps filled for the focused root.
 
-use egui::{Align, FontFamily, FontId, Layout, RichText, ScrollArea, Ui, WidgetInfo, WidgetType};
+use egui::{Align, Layout, RichText, ScrollArea, Ui, WidgetInfo, WidgetType};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::Worktree;
 
@@ -17,7 +17,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         ui.label(
             RichText::new("WORKTREES")
                 .strong()
-                .font(FontId::new(11.0, FontFamily::Proportional))
+                .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                 .color(Palette::INK_3),
         );
         if ui.button("Add worktree").clicked() {
@@ -59,12 +59,12 @@ fn worktree_row(ui: &mut Ui, state: &mut AppState, wt: &Worktree) {
         ui.add_space(8.0);
         ui.label(
             RichText::new(wt.path.display().to_string())
-                .font(FontId::new(12.0, FontFamily::Proportional))
+                .font(crate::theme::chrome_font(crate::theme::TYPE_BODY))
                 .color(Palette::INK),
         );
         ui.label(
             RichText::new(&wt.branch)
-                .font(FontId::new(11.0, FontFamily::Proportional))
+                .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                 .color(Palette::BRAND),
         );
         // Dirty state fills in per worktree as its probe completes (ticket
@@ -73,14 +73,14 @@ fn worktree_row(ui: &mut Ui, state: &mut AppState, wt: &Worktree) {
             Some(true) => {
                 ui.label(
                     RichText::new("dirty")
-                        .font(FontId::new(11.0, FontFamily::Proportional))
+                        .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                         .color(Palette::STATE_WARNING),
                 );
             }
             Some(false) => {
                 ui.label(
                     RichText::new("clean")
-                        .font(FontId::new(11.0, FontFamily::Proportional))
+                        .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                         .color(Palette::INK_3),
                 );
             }

@@ -5,7 +5,7 @@
 use super::actions::{paint_centered, preview_status};
 use super::model::{FileMeta, IMAGE_CAP_BYTES, IMAGE_MAX_PIXELS, ROW_H, repo_rel_path};
 use crate::theme::Palette;
-use egui::{Align, FontFamily, FontId, Layout, Sense, TextureOptions, Ui, Vec2};
+use egui::{Align, Layout, Sense, TextureOptions, Ui, Vec2};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -503,7 +503,7 @@ fn centered_note(ui: &mut Ui, text: &str) {
         ui.painter(),
         rect,
         text,
-        FontId::new(12.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
         Palette::INK_2,
     );
 }

@@ -21,6 +21,7 @@ use crate::theme::Palette;
 use crate::ui::branch_tree_view::{self, TreeEvent, TreeGroup, TreeProps};
 use crate::ui::branches::fetch_scope;
 use crate::ui::branches_tree::build_branch_view;
+use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::{self, BadgeKind, RefKind};
 use chrono::{DateTime, Local, TimeZone, Utc};
@@ -54,11 +55,10 @@ const FILES_WIDTH: f32 = 344.0;
 /// two-row ghost grid, and a two-line alert. The short-window yield below still
 /// applies.
 const DETAILS_HEIGHT: f32 = 440.0;
-/// Commit table row height.
-const ROW_HEIGHT: f32 = 24.0;
 /// Changed-file row height (redesign issue 04): a name line with its directory
-/// underneath. Deliberately separate from [`ROW_HEIGHT`], which the commit
-/// table shares — two-line rows must not retarget the graph's geometry.
+/// underneath, so two lines where [`crate::theme::FILE_ROW_HEIGHT`] is one.
+/// Deliberately local rather than a third ramp step — this is the log table's
+/// own two-line row, and two-line rows must not retarget the graph's geometry.
 const LOG_FILE_ROW_HEIGHT: f32 = 40.0;
 /// Gap between the two churn numbers at the right edge of a file row.
 const STAT_GAP: f32 = 6.0;
@@ -68,9 +68,6 @@ const STRIPE_WIDTH: f32 = 3.0;
 const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL;
 /// Mono cell font size — shared body role (T2).
 const MONO_TEXT: f32 = crate::theme::TYPE_BODY;
-/// Chip metrics — mirrors `widgets::chip` (`.tg-label` pills).
-const CHIP_HEIGHT: f32 = 18.0;
-const CHIP_PAD_X: f32 = 6.0;
 
 /// Commit-table column x-offsets, measured from `content_left` (the row left
 /// edge, plus the root stripe in multi-root views). The micro column headers
@@ -656,7 +653,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 // Painted as a compact ×; the accessibility label carries
                 // the full verb (kittest drives it by that label).
                 let remove = ui
-                    .small_button(RichText::new("×").size(13.0))
+                    .small_button(RichText::new("×").size(crate::theme::TYPE_DETAIL_TITLE))
                     .on_hover_text("Remove the path filter");
                 remove.widget_info(|| {
                     WidgetInfo::labeled(WidgetType::Button, true, "Remove path filter")
@@ -676,7 +673,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 // The ref scope's chip — the same removable-chip gesture as
                 // the path filter (plan D7/D9).
                 let remove = ui
-                    .small_button(RichText::new("×").size(13.0))
+                    .small_button(RichText::new("×").size(crate::theme::TYPE_DETAIL_TITLE))
                     .on_hover_text("Remove the ref filter");
                 remove.widget_info(|| {
                     WidgetInfo::labeled(WidgetType::Button, true, "Remove ref filter")
@@ -719,8 +716,11 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
         ui.horizontal_wrapped(|ui| {
             for (idx, root) in state.multi.roots.iter().enumerate() {
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), Sense::hover());
-                ui.painter()
-                    .rect_filled(rect, CornerRadius::same(2), root_color(idx));
+                ui.painter().rect_filled(
+                    rect,
+                    CornerRadius::same(crate::theme::MARK_RADIUS),
+                    root_color(idx),
+                );
                 ui.label(
                     RichText::new(root.id.name())
                         .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
@@ -777,7 +777,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn body_font() -> FontId {
-    FontId::new(12.0, FontFamily::Proportional)
+    crate::theme::chrome_font(crate::theme::TYPE_BODY)
 }
 
 fn mono_font() -> FontId {
@@ -790,7 +790,10 @@ fn row_ink(active: bool) -> Color32 {
 
 fn allocate_row(ui: &mut Ui) -> (Rect, Response) {
     let width = ui.available_width();
-    ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::click())
+    ui.allocate_exact_size(
+        Vec2::new(width, crate::theme::FILE_ROW_HEIGHT),
+        Sense::click(),
+    )
 }
 
 /// One two-line changed-file row (redesign issue 04).
@@ -828,17 +831,21 @@ fn elide(
     }
 }
 
-/// Row fill decision: active rows keep the translucent selection token,
-/// hovered rows take SURFACE_2, idle rows stay transparent.
+/// Row fill decision for the commit table: active rows keep the translucent
+/// focus band, hovered rows take SURFACE_2, idle rows stay transparent. This is
+/// the shared row-state API at the log's own full-row rect (conformance
+/// issue 12); [`widgets::paint_row`] supplies the control radius, which is what
+/// this row has always rounded at.
 fn paint_row_fill(ui: &Ui, rect: &Rect, active: bool, hovered: bool) {
-    let fill = if active {
-        Palette::selection_bg()
-    } else if hovered {
-        Palette::SURFACE_2
-    } else {
-        return;
-    };
-    ui.painter().rect_filled(*rect, CornerRadius::same(4), fill);
+    widgets::paint_row(
+        ui,
+        *rect,
+        if active {
+            components::RowState::FocusSelected
+        } else {
+            components::RowState::from_flags(false, hovered)
+        },
+    );
 }
 
 /// Micro column headers above the commit table, aligned with the row cells.
@@ -894,11 +901,17 @@ fn commit_row(
 
     // Translucent selection (SELECTION_BG) keeps lane colors readable (§7.2).
     if selected {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(4), Palette::selection_bg());
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::CONTROL_RADIUS),
+            Palette::selection_bg(),
+        );
     } else if response.hovered() {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(4), Palette::SURFACE_2);
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::theme::CONTROL_RADIUS),
+            Palette::SURFACE_2,
+        );
     }
 
     // Root stripe (multi-root only).
@@ -1037,14 +1050,10 @@ fn paint_label_pill(painter: &egui::Painter, x: f32, cy: f32) -> Rect {
     const ICON_SIZE: f32 = 12.0;
     let colors = BadgeKind::Neutral.colors();
     let rect = Rect::from_min_size(
-        Pos2::new(x, cy - CHIP_HEIGHT / 2.0),
-        Vec2::new(ICON_SIZE + CHIP_PAD_X * 2.0, CHIP_HEIGHT),
+        Pos2::new(x, cy - widgets::CHIP_HEIGHT / 2.0),
+        Vec2::new(ICON_SIZE + widgets::CHIP_PAD_X * 2.0, widgets::CHIP_HEIGHT),
     );
-    painter.rect_filled(
-        rect,
-        CornerRadius::same((CHIP_HEIGHT / 2.0) as u8),
-        colors.bg,
-    );
+    painter.rect_filled(rect, widgets::chip_radius(), colors.bg);
     icons::paint_icon(
         painter,
         Pos2::new(
@@ -1240,10 +1249,17 @@ fn file_row(
         colors.fg,
     );
     let badge_rect = Rect::from_min_size(
-        Pos2::new(mx, cy - CHIP_HEIGHT / 2.0),
-        Vec2::new(badge_galley.size().x + CHIP_PAD_X * 2.0, CHIP_HEIGHT),
+        Pos2::new(mx, cy - widgets::CHIP_HEIGHT / 2.0),
+        Vec2::new(
+            badge_galley.size().x + widgets::CHIP_PAD_X * 2.0,
+            widgets::CHIP_HEIGHT,
+        ),
     );
-    painter.rect_filled(badge_rect, CornerRadius::same(4), colors.bg);
+    painter.rect_filled(
+        badge_rect,
+        CornerRadius::same(crate::theme::CONTROL_RADIUS),
+        colors.bg,
+    );
     painter.galley(
         Pos2::new(
             badge_rect.center().x - badge_galley.size().x / 2.0,
@@ -1447,7 +1463,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(4.0);
     Frame::new()
         .fill(Palette::SURFACE_3)
-        .corner_radius(CornerRadius::same(4))
+        .corner_radius(CornerRadius::same(crate::theme::CONTROL_RADIUS))
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
             Grid::new("log_commit_meta")

@@ -682,7 +682,7 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
     let dirty = root.status.modified() + root.status.unversioned() + root.status.conflicted.len();
 
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(0), Palette::BG);
+        .rect_filled(rect, CornerRadius::ZERO, Palette::BG);
     let mut child = ui.new_child(
         UiBuilder::new()
             .max_rect(rect)
@@ -746,12 +746,7 @@ fn branch_pill(ui: &mut Ui, branch: &str) {
     let h = 22.0;
     let (rect, _) =
         ui.allocate_exact_size(Vec2::new(galley.size().x + pad * 2.0, h), Sense::hover());
-    let radius = CornerRadius {
-        nw: 4,
-        ne: 4,
-        sw: 4,
-        se: 4,
-    };
+    let radius = CornerRadius::same(crate::theme::CONTROL_RADIUS);
     ui.painter().rect_filled(rect, radius, Palette::SURFACE_2);
     ui.painter().rect_stroke(
         rect,
@@ -780,16 +775,11 @@ fn dirty_badge(ui: &mut Ui, dirty_count: usize) {
         crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         fg,
     );
-    let pad = 6.0;
-    let h = 18.0;
+    let pad = widgets::CHIP_PAD_X;
+    let h = widgets::CHIP_HEIGHT;
     let (rect, _) =
         ui.allocate_exact_size(Vec2::new(galley.size().x + pad * 2.0, h), Sense::hover());
-    let radius = CornerRadius {
-        nw: 4,
-        ne: 4,
-        sw: 4,
-        se: 4,
-    };
+    let radius = CornerRadius::same(crate::theme::CONTROL_RADIUS);
     ui.painter().rect_filled(rect, radius, bg);
     ui.painter().galley_with_override_text_color(
         Pos2::new(rect.left() + pad, rect.center().y - galley.size().y / 2.0),
@@ -866,7 +856,7 @@ fn tab_item(
         rect.center(),
         Vec2::new(rect.width() - 6.0, TAB_STRIP_HEIGHT - 8.0),
     );
-    let pill_radius = CornerRadius::same(12);
+    let pill_radius = CornerRadius::same((pill.height() / 2.0) as u8);
     if active {
         painter.rect_filled(pill, pill_radius, Palette::SURFACE_2);
     } else if response.hovered() {

@@ -13,7 +13,7 @@ use turbogit_services::{
 
 use crate::theme::Palette;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::widgets::group_title;
+use crate::ui::widgets::{self, group_title};
 
 pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
     let ctx = ui.ctx().clone();
@@ -393,77 +393,68 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
 /// wording: a fast-forward creates no merge commit; an already-merged
 /// target reads as up to date.
 fn preview_box(ui: &mut Ui, preview: integrate_service::MergePreview, strategy: MergeStrategy) {
-    egui::Frame::new()
-        .fill(Palette::SURFACE_2)
-        .inner_margin(8.0)
-        .corner_radius(4.0)
-        .show(ui, |ui| {
-            if preview.files == 0 && preview.insertions == 0 && preview.deletions == 0 {
-                ui.strong("Already up to date");
-                return;
-            }
-            let commits_line = match strategy {
-                MergeStrategy::FastForward => "Will fast-forward — no merge commit".to_string(),
-                _ => format!(
-                    "Will create {} merge {}",
-                    preview.merge_commits,
-                    if preview.merge_commits == 1 {
-                        "commit"
-                    } else {
-                        "commits"
-                    }
-                ),
-            };
-            ui.strong(commits_line);
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} {} · {} {} · {} {}",
-                    preview.files,
-                    if preview.files == 1 {
-                        "file changed"
-                    } else {
-                        "files changed"
-                    },
-                    preview.insertions,
-                    if preview.insertions == 1 {
-                        "insertion"
-                    } else {
-                        "insertions"
-                    },
-                    preview.deletions,
-                    if preview.deletions == 1 {
-                        "deletion"
-                    } else {
-                        "deletions"
-                    }
-                ))
-                .monospace(),
-            );
-        });
+    widgets::note(ui, None, |ui| {
+        if preview.files == 0 && preview.insertions == 0 && preview.deletions == 0 {
+            ui.strong("Already up to date");
+            return;
+        }
+        let commits_line = match strategy {
+            MergeStrategy::FastForward => "Will fast-forward — no merge commit".to_string(),
+            _ => format!(
+                "Will create {} merge {}",
+                preview.merge_commits,
+                if preview.merge_commits == 1 {
+                    "commit"
+                } else {
+                    "commits"
+                }
+            ),
+        };
+        ui.strong(commits_line);
+        ui.label(
+            egui::RichText::new(format!(
+                "{} {} · {} {} · {} {}",
+                preview.files,
+                if preview.files == 1 {
+                    "file changed"
+                } else {
+                    "files changed"
+                },
+                preview.insertions,
+                if preview.insertions == 1 {
+                    "insertion"
+                } else {
+                    "insertions"
+                },
+                preview.deletions,
+                if preview.deletions == 1 {
+                    "deletion"
+                } else {
+                    "deletions"
+                }
+            ))
+            .monospace(),
+        );
+    });
 }
 
 /// The cascade banner (screen 14): a warning-toned strip naming how many
 /// sibling repos share the branch, with the "View plan →" hand-off.
 fn cascade_banner(ui: &mut Ui, state: &mut AppState, siblings: usize) {
     let noun = if siblings == 1 { "repo" } else { "repos" };
-    egui::Frame::new()
-        .fill(Palette::SURFACE_2)
-        .stroke(egui::Stroke::new(1.0, Palette::STATE_WARNING))
-        .inner_margin(8.0)
-        .corner_radius(4.0)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.colored_label(
-                    Palette::STATE_WARNING,
-                    format!("⚠ Cascade with {siblings} other {noun} after this merge"),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("View plan →").clicked() {
-                        state.open_merge_cascade_plan();
-                    }
-                });
+    widgets::note(ui, Some(Palette::STATE_WARNING), |ui| {
+        ui.horizontal(|ui| {
+            ui.colored_label(
+                Palette::STATE_WARNING,
+                format!("⚠ Cascade with {siblings} other {noun} after this merge"),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button("View plan →").clicked() {
+                    state.open_merge_cascade_plan();
+                }
             });
         });
+    });
 }
 
 /// The Rebase dialog (issue 29, screen 15): an ONTO BRANCH picker with a
@@ -567,22 +558,18 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
         }
         if let Some(plan) = state.ui.dlg.rebase_preview.clone() {
             group_title(ui, &format!("{} COMMITS TO REBASE", plan.len()));
-            egui::Frame::new()
-                .fill(Palette::SURFACE_2)
-                .inner_margin(8.0)
-                .corner_radius(4.0)
-                .show(ui, |ui| {
-                    for entry in &plan {
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{}  {}",
-                                &entry.commit[..7.min(entry.commit.len())],
-                                entry.subject
-                            ))
-                            .monospace(),
-                        );
-                    }
-                });
+            widgets::note(ui, None, |ui| {
+                for entry in &plan {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}  {}",
+                            &entry.commit[..7.min(entry.commit.len())],
+                            entry.subject
+                        ))
+                        .monospace(),
+                    );
+                }
+            });
             replay = plan;
         }
     }
@@ -681,24 +668,19 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
 /// "View affected →" hand-off to the affected-repo list.
 fn rebase_banner(ui: &mut Ui, state: &mut AppState, commits: usize, repos: usize) {
     let noun = if repos == 1 { "repo" } else { "repos" };
-    egui::Frame::new()
-        .fill(Palette::SURFACE_2)
-        .stroke(egui::Stroke::new(1.0, Palette::STATE_WARNING))
-        .inner_margin(8.0)
-        .corner_radius(4.0)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.colored_label(
-                    Palette::STATE_WARNING,
-                    format!("⚠ Rewrites {commits} commits across {repos} {noun}"),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("View affected →").clicked() {
-                        state.open_rebase_affected_list();
-                    }
-                });
+    widgets::note(ui, Some(Palette::STATE_WARNING), |ui| {
+        ui.horizontal(|ui| {
+            ui.colored_label(
+                Palette::STATE_WARNING,
+                format!("⚠ Rewrites {commits} commits across {repos} {noun}"),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button("View affected →").clicked() {
+                    state.open_rebase_affected_list();
+                }
             });
         });
+    });
 }
 
 /// The Tag dialog (issue 31, screen 16): a live-validated tag name ("✓

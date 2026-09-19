@@ -38,8 +38,11 @@ pub fn maybe_show(ui: &mut Ui, state: &mut AppState) {
         let color = severity_color(banner.severity);
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(rect, egui::CornerRadius::same(2), color);
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::same(crate::theme::MARK_RADIUS),
+                color,
+            );
             ui.colored_label(color, &banner.message);
             let mut clicked: Option<String> = None;
             for action in &banner.actions {
@@ -69,8 +72,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState, banner: &Banner) {
     let clicked: Option<String> = ui
         .horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), egui::Sense::hover());
-            ui.painter()
-                .rect_filled(rect, egui::CornerRadius::same(2), color);
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius::same(crate::theme::MARK_RADIUS),
+                color,
+            );
             ui.colored_label(color, &banner.message);
             let mut clicked: Option<String> = None;
             for action in &banner.actions {

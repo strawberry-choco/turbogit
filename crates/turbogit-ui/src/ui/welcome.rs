@@ -20,6 +20,7 @@ use egui::{
 use std::time::{Duration, Instant};
 use turbogit_app::state::{AppState, Toast};
 
+use super::components;
 use super::icons::{self, Icon};
 use super::widgets;
 
@@ -36,7 +37,19 @@ const CARD_HEIGHT_COMPACT: f32 = 64.0;
 /// Left-column width at which the four cards switch to the 2×2 grid
 /// (narrower columns keep one row so the clone form stays high).
 const CARD_GRID_MIN_W: f32 = 560.0;
+/// A recent-project row: name, path and last-opened on three lines, so the row
+/// is three text lines plus leading rather than a step on the 24/26 px single-line
+/// ramp — which is why it stays here rather than joining `theme`'s row heights.
 const RECENT_ROW_HEIGHT: f32 = 64.0;
+/// Corner radius of the four action cards.
+///
+/// **Open D3 question, not a token to copy.** These are cards, and
+/// [`crate::theme::CARD_RADIUS`] is the radius the rest of the app gives a card
+/// — but that is 8 and welcome has always painted 6, one step below, equal to
+/// `MENU_RADIUS`'s value without being a menu. Rounding the cards up to the card
+/// role is a visible change to the launch screen, so it is left as-is and flagged
+/// in the conformance issue rather than silently repainted. Adding a
+/// `WELCOME_CARD_RADIUS` would only grow the alias pile for one screen.
 const RADIUS_MD: u8 = 6;
 
 /// Branch indicators recompute at most this often (ADR-0005: computed live
@@ -87,7 +100,7 @@ fn brand_header(ui: &mut Ui) {
         ui.add_space(6.0);
         ui.label(
             RichText::new("A fast, keyboard-friendly Git client for your desktop.")
-                .size(14.0)
+                .size(crate::theme::TYPE_TAGLINE)
                 .color(Palette::INK_3),
         );
     });
@@ -217,12 +230,12 @@ fn attach_compact_card(ui: &mut Ui, state: &mut AppState, width: f32) {
     );
     let title_galley = painter.layout_no_wrap(
         "Attach Workspace Root".to_owned(),
-        FontId::new(13.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE),
         Palette::INK,
     );
     let body_galley = painter.layout(
         "Scan a folder tree and index every repository in it as a workspace.".to_owned(),
-        FontId::new(12.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
         Palette::INK_3,
         width - 2.0 * pad - 22.0 - 10.0,
     );
@@ -317,12 +330,12 @@ fn action_card(
 
     let title_galley = painter.layout_no_wrap(
         title.to_owned(),
-        FontId::new(13.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE),
         Palette::INK,
     );
     let body_galley = painter.layout(
         body.to_owned(),
-        FontId::new(12.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
         Palette::INK_3,
         width - 2.0 * pad,
     );
@@ -469,7 +482,7 @@ fn recents_column(ui: &mut Ui, state: &mut AppState) {
     if recents.is_empty() {
         ui.label(
             RichText::new("No recent projects yet.")
-                .size(12.0)
+                .size(crate::theme::TYPE_BODY)
                 .color(Palette::INK_3),
         );
         return;
@@ -486,25 +499,23 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
         ui.allocate_exact_size(Vec2::new(width, RECENT_ROW_HEIGHT), Sense::click());
     let hovered = response.hovered();
     let painter = ui.painter().clone();
-    if hovered {
-        painter.rect_filled(rect, CornerRadius::same(4), Palette::SURFACE_2);
-    }
+    widgets::paint_row(ui, rect, components::RowState::from_flags(false, hovered));
 
     let pad_x = 10.0;
 
     let name_galley = painter.layout_no_wrap(
         truncate(&project.name, 24),
-        FontId::new(13.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE),
         Palette::INK,
     );
     let path_galley = painter.layout_no_wrap(
         truncate(&project.path.display().to_string(), 38),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     let meta_galley = painter.layout_no_wrap(
         turbogit_app::recents::format_last_opened(project.last_opened),
-        FontId::new(11.0, FontFamily::Proportional),
+        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
         Palette::INK_3,
     );
     let x = rect.left() + pad_x;
@@ -519,25 +530,16 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     if let Some(branch) = cached_branch(state, &project.path) {
         let branch_galley = painter.layout_no_wrap(
             truncate(&branch, 18),
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::ACCENT_TEXT,
         );
-        let chip_w = branch_galley.size().x + 12.0;
-        let chip_rect = Rect::from_min_size(
-            Pos2::new(rect.right() - pad_x - chip_w, rect.center().y - 9.0),
-            Vec2::new(chip_w, 18.0),
-        );
-        painter.rect_filled(
+        let chip_rect =
+            widgets::chip_rect_right(rect.right() - pad_x, rect.center().y, &branch_galley);
+        widgets::paint_chip(
+            &painter,
             chip_rect,
-            CornerRadius::same(crate::theme::PILL_RADIUS),
-            Palette::SURFACE_3,
-        );
-        painter.galley(
-            Pos2::new(
-                chip_rect.left() + 6.0,
-                chip_rect.center().y - branch_galley.size().y / 2.0,
-            ),
             branch_galley,
+            Palette::SURFACE_3,
             Palette::ACCENT_TEXT,
         );
     }
@@ -555,7 +557,7 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
         };
         let count_galley = painter.layout_no_wrap(
             count_text,
-            FontId::new(11.0, FontFamily::Proportional),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::ACCENT_TEXT,
         );
         let right_edge = rect.right() - pad_x;
@@ -566,22 +568,12 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
         } else {
             rect.center().y
         };
-        let chip_w = count_galley.size().x + 12.0;
-        let count_rect = Rect::from_min_size(
-            Pos2::new(right_edge - chip_w, cy - 9.0),
-            Vec2::new(chip_w, 18.0),
-        );
-        painter.rect_filled(
+        let count_rect = widgets::chip_rect_right(right_edge, cy, &count_galley);
+        widgets::paint_chip(
+            &painter,
             count_rect,
-            CornerRadius::same(crate::theme::PILL_RADIUS),
-            Palette::SURFACE_3,
-        );
-        painter.galley(
-            Pos2::new(
-                count_rect.left() + 6.0,
-                count_rect.center().y - count_galley.size().y / 2.0,
-            ),
             count_galley,
+            Palette::SURFACE_3,
             Palette::ACCENT_TEXT,
         );
     }
@@ -633,10 +625,14 @@ fn getting_started(ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new(format!("{}. ", i + 1))
-                    .size(12.0)
+                    .size(crate::theme::TYPE_BODY)
                     .color(Palette::BRAND),
             );
-            ui.label(RichText::new(*hint).size(12.0).color(Palette::INK_2));
+            ui.label(
+                RichText::new(*hint)
+                    .size(crate::theme::TYPE_BODY)
+                    .color(Palette::INK_2),
+            );
         });
     }
 }
@@ -663,7 +659,11 @@ const CHANGELOG: &[(&str, &str)] = &[
 /// Centered "What's new" link that opens the changelog overlay.
 fn what_new_link(ui: &mut Ui, state: &mut AppState) {
     ui.with_layout(Layout::top_down(Align::Center), |ui| {
-        let resp = ui.button(RichText::new("What's new").size(12.0).color(Palette::BRAND));
+        let resp = ui.button(
+            RichText::new("What's new")
+                .size(crate::theme::TYPE_BODY)
+                .color(Palette::BRAND),
+        );
         widgets::focus_ring(ui, &resp);
         if resp.clicked() {
             state.ui.show_changelog = true;
@@ -693,7 +693,7 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
                         ui.label(
                             RichText::new("What's New")
                                 .strong()
-                                .size(16.0)
+                                .size(crate::theme::TYPE_PANE_TITLE)
                                 .color(Palette::INK),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -711,10 +711,14 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
                                     ui.label(
                                         RichText::new(*version)
                                             .strong()
-                                            .size(12.0)
+                                            .size(crate::theme::TYPE_BODY)
                                             .color(Palette::BRAND),
                                     );
-                                    ui.label(RichText::new(*note).size(12.0).color(Palette::INK_2));
+                                    ui.label(
+                                        RichText::new(*note)
+                                            .size(crate::theme::TYPE_BODY)
+                                            .color(Palette::INK_2),
+                                    );
                                 });
                                 ui.add_space(6.0);
                             }

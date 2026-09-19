@@ -19,6 +19,7 @@ use egui::{
     UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 
+use super::components;
 use super::icons::{self, Icon};
 use super::multi_selection::CheckState;
 use super::project_tree::{self, ProjectNode, iter_repos};
@@ -33,11 +34,35 @@ use turbogit_app::state::{AppState, Dialog, Toast};
 /// Left rail width (screen 01); also used by the shell's geometry.
 pub const SIDEBAR_WIDTH: f32 = 280.0;
 
-const ROW_HEIGHT: f32 = 26.0;
-const GROUP_HEIGHT: f32 = 24.0;
 /// Right zone of a rule row reserved for its edit/delete affordances;
 /// the row's click target shrinks by the same amount.
 const RULE_BUTTONS_ZONE: f32 = 56.0;
+
+/// The sidebar tree's active-row band: the full-bleed translucent focus fill
+/// plus the 2 px brand rule at its left edge, which carries the state without
+/// relying on colour alone.
+///
+/// Three row kinds paint it identically — smart group, smart rule, project
+/// folder — so the band lives here (conformance issue 08), and its fill now
+/// comes from the one row-state decision rather than a direct `selection_bg()`.
+/// The **hover** fill deliberately stays at each call site: the two rule rows
+/// round a hover at `CONTROL_RADIUS` while a project row keeps the band
+/// full-bleed. That asymmetry is what the sidebar has always painted; unifying
+/// it is a visible change and needs a decision, not a cleanup.
+fn paint_active_band(painter: &egui::Painter, row: Rect) {
+    painter.rect_filled(
+        row,
+        CornerRadius::ZERO,
+        components::row_fill(components::RowState::FocusSelected),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(row.left() + 1.0, row.top()),
+            Pos2::new(row.left() + 1.0, row.bottom()),
+        ],
+        Stroke::new(2.0, Palette::BRAND),
+    );
+}
 /// Height of the bottom selection bar (issue #08), shown only while a
 /// selection is live.
 const SELECTION_BAR_HEIGHT: f32 = 36.0;
@@ -89,11 +114,19 @@ fn tri_state_checkbox(
     let painter = ui.painter().clone();
     match state {
         CheckState::Checked => {
-            painter.rect_filled(rect, CornerRadius::same(3), Palette::BRAND);
+            painter.rect_filled(
+                rect,
+                CornerRadius::same(crate::theme::CHIP_RADIUS),
+                Palette::BRAND,
+            );
             icon_at(ui, Icon::CHECK, rect.center(), 10.0, Palette::BRAND_INK);
         }
         CheckState::Partial => {
-            painter.rect_filled(rect, CornerRadius::same(3), Palette::BRAND);
+            painter.rect_filled(
+                rect,
+                CornerRadius::same(crate::theme::CHIP_RADIUS),
+                Palette::BRAND,
+            );
             painter.line_segment(
                 [
                     Pos2::new(rect.left() + 3.5, rect.center().y),
@@ -108,10 +141,10 @@ fn tri_state_checkbox(
             } else {
                 Palette::BG
             };
-            painter.rect_filled(rect, CornerRadius::same(3), fill);
+            painter.rect_filled(rect, CornerRadius::same(crate::theme::CHIP_RADIUS), fill);
             painter.rect_stroke(
                 rect,
-                CornerRadius::same(3),
+                CornerRadius::same(crate::theme::CHIP_RADIUS),
                 Stroke::new(1.0, Palette::LINE),
                 egui::StrokeKind::Inside,
             );
@@ -161,7 +194,7 @@ fn render_pinned_views(ui: &mut Ui, state: &mut AppState) {
 fn render_selection_bar(ui: &mut Ui, state: &mut AppState, total: usize) {
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
-    painter.rect_filled(rect, CornerRadius::same(0), Palette::SURFACE);
+    painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
     painter.line_segment(
         [
             Pos2::new(rect.left(), rect.top() + 0.5),
@@ -260,7 +293,7 @@ pub fn dot_color(dot: DotState) -> Color32 {
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(0), Palette::BG);
+        .rect_filled(rect, CornerRadius::ZERO, Palette::BG);
     ui.painter().line_segment(
         [
             Pos2::new(rect.right() - 0.5, rect.top()),
@@ -431,9 +464,12 @@ fn render_smart_group_row(
     let width = ui.available_width();
     let row = Rect::from_min_size(
         Pos2::new(ui.cursor().left(), ui.cursor().top()),
-        Vec2::new(width, GROUP_HEIGHT),
+        Vec2::new(width, crate::theme::FILE_ROW_HEIGHT),
     );
-    ui.allocate_exact_size(Vec2::new(width, GROUP_HEIGHT), Sense::hover());
+    ui.allocate_exact_size(
+        Vec2::new(width, crate::theme::FILE_ROW_HEIGHT),
+        Sense::hover(),
+    );
     let response = ui.interact(
         row,
         ui.auto_id_with(("smart_group", entry.group)),
@@ -446,16 +482,13 @@ fn render_smart_group_row(
 
     let painter = ui.painter().clone();
     if is_smart_group_active(state, entry.group.label()) {
-        painter.rect_filled(row, CornerRadius::same(0), Palette::selection_bg());
-        painter.line_segment(
-            [
-                Pos2::new(row.left() + 1.0, row.top()),
-                Pos2::new(row.left() + 1.0, row.bottom()),
-            ],
-            Stroke::new(2.0, Palette::BRAND),
-        );
+        paint_active_band(&painter, row);
     } else if response.hovered() {
-        painter.rect_filled(row, CornerRadius::same(4), Palette::SURFACE_2);
+        painter.rect_filled(
+            row,
+            CornerRadius::same(crate::theme::CONTROL_RADIUS),
+            components::row_fill(components::RowState::Hover),
+        );
     }
 
     let cy = row.center().y;
@@ -516,9 +549,12 @@ fn render_rule_group_row(
     let width = ui.available_width();
     let row = Rect::from_min_size(
         Pos2::new(ui.cursor().left(), ui.cursor().top()),
-        Vec2::new(width, GROUP_HEIGHT),
+        Vec2::new(width, crate::theme::FILE_ROW_HEIGHT),
     );
-    ui.allocate_exact_size(Vec2::new(width, GROUP_HEIGHT), Sense::hover());
+    ui.allocate_exact_size(
+        Vec2::new(width, crate::theme::FILE_ROW_HEIGHT),
+        Sense::hover(),
+    );
     // The click target excludes the affordances zone so the pencil/trash
     // buttons never fight the row's own filter toggle.
     let clickable = Rect::from_min_max(
@@ -540,16 +576,13 @@ fn render_rule_group_row(
 
     let painter = ui.painter().clone();
     if is_smart_group_active(state, &rule.label) {
-        painter.rect_filled(row, CornerRadius::same(0), Palette::selection_bg());
-        painter.line_segment(
-            [
-                Pos2::new(row.left() + 1.0, row.top()),
-                Pos2::new(row.left() + 1.0, row.bottom()),
-            ],
-            Stroke::new(2.0, Palette::BRAND),
-        );
+        paint_active_band(&painter, row);
     } else if response.hovered() {
-        painter.rect_filled(row, CornerRadius::same(4), Palette::SURFACE_2);
+        painter.rect_filled(
+            row,
+            CornerRadius::same(crate::theme::CONTROL_RADIUS),
+            components::row_fill(components::RowState::Hover),
+        );
     }
 
     let cy = row.center().y;
@@ -729,7 +762,11 @@ fn render_folder_row(
 
     let painter = ui.painter().clone();
     if response.hovered() {
-        painter.rect_filled(header, CornerRadius::same(4), Palette::SURFACE_2);
+        painter.rect_filled(
+            header,
+            CornerRadius::same(crate::theme::CONTROL_RADIUS),
+            Palette::SURFACE_2,
+        );
     }
     let cy = header.center().y;
     let indent = depth as f32 * two_space_indent(ui);
@@ -823,9 +860,12 @@ fn render_repo_node(
     let width = ui.available_width();
     let row = Rect::from_min_size(
         Pos2::new(ui.cursor().left(), ui.cursor().top()),
-        Vec2::new(width, ROW_HEIGHT),
+        Vec2::new(width, crate::theme::GROUP_ROW_HEIGHT),
     );
-    ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::hover());
+    ui.allocate_exact_size(
+        Vec2::new(width, crate::theme::GROUP_ROW_HEIGHT),
+        Sense::hover(),
+    );
     let selected = state.selected_root.as_ref() == Some(&repo.id);
     let response = ui.interact(
         row,
@@ -888,16 +928,13 @@ fn render_repo_node(
 
     let painter = ui.painter().with_clip_rect(row.intersect(ui.clip_rect()));
     if selected {
-        painter.rect_filled(row, CornerRadius::same(0), Palette::selection_bg());
-        painter.line_segment(
-            [
-                Pos2::new(row.left() + 1.0, row.top()),
-                Pos2::new(row.left() + 1.0, row.bottom()),
-            ],
-            Stroke::new(2.0, Palette::BRAND),
-        );
+        paint_active_band(&painter, row);
     } else if response.hovered() {
-        painter.rect_filled(row, CornerRadius::same(0), Palette::SURFACE_2);
+        painter.rect_filled(
+            row,
+            CornerRadius::ZERO,
+            components::row_fill(components::RowState::Hover),
+        );
     }
 
     let cy = row.center().y;
@@ -1014,7 +1051,10 @@ fn paint_row_label(ui: &Ui, row: Rect, text: &str, x: f32, width: f32, size: f32
 /// Reserve one full-width row inside the scroll area and return its rect.
 fn group_header_rect(ui: &mut Ui) -> egui::Rect {
     let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, GROUP_HEIGHT), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        Vec2::new(width, crate::theme::FILE_ROW_HEIGHT),
+        Sense::hover(),
+    );
     rect
 }
 
@@ -1066,7 +1106,7 @@ mod tests {
                     let rect = text.galley.rect.translate(text.pos.to_vec2());
                     assert!(rect.left() >= 44.0, "label/badge crowds controls: {rect:?}");
                     assert!(rect.right() <= width, "text escapes row: {rect:?}");
-                    assert!(shape.clip_rect.height() <= ROW_HEIGHT);
+                    assert!(shape.clip_rect.height() <= crate::theme::GROUP_ROW_HEIGHT);
                     for previous in &text_rects {
                         assert!(
                             !rect.intersects(*previous),

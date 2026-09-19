@@ -44,10 +44,6 @@ impl Palette {
     pub const LINE: Color32 = Color32::from_rgb(0x4e, 0x51, 0x57);
     /// Subtle row separators (`--tg-line-subtle`).
     pub const LINE_SUBTLE: Color32 = Color32::from_rgb(0x36, 0x38, 0x3c);
-    /// Sidebar surface (`#1B1C1E`) — dedicated to the Local Changes redesign;
-    /// darker than every window/panel fill, kept out of the general surface
-    /// ladder so a sidebar can never be mistaken for content chrome.
-    pub const SIDEBAR: Color32 = Color32::from_rgb(0x1b, 0x1c, 0x1e);
 
     // Ink (text).
     /// Primary text (`--tg-ink`). Equal-value alias of the authoritative
@@ -75,15 +71,6 @@ impl Palette {
     /// Info (`--tg-state-info`).
     pub const STATE_INFO: Color32 = Color32::from_rgb(0x42, 0xa5, 0xf5);
 
-    // Risk scale (issue #01): three severity tiers aliased onto the status
-    // family so a risk surface never invents a hue.
-    /// Low-risk surface color (issue #01).
-    pub const RISK_LOW: Color32 = Self::STATE_SUCCESS;
-    /// Medium-risk surface color (issue #01).
-    pub const RISK_MEDIUM: Color32 = Self::STATE_WARNING;
-    /// High-risk surface color (issue #01).
-    pub const RISK_HIGH: Color32 = Self::STATE_ERROR;
-
     // Status semantics (issue #01): clean / dirty / diverged / stale mapped
     // onto the four state tokens — every status chip paints a real color,
     // never a fallback.
@@ -109,8 +96,6 @@ impl Palette {
     // background; translucent treatments (e.g. the rgba selection fill) are
     // defined against the specific surface they sit on and documented with it.
 
-    /// Window / bars (`#1A1B1E`): title bar, activity strip, status bar.
-    pub const WINDOW_BG: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x1e);
     /// Panel (`#1E2023`): sidebar, metadata panel, detail panel, input wells.
     pub const PANEL_BG: Color32 = Color32::from_rgb(0x1e, 0x20, 0x23);
     /// Content (`#232529`): branch list, breadcrumb strip, tab strip.
@@ -133,8 +118,6 @@ impl Palette {
     pub const ACCENT: Color32 = Self::BRAND;
     /// Ahead (`#5FA86C`): ahead counts, current-branch icon, "in sync".
     pub const AHEAD: Color32 = Color32::from_rgb(0x5f, 0xa8, 0x6c);
-    /// Behind (`#DCA34E`): behind counts, dirty markers.
-    pub const BEHIND: Color32 = Color32::from_rgb(0xdc, 0xa3, 0x4e);
     /// Danger (`#DB5C5C`): Delete only.
     pub const DANGER: Color32 = Color32::from_rgb(0xdb, 0x5c, 0x5c);
     /// Link / hash (`#74A3E8`): commit hash chips.
@@ -149,13 +132,6 @@ impl Palette {
     pub const T_MUTED: Color32 = Color32::from_rgb(0xae, 0xb2, 0xba);
     /// Readable accent ink. Action fills continue to use ACCENT/BRAND.
     pub const ACCENT_TEXT: Color32 = Color32::from_rgb(0x8b, 0xb5, 0xf5);
-
-    /// Corner radius for chips and badges (design doc §13: 3) — shared
-    /// `CHIP_RADIUS` variant (S3).
-    pub const RADIUS_CHIP: u8 = CHIP_RADIUS;
-    /// Corner radius for buttons, inputs and panels (design doc §13: 4) —
-    /// shared `CONTROL_RADIUS` variant (S3).
-    pub const RADIUS_CONTROL: u8 = CONTROL_RADIUS;
 
     // Reserved counter orange (redesign issue 01): `#E0883C` is reserved for
     // dirt/unpulled count badges only. Never a general accent, action, or
@@ -182,30 +158,81 @@ impl Palette {
     /// Deleted-line text (`--tg-diff-del-text`).
     pub const DIFF_DEL_TEXT: Color32 = Color32::from_rgb(0xff, 0x9a, 0x9a);
 
-    // Redesign diff tokens (issue 01): accent (line text/markers) on a tinted
-    // block (line background) for the new diff preview — distinct from the
-    // legacy DIFF_*_BG/TEXT pair above, which the old diff view keeps using.
+    // Redesign diff accents (issue 01): the line text/marker colour for the new
+    // diff preview — distinct from the legacy DIFF_*_BG/TEXT pair above, which
+    // the old diff view keeps using. The pair of tinted *block* fills this block
+    // once also carried had no consumer by the time every screen had been
+    // migrated, so they were deleted rather than kept alive by a test
+    // (conformance issue 18); `DIFF_{ADD,DEL}_BG` remain the line-background
+    // roles.
     /// Added-line accent (`#57965C`) — shares the added-file green.
     pub const DIFF_ADD_ACCENT: Color32 = Color32::from_rgb(0x57, 0x96, 0x5c);
-    /// Added-line block (`#2E4334`).
-    pub const DIFF_ADD_BLOCK: Color32 = Color32::from_rgb(0x2e, 0x43, 0x34);
     /// Removed-line accent (`#F75464`).
     pub const DIFF_DEL_ACCENT: Color32 = Color32::from_rgb(0xf7, 0x54, 0x64);
-    /// Removed-line block (`#433034`).
-    pub const DIFF_DEL_BLOCK: Color32 = Color32::from_rgb(0x43, 0x30, 0x34);
 
     /// Selected-row fill: BRAND at ~25% premultiplied alpha over BG.
     pub fn selection_bg() -> Color32 {
         Color32::from_rgba_premultiplied(0x0d, 0x1d, 0x3c, 0x40)
     }
 
-    /// Solid row-selection background for the Local Changes
-    /// redesign. Equal-value alias of the canonical [`Self::SELECTION`]:
-    /// commit inclusion and navigation selection share one opaque selection
-    /// fill (C4) — previously a near-duplicate #2E436E; the translucent
-    /// [`Self::selection_bg`] focus treatment remains a separate variant.
+    // --- Kept with no `src` consumer (conformance issue 18) -----------------
+    // The sweep deleted these once every screen had had its turn and found they
+    // could not go in the same change as their tests: each is pinned by an
+    // assertion that reads it (`design_tokens.rs`, `branch_component_kit.rs`,
+    // `commit_window.rs`, `welcome.rs`), so removing one is a paired src+test
+    // deletion that needs its own review rather than being folded in here.
+    // They are listed with what still holds them, so the next pass can see that
+    // this is a deferred decision and not an oversight. `MARK_RADIUS`,
+    // `SECTION_TINT` and `MARKER_TINT` above are the counter-example: added with
+    // real consumers, and they render.
+
+    /// Solid row-selection background, an equal-value alias of
+    /// [`Self::SELECTION`]. No `src` consumer since the commit window's file row
+    // moved onto `RowState::Selected` (issue 10).
     pub const SELECTION_BG: Color32 = Self::SELECTION;
+    /// Sidebar surface, dedicated to the Local Changes redesign and deliberately
+    /// darker than every window/panel fill. No `src` consumer: `sidebar.rs`
+    /// paints `SURFACE`/`BG`, which is the disagreement issue 08 stopped on.
+    pub const SIDEBAR: Color32 = Color32::from_rgb(0x1b, 0x1c, 0x1e);
+    /// Window / bars (`#1A1B1E`). No `src` consumer.
+    pub const WINDOW_BG: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x1e);
+    /// Behind (`#DCA34E`). No `src` consumer — behind counts render through
+    /// `RepoState::Unpulled.color()`, which is `COUNTER`, not this.
+    pub const BEHIND: Color32 = Color32::from_rgb(0xdc, 0xa3, 0x4e);
+    /// Low-risk surface color, aliased onto the status family. No `src`
+    /// consumer; the bulk views use `STATE_*` directly (issue 13).
+    pub const RISK_LOW: Color32 = Self::STATE_SUCCESS;
+    /// Medium-risk surface color. No `src` consumer.
+    pub const RISK_MEDIUM: Color32 = Self::STATE_WARNING;
+    /// High-risk surface color. No `src` consumer.
+    pub const RISK_HIGH: Color32 = Self::STATE_ERROR;
+    /// Added-line block (`#2E4334`). No `src` consumer — the redesigned diff
+    /// preview uses `DIFF_ADD_ACCENT` over `DIFF_ADD_BG`.
+    pub const DIFF_ADD_BLOCK: Color32 = Color32::from_rgb(0x2e, 0x43, 0x34);
+    /// Removed-line block (`#433034`). No `src` consumer.
+    pub const DIFF_DEL_BLOCK: Color32 = Color32::from_rgb(0x43, 0x30, 0x34);
+    /// Corner radius for chips and badges — the `Palette`-side spelling of
+    /// [`CHIP_RADIUS`], retired to zero `src` consumers by issue 16.
+    pub const RADIUS_CHIP: u8 = CHIP_RADIUS;
+    /// Corner radius for buttons and inputs — the `Palette`-side spelling of
+    /// [`CONTROL_RADIUS`], retired to zero `src` consumers by issue 16.
+    pub const RADIUS_CONTROL: u8 = CONTROL_RADIUS;
 }
+
+// --- Accent tint fractions -------------------------------------------------
+// How strongly an accent colour is mixed over a surface, as a role rather than a
+// per-call-site decimal. `tint_over_bg` (ui::widgets) applies them; each value
+// here is the amount of accent in the result. The third member of the family,
+// a chip's 0.18, lives as `ui::widgets::BADGE_TINT` — a home for it is a
+// conformance issue 18 question, not a reason to duplicate the value here.
+/// A band behind one section of a multi-part panel — a "yours" / "theirs" block
+/// in the conflict screens. Weaker than a chip's fill, because it sits under many
+/// lines of text rather than behind one word.
+pub const SECTION_TINT: f32 = 0.12;
+/// A marker strip: a small object that has to read as *a thing you can act on*
+/// rather than as background. One step above [`SECTION_TINT`], which is what
+/// keeps a conflict's marker strip distinct from the section it marks.
+pub const MARKER_TINT: f32 = 0.15;
 
 /// Shared repository-state vocabulary for dots, badges and summaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -272,7 +299,9 @@ impl RepoState {
 pub const FILE_ROW_HEIGHT: f32 = 24.0;
 /// Group-row height in the changes tree (26 px).
 pub const GROUP_ROW_HEIGHT: f32 = 26.0;
-/// Grid-gap base unit for row/group heights and panel padding.
+/// Grid-gap base unit for row heights and panel padding. Kept with no `src`
+/// consumer (conformance issue 18): the named roles below are what call sites
+/// actually use, and `design_tokens.rs` asserts the grid relation by name.
 pub const GRID_GAP: f32 = 4.0;
 /// Panel padding (12 px; the spec allows 12–14 px).
 pub const PANEL_PADDING: f32 = 12.0;
@@ -300,8 +329,6 @@ pub const DENSITY_DENSE_BUTTON: Vec2 = Vec2::new(6.0, 2.0);
 pub const CHIP_RADIUS: u8 = 3;
 /// Control corner radius (4 px).
 pub const CONTROL_RADIUS: u8 = 4;
-/// Pill corner radius (9 px) — full-height pill chips (welcome, badges).
-pub const PILL_RADIUS: u8 = 9;
 /// Window corner radius (8 px).
 pub const WINDOW_RADIUS: u8 = 8;
 /// Menu corner radius (6 px).
@@ -310,6 +337,17 @@ pub const MENU_RADIUS: u8 = 6;
 /// Changes redesign, one step above the 4 px control radius so a card reads
 /// as a container rather than as a large control.
 pub const CARD_RADIUS: u8 = 8;
+/// Pill corner radius (9 px) — the full-height wrap the welcome chips and
+/// badges use. Kept with no `src` consumer (conformance issue 18): every pill
+/// now derives its radius from its own height via `widgets::chip_radius`, which
+/// is where this 9 came from, and `design_tokens.rs` plus `welcome.rs` still
+/// assert the shape by name.
+pub const PILL_RADIUS: u8 = 9;
+/// Mark corner radius (2 px) — the rounding on something too small to take
+/// [`CONTROL_RADIUS`]: a 3 px kind-colored accent bar, a 10 px repository dot,
+/// a 2 px focus stroke drawn *inside* a pane's own edge, a character-level diff
+/// highlight. Anything larger is a control or a chip and takes its radius.
+pub const MARK_RADIUS: u8 = 2;
 
 /// Accent (selection / primary action) color — the brand token.
 pub fn accent() -> Color32 {
@@ -335,10 +373,29 @@ pub const TYPE_BODY: f32 = 12.0;
 /// Detail-panel title — 13px.
 pub const TYPE_DETAIL_TITLE: f32 = 13.0;
 
+// Two steps the §13 ramp does not cover, each found by the conformance sweep as
+// a literal with no role to point at. Both have exactly one consumer today, so
+// each is recorded with it — a third call site has to be a deliberate choice to
+// reuse the role, not a coincidence of pixels.
+/// Repository-group header name in the commit window's changes tree (12.5 px).
+/// Sits one hair above [`TYPE_BODY`], which the file rows it groups render at,
+/// so a group header reads as the parent without jumping to a title. Consumer:
+/// `ui::commit_window::repo_group`.
+pub const TYPE_GROUP_NAME: f32 = 12.5;
+/// A full-window pane's own title (16 px) — the heading a tool window, dialog or
+/// summary pane writes above its content, as opposed to a label inside it.
+/// Consumers: `ui::multi_selection::show_summary`, the settings page header, and
+/// the changelog dialog's title in `ui::welcome`.
+pub const TYPE_PANE_TITLE: f32 = 16.0;
+
 // Display roles (T2): distinct sizes for prominent display-only text. Named
 // so central type changes reach the consumers, without reducing them to body.
 /// Welcome wordmark — 42px (welcome.rs brand header).
 pub const TYPE_WORDMARK: f32 = 42.0;
+/// The strapline directly under [`TYPE_WORDMARK`] (14 px) — one step above the
+/// §13 ramp's largest role, and only ever set beside the wordmark. Consumer:
+/// `ui::welcome::brand_header`.
+pub const TYPE_TAGLINE: f32 = 14.0;
 /// Multi-repo statistics — 22px (multi_selection.rs stats strip).
 pub const TYPE_STATISTIC: f32 = 22.0;
 
