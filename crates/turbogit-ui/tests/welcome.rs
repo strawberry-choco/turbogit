@@ -604,6 +604,62 @@ fn recents_card_is_enclosed_and_footers_show_all_projects() {
     assert!(card_fill, "the recents card must paint a CONTENT_BG frame");
 }
 
+/// Ticket 04: the `lower` band places the recents card (left, wider) beside the
+/// getting-started card (right). Before this the getting-started hints were a
+/// bare full-width list stacked well below a right-hand recents column, so the
+/// two headers were neither on one band nor in left→right order.
+#[test]
+fn lower_puts_recents_left_and_getting_started_right() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let repo = seed_repo(project.path(), "alpha");
+
+    seed_recents(
+        config.path(),
+        &[RecentProject {
+            path: repo.clone(),
+            name: "alpha".into(),
+            last_opened: 1_755_000_000_050,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
+        }],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = Harness::new_ui_state(
+        move |ui, state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
+            turbogit_ui::ui::render(ui, state);
+        },
+        AppState::launch_in(None, Some(cfg)),
+    );
+    harness.set_size(egui::vec2(1024.0, 768.0));
+    settle(&mut harness);
+
+    let recents = painted_text_centers(&harness, "RECENT PROJECTS")
+        .into_iter()
+        .next()
+        .expect("recents header");
+    let getting = painted_text_centers(&harness, "GETTING STARTED")
+        .into_iter()
+        .next()
+        .expect("getting-started header");
+    let (dy, dx) = ((recents.y - getting.y).abs(), getting.x - recents.x);
+    assert!(
+        dy <= 40.0 && dx > 0.0,
+        "getting-started must sit beside (right of) recents on one band: \
+         recents=({},{}) getting=({},{}) -> dx={dx} dy={dy}",
+        recents.x,
+        recents.y,
+        getting.x,
+        getting.y,
+    );
+    // The five hints still paint their text inside the card.
+    assert_painted(&harness, "Stage files in the Commit tool window.");
+}
+
 // ----------------------------------- issue: shared typography roles (T2) ----
 
 /// Paint-time font sizes (points) of every galley carrying exactly `text`.
