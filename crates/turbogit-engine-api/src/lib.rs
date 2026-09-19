@@ -47,6 +47,21 @@ pub trait GitExecutor: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Per-file line counts of one commit as `(path, insertions, deletions)`
+    /// (`git diff-tree --numstat -r -M`; logs-panels redesign issue 01). Paths
+    /// are exactly the ones [`GitExecutor::commit_files`] reports — rename
+    /// targets included — so the changed-files pane can join the two lists by
+    /// path. Binary files carry `-` in git's numstat columns and read as
+    /// `0/0`. The default returns an empty list for engines that cannot answer.
+    fn commit_file_stats(
+        &self,
+        root: &Path,
+        commit: &str,
+    ) -> TgResult<Vec<(PathBuf, usize, usize)>> {
+        let _ = (root, commit);
+        Ok(Vec::new())
+    }
+
     /// `git branch -vv` (+ remotes) for a root.
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>>;
 

@@ -477,6 +477,29 @@ impl GitExecutor for CliExecutor {
         Ok(out.lines().filter_map(parse_name_status_line).collect())
     }
 
+    fn commit_file_stats(
+        &self,
+        root: &Path,
+        commit: &str,
+    ) -> TgResult<Vec<(PathBuf, usize, usize)>> {
+        // The numstat twin of `commit_files` above: the same `-M` rename
+        // detection, so both lists report the same (new-side) paths, and the
+        // same `--root`, so a parentless commit still answers.
+        let (out, _, _) = self.run(
+            root,
+            &[
+                "diff-tree",
+                "--no-commit-id",
+                "--numstat",
+                "-r",
+                "--root",
+                "-M",
+                commit,
+            ],
+        )?;
+        Ok(parse_numstat(&out))
+    }
+
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
         let (out, _, _) = self.run(root, &["branch", "-a", "-vv"])?;
         // Branch-tip data, one `git for-each-ref` call: committer dates for
@@ -1785,6 +1808,45 @@ fn parse_name_status_line(line: &str) -> Option<Change> {
     })
 }
 
+/// Parse `git diff-tree --numstat` output into `(path, insertions, deletions)`.
+/// Binary rows carry `-` in both count columns and read as `0/0`.
+fn parse_numstat(s: &str) -> Vec<(PathBuf, usize, usize)> {
+    let mut out = Vec::new();
+    for line in s.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(insertions), Some(deletions), Some(path)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+        out.push((
+            PathBuf::from(numstat_path(path)),
+            insertions.parse().unwrap_or_default(),
+            deletions.parse().unwrap_or_default(),
+        ));
+    }
+    out
+}
+
+/// Resolve one numstat path column to the path `commit_files` reports. git
+/// collapses a rename into a single column: `pre/{old => new}post` when the two
+/// sides share a prefix or suffix, bare `old => new` when they share neither.
+/// Every other row is already a plain path.
+fn numstat_path(raw: &str) -> String {
+    if let Some(brace) = raw.find('{')
+        && let (head, tail) = raw.split_at(brace)
+        && let Some(closing) = tail.find('}')
+        && let Some((_, new)) = tail[..closing].split_once(" => ")
+    {
+        return format!("{head}{new}{}", &tail[closing + 1..]);
+    }
+    raw.split_once(" => ")
+        .map_or_else(|| raw.to_string(), |(_, new)| new.to_string())
+}
+
 /// Parse `git blame --line-porcelain` output into per-line records.
 fn parse_blame(s: &str) -> Vec<BlameLine> {
     let mut out: Vec<BlameLine> = Vec::new();
@@ -1867,5 +1929,61 @@ mod tests {
         assert_eq!(parse_signature_state("E"), SignatureState::Unverified);
         assert_eq!(parse_signature_state("X"), SignatureState::Unverified);
         assert_eq!(parse_signature_state(""), SignatureState::Unsigned);
+    }
+
+    /// Verbatim `git diff-tree --no-commit-id --numstat -r --root -M` output from
+    /// a fixture repository (one edited file, one deleted file).
+    #[test]
+    fn numstat_lines_carry_per_file_line_counts() {
+        let out = parse_numstat(
+            "4\t1\tapp/src/main/java/com/example/prom/PrometheusCollector.java\n\
+             0\t1\tsrc/gone.txt\n",
+        );
+        assert_eq!(
+            out,
+            vec![
+                (
+                    PathBuf::from("app/src/main/java/com/example/prom/PrometheusCollector.java"),
+                    4,
+                    1
+                ),
+                (PathBuf::from("src/gone.txt"), 0, 1),
+            ]
+        );
+    }
+
+    /// git reports a binary change as `-\t-\t<path>`: the row still exists, it
+    /// just has no line counts, so it reads as `0/0` rather than disappearing.
+    #[test]
+    fn binary_numstat_rows_read_as_zero_counts() {
+        let out = parse_numstat("-\t-\tlogo.png\n2\t0\tsrc/renamed.txt\n");
+        assert_eq!(
+            out,
+            vec![
+                (PathBuf::from("logo.png"), 0, 0),
+                (PathBuf::from("src/renamed.txt"), 2, 0),
+            ]
+        );
+    }
+
+    /// git collapses a rename into one path column: the two sides share their
+    /// prefix and/or suffix, written `pre/{old => new}post`, or nothing does,
+    /// written bare `old => new`. The new side is what `commit_files` reports,
+    /// so that is the key the counts must join on.
+    #[test]
+    fn rename_numstat_rows_resolve_to_their_new_path() {
+        let out = parse_numstat(
+            "2\t0\tsrc/{keep.txt => renamed.txt}\n\
+             6\t0\tdocs/{a => b}/guide.md\n\
+             0\t0\talpha_one.txt => elsewhere/deep/two.txt\n",
+        );
+        assert_eq!(
+            out,
+            vec![
+                (PathBuf::from("src/renamed.txt"), 2, 0),
+                (PathBuf::from("docs/b/guide.md"), 6, 0),
+                (PathBuf::from("elsewhere/deep/two.txt"), 0, 0),
+            ]
+        );
     }
 }

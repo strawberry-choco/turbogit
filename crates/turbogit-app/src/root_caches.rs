@@ -49,6 +49,10 @@ pub struct RootCaches {
     ref_cache: HashMap<RootId, HashMap<CommitId, Vec<CommitRef>>>,
     /// Changed-file lists keyed by (root, commit id) (issue #12).
     files_cache: HashMap<(RootId, CommitId), Vec<Change>>,
+    /// Per-file line counts keyed by (root, commit id) (logs-panels redesign
+    /// issue 02): the changed-files pane's `+N −M` column and the details
+    /// pane's churn bar. Loaded off the render thread, one request per commit.
+    file_stats_cache: HashMap<(RootId, CommitId), Vec<FileStat>>,
     /// Path-scoped logs keyed by (root, scoped path) (issue #19).
     log_path_cache: HashMap<(RootId, PathBuf), Vec<Commit>>,
     /// Ref-scoped logs keyed by (root, ref) (branch-tree extraction, plan
@@ -100,6 +104,21 @@ pub enum StatsView {
     Repo,
     Staged,
     Local,
+}
+
+/// One file's line counts within a commit, as the engine's numstat reports
+/// them: `(path, insertions, deletions)`.
+pub type FileStat = (PathBuf, usize, usize);
+
+/// The `(insertions, deletions)` of `path` within one commit's stats slice, or
+/// `None` when the path is absent — which covers both "counts still in flight"
+/// and "this commit did not touch that file". A row with no stat renders
+/// neither number, never a `+0 −0` that claims a measured zero.
+pub fn file_stat(stats: &[FileStat], path: &Path) -> Option<(usize, usize)> {
+    stats
+        .iter()
+        .find(|(p, _, _)| p == path)
+        .map(|(_, ins, dels)| (*ins, *dels))
 }
 
 impl RootCaches {
@@ -164,6 +183,23 @@ impl RootCaches {
         self.files_cache
             .get(&(root.clone(), commit.clone()))
             .map(|v| v.as_slice())
+    }
+
+    /// The cached per-file line counts of `(root, commit)`, if loaded
+    /// (logs-panels redesign issue 02). `None` means the request has not
+    /// settled yet — rows render without numbers rather than waiting.
+    pub fn file_stats_for(&self, root: &RootId, commit: &CommitId) -> Option<&[FileStat]> {
+        self.file_stats_cache
+            .get(&(root.clone(), commit.clone()))
+            .map(|v| v.as_slice())
+    }
+
+    /// True when `(root, commit)`'s line counts are stored — the check
+    /// [`AppState::fetch_file_stats`](crate::state::AppState::fetch_file_stats)
+    /// makes before dispatching, mirroring [`RootCaches::refs_loaded`].
+    pub fn file_stats_loaded(&self, root: &RootId, commit: &CommitId) -> bool {
+        self.file_stats_cache
+            .contains_key(&(root.clone(), commit.clone()))
     }
 
     /// Ahead/behind of `root`'s current branch vs its upstream, if known.
@@ -351,6 +387,13 @@ impl RootCaches {
         self.ref_cache.insert(root, deco.into_iter().collect());
     }
 
+    /// Store freshly loaded per-file line counts for one commit (logs-panels
+    /// redesign issue 02): the worker-event writer behind
+    /// `AppEvent::FileStatsLoaded`, same contract as [`Self::store_refs`].
+    pub fn store_file_stats(&mut self, root: RootId, commit: CommitId, stats: Vec<FileStat>) {
+        self.file_stats_cache.insert((root, commit), stats);
+    }
+
     /// Store freshly computed ahead/behind counts for `root`.
     pub fn store_ahead_behind(&mut self, root: RootId, ab: (usize, usize)) {
         self.ahead_behind.insert(root, ab);
@@ -395,6 +438,7 @@ impl RootCaches {
                 self.log_cache.remove(root);
                 self.ref_cache.remove(root);
                 self.files_cache.retain(|(r, _), _| r != root);
+                self.file_stats_cache.retain(|(r, _), _| r != root);
                 self.log_path_cache.retain(|(r, _), _| r != root);
                 self.log_ref_cache.retain(|(r, _), _| r != root);
                 self.search_cache.retain(|(r, _), _| r != root);
@@ -423,6 +467,7 @@ impl RootCaches {
         self.log_cache.clear();
         self.ref_cache.clear();
         self.files_cache.clear();
+        self.file_stats_cache.clear();
         self.log_path_cache.clear();
         self.log_ref_cache.clear();
         self.search_cache.clear();
@@ -438,6 +483,7 @@ impl RootCaches {
         self.log_cache.is_empty()
             && self.ref_cache.is_empty()
             && self.files_cache.is_empty()
+            && self.file_stats_cache.is_empty()
             && self.log_path_cache.is_empty()
             && self.log_ref_cache.is_empty()
             && self.search_cache.is_empty()
