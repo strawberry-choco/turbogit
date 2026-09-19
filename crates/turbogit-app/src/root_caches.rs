@@ -43,8 +43,11 @@ impl Affected {
 /// The root-keyed caches behind one interface.
 #[derive(Default)]
 pub struct RootCaches {
-    /// Commit logs keyed by root (refreshed on demand / after ops).
-    log_cache: HashMap<RootId, Vec<Commit>>,
+    /// Commit-log windows keyed by root: the fetched pages so far, newest
+    /// first, plus what the last page said about the rest of the history.
+    /// One entry per root, so invalidating a log cannot leave its paging flag
+    /// behind (log paging, P5).
+    log_cache: HashMap<RootId, LogWindow>,
     /// Ref decorations keyed by root, then commit id (issue #12).
     ref_cache: HashMap<RootId, HashMap<CommitId, Vec<CommitRef>>>,
     /// Changed-file lists keyed by (root, commit id) (issue #12).
@@ -70,6 +73,15 @@ pub struct RootCaches {
     /// (issue 20): HEAD↔worktree, HEAD↔index, and index↔worktree, each
     /// parsed into per-file hunk spans.
     hunk_stats: HashMap<RootId, RootHunkStats>,
+}
+
+/// One root's commit-log window: the pages fetched so far, newest first, and
+/// whether history continues past them. The window is the cached log plus its
+/// paging state as one value, so no invalidation can separate the two.
+#[derive(Default)]
+struct LogWindow {
+    commits: Vec<Commit>,
+    has_more: bool,
 }
 
 /// The three working-tree diff views of one root, parsed into per-file hunk
@@ -126,7 +138,14 @@ impl RootCaches {
 
     /// The cached commit log for `root`, if loaded.
     pub fn log(&self, root: &RootId) -> Option<&[Commit]> {
-        self.log_cache.get(root).map(|v| v.as_slice())
+        self.log_cache.get(root).map(|w| w.commits.as_slice())
+    }
+
+    /// Whether `root`'s cached window stops short of the end of its history —
+    /// the authoritative answer the log pane pages on (log paging, P4), `false`
+    /// for a root with nothing cached.
+    pub fn log_has_more(&self, root: &RootId) -> bool {
+        self.log_cache.get(root).is_some_and(|w| w.has_more)
     }
 
     /// The cached path-scoped log for `(root, path)`, if loaded (issue #19).
@@ -375,9 +394,38 @@ impl RootCaches {
         );
     }
 
-    /// Store a freshly loaded commit log for `root`.
+    /// Store a freshly loaded commit log for `root`, replacing whatever window
+    /// it held. A wholesale write makes no claim about rows beyond itself, so
+    /// `has_more` resets with it; the fetcher states the flag from what it
+    /// asked for ([`Self::set_log_has_more`]).
     pub fn store_log(&mut self, root: RootId, commits: Vec<Commit>) {
-        self.log_cache.insert(root, commits);
+        self.log_cache.insert(
+            root,
+            LogWindow {
+                commits,
+                has_more: false,
+            },
+        );
+    }
+
+    /// Append a fetched page onto `root`'s window (log paging): the
+    /// newest-first list grows by every commit it does not already hold.
+    /// Dedup by [`CommitId`] is what makes an overlapping page — the anchor
+    /// row the pager asks for again, a retry, a race with a refresh —
+    /// harmless. Says nothing about `has_more`, which the fetcher states.
+    pub fn append_log(&mut self, root: RootId, commits: Vec<Commit>) {
+        let window = self.log_cache.entry(root).or_default();
+        for commit in commits {
+            if !window.commits.iter().any(|held| held.id == commit.id) {
+                window.commits.push(commit);
+            }
+        }
+    }
+
+    /// Record whether `root`'s history continues past the cached window
+    /// (log paging, P4): a full page means more, a short one means the end.
+    pub fn set_log_has_more(&mut self, root: &RootId, has_more: bool) {
+        self.log_cache.entry(root.clone()).or_default().has_more = has_more;
     }
 
     /// Store freshly loaded ref decorations for `root` (log-open perf, D1):

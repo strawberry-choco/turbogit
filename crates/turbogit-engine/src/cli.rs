@@ -261,6 +261,11 @@ impl GitExecutor for CliExecutor {
         if let Some(n) = opts.max_count {
             a.push(format!("-n{}", n));
         }
+        // Paging: `--skip` is a rev-info option, so it belongs with the other
+        // limiting args — after it comes the rev, then `--` and the pathspec.
+        if let Some(n) = opts.skip {
+            a.push(format!("--skip={n}"));
+        }
         if let Some(b) = &opts.branch {
             a.push(b.clone());
         }

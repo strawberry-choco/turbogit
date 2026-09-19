@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
-use turbogit_app::events::AppEvent;
+use turbogit_app::events::{AppEvent, LogPageMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
 use turbogit_domain::model::{LogOpts, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -244,6 +244,7 @@ fn warm_log_and_refs(state: &mut AppState) {
             .send(AppEvent::LogLoaded {
                 root: root.id.clone(),
                 commits: Ok(commits),
+                mode: LogPageMode::Replace,
             })
             .expect("send LogLoaded");
         let deco = engine.ref_decorations(&root.path).expect("decorations");
@@ -541,6 +542,7 @@ fn log_renders_empty_first_and_decorations_appear_once_refs_loaded_lands() {
             .send(AppEvent::LogLoaded {
                 root: root.id.clone(),
                 commits: Ok(commits),
+                mode: LogPageMode::Replace,
             })
             .expect("send LogLoaded");
     }

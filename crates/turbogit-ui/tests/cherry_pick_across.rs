@@ -13,7 +13,7 @@ use egui_kittest::kittest::NodeT as _;
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
 use test_support::harness::{assert_painted, painted_text};
-use turbogit_app::events::AppEvent;
+use turbogit_app::events::{AppEvent, LogPageMode};
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{LogOpts, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -104,6 +104,7 @@ fn harness_with_log(seed: &Seed) -> Harness<'static, AppState> {
             .send(AppEvent::LogLoaded {
                 root: root.id.clone(),
                 commits: Ok(commits),
+                mode: LogPageMode::Replace,
             })
             .expect("send LogLoaded");
     }

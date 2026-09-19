@@ -274,6 +274,8 @@ impl GitExecutor for Git2Executor {
         }
 
         let root_id = RootId(root.into());
+        let skip = opts.skip.unwrap_or(0);
+        let mut skipped = 0usize;
         let mut commits = Vec::new();
         for entry in walk {
             let oid = entry.map_err(err)?;
@@ -281,6 +283,13 @@ impl GitExecutor for Git2Executor {
             if let Some(path) = &opts.path
                 && !commit_touches_path(&repo, &commit, path)
             {
+                continue;
+            }
+            // Paging: `skip` counts entries of the finished listing, so the
+            // discard happens here — after the path filter, before the cut —
+            // exactly like `git log --skip` on an already-filtered walk.
+            if skipped < skip {
+                skipped += 1;
                 continue;
             }
             commits.push(commit_to_commit(&repo, &commit, &root_id));

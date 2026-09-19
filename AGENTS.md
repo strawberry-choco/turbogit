@@ -105,12 +105,12 @@ characters.
 
 ### Issue tracker
 
-Issues and specs live as local markdown under `.scratch/<feature-slug>/` (the GitHub remote exists but the `gh` CLI is not assumed). See `docs/agents/issue-tracker.md`.
+Issues and specs live as local markdown under `.scratch/<feature-slug>/` (the GitHub remote exists but the `gh` CLI is not assumed). Each feature directory holds an `execution-plan.md` plus one `issues/NN-<slug>.md` per ticket.
 
 ### Triage labels
 
-The five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded as a `Status:` line in each file. See `docs/agents/triage-labels.md`.
+The five canonical triage roles use their default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded as a `Status:` line in each issue file.
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` at the repo root plus `docs/adr/`. See `docs/agents/domain.md`.
+Single-context: `CONTEXT.md` at the repo root plus `docs/adr/`.

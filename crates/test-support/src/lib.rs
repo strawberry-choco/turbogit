@@ -141,6 +141,9 @@ pub struct RecordingExecutor {
     /// the per-commit stats request must fire once per commit id, never once
     /// per frame).
     stats_calls: Mutex<usize>,
+    /// Every `log` request in order, so a test can assert the shape of the
+    /// page the app asked for (log paging).
+    log_opts: Mutex<Vec<LogOpts>>,
 }
 
 impl RecordingExecutor {
@@ -151,12 +154,19 @@ impl RecordingExecutor {
             log_calls: Mutex::new(0),
             ref_calls: Mutex::new(0),
             stats_calls: Mutex::new(0),
+            log_opts: Mutex::new(Vec::new()),
         }
     }
 
     /// How many `log` invocations have been made so far.
     pub fn log_call_count(&self) -> usize {
         *self.log_calls.lock().expect("log mutex")
+    }
+
+    /// Every `log` request made so far, in order — the [`LogOpts`] the app
+    /// actually handed the engine.
+    pub fn log_opts(&self) -> Vec<LogOpts> {
+        self.log_opts.lock().expect("log opts mutex").clone()
     }
 
     /// How many `ref_decorations` invocations have been made so far.
@@ -245,6 +255,12 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
+        // Recorded before the counter: a test that waits on `log_call_count`
+        // must then be able to read the matching `log_opts` entry too.
+        self.log_opts
+            .lock()
+            .expect("log opts mutex")
+            .push(opts.clone());
         *self.log_calls.lock().expect("log mutex") += 1;
         self.inner.log(root, opts)
     }
