@@ -339,11 +339,25 @@ fn engine_golden_log_pins_linear_history_fields() {
 }
 
 #[test]
-fn engine_golden_log_branch_filter_and_max_count() {
+fn engine_golden_log_branch_filter_max_count_and_skip() {
     let (_tmp, repo) = temp_repo("log-filter");
     let c1 = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
     let c2 = commit_file(&repo, "two.txt", "two\n", "second", DATE_2);
     let c3 = commit_file(&repo, "three.txt", "three\n", "third", DATE_3);
+
+    // Paging: `skip` moves the window down the same newest-first listing
+    // without moving the walk's start, so `-n2 --skip=1` is its tail.
+    let tail = engine()
+        .log(
+            &repo,
+            &LogOpts {
+                max_count: Some(2),
+                skip: Some(1),
+                ..LogOpts::default()
+            },
+        )
+        .expect("log -n2 --skip=1");
+    assert_eq!(ids(&tail), vec![c2.clone(), c1.clone()]);
 
     // Branch filter walks ONLY the named ref's history.
     run_git(&repo, &["branch", "topic", &c1]);
@@ -357,6 +371,40 @@ fn engine_golden_log_branch_filter_and_max_count() {
         )
         .expect("log topic");
     assert_eq!(ids(&topic), vec![c1.clone()]);
+
+    // `--skip` is a rev-info option: it has to reach git BEFORE the rev and
+    // before the `--` pathspec separator, or git reads it as a path. A window
+    // past the end of either filtered listing is empty, never an error.
+    let past_topic = engine()
+        .log(
+            &repo,
+            &LogOpts {
+                max_count: Some(1),
+                skip: Some(1),
+                branch: Some("topic".to_string()),
+                ..LogOpts::default()
+            },
+        )
+        .expect("log -n1 --skip=1 topic");
+    assert!(ids(&past_topic).is_empty());
+
+    let one_txt = LogOpts {
+        path: Some("two.txt".into()),
+        ..LogOpts::default()
+    };
+    let touching = engine().log(&repo, &one_txt).expect("log -- two.txt");
+    assert_eq!(ids(&touching), vec![c2.clone()]);
+    let past_path = engine()
+        .log(
+            &repo,
+            &LogOpts {
+                max_count: Some(1),
+                skip: Some(1),
+                ..one_txt
+            },
+        )
+        .expect("log -n1 --skip=1 -- two.txt");
+    assert!(ids(&past_path).is_empty());
 
     // max_count caps the newest-first walk of HEAD.
     let two = engine()

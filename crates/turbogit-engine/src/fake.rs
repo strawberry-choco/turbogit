@@ -70,6 +70,12 @@ pub struct FakeExecutor {
     pub remotes: HashMap<PathBuf, Vec<Remote>>,
     /// Status per repo path.
     pub status: HashMap<PathBuf, RootStatus>,
+    /// Commit log served per repo path, newest first. `log` slices it exactly
+    /// like a real backend: `skip` entries off the front, then up to
+    /// `max_count` (log paging) — so app-level paging tests can run without
+    /// git. Scoping (`branch`, `path`, `pickaxe`) is not modelled: every
+    /// listing is the whole seeded one.
+    pub logs: HashMap<PathBuf, Vec<Commit>>,
     /// Force-push to these branch names fails with `TgError::Other`.
     pub reject_force_branches: Vec<String>,
     /// Recorded mutating calls, in order.
@@ -92,6 +98,7 @@ impl FakeExecutor {
             current_branch: HashMap::new(),
             remotes: HashMap::new(),
             status: HashMap::new(),
+            logs: HashMap::new(),
             reject_force_branches: Vec::new(),
             calls: Mutex::new(Vec::new()),
         }
@@ -123,8 +130,16 @@ impl GitExecutor for FakeExecutor {
         Ok(self.status.get(root).cloned().unwrap_or_default())
     }
 
-    fn log(&self, _root: &Path, _opts: &LogOpts) -> TgResult<Vec<Commit>> {
-        Ok(Vec::new())
+    fn log(&self, root: &Path, opts: &LogOpts) -> TgResult<Vec<Commit>> {
+        // Page the seeded listing the way a real backend does: discard `skip`
+        // entries off the front, then take up to `max_count`. A window past
+        // the end is empty, not an error.
+        let all = self.logs.get(root).map(Vec::as_slice).unwrap_or_default();
+        let rest = all.get(opts.skip.unwrap_or(0)..).unwrap_or_default();
+        Ok(match opts.max_count {
+            Some(n) => rest.iter().take(n).cloned().collect(),
+            None => rest.to_vec(),
+        })
     }
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {

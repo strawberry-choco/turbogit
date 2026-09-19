@@ -591,9 +591,15 @@ pub struct ProjectState {
 }
 
 /// Options for a log query.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LogOpts {
     pub max_count: Option<usize>,
+    /// Entries to discard from the *front* of the listing before the page is
+    /// cut — the position half of log paging. The walk still starts at HEAD,
+    /// so the union of consecutive pages is a prefix of the uncapped listing
+    /// and can never have holes behind a merge's second parent. `None` (and
+    /// `Some(0)`) leave the listing untouched.
+    pub skip: Option<usize>,
     pub branch: Option<String>,
     pub path: Option<PathBuf>,
     /// Pickaxe search (issue 17): `Some(s)` scopes the log to commits where

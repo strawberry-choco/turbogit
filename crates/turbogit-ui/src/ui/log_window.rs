@@ -700,15 +700,14 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
         && state.ui.log_ref_scope.is_none();
 
     // Pagination (issue 17): "Load more" is offered while a visible root's
-    // cached log fills its whole fetch window — and never in a scoped view,
-    // whose listing is fetched uncapped. The click is deferred like the row
+    // cached window says history continues past it — and never in a scoped
+    // view, whose listing is fetched uncapped. The click is deferred like the row
     // selections: `commits` borrows the caches until rendering ends.
-    let page_limit = (state.ui.log_page + 1) * turbogit_app::state::LOG_PAGE_SIZE;
     let may_have_more = state.ui.log_path_scope.is_none()
         && state.ui.log_ref_scope.is_none()
         && visible_root_ids(state)
             .iter()
-            .any(|id| state.caches.log(id).is_some_and(|c| c.len() >= page_limit));
+            .any(|id| state.caches.log_has_more(id));
     let mut load_more = false;
 
     // Root-stripe legend chip row (11px INK_3) for multi-root setups.
@@ -737,7 +736,11 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     // cache slices, so rows render against a shared AppState and the
     // selection lands after the scroll pass ends.
     let mut clicked: Option<String> = None;
-    ScrollArea::vertical().show(ui, |ui| {
+    // The height the list is given, captured before it takes it: egui 0.36
+    // reports only the content's own rect back out, and an overflowing list
+    // fills exactly this.
+    let viewport_height = ui.available_rect_before_wrap().height();
+    let scrolled = ScrollArea::vertical().show(ui, |ui| {
         for c in &commits {
             if commit_row(ui, state, c, &colors, date_mode, multi_root) {
                 clicked = Some(c.id.clone());
@@ -751,6 +754,21 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
             );
         }
     });
+
+    // Auto-load-more (P6): the trigger is a settled bottom on an overflowing
+    // list, not a scroll gesture — so the wheel, the scrollbar and the
+    // keyboard all arrive here, and a list that fits its viewport never fires.
+    // `state.offset.y` counts down the list, so it is the scrolled distance.
+    if may_have_more
+        && settled_at_bottom(
+            scrolled.state.offset.y,
+            viewport_height,
+            scrolled.content_size.y,
+            crate::theme::FILE_ROW_HEIGHT,
+        )
+    {
+        load_more = true;
+    }
 
     // Pagination status line (issue 17): what is shown + the Load more
     // affordance while the fetched window may not cover the whole history.
@@ -1666,4 +1684,54 @@ fn micro_text(text: impl Into<String>) -> RichText {
     RichText::new(text)
         .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
         .color(Palette::INK_3)
+}
+
+/// Whether a scrolled list sits settled at its bottom: `offset` pixels scrolled
+/// from the top of a `content`-tall list inside a `viewport`-tall window, with
+/// the last `tolerance` pixels counting as arrived.
+///
+/// Two rules make this the whole automatic trigger (plan P6): a list that does
+/// not overflow its viewport is NEVER at the bottom — there is nothing to
+/// scroll to, so a one-screen log never auto-pages — and the test is on where
+/// the view rests, not on a scroll gesture, which is what lets the wheel, the
+/// scrollbar and the keyboard all fire it.
+pub fn settled_at_bottom(offset: f32, viewport: f32, content: f32, tolerance: f32) -> bool {
+    content > viewport && offset + tolerance >= content - viewport
+}
+
+#[cfg(test)]
+mod tests {
+    use super::settled_at_bottom;
+
+    const VIEWPORT: f32 = 300.0;
+    const CONTENT: f32 = 1_000.0;
+    /// The offset that puts the list's last pixel at the window's last pixel.
+    const BOTTOM: f32 = CONTENT - VIEWPORT;
+    const ROW: f32 = 24.0;
+
+    /// A log that fits its pane has nothing left to scroll to, so it must not
+    /// page itself — however far its rows sit from the bottom edge.
+    #[test]
+    fn a_list_that_fits_its_viewport_is_never_at_the_bottom() {
+        assert!(!settled_at_bottom(0.0, VIEWPORT, 120.0, ROW));
+        assert!(
+            !settled_at_bottom(0.0, VIEWPORT, VIEWPORT, ROW),
+            "an exact fit is still not an overflowing list"
+        );
+    }
+
+    #[test]
+    fn an_overflowing_list_arrives_within_one_row_of_its_end() {
+        assert!(!settled_at_bottom(0.0, VIEWPORT, CONTENT, ROW));
+        assert!(!settled_at_bottom(BOTTOM / 2.0, VIEWPORT, CONTENT, ROW));
+        assert!(
+            settled_at_bottom(BOTTOM - ROW, VIEWPORT, CONTENT, ROW),
+            "one row short still counts as arrived"
+        );
+        assert!(settled_at_bottom(BOTTOM, VIEWPORT, CONTENT, ROW));
+        assert!(
+            !settled_at_bottom(BOTTOM - ROW - 1.0, VIEWPORT, CONTENT, ROW),
+            "a row and a pixel short does not"
+        );
+    }
 }

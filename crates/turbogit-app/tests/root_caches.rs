@@ -20,8 +20,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
-use turbogit_app::events::AppEvent;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::events::{AppEvent, LogPageMode};
+use turbogit_app::root_caches::{Affected, RootCaches};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{Commit, LogOpts, RootId, Signature, SignatureState, VcsSettings};
 use turbogit_engine::GitExecutor;
@@ -88,6 +88,7 @@ fn prime_fake_entries(state: &mut AppState, roots: &[RootId]) {
             .send(AppEvent::LogLoaded {
                 root: root.clone(),
                 commits: Ok(vec![fake_commit(root, "fake: untouched")]),
+                mode: LogPageMode::Replace,
             })
             .expect("send LogLoaded");
         state
@@ -475,6 +476,135 @@ fn refs_fetch_guard_dedupes_and_releases_on_refs_loaded_ok_and_err() {
         recorder.ref_call_count() >= 3,
         "a later fetch must run again after the Err drain"
     );
+}
+
+// --- Commit-log paging: the container holds a window, not one load ----------
+
+/// A commit with a chosen id — for the paging cases identity is the point.
+fn commit_as(root: &RootId, id: &str) -> Commit {
+    Commit {
+        id: id.to_string(),
+        ..fake_commit(root, &format!("msg {id}"))
+    }
+}
+
+fn cached_ids(caches: &RootCaches, root: &RootId) -> Vec<String> {
+    caches
+        .log(root)
+        .unwrap_or_default()
+        .iter()
+        .map(|c| c.id.clone())
+        .collect()
+}
+
+/// The first page is also the whole cache: appending onto a root with nothing
+/// cached is exactly a store.
+#[test]
+fn appending_to_a_cold_root_stores_the_page() {
+    let mut caches = RootCaches::default();
+    let root = RootId(PathBuf::from("alpha").into());
+    assert!(caches.log(&root).is_none(), "a cold root has nothing");
+
+    caches.append_log(
+        root.clone(),
+        vec![commit_as(&root, "a3"), commit_as(&root, "a2")],
+    );
+    assert_eq!(cached_ids(&caches, &root), ["a3", "a2"]);
+}
+
+/// The pages arrive newest-first and overlap by the anchor row, so an append
+/// must add only what is missing and never reorder what is already there.
+#[test]
+fn an_overlapping_page_appends_once_and_keeps_newest_first() {
+    let mut caches = RootCaches::default();
+    let root = RootId(PathBuf::from("alpha").into());
+    caches.store_log(
+        root.clone(),
+        vec![
+            commit_as(&root, "a5"),
+            commit_as(&root, "a4"),
+            commit_as(&root, "a3"),
+        ],
+    );
+
+    // Page 2 as the engine returns it: the anchor `a3` again, then new rows.
+    caches.append_log(
+        root.clone(),
+        vec![
+            commit_as(&root, "a3"),
+            commit_as(&root, "a2"),
+            commit_as(&root, "a1"),
+        ],
+    );
+    assert_eq!(
+        cached_ids(&caches, &root),
+        ["a5", "a4", "a3", "a2", "a1"],
+        "the anchor is already held, so it must not appear twice"
+    );
+
+    // Replaying the same page whole — a retry, or a race with a refresh — is
+    // likewise harmless.
+    caches.append_log(
+        root.clone(),
+        vec![
+            commit_as(&root, "a3"),
+            commit_as(&root, "a2"),
+            commit_as(&root, "a1"),
+        ],
+    );
+    assert_eq!(cached_ids(&caches, &root), ["a5", "a4", "a3", "a2", "a1"]);
+}
+
+/// A short page ends history: the window keeps what it had, and the flag the
+/// fetcher sets on the way in is what says so.
+#[test]
+fn an_empty_append_leaves_the_window_alone() {
+    let mut caches = RootCaches::default();
+    let root = RootId(PathBuf::from("alpha").into());
+    caches.store_log(
+        root.clone(),
+        vec![commit_as(&root, "a2"), commit_as(&root, "a1")],
+    );
+    caches.set_log_has_more(&root, true);
+    assert!(caches.log_has_more(&root));
+
+    caches.append_log(root.clone(), Vec::new());
+    assert_eq!(cached_ids(&caches, &root), ["a2", "a1"]);
+    assert!(
+        caches.log_has_more(&root),
+        "an empty page on its own proves nothing about history"
+    );
+
+    caches.set_log_has_more(&root, false);
+    assert!(!caches.log_has_more(&root));
+    assert_eq!(cached_ids(&caches, &root), ["a2", "a1"]);
+}
+
+/// `has_more` is part of the log window, so it is invalidated with it —
+/// a root whose log was dropped must never keep claiming more rows.
+#[test]
+fn dropping_a_root_log_drops_its_has_more_flag_too() {
+    let mut caches = RootCaches::default();
+    let root = RootId(PathBuf::from("alpha").into());
+    caches.store_log(root.clone(), vec![commit_as(&root, "a1")]);
+    caches.set_log_has_more(&root, true);
+    assert!(!caches.is_empty(), "priming must populate the log window");
+
+    caches.invalidate(&Affected::Root(root.clone()));
+    assert!(
+        caches.log(&root).is_none(),
+        "the scoped invalidation must drop the root's log"
+    );
+    assert!(
+        !caches.log_has_more(&root),
+        "the dropped log's has-more flag must go with it"
+    );
+    assert!(caches.is_empty(), "one invalidation unit leaves nothing");
+
+    caches.set_log_has_more(&root, true);
+    caches.invalidate_all();
+    assert!(!caches.log_has_more(&root));
+    assert!(caches.is_empty());
 }
 
 // --- Issue 20: per-root hunk-span statistics ---------------------------------

@@ -31,6 +31,19 @@ pub struct FetchedBlob {
     pub decoded: Option<DecodedImage>,
 }
 
+/// How a fetched commit-log page folds into its root's cached window
+/// (log paging).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LogPageMode {
+    /// The window restarts here: this page is the whole listing held so far.
+    Replace,
+    /// The page continues a window whose oldest row is `anchor`, so it must
+    /// lead with that row. If it leads with anything else the listing moved
+    /// under the request — a commit, a checkout, a fetch — and the page is
+    /// torn (plan P3).
+    Append { anchor: CommitId },
+}
+
 /// Events posted from worker threads back to the UI thread over a channel.
 ///
 /// The app drains these in `update()` and calls `ctx.request_repaint()`.
@@ -48,10 +61,15 @@ pub enum AppEvent {
         root: RootId,
         branches: TgResult<Vec<Branch>>,
     },
-    /// Log for a root was loaded.
+    /// Log for a root was loaded — one page of it, plus how it folds into the
+    /// root's cached window (log paging).
     LogLoaded {
         root: RootId,
         commits: TgResult<Vec<Commit>>,
+        /// The mode the page was fetched in, with the anchor it was measured
+        /// against echoed back: the handler needs both to tell a continuation
+        /// from a torn page.
+        mode: LogPageMode,
     },
     /// Ref decorations for a root were loaded off the UI thread (log-open
     /// perf, D1): a success is stored into the ref cache; an error lands in

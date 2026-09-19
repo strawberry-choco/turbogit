@@ -3,7 +3,7 @@
 //! channel, and all UI-only ephemeral state. The UI reads from here and never
 //! calls git directly; long ops are dispatched to worker threads via
 //! [`AppState::run_git`].
-use crate::events::AppEvent;
+use crate::events::{AppEvent, LogPageMode};
 use crate::granular;
 use crate::root_caches::{Affected, RootCaches};
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -49,9 +49,9 @@ pub struct PushPreview {
 /// Maximum recent custom commands kept per workspace (issue 13).
 pub const MAX_RECENT_CUSTOM_COMMANDS: usize = 8;
 
-/// Commits fetched per log page (issue 17): the initial log load takes one
-/// page and `load_more_log` widens the fetch by another page, so a huge
-/// history never blocks the first paint.
+/// Commits per log page: every [`AppState::fetch_log`] takes exactly one, so a
+/// huge history never blocks the first paint, and the pane keeps paging until
+/// a page comes back short (log paging, P1/P4).
 pub const LOG_PAGE_SIZE: usize = 50;
 
 /// Persistent input fields for the modal dialogs (kept across redraws).
@@ -764,12 +764,6 @@ pub struct UiState {
     /// (set from the branches pane's row activation). Cleared when the
     /// selected repository changes, so the graph never goes silently empty.
     pub log_ref_scope: Option<(RootId, String)>,
-    /// Log pagination (issue 17): 0-based loaded-page index. The fetch
-    /// window is `(log_page + 1) * LOG_PAGE_SIZE` commits per root;
-    /// [`AppState::load_more_log`] widens it. The cache holds only the
-    /// fetched window — the UI's "Load more" appears while any visible
-    /// root's cached log fills its whole window.
-    pub log_page: usize,
     pub selected_commit: Option<CommitId>,
     pub diff: Option<DiffTarget>,
     /// Open blame view (issue 18): `Some` renders the blame surface for the
@@ -1331,10 +1325,38 @@ impl AppState {
         }
     }
 
-    /// Fetch (and cache) the commit log for a root on a worker thread. The
-    /// fetch is page-sized (issue 17): `(ui.log_page + 1) * LOG_PAGE_SIZE`
-    /// commits, widened by [`Self::load_more_log`] — never the uncapped
-    /// whole history.
+    /// The next page request for `root`'s window, and the mode its answer
+    /// folds in under (P5): the window is derived from the cache, never
+    /// stored. An empty window asks for one page from the front of the
+    /// listing; a window holding `have` rows asks for the page after them —
+    /// `skip = have - 1` deep and one row longer than a page, so the row it
+    /// already holds comes back as the boundary checksum (P3). The walk always
+    /// starts at HEAD, so no commit can be lost behind a merge's second
+    /// parent (P2).
+    fn log_page_plan(&self, root: &RootId) -> (LogOpts, LogPageMode) {
+        let window = self.caches.log(root);
+        let have = window.map_or(0, |c| c.len());
+        let anchor = window.and_then(|c| c.last()).map(|c| c.id.clone());
+        let (rows, skip) = if have == 0 {
+            (LOG_PAGE_SIZE, None)
+        } else {
+            (LOG_PAGE_SIZE + 1, Some(have - 1))
+        };
+        let mode = match anchor {
+            None => LogPageMode::Replace,
+            Some(anchor) => LogPageMode::Append { anchor },
+        };
+        (
+            LogOpts {
+                max_count: Some(rows),
+                skip,
+                ..Default::default()
+            },
+            mode,
+        )
+    }
+
+    /// Fetch the next page of a root's commit log on a worker thread.
     pub fn fetch_log(&mut self, root: RootId) {
         // One fetch per root in flight (log-open perf, D2): the tool-window
         // body asks every frame while the cache is cold; a second fetch for
@@ -1342,19 +1364,47 @@ impl AppState {
         if !self.log_fetch_inflight.insert(root.clone()) {
             return;
         }
+        let (opts, mode) = self.log_page_plan(&root);
         let executor = self.executor.clone();
         let tx = self.tx.clone();
-        let limit = (self.ui.log_page + 1) * LOG_PAGE_SIZE;
         std::thread::spawn(move || {
-            let res = executor.log(
-                &root.0,
-                &LogOpts {
-                    max_count: Some(limit),
-                    ..Default::default()
-                },
-            );
-            let _ = tx.send(AppEvent::LogLoaded { root, commits: res });
+            let res = executor.log(&root.0, &opts);
+            let _ = tx.send(AppEvent::LogLoaded {
+                root,
+                commits: res,
+                mode,
+            });
         });
+    }
+
+    /// Fold one fetched page into `root`'s window (log paging).
+    ///
+    /// An append page has to lead with the anchor row it was requested
+    /// against — that row is the checksum on the boundary. When it leads with
+    /// anything else, the listing moved under the request, so the window is
+    /// discarded and restarted at page 0 rather than growing a torn list (P3).
+    /// Either way the page's length against the rows it asked for is what says
+    /// whether history continues (P4).
+    fn settle_log_page(&mut self, root: &RootId, mode: LogPageMode, page: Vec<Commit>) {
+        let has_more;
+        match mode {
+            LogPageMode::Replace => {
+                has_more = page.len() == LOG_PAGE_SIZE;
+                self.caches.store_log(root.clone(), page);
+            }
+            LogPageMode::Append { anchor } => {
+                if page.first().map(|c| &c.id) != Some(&anchor) {
+                    self.caches.store_log(root.clone(), Vec::new());
+                    self.fetch_log(root.clone());
+                    return;
+                }
+                has_more = page.len() == LOG_PAGE_SIZE + 1;
+                // The leading row is the anchor the window already holds.
+                self.caches
+                    .append_log(root.clone(), page.into_iter().skip(1).collect());
+            }
+        }
+        self.caches.set_log_has_more(root, has_more);
     }
 
     /// Fetch (and cache) ref decorations for a root on a worker thread
@@ -1397,14 +1447,16 @@ impl AppState {
         });
     }
 
-    /// Widen the log fetch window by one page (issue 17's "Load more") and
-    /// refetch every registered root's log through the worker path. The
-    /// wider fetch *replaces* the cached window — there is no append, so no
-    /// duplicates can accumulate.
+    /// Fetch one more page for every root whose window says history continues
+    /// past it — the manual "Load more" button and the log pane's automatic
+    /// trigger. A root with nothing cached is NOT loaded here (the Log pane's
+    /// data-ensure step owns the first page), and a root at the end of its
+    /// history issues no fetch at all.
     pub fn load_more_log(&mut self) {
-        self.ui.log_page += 1;
         for root in self.multi.roots.clone() {
-            self.fetch_log(root.id);
+            if self.caches.log_has_more(&root.id) {
+                self.fetch_log(root.id);
+            }
         }
     }
 
@@ -1611,8 +1663,13 @@ impl AppState {
             };
             if in_scope {
                 if self.sync_refresh {
-                    if let Ok(commits) = self.executor.log(&sel.0, &LogOpts::default()) {
-                        self.caches.store_log(sel, commits);
+                    // The headless harness has no worker threads, so it runs
+                    // the same page plan inline. Paging here is not optional:
+                    // an uncapped fetch would write the whole history past the
+                    // pager and the window would never mean anything again.
+                    let (opts, mode) = self.log_page_plan(&sel);
+                    if let Ok(page) = self.executor.log(&sel.0, &opts) {
+                        self.settle_log_page(&sel, mode, page);
                     }
                 } else {
                     self.fetch_log(sel);
@@ -2348,12 +2405,16 @@ impl AppState {
                         }
                     }
                 }
-                AppEvent::LogLoaded { root, commits } => {
+                AppEvent::LogLoaded {
+                    root,
+                    commits,
+                    mode,
+                } => {
                     // Release the in-flight guard on Ok and Err alike — the
                     // worker always posts the event (log-open perf, D2).
                     self.log_fetch_inflight.remove(&root);
                     match commits {
-                        Ok(c) => self.caches.store_log(root, c),
+                        Ok(page) => self.settle_log_page(&root, mode, page),
                         Err(e) => self.last_error = Some(e.to_string()),
                     }
                 }
