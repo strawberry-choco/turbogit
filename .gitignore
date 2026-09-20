@@ -58,3 +58,8 @@ logs/
 %TEMP%/
 
 .scratch
+
+# kittest snapshot working files (the {name}.png baselines stay tracked)
+**/tests/snapshots/*.new.png
+**/tests/snapshots/*.diff.png
+**/tests/snapshots/*.old.png

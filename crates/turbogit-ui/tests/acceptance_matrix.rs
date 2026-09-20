@@ -1,7 +1,8 @@
 //! Issue #24 — acceptance-matrix verification with per-page screenshots.
 //!
 //! Renders every redesigned page through the headless harness and saves one
-//! PNG per page into `turbogit-screens/redesign/` via egui_kittest snapshots.
+//! PNG per page under egui_kittest's default snapshot directory
+//! (`tests/snapshots/`, resolved against this crate's root at test time).
 //! Assertions here are deliberately structural (the page paints its defining
 //! chrome); pixel-level checks live in each page's own suite.
 
@@ -10,8 +11,6 @@ use std::path::{Path, PathBuf};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::RootId;
 use turbogit_ui::theme::{configure_style, install_fonts};
-
-const SNAPSHOT_DIR: &str = "../../turbogit-screens/redesign";
 
 /// Run `git` in `repo`, asserting success.
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -51,11 +50,6 @@ fn settle(h: &mut Harness<'_, AppState>) {
     for _ in 0..8 {
         h.step();
     }
-}
-
-fn snap(h: &mut Harness<'_, AppState>, name: &str) {
-    let options = egui_kittest::SnapshotOptions::new().output_path(SNAPSHOT_DIR);
-    h.snapshot_options(name, &options);
 }
 
 /// Seed a repo with history worth looking at: two branches, a tag, a remote
@@ -142,7 +136,6 @@ fn acceptance_matrix_screenshots() {
         eprintln!("skipping acceptance-matrix screenshots: no GPU adapter on CI runners");
         return;
     }
-    std::fs::create_dir_all(SNAPSHOT_DIR).unwrap();
     let mut results = egui_kittest::SnapshotResults::default();
 
     // --- Welcome (no project open) -------------------------------------
@@ -153,7 +146,7 @@ fn acceptance_matrix_screenshots() {
         h.state().show_welcome(),
         "no-project launch must land on Welcome"
     );
-    snap(&mut h, "01-welcome");
+    h.snapshot("01-welcome");
     results.extend_harness(&mut h);
     drop(h);
     drop(project);
@@ -165,7 +158,7 @@ fn acceptance_matrix_screenshots() {
 
     // Commit tool window (default tab) with changelist + preview.
     settle(&mut h);
-    snap(&mut h, "02-commit");
+    h.snapshot("02-commit");
 
     // Git Log four panes with decorated history.
     h.state_mut().ui.tab = turbogit_app::state::Tab::Log;
@@ -174,7 +167,7 @@ fn acceptance_matrix_screenshots() {
         h.state().caches.log(&RootId(repo.clone().into())).is_some(),
         "log should be loaded"
     );
-    snap(&mut h, "03-git-log");
+    h.snapshot("03-git-log");
 
     // The same page with a commit selected, so the redesigned changed-files
     // rows and the commit-details blocks carry content (logs-panels redesign).
@@ -186,29 +179,29 @@ fn acceptance_matrix_screenshots() {
         std::thread::sleep(std::time::Duration::from_millis(25));
         h.step();
     }
-    snap(&mut h, "03-git-log-selected");
+    h.snapshot("03-git-log-selected");
 
     // Diff viewer over the working-tree change.
     h.state_mut().ui.preview_change = Some(repo.join("lib.txt"));
     settle(&mut h);
-    snap(&mut h, "04-diff");
+    h.snapshot("04-diff");
 
     // Branches popup.
     h.state_mut().ui.branches_popup = true;
     settle(&mut h);
-    snap(&mut h, "05-branches-popup");
+    h.snapshot("05-branches-popup");
     h.state_mut().ui.branches_popup = false;
 
     // Push dialog.
     h.state_mut().ui.dialog = Some(Dialog::Push);
     settle(&mut h);
-    snap(&mut h, "06-push-dialog");
+    h.snapshot("06-push-dialog");
     h.state_mut().ui.dialog = None;
 
     // Settings modal from the gear state.
     h.state_mut().ui.settings_open = true;
     settle(&mut h);
-    snap(&mut h, "08-settings-modal");
+    h.snapshot("08-settings-modal");
     results.extend_harness(&mut h);
     drop(h);
 
@@ -219,7 +212,7 @@ fn acceptance_matrix_screenshots() {
     state.ui.conflict_open = Some(crepo.join("conf.txt"));
     let mut h = harness(state);
     settle(&mut h);
-    snap(&mut h, "07-merge-editor");
+    h.snapshot("07-merge-editor");
     results.extend_harness(&mut h);
     drop(h);
 }
