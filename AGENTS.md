@@ -26,7 +26,8 @@ plus a thin root composition root.
 - `tests/` — the root's single cross-layer suite (`diff_parity`).
 - `docs/` — product spec, ADRs, architecture notes.
 - `research/` — competitive research and UX findings.
-- `turbogit-screens/` — visual assets/screenshots.
+- `crates/turbogit-ui/tests/snapshots/` — the per-page PNG renders written by
+  `acceptance_matrix.rs` (egui_kittest's default snapshot directory).
 
 Dependencies flow strictly downward: domain ← engine-api ← {engine, services}
 ← app ← ui, with the root composition root above ui. Every shared version lives

@@ -10,8 +10,9 @@ the same change; silent divergence is forbidden.
 when this was written is in the tree: `docs/ui-redesign-spec.md` does not exist
 (`docs/product-spec.md` is the *product* spec and describes no visual language),
 and the HTML mockups were never committed. What stands as the approved visuals
-today is the capture set under `turbogit-screens/` (`redesign/*.png`,
-`design/*.png`), which `crates/turbogit-ui/tests/acceptance_matrix.rs` renders
+today is the capture set in `crates/turbogit-ui/tests/snapshots/`
+(`01-welcome.png` … `08-settings-modal.png`), which
+`crates/turbogit-ui/tests/acceptance_matrix.rs` renders
 and compares against. Read the precedence rule above as *code follows those
 captures*, with the same ban on silent divergence. Where a capture and the code
 disagree, the capture wins.
