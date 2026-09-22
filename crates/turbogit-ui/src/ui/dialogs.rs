@@ -3,12 +3,12 @@
 //! dialog lives in [`super::push_dialog`] (issue #20).
 
 use egui::{Align, Layout, Ui};
-use std::path::Path;
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, TagType};
 use turbogit_domain::model::{BranchKind, MergeStrategy};
 use turbogit_services::{
-    branch_service, history_editor, integrate_service, shelve_stash, sync_service, tag_service,
+    branch_service, integrate_service, shelve_stash, sync_service, tag_service,
 };
 
 use crate::theme::Palette;
@@ -179,7 +179,7 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
     );
     ui.horizontal(|ui| {
         if ui.button("Create").clicked() {
-            let root = state.selected_path();
+            let root = state.selected_root.clone();
             let name = state.ui.dlg.new_branch_name.clone();
             let base = state.ui.dlg.new_branch_base.clone();
             let start = if base.trim().is_empty() {
@@ -191,17 +191,13 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
             // The Branches tab scrolls the fresh branch into view (issue 08):
             // creating something and then hunting for it feels broken.
             state.ui.branches_tree.scroll_to = Some(name.clone());
-            state.run_git(
-                format!("Create branch {name}"),
-                Affected::from_optional_root(root.as_deref()),
-                move |v| {
-                    if let Some(r) = &root {
-                        branch_service::create(v, r, &name, start.as_deref(), co)
-                    } else {
-                        Ok(())
-                    }
-                },
-            );
+            if let Some(root) = root {
+                state.dispatch(Operation::custom(
+                    format!("Create branch {name}"),
+                    Affected::Root(root.clone()),
+                    move |v| branch_service::create(v, root.as_path(), &name, start.as_deref(), co),
+                ));
+            }
             close(state);
         }
         if ui.button("Cancel").clicked() {
@@ -317,15 +313,10 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
     if !target.is_empty() {
         let key = (target.clone(), state.ui.dlg.merge_strategy);
         if state.ui.dlg.merge_preview_key.as_ref() != Some(&key) {
-            let preview = state.selected_path().and_then(|root| {
-                integrate_service::merge_preview(
-                    state.executor.as_ref(),
-                    Path::new(&root),
-                    &target,
-                    key.1,
-                )
-                .ok()
-            });
+            let preview = state
+                .selected_root
+                .as_ref()
+                .and_then(|root| state.merge_preview(root, &target, key.1));
             state.ui.dlg.merge_preview = preview;
             state.ui.dlg.merge_preview_key = Some(key);
         }
@@ -353,7 +344,7 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
             let can_merge = !target.is_empty();
             let merge_btn = ui.add_enabled(can_merge, egui::Button::new("Merge"));
             if merge_btn.clicked() {
-                let root = state.selected_path();
+                let root = state.selected_root.clone();
                 let target = state.ui.dlg.merge_target.clone();
                 let opts = state.merge_dialog_opts();
                 let clean = state.settings.clean_tree_method;
@@ -366,22 +357,15 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
                     .as_ref()
                     .map(|p| p.merge_commits)
                     .unwrap_or(0);
-                let label = if commits > 0 {
-                    format!("Merge {target} ({commits} commits)")
-                } else {
-                    format!("Merge {target}")
-                };
-                state.run_git(
-                    label,
-                    Affected::from_optional_root(root.as_deref()),
-                    move |v| {
-                        if let Some(r) = &root {
-                            integrate_service::smart_merge(v, r, &target, &opts, clean)
-                        } else {
-                            Ok(())
-                        }
-                    },
-                );
+                if let Some(root) = root {
+                    state.dispatch(Operation::Merge {
+                        root,
+                        target,
+                        opts,
+                        clean,
+                        commits,
+                    });
+                }
                 close(state);
             }
         });
@@ -550,9 +534,10 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
     let mut replay: Vec<turbogit_domain::model::RebasePlanEntry> = Vec::new();
     if !onto.is_empty() {
         if state.ui.dlg.rebase_preview_key.as_deref() != Some(onto.as_str()) {
-            let preview = state.selected_path().and_then(|root| {
-                history_editor::build_plan(state.executor.as_ref(), Path::new(&root), &onto).ok()
-            });
+            let preview = state
+                .selected_root
+                .as_ref()
+                .and_then(|root| state.rebase_plan(root, &onto));
             state.ui.dlg.rebase_preview = preview;
             state.ui.dlg.rebase_preview_key = Some(onto.clone());
         }
@@ -603,17 +588,10 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
             close(state);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let (label, op) = match state.ui.dlg.rebase_mode {
-                turbogit_domain::model::RebaseMode::Interactive => {
-                    ("Start interactive rebase", "Interactive rebase".to_string())
-                }
-                turbogit_domain::model::RebaseMode::Standard => {
-                    ("Start rebase", format!("Rebase onto {onto}"))
-                }
-                turbogit_domain::model::RebaseMode::Autosquash => (
-                    "Start autosquash rebase",
-                    format!("Autosquash rebase onto {onto}"),
-                ),
+            let label = match state.ui.dlg.rebase_mode {
+                turbogit_domain::model::RebaseMode::Interactive => "Start interactive rebase",
+                turbogit_domain::model::RebaseMode::Standard => "Start rebase",
+                turbogit_domain::model::RebaseMode::Autosquash => "Start autosquash rebase",
             };
             let start = ui
                 .add_enabled(!onto.is_empty() && !protected, egui::Button::new(label))
@@ -626,37 +604,31 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                     "Pick an onto branch first".to_string()
                 });
             if start.clicked() {
-                let root = state.selected_path();
+                let root = state.selected_root.clone();
                 let mode = state.ui.dlg.rebase_mode;
                 let opts = state.rebase_dialog_opts();
                 let settings = state.settings.clone();
                 let branch = current.clone().unwrap_or_default();
                 let onto2 = onto.clone();
                 let replay2 = replay.clone();
-                state.run_git(
-                    op,
-                    Affected::from_optional_root(root.as_deref()),
-                    move |v| {
-                        if let Some(r) = &root {
-                            // Interactive mode replays the listed commits
-                            // through the plan path; Standard/Autosquash run
-                            // a plain rebase with the mode-mapped flags.
-                            // Both dispatchers refuse a protected branch.
-                            match mode {
-                                turbogit_domain::model::RebaseMode::Interactive => {
-                                    integrate_service::rebase_plan(
-                                        v, r, &replay2, &settings, &branch,
-                                    )
-                                }
-                                _ => integrate_service::rebase_current(
-                                    v, r, &onto2, &opts, &settings, &branch,
-                                ),
-                            }
-                        } else {
-                            Ok(())
+                // Interactive mode replays the listed commits through the plan
+                // path; Standard/Autosquash run a plain rebase with the
+                // mode-mapped flags. All three refuse a protected branch, and
+                // all three settle as one rebase (ADR-0020).
+                if let Some(root) = root {
+                    let op = match mode {
+                        turbogit_domain::model::RebaseMode::Interactive => {
+                            Operation::rebase_interactive(&root, &branch, replay2, &settings, false)
                         }
-                    },
-                );
+                        turbogit_domain::model::RebaseMode::Standard => {
+                            Operation::rebase_onto(&root, &branch, &onto2, &opts, &settings)
+                        }
+                        turbogit_domain::model::RebaseMode::Autosquash => {
+                            Operation::rebase_autosquash(&root, &branch, &onto2, &opts, &settings)
+                        }
+                    };
+                    state.dispatch(op);
+                }
                 close(state);
             }
         });
@@ -695,8 +667,9 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
     // lifetime and cached in the dialog state.
     if state.ui.dlg.tag_existing.is_none() {
         state.ui.dlg.tag_existing = state
-            .selected_path()
-            .and_then(|root| tag_service::list(state.executor.as_ref(), Path::new(&root)).ok());
+            .selected_root
+            .as_ref()
+            .and_then(|root| state.tag_names(root));
     }
 
     // TAG NAME
@@ -761,18 +734,10 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
     });
     if state.ui.dlg.tag_target_picker_open {
         if state.ui.dlg.tag_candidates.is_none() {
-            state.ui.dlg.tag_candidates = state.selected_path().and_then(|root| {
-                state
-                    .executor
-                    .log(
-                        Path::new(&root),
-                        &turbogit_domain::model::LogOpts {
-                            max_count: Some(50),
-                            ..Default::default()
-                        },
-                    )
-                    .ok()
-            });
+            state.ui.dlg.tag_candidates = state
+                .selected_root
+                .as_ref()
+                .and_then(|root| state.recent_commits(root, 50));
         }
         // The "HEAD" reset row, then one row per recent commit.
         if ui
@@ -835,9 +800,10 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
         ui.horizontal(|ui| {
             ui.checkbox(&mut state.ui.dlg.tag_sign, "Sign with GPG key");
             if state.ui.dlg.tag_sign && !state.ui.dlg.tag_signing_key_fetched {
-                state.ui.dlg.tag_signing_key = state.selected_path().and_then(|root| {
-                    tag_service::signing_key(state.executor.as_ref(), Path::new(&root))
-                });
+                state.ui.dlg.tag_signing_key = state
+                    .selected_root
+                    .as_ref()
+                    .and_then(|root| state.signing_key(root));
                 state.ui.dlg.tag_signing_key_fetched = true;
             }
             if state.ui.dlg.tag_sign
@@ -869,7 +835,7 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
             let valid = validation.is_ok();
             let create = ui.add_enabled(valid, egui::Button::new("Create tag"));
             if create.clicked() {
-                let root = state.selected_path();
+                let root = state.selected_root.clone();
                 let spec = turbogit_domain::model::TagSpec {
                     name: state.ui.dlg.tag_name.trim().to_string(),
                     target: (!state.ui.dlg.tag_target.is_empty())
@@ -884,11 +850,12 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
                 };
                 let push = state.ui.dlg.tag_push;
                 let name = spec.name.clone();
-                state.run_git(
-                    format!("Create tag {name}"),
-                    Affected::from_optional_root(root.as_deref()),
-                    move |v| {
-                        if let Some(r) = &root {
+                if let Some(root) = root {
+                    state.dispatch(Operation::custom(
+                        format!("Create tag {name}"),
+                        Affected::Root(root.clone()),
+                        move |v| {
+                            let r = root.as_path();
                             tag_service::create(v, r, &spec)?;
                             if push {
                                 // Reports the outcome: the error carries the
@@ -896,11 +863,9 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
                                 tag_service::push_new(v, r, &name)?;
                             }
                             Ok(())
-                        } else {
-                            Ok(())
-                        }
-                    },
-                );
+                        },
+                    ));
+                }
                 close(state);
             }
         });
@@ -951,19 +916,11 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
             let shelf = shelve_stash::make_shelf(&name, &changes);
             state.ui.shelves.push(shelf);
             let _ = shelve_stash::save_shelves(&state.project_dir, &state.ui.shelves);
-            let root = state.selected_path();
-            state.run_git(
-                "Shelve".into(),
-                Affected::from_optional_root(root.as_deref()),
-                move |v| {
-                    if let Some(r) = &root {
-                        // Stash the working changes so they are parked.
-                        v.stash_push(r, &name, false)
-                    } else {
-                        Ok(())
-                    }
-                },
-            );
+            if let Some(root) = state.selected_root.clone() {
+                // The shelf record above is the IDE's own list; the git side is
+                // to park the working changes, with nothing chosen to discard.
+                state.dispatch(Operation::shelve(root, Vec::new(), name));
+            }
             close(state);
         }
         if ui.button("Cancel").clicked() {
@@ -978,35 +935,26 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
     ui.checkbox(&mut state.ui.dlg.stash_keep, "Keep index (--keep-index)");
     ui.horizontal(|ui| {
         if ui.button("Stash").clicked() {
-            let root = state.selected_path();
+            let root = state.selected_root.clone();
             let msg = state.ui.dlg.stash_msg.clone();
             let keep = state.ui.dlg.stash_keep;
-            state.run_git(
-                "Stash".into(),
-                Affected::from_optional_root(root.as_deref()),
-                move |v| {
-                    if let Some(r) = &root {
-                        v.stash_push(r, &msg, keep)
-                    } else {
-                        Ok(())
-                    }
-                },
-            );
+            if let Some(root) = root {
+                state.dispatch(Operation::custom(
+                    "Stash",
+                    Affected::Root(root.clone()),
+                    move |v| v.stash_push(root.as_path(), &msg, keep),
+                ));
+            }
             close(state);
         }
         if ui.button("Pop latest").clicked() {
-            let root = state.selected_path();
-            state.run_git(
-                "Stash pop".into(),
-                Affected::from_optional_root(root.as_deref()),
-                move |v| {
-                    if let Some(r) = &root {
-                        v.stash_pop(r, 0)
-                    } else {
-                        Ok(())
-                    }
-                },
-            );
+            if let Some(root) = state.selected_root.clone() {
+                state.dispatch(Operation::custom(
+                    "Stash pop",
+                    Affected::Root(root.clone()),
+                    move |v| v.stash_pop(root.as_path(), 0),
+                ));
+            }
             close(state);
         }
         if ui.button("Cancel").clicked() {
@@ -1096,11 +1044,7 @@ fn compare_branches(ui: &mut Ui, state: &mut AppState) {
         state.ui.dlg.compare_left = right.clone();
         state.ui.dlg.compare_right = left.clone();
         if let Some(id) = root {
-            let path = id.0.clone();
-            state.ui.dlg.compare_commits = state
-                .executor
-                .outgoing_commits(&path, &right, &left)
-                .unwrap_or_default();
+            state.ui.dlg.compare_commits = state.outgoing(&id, &right, &left);
         }
     }
 }

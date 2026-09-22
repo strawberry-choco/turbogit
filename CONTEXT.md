@@ -84,6 +84,26 @@ The module that talks to git. Its interface is `GitExecutor`; production uses
 the CLI adapter, tests use an in-memory adapter.
 _Avoid_: VCS manager, executor wrapper, git backend
 
+**Operation**:
+The unit the Shell dispatches: one value carrying what to run, its display
+label, the roots its results affect, whether it changes a repository root's
+worktree set, and — for the operations that have one — its identity, which is
+what settlement matches on. Named variants carry plain data and can rebuild
+themselves to be retried; `Custom` carries a one-shot closure for work whose
+label nothing inspects, and so cannot be retried. An Operation is *not* the
+Git engine method it eventually calls: it also owns the label, the scope and
+the settlement, none of which the engine knows about.
+_Avoid_: task, job, request, command (the palette already owns "command"), git call
+
+**Dispatch seam**:
+Where an Operation decides whether its work runs on a worker thread or on the
+calling thread: `Spawned` under the Shell, `Inline` under the Headless harness.
+Both modes post their results into the same channel, so settlement is the same
+event pump either way. Internal to the app layer — a caller selects a mode by
+choosing a constructor, never by naming the seam, and presentation code does
+not learn it exists.
+_Avoid_: async mode, sync flag, executor strategy, thread pool
+
 **Headless harness**:
 The deterministic way headless tests construct the app: an `AppState` over
 explicitly given repository roots, registered synchronously through the
@@ -206,10 +226,13 @@ which resolve through the conflict modal.
 _Avoid_: interactive add, chunk staging
 
 **Granular op**:
-One dispatch of partial staging — a single stage or unstage of one hunk or
-line selection on one file, run as one asynchronous operation. The unit the
-granular module owns end-to-end: input resolution, dispatch ordering, and
-completion settlement (exclusions and preview focus).
+One Operation of partial staging — a single stage or unstage of one hunk or
+line selection on one file. A kind of Operation rather than a parallel concept:
+it is dispatched through the same seam and settles through the same pump, and
+it is `Custom` rather than a named variant precisely because nothing selects
+behaviour on its label. The unit the granular module owns end-to-end: input
+resolution, dispatch ordering, and completion settlement (exclusions and
+preview focus).
 _Avoid_: hunk action, partial op
 
 **Display row**:

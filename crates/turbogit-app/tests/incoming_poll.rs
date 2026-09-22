@@ -7,6 +7,10 @@
 //! with the system `git`, and dispatch is asserted at the executor boundary
 //! through [`RecordingExecutor`]'s fetch recording.
 //!
+//! The headless harness runs a tick's work inline, so the tests settle it by
+//! draining rather than waiting for a thread; the production-mode cases at the
+//! bottom of the file keep their wait because they exercise the real worker.
+//!
 //! Covered:
 //! - an enabled, due poll fetches upstream roots and lands incoming commits
 //!   in the ahead/behind caches and the activity log
@@ -21,6 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use test_support::RecordingExecutor;
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, VcsSettings};
@@ -115,6 +120,16 @@ fn app_state_with(
         .with_settings(settings)
 }
 
+/// Advance the poll clock and settle what it dispatched.
+///
+/// The harness runs git work inline and the answer arrives on the same channel
+/// production uses, so a tick is only observed by draining — which is what the
+/// shell's next frame does. No deadline involved.
+fn tick_and_settle(state: &mut AppState, at: Instant) {
+    state.tick_incoming_poll(at);
+    state.drain_events();
+}
+
 /// Settings with the background incoming check enabled at the default
 /// interval (every 15 minutes).
 fn poll_settings() -> VcsSettings {
@@ -149,7 +164,7 @@ fn due_poll_fetches_upstream_roots_and_records_incoming() {
         "no ahead/behind knowledge before the first poll"
     );
 
-    state.tick_incoming_poll(Instant::now());
+    tick_and_settle(&mut state, Instant::now());
 
     // The poll fetched the root's remotes and its finding landed in the
     // ahead/behind cache: 0 outgoing, 1 incoming.
@@ -183,7 +198,7 @@ fn disabled_poll_never_fetches() {
     )));
     let mut state = app_state_with(project.path(), &[repo], rec.clone(), VcsSettings::default());
 
-    state.tick_incoming_poll(Instant::now());
+    tick_and_settle(&mut state, Instant::now());
     state.tick_incoming_poll(
         Instant::now()
             .checked_add(Duration::from_secs(3600))
@@ -215,12 +230,12 @@ fn poll_respects_the_interval() {
     let root = RootId(repo.into());
     let t0 = Instant::now();
 
-    state.tick_incoming_poll(t0);
+    tick_and_settle(&mut state, t0);
     assert_eq!(rec.fetches().len(), 1);
 
     // A second incoming commit arrives, but the interval has not elapsed.
     commit_on_remote(project.path(), &bare, "alpha", "incoming2.txt");
-    state.tick_incoming_poll(t0 + Duration::from_secs(60));
+    tick_and_settle(&mut state, t0 + Duration::from_secs(60));
     assert_eq!(rec.fetches().len(), 1, "an early tick must not re-poll");
     assert_eq!(
         state.caches.ahead_behind(&root),
@@ -230,7 +245,7 @@ fn poll_respects_the_interval() {
 
     // Once the interval (15 minutes) has elapsed, the poll runs again and
     // both incoming commits show up.
-    state.tick_incoming_poll(t0 + Duration::from_secs(15 * 60));
+    tick_and_settle(&mut state, t0 + Duration::from_secs(15 * 60));
     assert_eq!(rec.fetches().len(), 2);
     assert_eq!(state.caches.ahead_behind(&root), Some((0, 2)));
 }
@@ -280,8 +295,9 @@ fn poll_waits_while_an_operation_is_in_flight() {
     let root = RootId(repo.into());
 
     // An op occupies the worker pool; the due poll must park.
-    state.run_git("No-op".into(), Affected::All, |_| Ok(()));
+    state.dispatch(Operation::custom("No-op", Affected::All, |_| Ok(())));
     state.tick_incoming_poll(Instant::now());
+    state.drain_events();
     assert!(
         rec.fetches().is_empty(),
         "a busy worker pool must defer the poll"
@@ -291,7 +307,7 @@ fn poll_waits_while_an_operation_is_in_flight() {
     while state.ui.busy {
         state.drain_events();
     }
-    state.tick_incoming_poll(Instant::now());
+    tick_and_settle(&mut state, Instant::now());
     assert_eq!(rec.fetches().len(), 1);
     assert_eq!(state.caches.ahead_behind(&root), Some((0, 1)));
 }
@@ -344,13 +360,13 @@ fn in_flight_poll_is_not_redispatched_until_it_settles() {
         },
     )));
     let cfg = tempfile::tempdir().unwrap();
+    // The executor/settings swap happens after the launch scan, so setup
+    // reads never reach the recorder.
     let mut state = AppState::launch_in(
         Some(project.path().to_path_buf()),
         Some(cfg.path().to_path_buf()),
-    );
-    // The executor/settings swap happens after the launch scan, so setup
-    // reads never reach the recorder.
-    state.executor = rec.clone() as Arc<dyn GitExecutor>;
+    )
+    .with_executor(rec.clone() as Arc<dyn GitExecutor>);
     state.settings = poll_settings();
     let root = RootId(repo.into());
     let t0 = Instant::now();

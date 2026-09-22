@@ -49,40 +49,28 @@ impl AppState {
         Some(interval)
     }
 
-    /// Dispatch one poll per registered root: synchronously on the headless
-    /// harness, one worker thread per root in production. A root with a
-    /// poll already in flight is skipped (the cache entry only lands with
-    /// the event, mirroring the worktree fetch guard).
+    /// Dispatch one poll per registered root on the dispatch seam, so a tick
+    /// never spawns a thread the host did not ask for: a headless test that only
+    /// meant to advance time does real git work inline and settles it with the
+    /// drain that follows. A root with a poll already in flight is skipped (the
+    /// cache entry only lands with the event, mirroring the worktree fetch
+    /// guard).
     fn dispatch_incoming_poll(&mut self) {
         let roots: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
-        if self.sync_refresh {
-            let executor = self.executor.clone();
-            for root in roots {
-                let result = poll_root(executor.as_ref(), &root.0);
-                self.settle_incoming_poll(root, result);
+        for root in roots {
+            if !self.incoming_poll_inflight.insert(root.clone()) {
+                continue;
             }
-        } else {
-            for root in roots {
-                if !self.incoming_poll_inflight.insert(root.clone()) {
-                    continue;
-                }
-                let executor = self.executor.clone();
-                let tx = self.tx.clone();
-                let path = root.0.clone();
-                std::thread::spawn(move || {
-                    let result = poll_root(executor.as_ref(), &path);
-                    let _ = tx.send(AppEvent::IncomingPolled {
-                        root: RootId(path),
-                        result,
-                    });
-                });
-            }
+            let path = root.as_path().to_path_buf();
+            self.pump_read(move |executor, tx| {
+                let result = poll_root(executor.as_ref(), &path);
+                let _ = tx.send(AppEvent::IncomingPolled { root, result });
+            });
         }
     }
 
-    /// Land one finished poll (shared by the synchronous harness path and
-    /// the event pump): release the root's in-flight slot, store the fresh
-    /// ahead/behind counts, and log an activity entry when the poll found
+    /// Land one finished poll: release the root's in-flight slot, store the
+    /// fresh ahead/behind counts, and log an activity entry when the poll found
     /// incoming commits.
     pub(crate) fn settle_incoming_poll(
         &mut self,

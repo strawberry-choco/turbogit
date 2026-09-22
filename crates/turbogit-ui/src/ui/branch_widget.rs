@@ -12,12 +12,13 @@
 //! Enter checks the highlighted row out, Esc closes.
 //!
 //! All git mutations cross the [`turbogit_engine_api::GitExecutor`] seam via
-//! [`AppState::run_git`]; the pure row-model helpers are unit-testable.
+//! [`AppState::dispatch`]; the pure row-model helpers are unit-testable.
 
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{Align, Color32, Key, Layout, RichText, ScrollArea, Ui, vec2};
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, RootId};
@@ -452,7 +453,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 ui.add_space(2.0);
             }
 
-            let tags = state.executor.tag_list(&id.0).unwrap_or_default();
+            let tags = state.tag_names(&id).unwrap_or_default();
             let locals: Vec<Branch> = root
                 .branches
                 .iter()
@@ -727,31 +728,37 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
 
 /// Dispatch one row's checkout through the engine seam and close the popup.
 fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
-    let path = id.0.clone();
     let affected = Affected::Root(id.clone());
     match e {
         PopupEntry::Recent { name, .. } | PopupEntry::Local { name, .. } => {
             push_recent(&mut state.ui.recent_branches, name);
+            let root = id.clone();
             let nm = name.clone();
-            state.run_git(format!("Checkout {nm}"), affected.clone(), move |v| {
-                v.branch_checkout(&path, &nm)
-            });
+            state.dispatch(Operation::custom(
+                format!("Checkout {nm}"),
+                affected.clone(),
+                move |v| v.branch_checkout(root.as_path(), &nm),
+            ));
         }
         PopupEntry::Remote { name, .. } => {
             push_recent(&mut state.ui.recent_branches, name);
+            let root = id.clone();
             let nm = name.clone();
             let start = format!("origin/{name}");
-            state.run_git(
+            state.dispatch(Operation::custom(
                 format!("Checkout {nm} (new local)"),
                 affected.clone(),
-                move |v| v.branch_create(&path, &nm, true, Some(&start)),
-            );
+                move |v| v.branch_create(root.as_path(), &nm, true, Some(&start)),
+            ));
         }
         PopupEntry::Tag { name } => {
+            let root = id.clone();
             let nm = name.clone();
-            state.run_git(format!("Checkout {nm}"), affected, move |v| {
-                v.tag_checkout(&path, &nm)
-            });
+            state.dispatch(Operation::custom(
+                format!("Checkout {nm}"),
+                affected,
+                move |v| v.tag_checkout(root.as_path(), &nm),
+            ));
         }
     }
     state.ui.branches_popup = false;
@@ -790,14 +797,19 @@ fn apply_row_intent(state: &mut AppState, id: &RootId, intent: RowIntent) {
         },
         RowIntent::Compare(e) => state.open_compare(id, e.branch_name()),
         RowIntent::Pull(name) => {
-            let path = id.0.clone();
+            let root = id.clone();
             let affected = Affected::Root(id.clone());
             let rebase =
                 state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
-            state.run_git(format!("Pull {name}"), affected, move |v| {
-                v.branch_checkout(&path, &name)?;
-                v.pull(&path, rebase)
-            });
+            state.dispatch(Operation::custom(
+                format!("Pull {name}"),
+                affected,
+                move |v| {
+                    let path = root.as_path();
+                    v.branch_checkout(path, &name)?;
+                    v.pull(path, rebase)
+                },
+            ));
             state.ui.branches_popup = false;
         }
         RowIntent::Merge(name) => state.open_merge_into(id, &name),

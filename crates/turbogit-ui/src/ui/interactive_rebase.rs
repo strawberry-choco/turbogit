@@ -13,6 +13,7 @@
 use std::path::Path;
 
 use egui::{Align, Layout, Sense, Ui};
+use turbogit_app::operation::Operation;
 use turbogit_app::state::{AppState, RebaseEditorTab};
 use turbogit_domain::model::RebaseAction;
 use turbogit_services::history_editor;
@@ -69,14 +70,14 @@ fn ensure_plan(state: &mut AppState) {
     let Some(id) = state.selected_root.clone() else {
         return;
     };
-    let Some(base) = history_editor::base_of(state.executor.as_ref(), &id.0, &cid) else {
+    let Some(base) = state.commit_base_ref(&id, &cid) else {
         return;
     };
-    let Ok(plan) = history_editor::build_plan(state.executor.as_ref(), &id.0, &base) else {
+    let Some(plan) = state.rebase_plan(&id, &base) else {
         return;
     };
     state.ui.dlg.rebase_base = Some(base);
-    state.ui.dlg.rebase_cautions = history_editor::cautions(state.executor.as_ref(), &id.0, &plan);
+    state.ui.dlg.rebase_cautions = state.rebase_cautions(&id, &plan);
     state.ui.dlg.rebase_todo = history_editor::render_todo(&plan);
     state.ui.dlg.rebase_plan = Some(plan);
 }
@@ -156,20 +157,21 @@ fn body(ui: &mut Ui, state: &mut AppState) {
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button("Start rebase").clicked() {
-                let root = state.selected_path();
-                let plan2 = plan.clone();
+                let root = state.selected_root.clone();
                 let settings = state.settings.clone();
                 let branch = current_branch(state).unwrap_or_default();
-                state.run_git(
-                    "Interactive rebase".into(),
-                    turbogit_app::root_caches::Affected::from_optional_root(root.as_deref()),
-                    move |v| match &root {
-                        Some(r) => {
-                            history_editor::execute_with_backup(v, r, &plan2, &settings, &branch)
-                        }
-                        None => Ok(()),
-                    },
-                );
+                if let Some(root) = root {
+                    // The editor's own replay carries the backup-ref net that
+                    // the RECOVERY panel above promises.
+                    let op = Operation::rebase_interactive(
+                        &root,
+                        &branch,
+                        plan.clone(),
+                        &settings,
+                        true,
+                    );
+                    state.dispatch(op);
+                }
                 dispatched = true;
                 close(state);
             }
@@ -260,15 +262,13 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
         state.selected_path().as_deref().unwrap_or(Path::new(".")),
     ) && ui.button("Abort & restore").clicked()
     {
-        let root = state.selected_path();
-        state.run_git(
-            "Abort interactive rebase".into(),
-            turbogit_app::root_caches::Affected::from_optional_root(root.as_deref()),
-            move |v| match &root {
-                Some(r) => history_editor::abort_to_backup(v, r),
-                None => Ok(()),
-            },
-        );
+        if let Some(root) = state.selected_root.clone() {
+            state.dispatch(Operation::custom(
+                "Abort interactive rebase",
+                turbogit_app::root_caches::Affected::Root(root.clone()),
+                move |v| history_editor::abort_to_backup(v, root.as_path()),
+            ));
+        }
         close(state);
     }
 }

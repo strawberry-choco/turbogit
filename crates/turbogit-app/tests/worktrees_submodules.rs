@@ -41,7 +41,13 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path.canonicalize().unwrap()
 }
 
-/// Pump worker events until `pred` holds or the deadline passes.
+/// Pump events until `pred` holds or the deadline passes.
+///
+/// The linked-worktree list and its dirty probe keep their own threads:
+/// ADR-0019's admission slot and mutation epoch only mean something with a
+/// worker in front of them, so the dispatch seam deliberately leaves them
+/// `Spawned` even under the headless harness. A submodule list, by contrast,
+/// settles in the one drain the inline pump already made.
 fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {

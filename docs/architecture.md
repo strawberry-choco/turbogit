@@ -48,7 +48,7 @@ flowchart TB
     end
 
     subgraph AppCrate["turbogit-app"]
-        STATE["state.rs — AppState<br/>owns engine, event channel,<br/>UI ephemeral state, run_git()"]
+        STATE["state.rs — AppState<br/>owns engine, event channel,<br/>UI ephemeral state, dispatch()"]
         GRANULAR["granular.rs — hunk/line staging protocol"]
         CACHES["root_caches.rs — RootCaches<br/>(per-root scan caches + Affected op-scope)"]
         RECENTS["recents.rs"]
@@ -155,9 +155,12 @@ prerequisite for anything else.
 ### 3. State & App Services (`turbogit-app`)
 - `state.rs` — `AppState` is the hub: owns the `Arc<dyn GitExecutor>`, the
   multi-root model, canonical settings, the crossbeam event channel, and all
-  UI-only ephemeral state. Long ops are dispatched to worker threads via
-  `AppState::run_git`; the pump (`drain_events`) is on `AppState` so headless
-  test harnesses get production parity.
+  UI-only ephemeral state. Git work is dispatched as an `Operation` via
+  `AppState::dispatch`, which runs it on a worker thread (`Spawned`) under the
+  shell or inline (`Inline`) under the headless harness; either way it answers
+  through the same channel, and the pump (`drain_events`) is on `AppState`, so
+  headless test harnesses get production parity. Settlement matches the
+  operation's `OpKind`, never its label text (ADR-0020).
 - `granular.rs` — the stateful staging protocol (`&mut AppState`, hunk/line
   input resolution, dispatch ordering, completion settlement). Kept in the app
   layer rather than the services crate because it owns UI-facing state.
@@ -216,7 +219,7 @@ sequenceDiagram
     participant E as GitExecutor
 
     UI->>ST: user action (e.g. refresh)
-    ST->>W: run_git(op) — clone executor Arc
+    ST->>W: dispatch(op) — clone executor Arc
     W->>E: synchronous git call
     E-->>W: TgResult
     W-->>ST: AppEvent via crossbeam channel

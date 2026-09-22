@@ -52,26 +52,6 @@ fn seeded_root() -> (TempDir, RootId, PathBuf, String) {
     (tmp, RootId(repo.clone().into()), repo, head)
 }
 
-/// Drain events until the recorder has seen `n` stats calls **and** `pred`
-/// holds — the counter flips inside the worker, so a count-only wait can race
-/// the event still being in flight.
-fn wait_stats(
-    state: &mut AppState,
-    recorder: &RecordingExecutor,
-    n: usize,
-    pred: impl Fn(&AppState) -> bool,
-) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        state.drain_events();
-        if recorder.stats_call_count() >= n && pred(state) {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("commit_file_stats count {n} / predicate never satisfied");
-}
-
 #[test]
 fn file_stats_are_requested_once_per_commit_and_served_from_the_cache() {
     let (_tmp, root, repo, head) = seeded_root();
@@ -86,9 +66,11 @@ fn file_stats_are_requested_once_per_commit_and_served_from_the_cache() {
     state.fetch_file_stats(root.clone(), head.clone());
     state.fetch_file_stats(root.clone(), head.clone());
     state.fetch_file_stats(root.clone(), head.clone());
-    wait_stats(&mut state, &recorder, 1, |s| {
-        s.caches.file_stats_loaded(&root, &head)
-    });
+    state.drain_events();
+    assert!(
+        state.caches.file_stats_loaded(&root, &head),
+        "the line counts settled into the cache"
+    );
     assert_eq!(
         recorder.stats_call_count(),
         1,
@@ -127,9 +109,11 @@ fn invalidating_a_root_drops_its_cached_file_stats() {
         AppState::for_roots(&repo, std::slice::from_ref(&repo)).with_executor(recorder.clone());
 
     state.fetch_file_stats(root.clone(), head.clone());
-    wait_stats(&mut state, &recorder, 1, |s| {
-        s.caches.file_stats_loaded(&root, &head)
-    });
+    state.drain_events();
+    assert!(
+        state.caches.file_stats_loaded(&root, &head),
+        "the line counts settled into the cache"
+    );
 
     state.caches.invalidate(&Affected::Root(root.clone()));
     assert!(
@@ -139,5 +123,6 @@ fn invalidating_a_root_drops_its_cached_file_stats() {
 
     // And the next request runs again rather than serving the dropped entry.
     state.fetch_file_stats(root.clone(), head);
-    wait_stats(&mut state, &recorder, 2, |_| true);
+    state.drain_events();
+    assert_eq!(recorder.stats_call_count(), 2, "the refetch ran again");
 }

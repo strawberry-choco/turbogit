@@ -1,10 +1,9 @@
 //! Issue 15 — Log commit actions, app seam: revert through the confirmation
 //! gate (`PendingConfirm::RevertCommit` → `run_confirmed`) and cherry-pick
 //! onto a chosen branch (`AppState::cherry_pick_to`), both dispatched through
-//! the production `run_git` worker path with events pumped back in.
+//! the production dispatch worker path with events pumped back in.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use turbogit_app::state::{AppState, PendingConfirm};
 
@@ -54,22 +53,6 @@ fn seeded_project() -> (tempfile::TempDir, PathBuf, String, String) {
     (tmp, project, c2, fc)
 }
 
-/// Pump worker events until `pred` holds or the deadline passes.
-fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        state.drain_events();
-        if pred(state) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!(
-        "condition not met within 10s; toast={:?} last_error={:?}",
-        state.ui.toast, state.last_error
-    );
-}
-
 #[test]
 fn revert_through_the_confirm_gate_creates_and_commits_the_revert() {
     let (_tmp, project, c2, _fc) = seeded_project();
@@ -77,12 +60,14 @@ fn revert_through_the_confirm_gate_creates_and_commits_the_revert() {
     let root_id = state.multi.roots[0].id.clone();
 
     state.run_confirmed(PendingConfirm::RevertCommit { commit: c2.clone() });
-    wait_for(&mut state, |s| {
-        s.caches.log(&root_id).is_some_and(|cs| {
-            cs.iter()
-                .any(|c| c.message.to_lowercase().starts_with("revert"))
-        })
-    });
+    state.drain_events();
+    assert!(
+        state.caches.log(&root_id).is_some_and(|cs| cs
+            .iter()
+            .any(|c| c.message.to_lowercase().starts_with("revert"))),
+        "the completion refresh brought the revert into the cached log; last_error={:?}",
+        state.last_error
+    );
 
     let subject = git(&project.join("alpha"), &["log", "-1", "--format=%s"]);
     assert!(
@@ -111,11 +96,16 @@ fn cherry_pick_to_applies_the_commit_onto_the_target_branch() {
     let root_id = state.multi.roots[0].id.clone();
 
     state.cherry_pick_to(fc, "main".to_string());
-    wait_for(&mut state, |s| {
-        s.ui.toast
+    state.drain_events();
+    assert!(
+        state
+            .ui
+            .toast
             .as_ref()
-            .is_some_and(|t| t.kind == turbogit_app::state::ToastKind::Success)
-    });
+            .is_some_and(|t| t.kind == turbogit_app::state::ToastKind::Success),
+        "the cherry-pick reported success; last_error={:?}",
+        state.last_error
+    );
 
     // The commit landed on main exactly once…
     let count = git(&repo, &["rev-list", "--count", "main"])

@@ -3,8 +3,8 @@
 //! Exercises [`turbogit_app::granular::dispatch`] and — through its
 //! production trigger, the `OpCompleted` → refresh → settle path in
 //! [`turbogit_app::state::AppState::drain_events`] — the completion settlement
-//! over a real temporary repository ([`AppState::for_roots`], sync_refresh
-//! mode). No UI rendering: callers pass pure intent exactly as the diff
+//! over a real temporary repository ([`AppState::for_roots`], whose dispatch
+//! seam runs the work inline). No UI rendering: callers pass pure intent exactly as the diff
 //! viewer's gutter controls and the palette verbs do, and assertions observe
 //! **what reached the engine** (via [`test_support::RecordingExecutor`]) and the
 //! resulting repository state via real `git` commands.
@@ -12,7 +12,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use test_support::{RecordedCall, RecordingExecutor};
 
 use turbogit_app::granular::{self, HunkTarget};
@@ -145,36 +144,6 @@ fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str, staged: bool
     state.ui.diff_cache = Some((preview_key(root, rel, staged), text));
 }
 
-/// Wait until the dispatched op's `OpCompleted` event has been drained —
-/// which in sync_refresh mode also runs the synchronous refresh + granular
-/// settlement — or panic once the deadline elapses.
-fn pump(state: &mut AppState) {
-    let deadline = Instant::now() + Duration::from_millis(15_000);
-    while Instant::now() < deadline {
-        state.drain_events();
-        if !state.ui.busy && state.ui.pending_granular.is_none() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    panic!("granular op did not complete in time");
-}
-
-/// Poll `f` until it returns true or the deadline elapses (worker threads run
-/// asynchronously, so completion is observed by polling).
-fn wait_until<F: FnMut() -> bool>(ms: u64, mut f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
 // ------------------------------------------------------------------ tests --
 
 #[test]
@@ -195,11 +164,12 @@ fn granular_dispatch_stages_whole_hunk_forward() {
         true,
     );
 
-    assert!(
-        wait_until(15_000, || porcelain_code(&repo.path, "words.txt") == "MM"),
+    assert_eq!(
+        porcelain_code(&repo.path, "words.txt"),
+        "MM",
         "staging hunk 0 must leave hunk 1 unstaged (partially staged MM)"
     );
-    pump(&mut state);
+    state.drain_events();
 
     assert!(
         recorder.recorded().contains(&RecordedCall::ApplyPatch {
@@ -242,13 +212,10 @@ fn granular_dispatch_stages_only_the_selected_lines_of_a_hunk() {
     );
 
     assert!(
-        wait_until(15_000, || {
-            let staged = git(&repo.path, &["diff", "--cached", "--", "words.txt"]);
-            staged.contains("+BRAVO")
-        }),
+        git(&repo.path, &["diff", "--cached", "--", "words.txt"]).contains("+BRAVO"),
         "the selected line must land in the index"
     );
-    pump(&mut state);
+    state.drain_events();
 
     let staged = git(&repo.path, &["diff", "--cached", "--", "words.txt"]);
     assert!(staged.contains("+BRAVO"), "selected line staged:\n{staged}");
@@ -298,7 +265,7 @@ fn granular_dispatch_stages_exactly_the_selected_character_range() {
         HunkTarget::Chars(0, 1, 8, 24),
         true,
     );
-    pump(&mut state);
+    state.drain_events();
 
     assert!(
         recorder.recorded().contains(&RecordedCall::ApplyPatch {
@@ -414,7 +381,7 @@ fn enter_stages_the_active_char_selection_and_consumes_it() {
     });
 
     granular::stage_char_selection(&mut state);
-    pump(&mut state);
+    state.drain_events();
 
     let staged = git(&repo.path, &["diff", "--cached"]);
     assert!(
@@ -452,7 +419,7 @@ fn file_granularity_dispatch_stages_every_hunk_of_the_diff() {
         HunkTarget::File,
         true,
     );
-    pump(&mut state);
+    state.drain_events();
 
     let staged = git(&repo.path, &["diff", "--cached", "--", "words.txt"]);
     assert!(
@@ -542,13 +509,10 @@ fn granular_dispatch_unstages_hunk_via_reverse_apply() {
     );
 
     assert!(
-        wait_until(15_000, || {
-            let staged = git(&repo.path, &["diff", "--cached", "--", "words.txt"]);
-            !staged.contains("BRAVO")
-        }),
+        !git(&repo.path, &["diff", "--cached", "--", "words.txt"]).contains("BRAVO"),
         "reverse-applying hunk 0 must remove it from the index"
     );
-    pump(&mut state);
+    state.drain_events();
 
     assert!(
         recorder.recorded().contains(&RecordedCall::ApplyPatch {
@@ -605,12 +569,13 @@ fn granular_dispatch_routes_untracked_stage_through_intent_to_add() {
         true,
     );
 
-    assert!(
-        wait_until(15_000, || recorder.recorded().len() == 2),
+    assert_eq!(
+        recorder.recorded().len(),
+        2,
         "untracked staging routes two engine calls, recorded={:?}",
         recorder.recorded()
     );
-    pump(&mut state);
+    state.drain_events();
 
     assert_eq!(
         recorder.recorded(),
@@ -661,7 +626,7 @@ fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
         HunkTarget::Whole(0),
         true,
     );
-    pump(&mut state);
+    state.drain_events();
 
     // The whole file staged (single hunk) → story 9 exclusion lands under the
     // canonical (root-joined) key…
@@ -712,7 +677,8 @@ fn granular_dispatch_without_cached_diff_is_a_silent_no_op() {
         true,
     );
 
-    std::thread::sleep(Duration::from_millis(300));
+    // The harness runs work inline, so a dispatched op would already have
+    // reached the engine: nothing to wait for, and nothing arrived.
     state.drain_events();
     assert!(
         recorder.recorded().is_empty(),

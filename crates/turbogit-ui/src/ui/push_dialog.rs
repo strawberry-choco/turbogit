@@ -24,11 +24,12 @@
 
 use crate::theme::Palette;
 use egui::{RichText, Ui};
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, OutgoingRoot, PushPreview};
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{
-    BranchKind, ChangeStatus, Commit, LogOpts, Root, RootId, Signature, SignatureState,
+    BranchKind, ChangeStatus, Commit, CommitId, Root, RootId, Signature, SignatureState,
 };
 use turbogit_services::sync_service::{self, PushScope, SubsetPushState};
 
@@ -360,8 +361,6 @@ fn preview_reports(ui: &mut Ui, preview: &PushPreview) {
 /// remotes · X refs · Y rejected` summary (issue #25).
 fn run_preview(state: &mut AppState) {
     let scope = scope_roots(state);
-    let exec = state.executor.clone();
-    let _settings = state.settings.clone();
     let force = state.ui.dlg.force_push;
     let subset = state.ui.dlg.push_subset.clone();
     let narrowed_sha: Option<String> = match &subset {
@@ -371,23 +370,13 @@ fn run_preview(state: &mut AppState) {
     let scope_commits = scope_outgoing(state, &scope);
     let total: usize = scope_commits.iter().map(|(_, cs)| cs.len()).sum();
 
-    let results: Vec<(String, Result<String, String>)> =
-        if scope.len() == 1 && state.ui.dlg.push_scope == PushScope::ThisRepo {
-            // Single-root path: keep the old Remote/Branch field semantics.
-            let root = &scope[0];
-            let branch = state.ui.dlg.push_branch.clone();
-            let remote = state.ui.dlg.push_remote.clone();
-            let r = exec
-                .push_dry_run(&root.path, &remote, &branch, force)
-                .map_err(|e| verbatim_stderr(&e));
-            vec![(remote, r)]
-        } else {
-            let refs: Vec<&Root> = scope.iter().collect();
-            sync_service::push_dry_run_roots(exec.as_ref(), &refs, force, narrowed_sha.as_deref())
-                .into_iter()
-                .map(|(remote, res)| (remote, res.map_err(|e| verbatim_stderr(&e))))
-                .collect()
-        };
+    // Single-root scope with the dialog's own Remote/Branch fields, or the
+    // per-root service for everything else — the engine work is the app's.
+    let single = (scope.len() == 1 && state.ui.dlg.push_scope == PushScope::ThisRepo).then_some((
+        state.ui.dlg.push_remote.as_str(),
+        state.ui.dlg.push_branch.as_str(),
+    ));
+    let results = state.push_dry_run_reports(&scope, single, force, narrowed_sha.as_deref());
 
     let summary = sync_service::summarize_dry_runs(&results);
     let reports: Vec<(String, Result<String, String>)> = results
@@ -423,14 +412,6 @@ fn run_preview(state: &mut AppState) {
     });
 }
 
-/// Extract git's verbatim stderr from an engine error.
-fn verbatim_stderr(e: &TgError) -> String {
-    match e {
-        TgError::Cli { stderr, .. } => stderr.clone(),
-        other => other.to_string(),
-    }
-}
-
 /// Build the outgoing-commit snapshot once when the dialog opens. Seeds the
 /// commit-selection list with every outgoing SHA so an untouched dialog pushes
 /// everything ahead (issue #24).
@@ -438,8 +419,7 @@ fn ensure_outgoing(state: &mut AppState) {
     if state.ui.dlg.push_outgoing.is_some() {
         return;
     }
-    let exec = state.executor.clone();
-    let results = sync_service::outgoing_per_root(exec.as_ref(), &state.multi);
+    let results = state.outgoing_per_root();
     let mut out = Vec::with_capacity(results.len());
     let mut selected = Vec::new();
     for (id, res) in results {
@@ -449,7 +429,7 @@ fn ensure_outgoing(state: &mut AppState) {
                 .unwrap_or_else(|| id.0.display().to_string());
         let commits = match res {
             Ok(ids) => {
-                let log = exec.log(&id.0, &LogOpts::default()).unwrap_or_default();
+                let log = state.full_log(&id);
                 Ok(ids
                     .into_iter()
                     .map(|cid| {
@@ -631,30 +611,33 @@ fn changed_files_preview(ui: &mut Ui, state: &mut AppState) {
     egui::CollapsingHeader::new("Changed files")
         .default_open(true)
         .show(ui, |ui| {
-            let snapshot = state.ui.dlg.push_outgoing.as_deref().unwrap_or(&[]);
-            let filter = state.ui.dlg.push_preview_root.as_ref();
-            let mut any = false;
-            for entry in snapshot
+            let filter = state.ui.dlg.push_preview_root.clone();
+            // The (root, commit) pairs are taken out first: the cache read wants
+            // the app state, and holding a borrow of `push_outgoing` across it
+            // would keep the two from coexisting.
+            let wanted: Vec<(RootId, CommitId)> = state
+                .ui
+                .dlg
+                .push_outgoing
+                .as_deref()
+                .unwrap_or(&[])
                 .iter()
-                .filter(|e| filter.is_none_or(|f| f == &e.id))
-            {
-                let commits = match &entry.commits {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                for c in commits {
-                    let files =
-                        state
-                            .caches
-                            .ensure_files(state.executor.as_ref(), &entry.id, &c.id);
-                    for ch in files {
-                        any = true;
-                        ui.label(format!(
-                            "{} {}",
-                            change_letter(ch.status),
-                            ch.path.display()
-                        ));
-                    }
+                .filter(|e| filter.as_ref().is_none_or(|f| f == &e.id))
+                .flat_map(|e| {
+                    e.commits
+                        .iter()
+                        .flat_map(move |cs| cs.iter().map(move |c| (e.id.clone(), c.id.clone())))
+                })
+                .collect();
+            let mut any = false;
+            for (root, commit) in wanted {
+                for ch in state.ensure_files(&root, &commit) {
+                    any = true;
+                    ui.label(format!(
+                        "{} {}",
+                        change_letter(ch.status),
+                        ch.path.display()
+                    ));
                 }
             }
             if !any {
@@ -693,29 +676,29 @@ fn execute_push(state: &mut AppState) {
     };
 
     if state.ui.dlg.push_scope == PushScope::ThisRepo {
-        let root = state.selected_path();
         let remote = state.ui.dlg.push_remote.clone();
         let branch = state.ui.dlg.push_branch.clone();
         let sha = narrowed_sha.clone();
-        state.run_git(
-            "Push".into(),
-            Affected::from_optional_root(root.as_deref()),
-            move |v| match root {
-                Some(r) => sync_service::push(
-                    v,
-                    &r,
-                    &remote,
-                    &branch,
-                    force,
-                    tags,
-                    no_verify,
-                    set_upstream,
-                    sha.as_deref(),
-                    &settings,
-                ),
-                None => Ok(()),
-            },
-        );
+        if let Some(root) = state.selected_root.clone() {
+            state.dispatch(Operation::custom(
+                "Push",
+                Affected::Root(root.clone()),
+                move |v| {
+                    sync_service::push(
+                        v,
+                        root.as_path(),
+                        &remote,
+                        &branch,
+                        force,
+                        tags,
+                        no_verify,
+                        set_upstream,
+                        sha.as_deref(),
+                        &settings,
+                    )
+                },
+            ));
+        }
     } else {
         // Multi-repo push (issue #25): push every root in the resolved scope
         // via `push_roots`; per-root remote resolution and protected-branch
@@ -724,7 +707,7 @@ fn execute_push(state: &mut AppState) {
         let owned_roots: Vec<Root> = scope.clone();
         let owned_settings = settings;
         let owned_sha = narrowed_sha;
-        state.run_git("Push".into(), Affected::All, move |v| {
+        state.dispatch(Operation::custom("Push", Affected::All, move |v| {
             let roots_ref: Vec<&Root> = owned_roots.iter().collect();
             let results = sync_service::push_roots(
                 v,
@@ -756,6 +739,6 @@ fn execute_push(state: &mut AppState) {
                     failures.join("; ")
                 )))
             }
-        });
+        }));
     }
 }

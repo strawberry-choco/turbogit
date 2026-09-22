@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 chrono = { workspace = true }
+image = { workspace = true }
 crossbeam-channel = { workspace = true }
 dirs = { workspace = true }
 ron = { workspace = true }

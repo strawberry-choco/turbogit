@@ -113,6 +113,7 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
 #[track_caller]
 fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
     let texts = painted_text(harness);
+    let _ = &harness.state().ui.activity.entries;
     assert!(
         texts.iter().any(|t| t == text),
         "`{text}` was not painted as an exact galley; painted text:\n{texts:#?}"
@@ -220,7 +221,10 @@ fn fetch_and_pull_quick_actions_dispatch_over_the_selection() {
     settle(&mut h);
 
     h.get_by_label("Fetch selection").click();
-    wait_painted(&mut h, "Fetch · 4 repos");
+    // A fetch of the whole selection reports what it brought in, exactly as a
+    // single-repo fetch does — it used to paint its own label back and report
+    // nothing (ADR-0020).
+    wait_painted(&mut h, "Fetch · nothing changed");
 
     h.get_by_label("Pull selection").click();
     wait_painted(&mut h, "Pull · 4 repos");

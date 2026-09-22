@@ -9,9 +9,7 @@ use super::model::{
     DiffModel, DisplayRow, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W, TEXT_X,
     diff_model, mono_font, pane_kind,
 };
-use super::panes::{
-    binary_placeholder, ensure_diff, ensure_pane_bytes, pane_byte_lens, render_image_pane,
-};
+use super::panes::{binary_placeholder, pane_byte_lens, pane_side_requests, render_image_pane};
 use crate::theme::Palette;
 use crate::ui::widgets;
 use egui::{
@@ -47,7 +45,7 @@ pub fn render_diff(
     let ignore_ws = state.ui.diff_ignore_whitespace;
     let (eff_left, eff_right, staged) = comparison_triple(left, right, comparison);
 
-    ensure_diff(state, &root, &eff_left, &eff_right, staged, ignore_ws, path);
+    state.ensure_diff(&root, &eff_left, &eff_right, staged, ignore_ws, path);
     let key = diff_key(&root, &eff_left, &eff_right, staged, ignore_ws, path);
 
     // Cached display model (absent while loading / before first load).
@@ -139,16 +137,8 @@ pub fn render_diff(
         PaneKind::Binary => {
             let meta = &model.files[0];
             let pane_key = format!("{key}#bin");
-            ensure_pane_bytes(
-                state,
-                pane_key.clone(),
-                &root,
-                &eff_left,
-                &eff_right,
-                staged,
-                meta,
-                false,
-            );
+            let (old, new) = pane_side_requests(&root, &eff_left, &eff_right, staged, meta);
+            state.ensure_pane_bytes(pane_key.clone(), old, new, false);
             // While loading (or when a side is unreadable) the sizes are
             // unresolved and the bare description shows — the graceful
             // fallback text.

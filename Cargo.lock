@@ -3526,6 +3526,7 @@ dependencies = [
  "chrono",
  "crossbeam-channel",
  "dirs",
+ "image",
  "ron",
  "serde",
  "tempfile",

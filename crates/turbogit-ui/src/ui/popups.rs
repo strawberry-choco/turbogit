@@ -9,6 +9,7 @@ use egui::{Pos2, RichText, Ui};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use turbogit_app::granular;
+use turbogit_app::operation::Operation;
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, Tab, TagType, Toast};
@@ -124,40 +125,26 @@ impl Action {
 }
 
 pub fn run_action(state: &mut AppState, action: Action) {
-    let root = state.selected_path();
+    let root = state.selected_root.clone();
     match action {
         // Manual refresh (decision 8): the full scoped refresh — drops every
         // cache entry (decorations and path history included) and rescans.
         Action::Refresh => state.refresh(Affected::All),
         Action::Fetch => {
-            let r = root.clone();
-            state.run_git(
-                "Fetch".into(),
-                Affected::from_optional_root(r.as_deref()),
-                move |v| {
-                    if let Some(r) = &r {
-                        v.fetch(r, None)
-                    } else {
-                        Ok(())
-                    }
-                },
-            );
+            if let Some(r) = root {
+                state.dispatch(Operation::Fetch { roots: vec![r] });
+            }
         }
         Action::Pull => {
-            let r = root.clone();
             let rebase =
                 state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
-            state.run_git(
-                "Pull".into(),
-                Affected::from_optional_root(r.as_deref()),
-                move |v| {
-                    if let Some(r) = &r {
-                        v.pull(r, rebase)
-                    } else {
-                        Ok(())
-                    }
-                },
-            );
+            if let Some(r) = root {
+                state.dispatch(Operation::custom(
+                    "Pull",
+                    Affected::Root(r.clone()),
+                    move |v| v.pull(r.as_path(), rebase),
+                ));
+            }
         }
         Action::Push => state.ui.dialog = Some(Dialog::Push),
         Action::Branches => state.ui.branches_popup = true,

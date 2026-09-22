@@ -245,7 +245,6 @@ fn each_toast_kind_paints_its_semantic_color_and_icon() {
             st.ui.toast = Some(Toast {
                 kind,
                 message: msg.into(),
-                retry: None,
             });
             st.ui.toast_shown_at = None; // fresh auto-dismiss window per case
         }

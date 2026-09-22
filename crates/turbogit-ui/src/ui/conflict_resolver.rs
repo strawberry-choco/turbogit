@@ -21,8 +21,10 @@ use egui::{
     Color32, CornerRadius, Frame, Key, Margin, Modifiers, Rect, RichText, ScrollArea, Stroke,
     TextEdit, Ui, Vec2,
 };
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Toast};
+use turbogit_domain::model::RootId;
 use turbogit_services::conflict;
 
 use std::path::{Path, PathBuf};
@@ -44,7 +46,7 @@ fn merge_editor_segments(
 ) -> (Vec<(String, String, bool)>, usize) {
     if state.settings.in_process_diffs
         && let Some(root) = root
-        && let Ok(v) = conflict::read_versions(state.executor.as_ref(), root, path)
+        && let Some(v) = state.merge_versions(&RootId(root.clone().into()), path)
     {
         let segs = turbogit_services::diff_engine::merge_segments(&v.base, &v.ours, &v.theirs);
         let n = segs.iter().filter(|(_, _, c)| *c).count();
@@ -359,7 +361,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if let Some(r) = &root {
         if r.join(".git").join("MERGE_HEAD").exists() {
             state.ui.merge_in_progress = true;
-            if let Ok(list) = state.executor.merge_auto_merged_files(r, &conflicted) {
+            let root_id = RootId(r.clone().into());
+            if let Some(list) = state.auto_merged_files(&root_id, &conflicted) {
                 state.ui.auto_merged_files = list;
             }
         } else {
@@ -593,19 +596,15 @@ fn apply_to_all_remaining(state: &mut AppState) {
 
 fn apply_resolution(state: &mut AppState) {
     let content = state.ui.conflict_text.clone();
-    let r = state.selected_path();
+    let r = state.selected_root.clone();
     let p = state.ui.conflict_resolver_selected.clone();
-    state.run_git(
-        "Apply merge resolution".into(),
-        Affected::from_optional_root(r.as_deref()),
-        move |v| {
-            if let (Some(r), Some(p)) = (r.as_ref(), p.as_ref()) {
-                conflict::write_resolution(v, r, p, &content)
-            } else {
-                Ok(())
-            }
-        },
-    );
+    if let (Some(r), Some(p)) = (r, p) {
+        state.dispatch(Operation::custom(
+            "Apply merge resolution",
+            Affected::Root(r.clone()),
+            move |v| conflict::write_resolution(v, r.as_path(), &p, &content),
+        ));
+    }
     // Keep the resolver open while a merge is still pending Continue —
     // the file is staged but the merge commit hasn't been written yet.
     if !state.ui.merge_in_progress {
@@ -614,34 +613,24 @@ fn apply_resolution(state: &mut AppState) {
 }
 
 fn abort_merge(state: &mut AppState) {
-    let r = state.selected_path();
-    state.run_git(
-        "Abort merge".into(),
-        Affected::from_optional_root(r.as_deref()),
-        move |v| {
-            if let Some(r) = r.as_ref() {
-                v.abort(r, "merge")
-            } else {
-                Ok(())
-            }
-        },
-    );
+    if let Some(r) = state.selected_root.clone() {
+        state.dispatch(Operation::custom(
+            "Abort merge",
+            Affected::Root(r.clone()),
+            move |v| v.abort(r.as_path(), "merge"),
+        ));
+    }
     state.ui.conflict_resolver_open = false;
 }
 
 fn continue_merge(state: &mut AppState) {
-    let r = state.selected_path();
-    state.run_git(
-        "Continue merge".into(),
-        Affected::from_optional_root(r.as_deref()),
-        move |v| {
-            if let Some(r) = r.as_ref() {
-                v.continue_op(r, "merge")
-            } else {
-                Ok(())
-            }
-        },
-    );
+    if let Some(r) = state.selected_root.clone() {
+        state.dispatch(Operation::custom(
+            "Continue merge",
+            Affected::Root(r.clone()),
+            move |v| v.continue_op(r.as_path(), "merge"),
+        ));
+    }
     state.ui.conflict_resolver_open = false;
 }
 

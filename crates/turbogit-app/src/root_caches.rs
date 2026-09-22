@@ -19,9 +19,9 @@ use turbogit_domain::model::{
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::hunk_stats::{self, FileHunks};
 
-/// Which roots an operation's results affect — declared at every
-/// [`AppState::run_git`](crate::state::AppState::run_git) call site and used
-/// to scope cache invalidation and rescans.
+/// Which roots an operation's results affect — owned by the
+/// [`Operation`](crate::operation::Operation) that produced them and used to
+/// scope cache invalidation and rescans.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Affected {
     /// Every registered root (batch operations, unknown scope).
@@ -30,13 +30,27 @@ pub enum Affected {
     Root(RootId),
 }
 
+/// Which scoped commit listing a cache read fills: a file's history, one ref's
+/// history, or a pickaxe search. Each is a `git log` with one term in one
+/// `LogOpts` field, so the choice is one value rather than three signatures
+/// (issue #19, plan D9, issue 17).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LogScope {
+    /// `git log -- <path>`.
+    Path(PathBuf),
+    /// `git log <ref>`.
+    Ref(String),
+    /// `git log -S <query>`.
+    Search(String),
+}
+
 impl Affected {
-    /// Scope for an operation that targets an optionally-selected root and
-    /// no-ops when none is selected: [`Affected::Root`] when present,
-    /// [`Affected::All`] otherwise (harmless — the closure no-ops too).
-    pub fn from_optional_root(root: Option<&Path>) -> Self {
-        root.map(|p| Affected::Root(RootId(p.into())))
-            .unwrap_or(Affected::All)
+    /// The one root in scope, when the scope is a single root.
+    pub fn root(&self) -> Option<&RootId> {
+        match self {
+            Affected::Root(id) => Some(id),
+            Affected::All => None,
+        }
     }
 }
 
@@ -108,6 +122,25 @@ impl RootHunkStats {
         let want = path.to_string_lossy().replace('\\', "/");
         view.iter().find(|f| f.path == want)
     }
+}
+
+/// One scoped-log fill: fetch on miss, then hand back a borrow of what the map
+/// now holds. Written once for all three [`LogScope`]s, which differ only in
+/// their key type. The tuple key cannot be probed in borrowed form (`HashMap`
+/// has no mixed-reference `Borrow` for tuples), so the caller builds the owned
+/// key up front and clones it only for the insert.
+fn fill_scoped_log<K>(
+    map: &mut HashMap<K, Vec<Commit>>,
+    key: K,
+    fetch: impl FnOnce() -> Vec<Commit>,
+) -> &[Commit]
+where
+    K: Clone + Eq + std::hash::Hash,
+{
+    if !map.contains_key(&key) {
+        map.insert(key.clone(), fetch());
+    }
+    map.get(&key).map(Vec::as_slice).unwrap_or(&[])
 }
 
 /// Which of the three working-tree diff views [`RootHunkStats::file` reads.
@@ -269,91 +302,65 @@ impl RootCaches {
             .unwrap_or(&[])
     }
 
-    /// The commits touching `path` in `root` (`git log -- <path>`),
-    /// computed through the engine seam on miss and cached (issue #19).
-    /// Returns a borrow of the cached list — same fill-and-reborrow shape
-    /// as [`RootCaches::ensure_files`] (plan §1.2).
-    pub fn ensure_path_log(
-        &mut self,
-        exec: &dyn GitExecutor,
-        root: &RootId,
-        path: &Path,
-    ) -> &[Commit] {
-        let key = (root.clone(), path.to_path_buf());
-        if !self.log_path_cache.contains_key(&key) {
-            let commits = exec
-                .log(
-                    &root.0,
-                    &LogOpts {
-                        path: Some(key.1.clone()),
-                        ..Default::default()
-                    },
-                )
-                .unwrap_or_default();
-            self.log_path_cache.insert(key.clone(), commits);
-        }
-        self.log_path_cache
-            .get(&key)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-    }
-
-    /// The commits of `ref_name` in `root` (`git log <ref>`), computed
-    /// through the engine seam on miss and cached (plan D9). Returns a
-    /// borrow of the cached list — same fill-and-reborrow shape as
+    /// The commits of one scoped listing in `root`, computed through the engine
+    /// seam on miss and cached. The three scopes are one operation apart from
+    /// which map they fill and which `LogOpts` field carries the term, so the
+    /// choice lives here and the fill-and-reborrow body lives in
+    /// `fill_scoped_log`.
+    ///
+    /// Returns a borrow of the cached list — same rule as
     /// [`RootCaches::ensure_files`] (plan §1.2).
-    pub fn ensure_ref_log(
+    pub fn ensure_log(
         &mut self,
         exec: &dyn GitExecutor,
         root: &RootId,
-        ref_name: &str,
+        scope: &LogScope,
     ) -> &[Commit] {
-        let key = (root.clone(), ref_name.to_string());
-        if !self.log_ref_cache.contains_key(&key) {
-            let commits = exec
-                .log(
-                    &root.0,
-                    &LogOpts {
-                        branch: Some(key.1.clone()),
-                        ..Default::default()
-                    },
-                )
-                .unwrap_or_default();
-            self.log_ref_cache.insert(key.clone(), commits);
+        let path = root.0.clone();
+        match scope {
+            LogScope::Path(target) => {
+                let key = (root.clone(), target.clone());
+                let term = key.1.clone();
+                fill_scoped_log(&mut self.log_path_cache, key, || {
+                    exec.log(
+                        &path,
+                        &LogOpts {
+                            path: Some(term),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default()
+                })
+            }
+            LogScope::Ref(ref_name) => {
+                let key = (root.clone(), ref_name.clone());
+                let term = key.1.clone();
+                fill_scoped_log(&mut self.log_ref_cache, key, || {
+                    exec.log(
+                        &path,
+                        &LogOpts {
+                            branch: Some(term),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default()
+                })
+            }
+            LogScope::Search(query) => {
+                let key = (root.clone(), query.clone());
+                let term = key.1.clone();
+                fill_scoped_log(&mut self.search_cache, key, || {
+                    exec.log(
+                        &path,
+                        &LogOpts {
+                            pickaxe: Some(term),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap_or_default()
+                })
+            }
         }
-        self.log_ref_cache
-            .get(&key)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-    }
-
-    /// The commits where the occurrence count of `query` changed (pickaxe,
-    /// issue 17), computed through the engine seam on miss and cached.
-    /// Returns a borrow of the cached list — same fill-and-reborrow shape
-    /// as [`RootCaches::ensure_files`] (plan §1.2).
-    pub fn ensure_search_log(
-        &mut self,
-        exec: &dyn GitExecutor,
-        root: &RootId,
-        query: &str,
-    ) -> &[Commit] {
-        let key = (root.clone(), query.to_string());
-        if !self.search_cache.contains_key(&key) {
-            let commits = exec
-                .log(
-                    &root.0,
-                    &LogOpts {
-                        pickaxe: Some(key.1.clone()),
-                        ..Default::default()
-                    },
-                )
-                .unwrap_or_default();
-            self.search_cache.insert(key.clone(), commits);
-        }
-        self.search_cache
-            .get(&key)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
     }
 
     // --- Event-fed writes (called from drain_events) ------------------------

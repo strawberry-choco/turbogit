@@ -24,6 +24,7 @@ use egui::{
     Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::{Path, PathBuf};
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::{Affected, StatsView};
 use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use turbogit_domain::model::{Change, ChangeStatus, Root};
@@ -171,11 +172,10 @@ fn has_selected_changes(state: &AppState) -> bool {
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     // Hunk-span statistics (issue 20) feed the per-file hunk badges and the
-    // staged-hunk rail; computed on miss through the engine seam, keyed per
-    // root and invalidated with the other root caches.
+    // staged-hunk rail; computed on miss through the engine the app owns, keyed
+    // per root and invalidated with the other root caches.
     if let Some(root_id) = state.selected_root.clone() {
-        let exec = state.executor.clone();
-        state.caches.ensure_hunk_stats(exec.as_ref(), &root_id);
+        state.ensure_hunk_stats(&root_id);
     }
     sub_tab_strip(ui, state);
     match state.ui.commit_subtab {
@@ -1541,7 +1541,7 @@ fn primary_button_enabled(ui: &mut Ui, label: &str, enabled: bool) -> egui::Resp
 }
 
 fn do_commit(state: &mut AppState, and_push: bool) {
-    let root = state.selected_path();
+    let root = state.selected_root.clone();
     // Files whose index already diverges from HEAD carry a — possibly
     // granular — staged selection (spec R2); re-staging them whole would
     // blow it away (ADR-0013). They commit as-is from the index; untouched
@@ -1556,18 +1556,17 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         state.ui.recent_messages.insert(0, msg.clone());
         state.ui.recent_messages.truncate(12);
     }
-    state.run_git(
-        "Commit".into(),
-        Affected::from_optional_root(root.as_deref()),
-        move |v| {
-            if let Some(r) = &root {
-                let _ = changes::commit_selected(v, r, &msg, &untouched, &partial, amend)?;
+    if let Some(root) = root {
+        state.dispatch(Operation::custom(
+            "Commit",
+            Affected::Root(root.clone()),
+            move |v| {
+                let _ =
+                    changes::commit_selected(v, root.as_path(), &msg, &untouched, &partial, amend)?;
                 Ok(())
-            } else {
-                Ok(())
-            }
-        },
-    );
+            },
+        ));
+    }
     // Reset fields (the recent message was recorded above).
     state.ui.commit_message.clear();
     state.ui.selected.clear();
