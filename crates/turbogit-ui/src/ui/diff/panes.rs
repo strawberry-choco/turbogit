@@ -1,49 +1,37 @@
-//! Non-text pane assembly and async loading: image/binary pane kind
-//! routing, off-frame byte fetches, texture upload, and the diff loader
-//! (`ensure_diff`, spec R8, ADR-0015).
+//! Non-text pane assembly: routing a diff section to the text, image or
+//! binary renderer, the pane's texture cache, and the request building for the
+//! app layer's off-frame loads (spec R8, ADR-0015). The loads themselves are
+//! [`AppState::ensure_diff`] and [`AppState::ensure_pane_bytes`] — the Shell
+//! never holds the Git engine or an event sender.
 
-use super::actions::{paint_centered, preview_status};
-use super::model::{FileMeta, IMAGE_CAP_BYTES, IMAGE_MAX_PIXELS, ROW_H, repo_rel_path};
+use super::actions::paint_centered;
+use super::model::{FileMeta, ROW_H};
 use crate::theme::Palette;
 use egui::{Align, Layout, Sense, TextureOptions, Ui, Vec2};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
 use turbogit_app::diff_data::PaneSide;
-use turbogit_app::events::{AppEvent, DecodedImage, FetchedBlob};
-use turbogit_app::granular::{self, diff_key};
+use turbogit_app::diff_load::{PaneSideRequest, SideSpec};
+use turbogit_app::events::DecodedImage;
 use turbogit_app::state::AppState;
-use turbogit_domain::model::{ChangeStatus, DiffOpts};
-use turbogit_engine_api::GitExecutor;
-use turbogit_services::diff_engine;
 
-/// Where one side's bytes come from — mirroring exactly how the viewer's
-/// diff text is requested ([`turbogit_app::granular::comparison_triple`] + `CliExecutor::diff`):
-///
-/// | comparison       | old side   | new side     |
-/// |------------------|------------|--------------|
-/// | Repo (HEAD↔wt)   | `HEAD`     | worktree fs  |
-/// | Staged (HEAD↔ix) | `HEAD`     | index `:0`   |
-/// | Local (ix↔wt)    | index `:0` | worktree fs  |
-/// | explicit l..r    | `<left>`   | `<right>`    |
-///
-/// Index revs use git's stage syntax (`:<n>:<path>`), the same style the
-/// conflict reader uses for `:1`/`:2`/`:3`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum SideSpec {
-    Rev(String),
-    Worktree,
-    Missing,
-}
-
-/// Byte sources for `(old, new)` of one file section. New files have no old
-/// side; deleted files no new side — those render as the single-image case.
-fn byte_side_specs(
+/// The two byte sources for one file section. New files have no old side;
+/// deleted files no new side — those render as the single-image case. Paths
+/// become repo-relative and slash-separated here, because that is the form
+/// `git show` takes and the metadata carries git's `a/`/`b/` prefixes.
+pub(super) fn pane_side_requests(
+    root: &std::path::Path,
     left: &Option<String>,
     right: &Option<String>,
     staged: bool,
     meta: &FileMeta,
-) -> (SideSpec, SideSpec) {
+) -> (PaneSideRequest, PaneSideRequest) {
+    let rel = |p: &Option<String>| {
+        p.as_deref()
+            .map(super::model::repo_rel_path)
+            .unwrap_or_default()
+            .to_owned()
+    };
     let old = if meta.new_file {
         SideSpec::Missing
     } else {
@@ -62,7 +50,24 @@ fn byte_side_specs(
             None => SideSpec::Worktree,
         }
     };
-    (old, new)
+    (
+        PaneSideRequest {
+            root: root.to_path_buf(),
+            spec: old,
+            path: rel(&meta.old_path),
+        },
+        PaneSideRequest {
+            root: root.to_path_buf(),
+            spec: new,
+            path: rel(&meta.new_path),
+        },
+    )
+}
+
+/// Resolved byte lengths for the binary caption, when both sides resolved.
+pub(super) fn pane_byte_lens(state: &AppState, pane_key: &str) -> Option<(u64, u64)> {
+    let entry = state.ui.pane_bytes.get(pane_key)?;
+    Some((entry.old.as_ref()?.byte_len, entry.new.as_ref()?.byte_len))
 }
 
 /// Human-readable byte size ("0 B", "512 B", "1.2 KB", "12 MB") — decimal
@@ -152,112 +157,6 @@ fn pane_texture(
     })
 }
 
-/// Decode raw bytes into a [`DecodedImage`] when they are an in-cap image.
-/// SVG can never reach this — the extension sniff gates decoding — and a
-/// blob over [`IMAGE_CAP_BYTES`] or with more than [`IMAGE_MAX_PIXELS`]
-/// counts as undecodable so the pane falls back to the binary change.
-fn decode_image(bytes: &[u8]) -> Option<DecodedImage> {
-    if bytes.len() as u64 > IMAGE_CAP_BYTES {
-        return None;
-    }
-    let img = image::load_from_memory(bytes).ok()?;
-    let (width, height) = (img.width(), img.height());
-    if width as u64 * height as u64 > IMAGE_MAX_PIXELS {
-        return None;
-    }
-    Some(DecodedImage {
-        width,
-        height,
-        rgba: img.to_rgba8().into_raw(),
-    })
-}
-
-/// Fetch one side's bytes (worker-thread only): engine blob for rev specs,
-/// filesystem for the worktree — metadata-only when no decode is needed,
-/// since the binary caption wants lengths, not content.
-fn fetch_side(
-    exec: &dyn GitExecutor,
-    root: &std::path::Path,
-    spec: &SideSpec,
-    rel: &str,
-    decode: bool,
-) -> Option<FetchedBlob> {
-    let bytes = match spec {
-        SideSpec::Missing => return None,
-        SideSpec::Worktree => {
-            let full = root.join(rel);
-            if !decode {
-                let len = std::fs::metadata(full).ok()?.len();
-                return Some(FetchedBlob {
-                    byte_len: len,
-                    decoded: None,
-                });
-            }
-            std::fs::read(full).ok()?
-        }
-        SideSpec::Rev(rev) => exec
-            .show_file_bytes(root, rev, std::path::Path::new(rel))
-            .ok()?,
-    };
-    let byte_len = bytes.len() as u64;
-    let decoded = decode.then(|| decode_image(&bytes)).flatten();
-    Some(FetchedBlob { byte_len, decoded })
-}
-
-/// Dispatch the off-frame byte load for a non-text pane when nothing is in
-/// flight and the result is not cached — one in-flight load per target,
-/// mirroring `ensure_diff`. Returns whether an entry for `pane_key` is
-/// already cached.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn ensure_pane_bytes(
-    state: &mut AppState,
-    pane_key: String,
-    root: &std::path::Path,
-    left: &Option<String>,
-    right: &Option<String>,
-    staged: bool,
-    meta: &FileMeta,
-    decode: bool,
-) -> bool {
-    if state.ui.pane_bytes.get(&pane_key).is_some() {
-        return true;
-    }
-    if state.ui.pane_bytes_loading.is_none() {
-        let (old_spec, new_spec) = byte_side_specs(left, right, staged, meta);
-        // Owned: the worker closure is 'static, the metadata borrow is not.
-        let old_rel = meta
-            .old_path
-            .as_deref()
-            .map(|p| repo_rel_path(p).to_owned())
-            .unwrap_or_default();
-        let new_rel = meta
-            .new_path
-            .as_deref()
-            .map(|p| repo_rel_path(p).to_owned())
-            .unwrap_or_default();
-        let root = root.to_path_buf();
-        let executor = state.executor.clone();
-        let tx = state.tx.clone();
-        state.ui.pane_bytes_loading = Some(pane_key.clone());
-        std::thread::spawn(move || {
-            let old = fetch_side(executor.as_ref(), &root, &old_spec, &old_rel, decode);
-            let new = fetch_side(executor.as_ref(), &root, &new_spec, &new_rel, decode);
-            let _ = tx.send(AppEvent::FileBytesReady {
-                key: pane_key,
-                old,
-                new,
-            });
-        });
-    }
-    false
-}
-
-/// Resolved byte lengths for the binary caption, when both sides resolved.
-pub(super) fn pane_byte_lens(state: &AppState, pane_key: &str) -> Option<(u64, u64)> {
-    let entry = state.ui.pane_bytes.get(pane_key)?;
-    Some((entry.old.as_ref()?.byte_len, entry.new.as_ref()?.byte_len))
-}
-
 /// Fit `tex` inside `max`, preserving aspect ratio, never upscaling past
 /// the natural pixel size (crisp beats blurry).
 fn fitted(tex: Vec2, max: Vec2) -> Vec2 {
@@ -309,16 +208,8 @@ pub(super) fn render_image_pane(
     staged: bool,
     meta: &FileMeta,
 ) {
-    if !ensure_pane_bytes(
-        state,
-        pane_key.to_owned(),
-        root,
-        left,
-        right,
-        staged,
-        meta,
-        true,
-    ) {
+    let (old, new) = pane_side_requests(root, left, right, staged, meta);
+    if !state.ensure_pane_bytes(pane_key.to_owned(), old, new, true) {
         centered_note(ui, "Loading image…");
         return;
     }
@@ -384,116 +275,6 @@ pub(super) fn render_image_pane(
         }
     }
 }
-// --- engine access -----------------------------------------------------------
-
-/// Synthesize a creation unified-diff for an untracked preview (spec R2):
-/// `git diff` cannot see untracked files, so the worktree content is dressed
-/// as a whole-file addition and fed through the normal cache/parse path —
-/// rows, gutters, hover tracking, and hunk nav all behave unchanged. This is
-/// the exact shape `partial_stage_cli.rs` proves appliable. `None` falls back
-/// to engine behavior (unreadable, binary, or empty files).
-fn synthetic_untracked_diff(root: &std::path::Path, rel: &std::path::Path) -> Option<String> {
-    let bytes = std::fs::read(root.join(rel)).ok()?;
-    // Binary (NUL byte) or empty content has no meaningful granular diff.
-    if bytes.is_empty() || bytes.contains(&0) {
-        return None;
-    }
-    let content = String::from_utf8(bytes).ok()?;
-    // Patch headers need slash-separated repo-relative paths.
-    let display = rel
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/");
-    let n = content.lines().count();
-    let mut out = format!(
-        "diff --git a/{display} b/{display}\n\
-         new file mode 100644\n\
-         --- /dev/null\n\
-         +++ b/{display}\n\
-         @@ -0,0 +1,{n} @@\n"
-    );
-    for line in content.lines() {
-        out.push('+');
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !content.ends_with('\n') {
-        out.push_str("\\ No newline at end of file\n");
-    }
-    Some(out)
-}
-
-/// Trigger an async diff load if the cache is missing/stale and not already
-/// loading. Resets hunk navigation whenever a fresh load starts so the ‹n/N›
-/// counter always describes the content being displayed.
-pub(super) fn ensure_diff(
-    state: &mut AppState,
-    root: &std::path::Path,
-    left: &Option<String>,
-    right: &Option<String>,
-    staged: bool,
-    ignore_whitespace: bool,
-    path: &Option<std::path::PathBuf>,
-) {
-    let key = diff_key(root, left, right, staged, ignore_whitespace, path);
-    let stale = state
-        .ui
-        .diff_cache
-        .as_ref()
-        .map(|(k, _)| k != &key)
-        .unwrap_or(true);
-    if stale && !state.ui.diff_loading {
-        state.ui.diff_error = None;
-        state.ui.diff_current_hunk = 0;
-        // Collapse state (issue 20) describes the outgoing diff's hunks; it
-        // dies with them, like the hunk navigation cursor above.
-        state.ui.diff_collapsed.clear();
-        // The sub-hunk line selections refer to the outgoing content; the
-        // granular module drops them with the rest of the per-diff
-        // navigation state (spec R2, story 3) — the current hunk was reset
-        // to the first hunk above.
-        granular::on_diff_changed(state, path.as_deref());
-
-        // Untracked previews never reach `git diff`; synthesize a creation
-        // diff from worktree content synchronously and populate the cache
-        // under the same key — no worker, no loading spinner (spec R2).
-        let untracked = preview_status(state, path.as_deref()) == ChangeStatus::Unversioned;
-        if untracked
-            && let Some(rel) = path
-            && let Some(text) = synthetic_untracked_diff(root, rel)
-        {
-            state.ui.diff_cache = Some((key, text));
-            return;
-        }
-
-        state.ui.diff_loading = true;
-        let executor: Arc<dyn turbogit_engine_api::GitExecutor> = state.executor.clone();
-        let tx = state.tx.clone();
-        let root = root.to_path_buf();
-        // Phase L1: when the setting asks for in-process diffs, the worker
-        // computes the patch with `similar`; `diff_text` itself falls back to
-        // this same CLI call whenever the in-process path cannot produce it
-        // (multi-file targets, unreadable sides, non-UTF-8 content).
-        let in_process = state.settings.in_process_diffs;
-        let opts = DiffOpts {
-            staged,
-            ignore_whitespace,
-            left: left.clone(),
-            right: right.clone(),
-            path: path.clone(),
-            ..DiffOpts::default()
-        };
-        std::thread::spawn(move || {
-            let res = if in_process {
-                diff_engine::diff_text(executor.as_ref(), &root, &opts)
-            } else {
-                executor.diff(&root, &opts)
-            };
-            let _ = tx.send(AppEvent::DiffReady { key, result: res });
-        });
-    }
-}
 /// Centered muted one-line note filling the remaining pane height.
 fn centered_note(ui: &mut Ui, text: &str) {
     let width = ui.available_width();
@@ -527,12 +308,22 @@ pub(super) fn binary_placeholder(ui: &mut Ui, sizes: Option<(u64, u64)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::diff::model::{FileMeta, IMAGE_CAP_BYTES};
+    use crate::ui::diff::model::FileMeta;
     use turbogit_app::diff_data::PaneSide;
     use turbogit_app::events::DecodedImage;
 
     #[test]
-    fn diff_byte_side_specs_mirror_diff_invocation() {
+    fn pane_side_requests_mirror_the_diff_invocation() {
+        let root = std::path::Path::new("/repo");
+        let ask = |left: Option<&str>, right: Option<&str>, staged: bool, meta: &FileMeta| {
+            pane_side_requests(
+                root,
+                &left.map(str::to_owned),
+                &right.map(str::to_owned),
+                staged,
+                meta,
+            )
+        };
         let plain = FileMeta::default();
         let added = FileMeta {
             new_file: true,
@@ -545,44 +336,63 @@ mod tests {
 
         // Repo chip (HEAD↔worktree): `git diff HEAD`.
         assert_eq!(
-            byte_side_specs(&Some("HEAD".to_owned()), &None, false, &plain),
-            (SideSpec::Rev("HEAD".to_owned()), SideSpec::Worktree)
+            ask(Some("HEAD"), None, false, &plain),
+            (
+                side(root, SideSpec::Rev("HEAD".to_owned()), ""),
+                side(root, SideSpec::Worktree, ""),
+            )
         );
         // Staged chip (HEAD↔index): `git diff --cached`; index via stage-0.
         assert_eq!(
-            byte_side_specs(&None, &None, true, &plain),
+            ask(None, None, true, &plain),
             (
-                SideSpec::Rev("HEAD".to_owned()),
-                SideSpec::Rev(":0".to_owned())
+                side(root, SideSpec::Rev("HEAD".to_owned()), ""),
+                side(root, SideSpec::Rev(":0".to_owned()), ""),
             )
         );
         // Local chip (index↔worktree): plain `git diff`.
         assert_eq!(
-            byte_side_specs(&None, &None, false, &plain),
-            (SideSpec::Rev(":0".to_owned()), SideSpec::Worktree)
+            ask(None, None, false, &plain),
+            (
+                side(root, SideSpec::Rev(":0".to_owned()), ""),
+                side(root, SideSpec::Worktree, ""),
+            )
         );
         // Explicit commit-to-commit targets pass their revs through.
         assert_eq!(
-            byte_side_specs(
-                &Some("abc123".to_owned()),
-                &Some("def456".to_owned()),
-                false,
-                &plain
-            ),
+            ask(Some("abc123"), Some("def456"), false, &plain),
             (
-                SideSpec::Rev("abc123".to_owned()),
-                SideSpec::Rev("def456".to_owned())
+                side(root, SideSpec::Rev("abc123".to_owned()), ""),
+                side(root, SideSpec::Rev("def456".to_owned()), ""),
             )
         );
         // New files have no old side; deleted files no new side.
+        assert_eq!(ask(None, None, false, &added).0.spec, SideSpec::Missing);
         assert_eq!(
-            byte_side_specs(&None, &None, false, &added).0,
+            ask(Some("HEAD"), None, false, &deleted).1.spec,
             SideSpec::Missing
         );
+
+        // Paths arrive repo-relative and slash-separated, stripped of git's
+        // `a/`/`b/` prefixes, because that is the form `git show` takes.
+        let renamed = FileMeta {
+            old_path: Some("a/old/dir/Art.png".into()),
+            new_path: Some("b/new/dir/Art.png".into()),
+            ..FileMeta::default()
+        };
+        let (old, new) = ask(None, None, false, &renamed);
         assert_eq!(
-            byte_side_specs(&Some("HEAD".to_owned()), &None, false, &deleted).1,
-            SideSpec::Missing
+            (old.path.as_str(), new.path.as_str()),
+            ("old/dir/Art.png", "new/dir/Art.png")
         );
+    }
+
+    fn side(root: &std::path::Path, spec: SideSpec, path: &str) -> PaneSideRequest {
+        PaneSideRequest {
+            root: root.to_path_buf(),
+            spec,
+            path: path.to_owned(),
+        }
     }
 
     #[test]
@@ -610,56 +420,5 @@ mod tests {
             }),
         };
         assert_eq!(image_caption(&side), "1920×1080 · 5 B");
-    }
-
-    #[test]
-    fn diff_decode_image_rejects_garbage_and_over_cap() {
-        assert!(decode_image(b"not an image").is_none());
-        let over_cap = vec![0u8; IMAGE_CAP_BYTES as usize + 1];
-        assert!(decode_image(&over_cap).is_none());
-    }
-
-    #[test]
-    fn diff_fetch_side_reads_rev_blob_and_worktree_file() {
-        let png = {
-            let img = image::DynamicImage::new_rgb8(2, 3);
-            let mut buf = std::io::Cursor::new(Vec::new());
-            img.write_to(&mut buf, image::ImageFormat::Png).unwrap();
-            buf.into_inner()
-        };
-        let exec = turbogit_engine::fake::FakeExecutor::new();
-        exec.files_bytes
-            .lock()
-            .unwrap()
-            .insert(std::path::PathBuf::from("art.png"), png.clone());
-
-        // Rev side through the engine seam (`<rev>:<path>`).
-        let blob = fetch_side(
-            &exec,
-            std::path::Path::new("/irrelevant"),
-            &SideSpec::Rev("HEAD".to_owned()),
-            "art.png",
-            true,
-        )
-        .expect("rev side readable");
-        assert_eq!(blob.byte_len, png.len() as u64);
-        let decoded = blob.decoded.expect("png decodes");
-        assert_eq!((decoded.width, decoded.height), (2, 3));
-
-        // Worktree side reads the file when decoding…
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("art.png"), &png).unwrap();
-        let blob = fetch_side(&exec, dir.path(), &SideSpec::Worktree, "art.png", true)
-            .expect("worktree side readable");
-        assert_eq!(blob.decoded.as_ref().map(|d| d.width), Some(2));
-
-        // …and uses fs metadata only when lengths suffice (binary caption).
-        let blob = fetch_side(&exec, dir.path(), &SideSpec::Worktree, "art.png", false)
-            .expect("worktree side measurable");
-        assert_eq!(blob.byte_len, png.len() as u64);
-        assert!(blob.decoded.is_none());
-
-        // A missing side (new/deleted file) yields nothing.
-        assert!(fetch_side(&exec, dir.path(), &SideSpec::Missing, "art.png", true).is_none());
     }
 }

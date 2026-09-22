@@ -50,7 +50,8 @@ pub mod worktrees;
 
 use crate::theme::Palette;
 use egui::{Color32, Context, Ui};
-use turbogit_app::state::{AppState, Dialog, PendingConfirm, RetryAction, ToastKind};
+use turbogit_app::operation::Operation;
+use turbogit_app::state::{AppState, Dialog, PendingConfirm, ToastKind};
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     // Banner strip (issue #02): when set, paints a severity-tinted
     // strip with deep-link actions above the shell. Each surface can
@@ -141,7 +142,6 @@ fn render_toast(ui: &mut Ui, state: &mut AppState) {
     // Semantic kind drives accent bar, icon, and message tint (issue #22).
     let color = toast_kind_color(toast.kind);
     let icon = toast_kind_icon(toast.kind);
-    let has_retry = toast.retry.is_some();
     let ctx: Context = ui.ctx().clone();
     egui::Window::new("Notice")
         .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -40.0))
@@ -158,72 +158,16 @@ fn render_toast(ui: &mut Ui, state: &mut AppState) {
                 );
                 icons::icon(ui, icon, 16.0, color);
                 ui.colored_label(color, &toast.message);
-                // Retry button (issue #02): only painted when the toast
-                // carries a replay handle. The button consumes the
-                // action: clicking it clears the toast and re-dispatches
-                // via `AppState::retry`. Dismiss is always available.
-                if has_retry
-                    && ui.small_button("Retry").clicked()
-                    && let Some(action) = state.ui.toast.as_ref().and_then(|t| t.retry.clone())
-                {
-                    state.ui.toast = None;
-                    state.ui.toast_shown_at = None;
-                    state.retry(action);
-                }
+                // `Dismiss` is the toast's only action (ADR-0020): no
+                // production path could ever hand a toast a replay handle, so
+                // the `Retry` button was deleted as unreachable rather than
+                // repaired. Bringing it back is a feature with its own ticket.
                 if ui.small_button("Dismiss").clicked() {
                     state.ui.toast = None;
                     state.ui.toast_shown_at = None;
                 }
             });
         });
-}
-
-/// Confirmation dialog for destructive actions (Epic C8).
-/// Compute the ahead-of-upstream warning line for a delete-branch
-/// confirm, if any (issue #02). Reads the branch's tracking upstream
-/// from git config and queries `is_ancestor`. Returns `Some(message)`
-/// when the branch carries unmerged commits relative to its upstream,
-/// `None` when fully merged or when the query fails.
-fn branch_ahead_warning(state: &AppState, branch: &str) -> Option<String> {
-    let root = state.selected_path()?;
-    let remote = state
-        .executor
-        .config_get(&root, &format!("branch.{branch}.remote"))
-        .ok()
-        .flatten()?;
-    let merge = state
-        .executor
-        .config_get(&root, &format!("branch.{branch}.merge"))
-        .ok()
-        .flatten()?;
-    // `merge` is a `refs/heads/<name>` path; strip the prefix.
-    let upstream_branch = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
-    // The tracking ref is either `<remote>/<branch>` (real remote) or
-    // just `<remote>` when `remote` is itself a local branch name
-    // (common in test fixtures and in working trees that branch off
-    // another local branch). Probe the real one first; fall back to
-    // the plain name on lookup failure.
-    let candidates = [
-        format!("{remote}/{upstream_branch}"),
-        upstream_branch.to_string(),
-    ];
-    let merged = candidates
-        .iter()
-        .find_map(|c| state.executor.is_ancestor(&root, c, branch).ok())?;
-    if merged {
-        None
-    } else {
-        let used = if state
-            .executor
-            .is_ancestor(&root, &candidates[0], branch)
-            .unwrap_or(false)
-        {
-            &candidates[0]
-        } else {
-            &candidates[1]
-        };
-        Some(format!("'{branch}' is ahead of '{used}' and not merged"))
-    }
 }
 
 /// Confirmation dialog for destructive actions (Epic C8).
@@ -264,18 +208,15 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                     // confirm. The worktree stays clean; the stash
                     // entry preserves the changes for later recovery.
                     if ui.button("Shelve first").clicked() {
-                        let root = state.selected_path();
                         let changes_owned = changes.clone();
+                        let n = changes.len();
                         state.ui.confirm = None;
-                        if let Some(root) = root {
-                            state.retry(RetryAction::Shelve {
+                        if let Some(root) = state.selected_root.clone() {
+                            state.dispatch(Operation::shelve(
                                 root,
-                                changes: changes_owned,
-                                message: format!(
-                                    "Shelved {} file(s) before discard",
-                                    changes.len()
-                                ),
-                            });
+                                changes_owned,
+                                format!("Shelved {n} file(s) before discard"),
+                            ));
                         }
                     }
                     // Suffix the label with the file count so it is
@@ -308,7 +249,7 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 // engine for the branch's tracking upstream; if it
                 // exists and is NOT an ancestor of `name`, the branch
                 // carries unmerged commits. The query is synchronous
-                if let Some(warning) = branch_ahead_warning(state, name) {
+                if let Some(warning) = state.branch_ahead_warning(name) {
                     ui.colored_label(crate::theme::Palette::STATE_WARNING, warning);
                 }
                 // Issue 12: what is lost, in human terms.
@@ -319,16 +260,15 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                     if ui.button("OK").clicked() {
                         // Capture the tip for the undo window before the
                         // branch is gone (issue 12).
-                        if let Some(root) = state.selected_path() {
-                            let args = ["rev-parse".to_string(), name.clone()];
-                            if let Ok(sha) = state.executor.run_raw(&root, &args) {
-                                state.ui.branches_delete_pending =
-                                    Some(turbogit_app::state::BranchDeletePending {
-                                        root: turbogit_domain::model::RootId(root.clone().into()),
-                                        name: name.clone(),
-                                        tip_sha: sha.trim().to_string(),
-                                    });
-                            }
+                        if let Some(root) = state.selected_root.clone()
+                            && let Some(tip_sha) = state.branch_tip(&root, name)
+                        {
+                            state.ui.branches_delete_pending =
+                                Some(turbogit_app::state::BranchDeletePending {
+                                    root,
+                                    name: name.clone(),
+                                    tip_sha,
+                                });
                         }
                         state.run_confirmed(confirm.clone());
                         state.ui.confirm = None;

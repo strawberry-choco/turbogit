@@ -57,9 +57,11 @@ fn app_with_selection(project: &Path, roots: &[PathBuf]) -> AppState {
     state
 }
 
-/// Step the event pump until the completion toast lands (the dispatch runs
-/// on a worker thread even in the headless harness).
-fn wait_for_toast(state: &mut AppState) {
+/// Step the event pump until a bulk run reports. A cascade commit fans out
+/// over the same worker pool as a fleet run, which ADR-0019's admission slot
+/// only means something in front of — so the dispatch seam leaves it threaded
+/// even under the headless harness, and its answer really does arrive later.
+fn settle_bulk_run(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         state.drain_events();
@@ -145,7 +147,7 @@ fn cascade_commit_fans_out_across_the_selection_and_reports_per_repo_outcomes() 
     let ui_before = head(&ui);
 
     state.run_commit_across("shared message", false);
-    wait_for_toast(&mut state);
+    settle_bulk_run(&mut state);
 
     assert_ne!(head(&alpha), alpha_before, "alpha advanced");
     assert_ne!(head(&lib), lib_before, "lib advanced");
@@ -180,12 +182,12 @@ fn cascade_commit_amend_amends_only_repos_that_have_a_committable_index() {
     // First commit normally, then amend with a new message.
     let before = head(&alpha);
     state.run_commit_across("first message", false);
-    wait_for_toast(&mut state);
+    settle_bulk_run(&mut state);
 
     // Stage a second edit and amend with a new message — fan out again.
     stage(&alpha, "amend2.txt", "amend body 2\n");
     state.run_commit_across("amended message", true);
-    wait_for_toast(&mut state);
+    settle_bulk_run(&mut state);
 
     let after = head(&alpha);
     assert_ne!(before, after, "amend produced a new HEAD");

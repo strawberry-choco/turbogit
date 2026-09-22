@@ -5,7 +5,6 @@
 //! surface refetches on its next ensure.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, BlameTarget};
@@ -50,22 +49,6 @@ fn seeded_repo() -> (tempfile::TempDir, PathBuf, String, String) {
     (tmp, repo, c1, c2)
 }
 
-/// Pump worker events until `pred` holds or the deadline passes.
-fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        state.drain_events();
-        if pred(state) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!(
-        "condition not met within 10s; blame_error={:?} last_error={:?}",
-        state.ui.blame_error, state.last_error
-    );
-}
-
 fn cached_lines(state: &AppState) -> &[BlameLine] {
     state
         .ui
@@ -88,7 +71,13 @@ fn blame_target_fetches_per_line_attribution_through_the_event_pump() {
         rev: c2.clone(),
     });
     state.ensure_blame();
-    wait_for(&mut state, |s| s.ui.blame_cache.is_some());
+    state.drain_events();
+    assert!(
+        state.ui.blame_cache.is_some(),
+        "the blame answer settles; blame_error={:?} last_error={:?}",
+        state.ui.blame_error,
+        state.last_error
+    );
 
     let lines = cached_lines(&state);
     assert_eq!(lines.len(), 2, "both lines of a.txt are blamed");
@@ -109,7 +98,13 @@ fn refresh_after_an_operation_drops_the_blame_cache_for_refetch() {
         rev: c2.clone(),
     });
     state.ensure_blame();
-    wait_for(&mut state, |s| s.ui.blame_cache.is_some());
+    state.drain_events();
+    assert!(
+        state.ui.blame_cache.is_some(),
+        "the blame answer settles; blame_error={:?} last_error={:?}",
+        state.ui.blame_error,
+        state.last_error
+    );
 
     // A completed operation refreshes the affected roots; the blame cache
     // must be dropped with it (the diff cache's wholesale rule) so the next
@@ -120,6 +115,12 @@ fn refresh_after_an_operation_drops_the_blame_cache_for_refetch() {
         "refresh must drop the blame cache"
     );
     state.ensure_blame();
-    wait_for(&mut state, |s| s.ui.blame_cache.is_some());
+    state.drain_events();
+    assert!(
+        state.ui.blame_cache.is_some(),
+        "the blame answer settles; blame_error={:?} last_error={:?}",
+        state.ui.blame_error,
+        state.last_error
+    );
     assert_eq!(cached_lines(&state).len(), 2, "refetch repopulates blame");
 }

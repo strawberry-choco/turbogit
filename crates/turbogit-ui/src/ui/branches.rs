@@ -7,7 +7,7 @@
 //! action, names truncate in the middle, and the detail panel never blocks
 //! the list. All geometry maps onto the §12 constants in
 //! [`crate::ui::components`]; every git mutation crosses the
-//! [`turbogit_engine_api::GitExecutor`] seam via [`AppState::run_git`].
+//! Git engine only through [`AppState::dispatch`] and cached reads.
 //!
 //! Since the branch-tree-view extraction the grouped list itself is the shared
 //! [`branch_tree_view::branch_tree`] component: this surface builds the props,
@@ -16,6 +16,7 @@
 
 use egui::{Align, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Ui, UiBuilder};
 
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId};
@@ -683,24 +684,11 @@ pub fn fetch_scope(state: &mut AppState) {
     }
 }
 
-/// Fetch one repository, recording its pre-fetch remote snapshot so the report
-/// can say what *that* repo changed.
+/// Fetch one repository. `dispatch` records its pre-fetch remote snapshot, so
+/// the report can say what *that* repo changed.
 pub fn fetch_root(state: &mut AppState, rid: &RootId) {
-    let before: Vec<String> = state
-        .multi
-        .by_id(rid)
-        .map(|r| {
-            r.branches
-                .iter()
-                .filter(|b| b.kind == BranchKind::Remote)
-                .map(|b| b.name.clone())
-                .collect()
-        })
-        .unwrap_or_default();
-    state.ui.branches_fetch_before.push((rid.clone(), before));
-    let exec_rid = rid.clone();
-    state.run_git("Fetch".to_string(), Affected::Root(rid.clone()), move |v| {
-        v.fetch(&exec_rid.0, None)
+    state.dispatch(Operation::Fetch {
+        roots: vec![rid.clone()],
     });
 }
 
@@ -727,11 +715,11 @@ fn undo_banner(ui: &mut Ui, state: &mut AppState) {
             let n = undo.name.clone();
             let sha = undo.tip_sha.clone();
             state.ui.branches_undo = None;
-            state.run_git(
+            state.dispatch(Operation::custom(
                 format!("Restore branch {n}"),
                 Affected::Root(root.clone()),
-                move |v| v.branch_create(&root.0, &n, false, Some(&sha)),
-            );
+                move |v| v.branch_create(root.as_path(), &n, false, Some(&sha)),
+            ));
         }
     });
     ui.add_space(4.0);
@@ -1081,16 +1069,7 @@ fn delete_consequence(state: &mut AppState, id: &RootId, branch: &Branch) -> Opt
         .multi
         .by_id(id)
         .and_then(|r| r.current_branch.clone())?;
-    let args = [
-        "rev-list".to_string(),
-        "--count".to_string(),
-        format!("HEAD..{}", branch.name),
-    ];
-    let count = state
-        .executor
-        .run_raw(&id.0, &args)
-        .ok()
-        .and_then(|s| s.trim().parse::<usize>().ok());
+    let count = state.unmerged_commit_count(id, &branch.name);
     match count {
         Some(0) => Some(format!(
             "everything on this branch already exists on {current} — safe to delete"

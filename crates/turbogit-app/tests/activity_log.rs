@@ -2,16 +2,16 @@
 //! appends an entry to the session-durable feed.
 //!
 //! Headless over a real temp repository (git on PATH): operations are
-//! dispatched through the production `AppState::run_git` path and events are
+//! dispatched through the production [`AppState::dispatch`] path and events are
 //! pumped through `drain_events`. Assertions are on the public
 //! `state.ui.activity` surface — never on internals.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
 
 use tempfile::TempDir;
 use turbogit_app::activity::ActivityKind;
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
 
@@ -64,22 +64,6 @@ fn repo_project() -> (TempDir, PathBuf, PathBuf) {
     (tmp, project, alpha)
 }
 
-/// Pump events until the dispatched op settles (busy clears and at least one
-/// activity entry exists), with a bounded wait.
-fn wait_for_activity(state: &mut AppState) {
-    for _ in 0..300 {
-        state.drain_events();
-        if !state.ui.busy && !state.ui.activity.entries.is_empty() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!(
-        "op never produced an activity entry; entries: {:?} last_error: {:?}",
-        state.ui.activity.entries, state.last_error
-    );
-}
-
 // --- tests ---------------------------------------------------------------------
 
 /// Contract: a dispatched git operation that completes successfully appends
@@ -87,24 +71,23 @@ fn wait_for_activity(state: &mut AppState) {
 #[test]
 fn successful_op_appends_one_activity_entry() {
     let (_tmp, project, alpha) = repo_project();
-    let mut state = AppState::new(project);
-
-    let root = state
-        .multi
-        .roots
-        .iter()
-        .find(|r| r.path == alpha)
-        .expect("alpha root registered")
-        .id
-        .clone();
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = state.multi.roots[0].id.clone();
     let alpha_path = alpha.clone();
-    state.run_git(
-        "Fetch from origin".to_string(),
+    state.dispatch(Operation::custom(
+        "Fetch from origin",
         Affected::Root(root),
         move |v| v.fetch(&alpha_path, Some("origin")),
-    );
+    ));
 
-    wait_for_activity(&mut state);
+    // The harness runs the operation inline, so one drain settles it and the
+    // activity entry is already there — no thread, no deadline.
+    state.drain_events();
+    assert!(
+        !state.ui.activity.entries.is_empty(),
+        "the op produced an activity entry; last_error={:?}",
+        state.last_error
+    );
 
     assert_eq!(
         state.ui.activity.entries.len(),
@@ -123,24 +106,23 @@ fn successful_op_appends_one_activity_entry() {
 #[test]
 fn failed_op_appends_error_entry() {
     let (_tmp, project, alpha) = repo_project();
-    let mut state = AppState::new(project);
-
-    let root = state
-        .multi
-        .roots
-        .iter()
-        .find(|r| r.path == alpha)
-        .expect("alpha root registered")
-        .id
-        .clone();
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = state.multi.roots[0].id.clone();
     let missing = PathBuf::from("/nonexistent/root/never/existed");
-    state.run_git(
-        "Fetch from origin".to_string(),
+    state.dispatch(Operation::custom(
+        "Fetch from origin",
         Affected::Root(root),
         move |v| v.fetch(&missing, Some("origin")),
-    );
+    ));
 
-    wait_for_activity(&mut state);
+    // The harness runs the operation inline, so one drain settles it and the
+    // activity entry is already there — no thread, no deadline.
+    state.drain_events();
+    assert!(
+        !state.ui.activity.entries.is_empty(),
+        "the op produced an activity entry; last_error={:?}",
+        state.last_error
+    );
 
     let e = &state.ui.activity.entries[0];
     assert_eq!(e.kind, ActivityKind::Error);
@@ -186,24 +168,23 @@ fn plant_merge_conflict(alpha: &Path) {
 fn op_leaving_conflicts_logs_warning_entry() {
     let (_tmp, project, alpha) = repo_project();
     plant_merge_conflict(&alpha);
-    let mut state = AppState::new(project);
-
-    let root = state
-        .multi
-        .roots
-        .iter()
-        .find(|r| r.path == alpha)
-        .expect("alpha root registered")
-        .id
-        .clone();
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = state.multi.roots[0].id.clone();
     let alpha_path = alpha.clone();
-    state.run_git(
-        "Fetch from origin".to_string(),
+    state.dispatch(Operation::custom(
+        "Fetch from origin",
         Affected::Root(root),
         move |v| v.fetch(&alpha_path, Some("origin")),
-    );
+    ));
 
-    wait_for_activity(&mut state);
+    // The harness runs the operation inline, so one drain settles it and the
+    // activity entry is already there — no thread, no deadline.
+    state.drain_events();
+    assert!(
+        !state.ui.activity.entries.is_empty(),
+        "the op produced an activity entry; last_error={:?}",
+        state.last_error
+    );
 
     let e = &state.ui.activity.entries[0];
     assert_eq!(e.kind, ActivityKind::Warning, "entry: {:?}", e);

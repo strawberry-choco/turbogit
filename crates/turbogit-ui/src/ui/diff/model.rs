@@ -316,13 +316,6 @@ pub(super) enum PaneKind {
 /// as whatever the patch says (text rows or binary placeholder).
 const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
-/// Per-image raw-byte cap: over-cap sides fall back to the binary change.
-pub(super) const IMAGE_CAP_BYTES: u64 = 20 * 1024 * 1024;
-
-/// Decoded-pixel guard: a small blob can still explode into hundreds of MB
-/// of RGBA; beyond this a side counts as undecodable (binary fallback).
-pub(super) const IMAGE_MAX_PIXELS: u64 = 80_000_000;
-
 /// Extension sniff (case-insensitive) deciding whether a side decodes.
 fn is_image_path(path: &str) -> bool {
     let ext = std::path::Path::new(path)

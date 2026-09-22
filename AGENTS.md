@@ -15,9 +15,11 @@ plus a thin root composition root.
 - `crates/turbogit-services` — pure domain services over the port: branch,
   sync, history/editor, integrate, changes, partial, diff engine, conflict,
   shelve/stash, multi-root.
-- `crates/turbogit-app` — `AppState` (worker dispatch, `run_git`, the event
-  pump), `events`, `root_caches`, `persistence`, `recents`, the diff plain-data
-  types, and the `granular` staging orchestrator.
+- `crates/turbogit-app` — `AppState` (the dispatch seam, the event pump),
+  `operation` (the `Operation` dispatch unit), `shell_reads` (the named git
+  reads that are not cached values), `events`, `root_caches`, `persistence`,
+  `recents`, `diff_data` (plain diff-pane types) and `diff_load` (the
+  off-frame diff and pane loads), and the `granular` staging orchestrator.
 - `crates/turbogit-ui` — `theme` and every presentation module under `ui/`.
 - `crates/test-support` — the headless harness and kittest helpers, consumed as
   a dev-dependency.

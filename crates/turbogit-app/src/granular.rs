@@ -14,6 +14,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::operation::Operation;
 use crate::root_caches::Affected;
 use crate::state::{AppState, CharSelection, DiffComparison, Granularity};
 use turbogit_domain::model::ChangeStatus;
@@ -93,7 +94,7 @@ pub enum HunkTarget {
 /// then apply the composed patch through the async op seam. Missing inputs →
 /// silent no-op (the palette verbs' contract).
 pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: bool) {
-    let Some(root) = state.selected_path() else {
+    let Some(root) = state.selected_root.clone() else {
         return;
     };
     let Some(diff_text) = cached_preview_diff(state, &path) else {
@@ -107,31 +108,32 @@ pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: 
     // unstage keeps the plain reverse-apply so both paths stay predictable.
     let untracked = stage && status == ChangeStatus::Unversioned;
     // Post-op the viewer settles on the remaining unstaged changes (story 8);
-    // called right before `run_git`, so no-op paths never move the mode.
+    // called right before the dispatch, so no-op paths never move the mode.
     settle_preview_on_unstaged(state);
     // Story 9: remember which file the op targeted so completion can decide
     // exclusions/focus with fresh status.
     state.ui.pending_granular = Some(path.clone());
-    state.run_git(
-        label.to_owned(),
-        Affected::from_optional_root(Some(root.as_path())),
+    state.dispatch(Operation::custom(
+        label,
+        Affected::Root(root.clone()),
         move |v| {
+            let root = root.as_path();
             if untracked {
                 partial::stage_untracked_selection(
                     v,
-                    &root,
+                    root,
                     std::slice::from_ref(&path),
                     &diff_text,
                     &selection,
                     status,
                 )
             } else if stage {
-                partial::stage_selection(v, &root, &diff_text, &selection, status)
+                partial::stage_selection(v, root, &diff_text, &selection, status)
             } else {
-                partial::unstage_selection(v, &root, &diff_text, &selection, status)
+                partial::unstage_selection(v, root, &diff_text, &selection, status)
             }
         },
-    );
+    ));
 }
 
 fn selection_for(target: &HunkTarget, diff_text: &str) -> Selection {
@@ -171,9 +173,20 @@ fn file_selection(diff_text: &str) -> Selection {
     }
 }
 
+/// The previewed path's [`ChangeStatus`] via the canonical resolver; an
+/// unlisted or absent path falls back to [`ChangeStatus::Modified`] — controls
+/// stay enabled and the engine seam remains the final authority. One owner for
+/// the question the diff panes, the palette's stage verbs and the off-frame
+/// diff load all ask.
+pub fn preview_status(state: &AppState, path: Option<&Path>) -> ChangeStatus {
+    let Some(path) = path else {
+        return ChangeStatus::Modified;
+    };
+    change_status(state, path)
+}
+
 /// The path's [`ChangeStatus`] via the canonical resolver; unlisted paths
-/// fall back to [`ChangeStatus::Modified`] — controls stay enabled and the
-/// engine seam remains the final authority (same rule as the viewer's
+/// fall back to [`ChangeStatus::Modified`] (same rule as the viewer's
 /// resolution).
 fn change_status(state: &AppState, path: &Path) -> ChangeStatus {
     state

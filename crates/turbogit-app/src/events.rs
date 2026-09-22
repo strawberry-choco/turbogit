@@ -87,17 +87,16 @@ pub enum AppEvent {
         commit: CommitId,
         stats: TgResult<Vec<(PathBuf, usize, usize)>>,
     },
-    /// Generic asynchronous completion (e.g. push/pull finished). `affected`
-    /// declares which roots the op touched so the post-op refresh can be
-    /// scoped (root-caches deepening, decision 6).
+    /// A dispatched [`Operation`](crate::operation::Operation) completed.
+    /// `kind` is the operation's identity — what settlement matches on — and
+    /// `affected` declares which roots it touched, so the post-op refresh is
+    /// scoped by the operation rather than by a caller's guess
+    /// (root-caches deepening, decision 6; ADR-0020).
     OpCompleted {
+        kind: crate::operation::OpKind,
         label: String,
         affected: Affected,
         result: TgResult<()>,
-        /// Optional replay handle attached when the op was dispatched via
-        /// [`crate::state::AppState::run_git_with_retry`]. On `Err` the
-        /// error toast carries it as a `Retry` button (issue #02).
-        retry: Option<crate::state::RetryAction>,
     },
     /// Fatal / unexpected error to surface in the UI.
     Error(String),

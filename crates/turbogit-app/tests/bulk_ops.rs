@@ -169,7 +169,18 @@ fn run_bulk_confirmed_executes_the_plan_and_reports_per_repo_outcomes() {
 
     // The preflight modal closes on confirm and the op runs async.
     assert_eq!(state.ui.bulk_op, None);
-    wait_for_toast(&mut state);
+    // A bulk run keeps its own worker pool (ADR-0019's admission slot is only
+    // meaningful with a worker in front of it), so this one result genuinely
+    // arrives on a later frame — unlike a single Operation, which the harness
+    // runs inline.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        state.drain_events();
+        if state.ui.toast.is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     // The planned root was stashed; the out-of-scope root keeps its changes.
     let stashes = git(&alpha, &["stash", "list"]);
@@ -218,18 +229,4 @@ fn run_bulk_confirmed_reports_partial_failure_in_the_summary() {
         ],
     );
     assert_eq!(msg, "Push all · 1 of 2 ok · failed: ui");
-}
-
-/// Step the event pump until the completion toast lands (the dispatch runs
-/// on a worker thread even in the headless harness).
-fn wait_for_toast(state: &mut AppState) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        state.drain_events();
-        if state.ui.toast.is_some() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!("no completion toast within 10s");
 }

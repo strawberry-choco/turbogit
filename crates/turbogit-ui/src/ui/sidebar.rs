@@ -27,6 +27,7 @@ use super::smart_groups::{self, GroupFilter};
 use super::tree_selection::{self};
 use super::widgets;
 use crate::theme::{Palette, two_space_indent};
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::smart_rules::SmartGroupRule;
 use turbogit_app::state::{AppState, Dialog, Toast};
@@ -247,24 +248,16 @@ fn render_selection_bar(ui: &mut Ui, state: &mut AppState, total: usize) {
     }
 }
 
-/// `git fetch` on every selected root, one worker op (issue #08).
+/// `git fetch` on every selected root, one operation (issue #08).
 fn fetch_selection(state: &mut AppState) {
-    let paths: Vec<PathBuf> = state
-        .ui
-        .repo_selection
-        .iter()
-        .map(|id| id.0.to_path_buf())
-        .collect();
-    let n = paths.len();
-    state.run_git(format!("Fetch · {n} repos"), Affected::All, move |v| {
-        for p in &paths {
-            v.fetch(p, None)?;
-        }
-        Ok(())
-    });
+    let roots: Vec<_> = state.ui.repo_selection.iter().cloned().collect();
+    if roots.is_empty() {
+        return;
+    }
+    state.dispatch(Operation::Fetch { roots });
 }
 
-/// `git pull` on every selected root, one worker op (issue #08).
+/// `git pull` on every selected root, one operation (issue #08).
 fn pull_selection(state: &mut AppState) {
     let paths: Vec<PathBuf> = state
         .ui
@@ -273,12 +266,19 @@ fn pull_selection(state: &mut AppState) {
         .map(|id| id.0.to_path_buf())
         .collect();
     let n = paths.len();
-    state.run_git(format!("Pull · {n} repos"), Affected::All, move |v| {
-        for p in &paths {
-            v.pull(p, false)?;
-        }
-        Ok(())
-    });
+    if n == 0 {
+        return;
+    }
+    state.dispatch(Operation::custom(
+        format!("Pull · {n} repos"),
+        Affected::All,
+        move |v| {
+            for p in &paths {
+                v.pull(p, false)?;
+            }
+            Ok(())
+        },
+    ));
 }
 
 /// The STATE-family token a row's dot paints with. Conflict shares the

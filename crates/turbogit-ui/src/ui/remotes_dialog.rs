@@ -6,6 +6,7 @@
 //! with per-repo outcomes (routed through the bulk-completed pipeline).
 
 use egui::{Align, Layout, Ui};
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, RemoteRowAction};
 use turbogit_domain::model::{BranchKind, RootId};
@@ -73,13 +74,13 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                         let new = state.ui.dlg.remotes_rename_new.trim().to_string();
                         if !new.is_empty() && new != name {
                             let p = root_path.clone();
-                            state.run_git(
+                            state.dispatch(Operation::custom(
                                 format!("Rename remote {name}"),
                                 Affected::Root(id.clone()),
                                 move |v| {
                                     turbogit_services::remote_service::rename(v, &p, &name, &new)
                                 },
-                            );
+                            ));
                         }
                         state.ui.dlg.remotes_row_action = None;
                     }
@@ -112,7 +113,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                         let fetch = state.ui.dlg.remotes_edit_fetch.clone();
                         let push = state.ui.dlg.remotes_edit_push.clone();
                         let p = root_path.clone();
-                        state.run_git(
+                        state.dispatch(Operation::custom(
                             format!("Update remote {name}"),
                             Affected::Root(id.clone()),
                             move |v| {
@@ -126,7 +127,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                                     push.as_deref(),
                                 )
                             },
-                        );
+                        ));
                         state.ui.dlg.remotes_row_action = None;
                     }
                     if ui.button("Cancel").clicked() {
@@ -149,7 +150,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                         {
                             let b = branch.clone();
                             let p = root_path.clone();
-                            state.run_git(
+                            state.dispatch(Operation::custom(
                                 format!("Set upstream {b} → {upstream}"),
                                 Affected::Root(id.clone()),
                                 move |v| {
@@ -157,7 +158,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                                         v, &p, &b, &upstream,
                                     )
                                 },
-                            );
+                            ));
                             state.ui.dlg.remotes_row_action = None;
                         }
                     }
@@ -185,11 +186,11 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                     }
                     if ui.button("Remove").clicked() {
                         let p = root_path.clone();
-                        state.run_git(
+                        state.dispatch(Operation::custom(
                             format!("Remove remote {name}"),
                             Affected::Root(id.clone()),
                             move |v| turbogit_services::remote_service::remove(v, &p, &name),
-                        );
+                        ));
                     }
                 }
             }
@@ -252,7 +253,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
         let p = root_path.clone();
         let fetch = add_fetch.clone();
         let name = add_name.clone();
-        state.run_git(
+        state.dispatch(Operation::custom(
             format!("Add remote {add_name}"),
             Affected::Root(id.clone()),
             move |v| {
@@ -263,7 +264,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                 };
                 turbogit_services::remote_service::add(v, &p, &name, &url)
             },
-        );
+        ));
     }
     ui.add_space(6.0);
 

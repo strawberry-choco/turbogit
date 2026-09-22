@@ -31,7 +31,7 @@ use egui::{
     WidgetInfo, WidgetType,
 };
 use std::path::PathBuf;
-use turbogit_app::root_caches::file_stat;
+use turbogit_app::root_caches::{LogScope, file_stat};
 use turbogit_app::state::{AppState, BlameTarget, Dialog, DiffTarget, PendingConfirm, Toast};
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
@@ -228,30 +228,22 @@ fn ensure_log_data(state: &mut AppState) {
         state.selected_root.clone(),
         state.ui.selected_commit.clone(),
     ) {
-        state
-            .caches
-            .ensure_files(state.executor.as_ref(), &root, &cid);
+        state.ensure_files(&root, &cid);
         // Per-file line counts (redesign issue 02) load off the render thread:
         // the in-flight guard makes a repeat ask a no-op, so rows render
         // without numbers for the frames a request is open rather than the
         // pane waiting on git.
         state.fetch_file_stats(root, cid);
     }
-    // Path-scoped history (issue #19): fill the scoped cache through the
-    // engine seam's `LogOpts::path` support (`git log -- <path>`).
+    // Path-scoped history (issue #19): the scoped listing fills through the
+    // same cache read as the other two scopes.
     if let (Some(root), Some(path)) = (state.selected_root.clone(), state.ui.log_path_scope.clone())
     {
-        state
-            .caches
-            .ensure_path_log(state.executor.as_ref(), &root, &path);
+        state.ensure_log(&root, LogScope::Path(path));
     }
-    // Ref-scoped history (branch-tree extraction, plan D9): filled like the
-    // path scope, through the engine seam's `LogOpts::branch` support
-    // (`git log <ref>`).
+    // Ref-scoped history (branch-tree extraction, plan D9).
     if let Some((root, ref_name)) = state.ui.log_ref_scope.clone() {
-        state
-            .caches
-            .ensure_ref_log(state.executor.as_ref(), &root, &ref_name);
+        state.ensure_log(&root, LogScope::Ref(ref_name));
     }
     // Code-change search (issue 17): a non-empty search box also fills the
     // pickaxe cache per visible root — `git log -S` covers commits whose
@@ -260,9 +252,7 @@ fn ensure_log_data(state: &mut AppState) {
     let query = state.ui.log_filter.trim().to_string();
     if !query.is_empty() {
         for id in visible_root_ids(state) {
-            state
-                .caches
-                .ensure_search_log(state.executor.as_ref(), &id, &query);
+            state.ensure_log(&id, LogScope::Search(query.clone()));
         }
     }
 }

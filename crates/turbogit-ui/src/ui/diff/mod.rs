@@ -3,9 +3,11 @@
 //! Restyled onto the central [`crate::theme::Palette`] tokens and the shared
 //! widget vocabulary — behavior preserved, visual migration only:
 //!
-//! - **Async + cached** engine access through the [`GitExecutor`] seam
-//!   (Epic E7/J1): diffs are computed on a worker thread and cached, so no
-//!   `git diff` runs synchronously per frame.
+//! - **Async + cached** diff access through the app layer (Epic E7/J1): the
+//!   loads are [`turbogit_app::state::AppState::ensure_diff`] and
+//!   [`turbogit_app::state::AppState::ensure_pane_bytes`],
+//!   which compute off the frame path and cache, so no `git diff` runs
+//!   synchronously per frame. The Shell holds no Git engine.
 //! - **Virtualized rendering (ADR-0014)**: rows paint through
 //!   `ScrollArea::show_rows` over a memoized display-row model built once
 //!   per diff beside `diff_cache` — parsing and side-by-side pairing never

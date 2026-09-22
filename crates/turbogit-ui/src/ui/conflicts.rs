@@ -9,8 +9,10 @@
 use crate::theme::Palette;
 use crate::ui::widgets::tint_over_bg;
 use egui::{Color32, CornerRadius, Margin, Rect, RichText, ScrollArea, Stroke, Ui, Vec2};
+use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Toast};
+use turbogit_domain::model::RootId;
 use turbogit_services::conflict;
 use turbogit_services::diff_engine;
 
@@ -40,7 +42,7 @@ fn merge_editor_segments(
 ) -> (Vec<(String, String, bool)>, usize) {
     if state.settings.in_process_diffs
         && let Some(root) = root
-        && let Ok(v) = conflict::read_versions(state.executor.as_ref(), root, path)
+        && let Some(v) = state.merge_versions(&RootId(root.clone().into()), path)
     {
         let segs = diff_engine::merge_segments(&v.base, &v.ours, &v.theirs);
         let n = segs.iter().filter(|(_, _, c)| *c).count();
@@ -247,44 +249,36 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // The canonical "Merge conflicts" group in the changelist tree owns the
     // listing; this section only hosts the resolution tools.
     ui.heading("Conflict resolution");
-    let root = state.selected_path();
+    let root = state.selected_root.clone();
     for path in &conflicted {
         ui.horizontal(|ui| {
             ui.label(path.display().to_string());
             if ui.button("Ours").clicked() {
                 let r = root.clone();
                 let p = path.clone();
-                state.run_git(
-                    "Accept ours".into(),
-                    Affected::from_optional_root(r.as_deref()),
-                    move |v| {
-                        if let Some(r) = &r {
-                            conflict::accept_ours(v, r, &p)
-                        } else {
-                            Ok(())
-                        }
-                    },
-                );
+                if let Some(r) = r {
+                    state.dispatch(Operation::custom(
+                        "Accept ours",
+                        Affected::Root(r.clone()),
+                        move |v| conflict::accept_ours(v, r.as_path(), &p),
+                    ));
+                }
             }
             if ui.button("Theirs").clicked() {
                 let r = root.clone();
                 let p = path.clone();
-                state.run_git(
-                    "Accept theirs".into(),
-                    Affected::from_optional_root(r.as_deref()),
-                    move |v| {
-                        if let Some(r) = &r {
-                            conflict::accept_theirs(v, r, &p)
-                        } else {
-                            Ok(())
-                        }
-                    },
-                );
+                if let Some(r) = r {
+                    state.dispatch(Operation::custom(
+                        "Accept theirs",
+                        Affected::Root(r.clone()),
+                        move |v| conflict::accept_theirs(v, r.as_path(), &p),
+                    ));
+                }
             }
             if ui.button("Merge…").clicked()
                 && let Some(r) = &root
             {
-                crate::ui::conflicts::open_conflict_editor(state, r, path);
+                crate::ui::conflicts::open_conflict_editor(state, r.as_path(), path);
             }
             if ui.button("Resolve…").clicked() {
                 // Open the redesigned Resolve Conflicts tool window (issue
@@ -292,7 +286,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 // per-conflict undo / take-both / prev-next, auto-merged
                 // file list, and Abort/Continue merge header actions.
                 if let Some(r) = &root {
-                    crate::ui::conflict_resolver::open_resolver(state, r, path);
+                    crate::ui::conflict_resolver::open_resolver(state, r.as_path(), path);
                 }
             }
         });
@@ -302,8 +296,19 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if ui.button("Resolve all simple").clicked()
         && let (Some(r), Some(status)) = (r.clone(), st.clone())
     {
-        let _ = conflict::resolve_all_simple(state.executor.as_ref(), &r, &status);
-        state.rescan();
+        state.dispatch(Operation::custom(
+            "Resolve simple conflicts",
+            Affected::Root(r.clone()),
+            move |v| {
+                // Every per-file outcome counts: a resolution that failed has
+                // to surface, not be discarded (issue #04's honest feed).
+                let results = conflict::resolve_all_simple(v, r.as_path(), &status);
+                match results.into_iter().find_map(|(_, res)| res.err()) {
+                    Some(e) => Err(e),
+                    None => Ok(()),
+                }
+            },
+        ));
     }
     // Structured 3-way merge editor window (issue #15 redesign): three equal
     // panes Local | Result | Incoming over discrete conflict blocks.
@@ -388,20 +393,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             .add_enabled(remaining == 0, egui::Button::new("Apply"))
                             .clicked()
                         {
-                            let r = state.selected_path();
+                            let r = state.selected_root.clone();
                             let p = path.clone();
                             let content = compose(&segs, &state.ui.conflict_res);
-                            state.run_git(
-                                "Apply merge resolution".into(),
-                                Affected::from_optional_root(r.as_deref()),
-                                move |v| {
-                                    if let Some(r) = &r {
-                                        conflict::write_resolution(v, r, &p, &content)
-                                    } else {
-                                        Ok(())
-                                    }
-                                },
-                            );
+                            if let Some(r) = r {
+                                state.dispatch(Operation::custom(
+                                    "Apply merge resolution",
+                                    Affected::Root(r.clone()),
+                                    move |v| {
+                                        conflict::write_resolution(v, r.as_path(), &p, &content)
+                                    },
+                                ));
+                            }
                             state.ui.conflict_open = None;
                         }
                         if ui.button("Cancel").clicked() {

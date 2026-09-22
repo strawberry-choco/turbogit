@@ -5,11 +5,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
 
 use test_support::RecordingExecutor;
 use turbogit_app::events::{AppEvent, LogPageMode};
-use turbogit_app::root_caches::Affected;
+use turbogit_app::operation::OpKind;
+use turbogit_app::root_caches::{Affected, LogScope};
 use turbogit_app::state::{AppState, LOG_PAGE_SIZE};
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{Commit, LogOpts, RootId, Signature, SignatureState, VcsSettings};
@@ -50,19 +50,6 @@ fn seeded_repo(project: &Path, n: usize) -> PathBuf {
         );
     }
     repo
-}
-
-/// Pump worker events until `pred` holds or the deadline passes.
-fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        state.drain_events();
-        if pred(state) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!("condition not met within 10s");
 }
 
 // --- Pages fold into one window (P3/P4) ---------------------------------------
@@ -129,7 +116,11 @@ fn consecutive_pages_append_into_one_window() {
     let total = 2 * LOG_PAGE_SIZE + 3;
 
     state.fetch_log(root.clone());
-    wait_for(&mut state, |s| cached_ids(s, &root).len() == LOG_PAGE_SIZE);
+    state.drain_events();
+    assert!(
+        cached_ids(&state, &root).len() == LOG_PAGE_SIZE,
+        "the inline pump settles this in one drain"
+    );
     let first = cached_ids(&state, &root);
     assert!(
         state.caches.log_has_more(&root),
@@ -137,9 +128,11 @@ fn consecutive_pages_append_into_one_window() {
     );
 
     state.load_more_log();
-    wait_for(&mut state, |s| {
-        cached_ids(s, &root).len() == 2 * LOG_PAGE_SIZE
-    });
+    state.drain_events();
+    assert!(
+        { cached_ids(&state, &root).len() == 2 * LOG_PAGE_SIZE },
+        "the inline pump settles this in one drain"
+    );
     let second = cached_ids(&state, &root);
     assert_eq!(
         &second[..LOG_PAGE_SIZE],
@@ -157,7 +150,11 @@ fn consecutive_pages_append_into_one_window() {
     );
 
     state.load_more_log();
-    wait_for(&mut state, |s| cached_ids(s, &root).len() == total);
+    state.drain_events();
+    assert!(
+        cached_ids(&state, &root).len() == total,
+        "the inline pump settles this in one drain"
+    );
     assert_eq!(
         cached_ids(&state, &root),
         engine_ids(repo),
@@ -188,14 +185,22 @@ fn an_exact_multiple_of_the_page_size_ends_after_one_extra_fetch() {
     let root = state.multi.roots[0].id.clone();
 
     state.fetch_log(root.clone());
-    wait_for(&mut state, |s| cached_ids(s, &root).len() == LOG_PAGE_SIZE);
+    state.drain_events();
+    assert!(
+        cached_ids(&state, &root).len() == LOG_PAGE_SIZE,
+        "the inline pump settles this in one drain"
+    );
     assert!(
         state.caches.log_has_more(&root),
         "a page that fills the request offers one more"
     );
 
     state.load_more_log();
-    wait_for(&mut state, |s| !s.caches.log_has_more(&root));
+    state.drain_events();
+    assert!(
+        !state.caches.log_has_more(&root),
+        "the inline pump settles this in one drain"
+    );
     assert_eq!(
         recorder.log_call_count(),
         2,
@@ -229,7 +234,11 @@ fn a_commit_landed_mid_paging_restarts_the_window_instead_of_tearing_it() {
     let root = state.multi.roots[0].id.clone();
 
     state.fetch_log(root.clone());
-    wait_for(&mut state, |s| cached_ids(s, &root).len() == LOG_PAGE_SIZE);
+    state.drain_events();
+    assert!(
+        cached_ids(&state, &root).len() == LOG_PAGE_SIZE,
+        "the inline pump settles this in one drain"
+    );
     let held_before = cached_ids(&state, &root);
 
     // HEAD moves while the next page is in flight.
@@ -242,10 +251,14 @@ fn a_commit_landed_mid_paging_restarts_the_window_instead_of_tearing_it() {
 
     // The rejected page is never appended: the window is a clean page 0 that
     // leads with the commit that moved it.
-    wait_for(&mut state, |s| {
-        let ids = cached_ids(s, &root);
-        ids.first().map(String::as_str) == Some(late.as_str())
-    });
+    state.drain_events();
+    assert!(
+        {
+            let ids = cached_ids(&state, &root);
+            ids.first().map(String::as_str) == Some(late.as_str())
+        },
+        "the inline pump settles this in one drain"
+    );
     let after = cached_ids(&state, &root);
     assert_eq!(
         after.len(),
@@ -293,13 +306,21 @@ fn the_page_walk_never_repeats_or_skips_a_row_of_the_listing() {
     let mut state = state0.with_executor(Arc::new(fake));
 
     state.fetch_log(root.clone());
-    wait_for(&mut state, |s| cached_ids(s, &root).len() == LOG_PAGE_SIZE);
+    state.drain_events();
+    assert!(
+        cached_ids(&state, &root).len() == LOG_PAGE_SIZE,
+        "the inline pump settles this in one drain"
+    );
     assert!(state.caches.log_has_more(&root));
 
     // Page 2 and page 3: a full page, then the short one that ends it.
     for expected in [2 * LOG_PAGE_SIZE, 2 * LOG_PAGE_SIZE + 3] {
         state.load_more_log();
-        wait_for(&mut state, |s| cached_ids(s, &root).len() == expected);
+        state.drain_events();
+        assert!(
+            cached_ids(&state, &root).len() == expected,
+            "the inline pump settles this in one drain"
+        );
     }
     assert_eq!(
         cached_ids(&state, &root),
@@ -324,19 +345,25 @@ fn a_completed_op_resets_the_window_to_one_page() {
     let root = state.multi.roots[0].id.clone();
 
     state.fetch_log(root.clone());
-    wait_for(&mut state, |s| cached_ids(s, &root).len() == LOG_PAGE_SIZE);
+    state.drain_events();
+    assert!(
+        cached_ids(&state, &root).len() == LOG_PAGE_SIZE,
+        "the inline pump settles this in one drain"
+    );
     state.load_more_log();
-    wait_for(&mut state, |s| {
-        cached_ids(s, &root).len() == 2 * LOG_PAGE_SIZE
-    });
+    state.drain_events();
+    assert!(
+        { cached_ids(&state, &root).len() == 2 * LOG_PAGE_SIZE },
+        "the inline pump settles this in one drain"
+    );
 
     state
         .tx
         .send(AppEvent::OpCompleted {
+            kind: OpKind::Other,
             label: "op".to_string(),
             affected: Affected::Root(root.clone()),
             result: Ok(()),
-            retry: None,
         })
         .expect("send OpCompleted");
     state.drain_events();
@@ -371,10 +398,8 @@ fn scoped_listings_are_still_fetched_whole() {
     let (mut state, recorder) = recording_state(&project, &repo);
     let root = state.multi.roots[0].id.clone();
 
-    state.caches.ensure_ref_log(&*recorder, &root, "main");
-    state
-        .caches
-        .ensure_path_log(&*recorder, &root, Path::new("file.txt"));
+    state.ensure_log(&root, LogScope::Ref("main".into()));
+    state.ensure_log(&root, LogScope::Path(PathBuf::from("file.txt")));
 
     assert_eq!(
         recorder.log_opts(),
@@ -431,7 +456,12 @@ fn a_cold_root_is_asked_for_one_page_from_the_front() {
     let root_id = state.multi.roots[0].id.clone();
 
     state.fetch_log(root_id.clone());
-    wait_log_calls(&mut state, &recorder, 1);
+    state.drain_events();
+    assert!(
+        recorder.log_call_count() >= 1,
+        "the inline pump already made the call; saw {}",
+        recorder.log_call_count()
+    );
 
     assert_eq!(
         recorder.log_opts(),
@@ -457,8 +487,10 @@ fn a_warm_root_is_asked_for_the_next_page_with_one_row_of_overlap() {
     prime_window(&mut state, &root_id, LOG_PAGE_SIZE, true);
 
     state.fetch_log(root_id.clone());
-    wait_log_calls(&mut state, &recorder, 1);
-
+    // The harness runs the fetch inline, so the request the test is about is
+    // already recorded. Settling it is a later concern — and settling this one
+    // would add a second request, because the primed rows are synthetic and the
+    // answer tears the window (the restart test below covers that).
     assert_eq!(
         recorder.log_opts(),
         vec![LogOpts {
@@ -485,26 +517,28 @@ fn load_more_pages_only_the_roots_that_still_have_more() {
     prime_window(&mut state, &beta_id, 3, false);
 
     state.load_more_log();
-    wait_log_calls(&mut state, &recorder, 1);
-    state.drain_events();
+    let requests = recorder.log_opts();
     assert_eq!(
-        recorder.log_call_count(),
+        requests.len(),
         1,
         "one fetch per root that has more — beta's short window is the end"
     );
-    assert_eq!(recorder.log_opts()[0].skip, Some(LOG_PAGE_SIZE - 1));
+    assert_eq!(requests[0].skip, Some(LOG_PAGE_SIZE - 1));
 
     // With nothing left to load, load more is silent. The explicit fetch below
     // proves the counter is live rather than merely slow.
     state.caches.set_log_has_more(&alpha_id, false);
     state.load_more_log();
-    state.fetch_log(beta_id.clone());
-    wait_log_calls(&mut state, &recorder, 2);
-    state.drain_events();
     assert_eq!(
-        recorder.log_call_count(),
-        2,
+        recorder.log_opts().len(),
+        1,
         "a window with nothing left to load must issue no fetch"
+    );
+    state.fetch_log(beta_id.clone());
+    assert_eq!(
+        recorder.log_opts().len(),
+        2,
+        "an explicit ask still goes out, and the counter is live"
     );
 }
 
@@ -527,21 +561,8 @@ fn recording_state_over(project: &Path, repos: &[PathBuf]) -> (AppState, Arc<Rec
     (state, recorder)
 }
 
-/// Drain events until the recording executor has seen at least `n` log calls.
-fn wait_log_calls(state: &mut AppState, recorder: &RecordingExecutor, n: usize) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        state.drain_events();
-        if recorder.log_call_count() >= n {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    panic!("log call count never reached {n}");
-}
-
 #[test]
-fn two_fetches_for_the_same_root_in_one_frame_spawn_one_worker() {
+fn two_fetches_for_the_same_root_in_one_frame_ask_the_engine_once() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");
     let repo = seeded_repo(&project, 3);
@@ -552,7 +573,11 @@ fn two_fetches_for_the_same_root_in_one_frame_spawn_one_worker() {
     // cold; the second call lands before the first event drains.
     state.fetch_log(root_id.clone());
     state.fetch_log(root_id.clone());
-    wait_for(&mut state, |s| s.caches.log(&root_id).is_some());
+    state.drain_events();
+    assert!(
+        state.caches.log(&root_id).is_some(),
+        "the inline pump settles this in one drain"
+    );
     state.drain_events();
 
     assert_eq!(
@@ -572,10 +597,19 @@ fn inflight_guard_releases_when_the_log_event_drains_ok_and_err() {
 
     // Ok path: the drained LogLoaded frees the guard, so a later fetch runs.
     state.fetch_log(root_id.clone());
-    wait_for(&mut state, |s| s.caches.log(&root_id).is_some());
+    state.drain_events();
+    assert!(
+        state.caches.log(&root_id).is_some(),
+        "the inline pump settles this in one drain"
+    );
     state.drain_events();
     state.fetch_log(root_id.clone());
-    wait_log_calls(&mut state, &recorder, 2);
+    state.drain_events();
+    assert!(
+        recorder.log_call_count() >= 2,
+        "the inline pump already made the call; saw {}",
+        recorder.log_call_count()
+    );
     assert!(
         recorder.log_call_count() >= 2,
         "a later fetch must run again after the Ok drain"
@@ -604,7 +638,12 @@ fn inflight_guard_releases_when_the_log_event_drains_ok_and_err() {
         "a failing page must not touch the window"
     );
     state.fetch_log(root_id.clone());
-    wait_log_calls(&mut state, &recorder, 3);
+    state.drain_events();
+    assert!(
+        recorder.log_call_count() >= 3,
+        "the inline pump already made the call; saw {}",
+        recorder.log_call_count()
+    );
     assert!(
         recorder.log_call_count() >= 3,
         "a later fetch must run again after the Err drain"

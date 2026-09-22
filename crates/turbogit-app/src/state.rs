@@ -1,11 +1,12 @@
 //! Application state: owns the Git engine (the [`GitExecutor`] seam), the
 //! multi-root model, canonical settings, the project directory, the event
 //! channel, and all UI-only ephemeral state. The UI reads from here and never
-//! calls git directly; long ops are dispatched to worker threads via
-//! [`AppState::run_git`].
+//! calls git directly; git work is dispatched as an
+//! [`Operation`] via [`AppState::dispatch`].
 use crate::events::{AppEvent, LogPageMode};
 use crate::granular;
-use crate::root_caches::{Affected, RootCaches};
+use crate::operation::{OpKind, Operation};
+use crate::root_caches::{Affected, LogScope, RootCaches};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -19,6 +20,27 @@ use turbogit_services::bulk_ops::{self, BulkOp, BulkPlan, Preflight};
 use turbogit_services::bulk_run;
 use turbogit_services::changes;
 use turbogit_services::commit_across;
+
+/// Where a unit of git work runs.
+///
+/// A named enum field, not a trait: a `trait Dispatch` with two implementors
+/// would be a seam standing in for a third mode that does not exist, and both
+/// modes run inside this process. The field is private — no caller and no test
+/// constructs a `Pump` or learns the name; a test selects the mode by choosing
+/// a constructor ([`AppState::for_roots`] is Inline, [`AppState::launch_in`] is
+/// Spawned) and then drives `dispatch` and `drain_events` like the shell does.
+enum Pump {
+    /// Hand the work to a worker thread; its answer arrives as an event on a
+    /// later frame. What the desktop shell runs.
+    Spawned,
+    /// Run the work on the calling thread and push the same events into the
+    /// same channel, then return. The caller settles by draining, exactly as
+    /// production does — which is the point: the headless harness stops being a
+    /// second, synchronous implementation of settlement. Running the work
+    /// rather than settling re-entrantly is what keeps a dispatching method from
+    /// needing `&mut self` twice.
+    Inline,
+}
 
 /// One root's outgoing commits for the push dialog tree (issue #20).
 #[derive(Clone)]
@@ -560,50 +582,16 @@ pub enum ToastKind {
 }
 
 /// One transient feedback message with its semantic kind (issue #22).
+///
+/// A toast paints `Dismiss` and nothing else: its `Retry` button was deleted
+/// as unreachable rather than repaired, because `dispatch` never had a way to
+/// hand a toast a replay handle. Re-adding the button is a feature with its own
+/// ticket (ADR-0020). Retrying work is [`Operation::retry`], which is how the
+/// Shelve confirmation re-dispatches.
 #[derive(Clone, Debug)]
 pub struct Toast {
     pub kind: ToastKind,
     pub message: String,
-    /// Optional action surfaced as a `Retry` button on the toast. None
-    /// paints only `Dismiss`; `Some(action)` paints `Retry | Dismiss` and
-    /// `AppState::retry` re-dispatches it on click (issue #02).
-    pub retry: Option<RetryAction>,
-}
-
-/// One re-dispatchable operation that a toast's `Retry` button can replay
-/// (issue #02). Every variant carries enough state for
-/// [`AppState::retry`] to construct the same `run_git` call the original
-/// op used — without reaching for stored closures (which are not
-/// `Clone + Debug + Eq` and so cannot live inside `Toast`).
-#[derive(Clone, Debug)]
-pub enum RetryAction {
-    /// `git fetch [<remote>]`.
-    Fetch {
-        root: PathBuf,
-        remote: Option<String>,
-    },
-    /// `git pull [--rebase]`.
-    Pull { root: PathBuf, rebase: bool },
-    /// `git push <remote> <branch>` with the listed flags and (when given)
-    /// a subset-refspec that only pushes the range from `selected_oldest`
-    /// through the local tip (issue #24).
-    Push {
-        root: PathBuf,
-        remote: String,
-        branch: String,
-        force: bool,
-        tags: bool,
-        no_verify: bool,
-        set_upstream: bool,
-        selected_oldest: Option<String>,
-    },
-    /// `git stash push` capturing the listed changes by path. The
-    /// destructive `discard` is the natural pair (issue #02 Shelve-first).
-    Shelve {
-        root: PathBuf,
-        changes: Vec<Change>,
-        message: String,
-    },
 }
 
 impl Toast {
@@ -611,7 +599,6 @@ impl Toast {
         Self {
             kind: ToastKind::Success,
             message: message.into(),
-            retry: None,
         }
     }
 
@@ -619,7 +606,6 @@ impl Toast {
         Self {
             kind: ToastKind::Warning,
             message: message.into(),
-            retry: None,
         }
     }
 
@@ -627,7 +613,6 @@ impl Toast {
         Self {
             kind: ToastKind::Error,
             message: message.into(),
-            retry: None,
         }
     }
 
@@ -635,7 +620,6 @@ impl Toast {
         Self {
             kind: ToastKind::Info,
             message: message.into(),
-            retry: None,
         }
     }
 }
@@ -1023,8 +1007,12 @@ pub struct UiState {
 }
 pub struct AppState {
     pub project_dir: PathBuf,
-    /// The Git engine. This interface is the seam (ADR-0001).
-    pub executor: Arc<dyn GitExecutor>,
+    /// The Git engine. This interface is the seam (ADR-0001), and it is
+    /// reachable only from this crate: the Shell's two git interfaces are
+    /// [`AppState::dispatch`] and a value the app has already read or cached
+    /// (ADR-0020). Tests that need a different engine use
+    /// [`AppState::with_executor`], never this field.
+    pub(crate) executor: Arc<dyn GitExecutor>,
     /// Canonical engine settings (git binary path, update method, …).
     pub settings: VcsSettings,
     pub multi: MultiRootManager,
@@ -1049,9 +1037,9 @@ pub struct AppState {
     /// computed once at launch (issue #34) so the header never spawns `git`
     /// per frame. `"unknown"` when the binary cannot be resolved.
     pub git_version: String,
-    /// Headless-harness mode: completed ops refresh root status synchronously
-    /// instead of spawning background rescans (see `for_roots`).
-    pub(crate) sync_refresh: bool,
+    /// Where git work runs. Private by design: the mode is chosen by which
+    /// constructor built the state, never by a caller.
+    pump: Pump,
     /// own worktree-list admission and freshness policy (ticket 02).
     worktree: crate::worktree_lifecycle::WorktreeLifecycle,
     /// In-flight log fetches per root (log-open perf, D2): the tool-window
@@ -1123,7 +1111,7 @@ impl AppState {
             caches: RootCaches::default(),
             recents_config_dir,
             dir_picker: None,
-            sync_refresh: false,
+            pump: Pump::Spawned,
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
@@ -1174,10 +1162,13 @@ impl AppState {
     /// deterministic [`AppState`] over explicit repository roots.
     ///
     /// Roots are registered synchronously through the same registration path
-    /// production uses ([`turbogit_services::multi_root::register_all`]); no background
-    /// threads are spawned, and completed operations refresh root status
-    /// synchronously instead of rescanning on workers. Panics if any root cannot
-    /// be snapshotted — a broken test fixture should fail at construction.
+    /// production uses ([`turbogit_services::multi_root::register_all`]). Git
+    /// work then runs inline on the calling thread and posts its results into
+    /// the same channel production uses: a test dispatches, calls
+    /// [`AppState::drain_events`], and asserts what the state looks like after
+    /// settlement — no thread, no deadline, and no second settlement path.
+    /// Panics if any root cannot be snapshotted — a broken test fixture should
+    /// fail at construction.
     pub fn for_roots(project_dir: &Path, roots: &[PathBuf]) -> Self {
         let (tx, rx) = unbounded();
         let settings = VcsSettings::default();
@@ -1201,7 +1192,7 @@ impl AppState {
             caches: RootCaches::default(),
             recents_config_dir: None,
             dir_picker: None,
-            sync_refresh: true,
+            pump: Pump::Inline,
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
@@ -1296,27 +1287,23 @@ impl AppState {
             self.selected_root = self.multi.roots.first().map(|r| r.id.clone());
         }
 
-        let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        for root in &self.multi.roots {
-            let root_path = root.id.0.clone();
-            let exec = executor.clone();
-            let tx_status = tx.clone();
-            std::thread::spawn(move || {
-                let res = exec.status(&root_path);
-                let _ = tx_status.send(AppEvent::StatusScanned {
-                    root: RootId(root_path),
+        let roots: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
+        for root in roots {
+            let path = root.as_path().to_path_buf();
+            let id = root.clone();
+            self.pump_read(move |executor, tx| {
+                let res = executor.status(&path);
+                let _ = tx.send(AppEvent::StatusScanned {
+                    root: id,
                     status: res,
                 });
             });
             // Ahead/behind of the current branch vs its upstream (Epic D3).
-            let exec2 = executor.clone();
-            let tx2 = tx.clone();
-            let rp = root.id.0.clone();
-            std::thread::spawn(move || {
-                if let Ok((ahead, behind)) = current_branch_ahead_behind(exec2.as_ref(), &rp) {
-                    let _ = tx2.send(AppEvent::AheadBehind {
-                        root: RootId(rp),
+            let path = root.as_path().to_path_buf();
+            self.pump_read(move |executor, tx| {
+                if let Ok((ahead, behind)) = current_branch_ahead_behind(executor.as_ref(), &path) {
+                    let _ = tx.send(AppEvent::AheadBehind {
+                        root,
                         ahead,
                         behind,
                     });
@@ -1365,9 +1352,7 @@ impl AppState {
             return;
         }
         let (opts, mode) = self.log_page_plan(&root);
-        let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
+        self.pump_read(move |executor, tx| {
             let res = executor.log(&root.0, &opts);
             let _ = tx.send(AppEvent::LogLoaded {
                 root,
@@ -1417,9 +1402,7 @@ impl AppState {
         if !self.fetching_refs.insert(root.clone()) {
             return;
         }
-        let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
+        self.pump_read(move |executor, tx| {
             let res = executor.ref_decorations(&root.0);
             let _ = tx.send(AppEvent::RefsLoaded { root, deco: res });
         });
@@ -1435,9 +1418,7 @@ impl AppState {
         {
             return;
         }
-        let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
+        self.pump_read(move |executor, tx| {
             let res = executor.commit_file_stats(&root.0, &commit);
             let _ = tx.send(AppEvent::FileStatsLoaded {
                 root,
@@ -1493,9 +1474,7 @@ impl AppState {
         }
         self.ui.blame_loading = true;
         self.ui.blame_error = None;
-        let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
+        self.pump_read(move |executor, tx| {
             let res = turbogit_services::history_service::blame(
                 executor.as_ref(),
                 &target.root.0,
@@ -1555,15 +1534,42 @@ impl AppState {
         if !self.fetching_submodules.insert(root.clone()) {
             return;
         }
-        let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        std::thread::spawn(move || {
+        self.pump_read(move |executor, tx| {
             let res = executor.submodule_status(&root.0);
             let _ = tx.send(AppEvent::SubmodulesLoaded {
                 root,
                 submodules: res,
             });
         });
+    }
+
+    /// The changed files of `(root, commit)`, filled through the Git engine the
+    /// app owns on miss (CONTEXT.md "Root caches"). The Shell asks for a value
+    /// and gets the cached list; it never hands the cache an engine.
+    ///
+    /// Borrows the cache: do not touch app state while holding the slice.
+    pub fn ensure_files(&mut self, root: &RootId, commit: &CommitId) -> &[Change] {
+        self.caches
+            .ensure_files(self.executor.as_ref(), root, commit)
+    }
+
+    /// One scoped commit listing of `root` — a file's history, a ref's history
+    /// or a pickaxe search — filled through the engine the app owns on miss.
+    /// The three listings were three near-identical signatures; they are one
+    /// call taking a [`LogScope`].
+    ///
+    /// Borrows the cache: do not touch app state while holding the slice.
+    pub fn ensure_log(&mut self, root: &RootId, scope: LogScope) -> &[Commit] {
+        self.caches.ensure_log(self.executor.as_ref(), root, &scope)
+    }
+
+    /// `root`'s hunk-span statistics, filled through the engine the app owns on
+    /// miss (issue 20). Three whole-root diffs on a cold entry, so this is the
+    /// heaviest of the cache reads and the reason the Commit window asks for
+    /// only the selected root.
+    pub fn ensure_hunk_stats(&mut self, root: &RootId) {
+        let exec = self.executor.clone();
+        self.caches.ensure_hunk_stats(exec.as_ref(), root);
     }
 
     /// The one refresh seam for completed operations and manual refresh
@@ -1577,8 +1583,9 @@ impl AppState {
     /// status) without scanning for new roots — what kept branch indicators
     /// fresh after checkouts pre-refactor, now scoped to the affected roots.
     ///
-    /// Production computes ahead/behind on worker threads; the headless
-    /// harness (`sync_refresh`) mirrors the same steps synchronously.
+    /// Ahead/behind and the selected root's log refetch go out on the dispatch
+    /// seam, so the headless harness answers them the same way production does —
+    /// as events the next drain settles.
     pub fn refresh(&mut self, affected: Affected) {
         self.caches.invalidate(&affected);
         if matches!(affected, Affected::All) {
@@ -1628,31 +1635,20 @@ impl AppState {
             }
         }
 
-        // Ahead/behind of each affected root's current branch vs upstream.
-        if self.sync_refresh {
-            // Headless harness: refresh synchronously, no threads.
-            let executor = self.executor.clone();
-            for path in paths {
-                if let Ok(ab) = current_branch_ahead_behind(executor.as_ref(), &path) {
-                    self.caches.store_ahead_behind(RootId(path), ab);
+        // Ahead/behind of each affected root's current branch vs upstream, on
+        // the same seam everywhere: under `Spawned` it answers on a later frame,
+        // and the headless harness now waits for that frame rather than
+        // pretending the answer arrived sooner.
+        for rp in paths {
+            self.pump_read(move |executor, tx| {
+                if let Ok((ahead, behind)) = current_branch_ahead_behind(executor.as_ref(), &rp) {
+                    let _ = tx.send(AppEvent::AheadBehind {
+                        root: RootId(rp),
+                        ahead,
+                        behind,
+                    });
                 }
-            }
-        } else {
-            let executor = self.executor.clone();
-            let tx = self.tx.clone();
-            for rp in paths {
-                let exec2 = executor.clone();
-                let tx2 = tx.clone();
-                std::thread::spawn(move || {
-                    if let Ok((ahead, behind)) = current_branch_ahead_behind(exec2.as_ref(), &rp) {
-                        let _ = tx2.send(AppEvent::AheadBehind {
-                            root: RootId(rp),
-                            ahead,
-                            behind,
-                        });
-                    }
-                });
-            }
+            });
         }
 
         // Refetch the selected root's log iff it is inside the scope.
@@ -1661,152 +1657,109 @@ impl AppState {
                 Affected::All => true,
                 Affected::Root(id) => *id == sel,
             };
+            // Paging lives in `fetch_log`'s page plan, so the harness and the
+            // shell ask for exactly the same window.
             if in_scope {
-                if self.sync_refresh {
-                    // The headless harness has no worker threads, so it runs
-                    // the same page plan inline. Paging here is not optional:
-                    // an uncapped fetch would write the whole history past the
-                    // pager and the window would never mean anything again.
-                    let (opts, mode) = self.log_page_plan(&sel);
-                    if let Ok(page) = self.executor.log(&sel.0, &opts) {
-                        self.settle_log_page(&sel, mode, page);
-                    }
-                } else {
-                    self.fetch_log(sel);
-                }
+                self.fetch_log(sel);
             }
         }
     }
 
-    /// Dispatch a git operation on a worker thread. `work` receives the
-    /// engine (`GitExecutor`) and returns a `TgResult<()>`; the result is posted as an
-    /// `OpCompleted` event and the affected roots' caches and status are
-    /// refreshed on completion ([`AppState::refresh`]). Every call site
-    /// declares its scope via `affected`.
-    pub fn run_git<W>(&mut self, label: String, affected: Affected, work: W)
-    where
-        W: FnOnce(&dyn GitExecutor) -> TgResult<()> + Send + 'static,
-    {
-        self.run_git_with_retry(label, affected, None, work);
+    /// Dispatch an [`Operation`]: run its work on a worker and post its
+    /// completion back.
+    ///
+    /// The operation is consumed to run it, so what rides back is its identity,
+    /// label and scope rather than the operation itself (ADR-0020). A
+    /// worktree-mutating operation posts its extra invalidation *after* the
+    /// completion, which is the ordering ADR-0019 requires: invalidating at
+    /// dispatch alone loses the race against the eager per-frame fill and
+    /// caches the pre-mutation list, which a root refresh no longer drops.
+    pub fn dispatch(&mut self, op: Operation) {
+        if let Operation::Fetch { roots } = &op {
+            self.record_fetch_baseline(roots);
+        }
+        let kind = op.kind();
+        let label = op.label();
+        let affected = op.affected();
+        let mutated = if op.mutates_worktrees() {
+            affected.root().cloned()
+        } else {
+            None
+        };
+        self.ui.busy = true;
+        let executor = self.executor.clone();
+        let tx = self.tx.clone();
+        let run = move || {
+            let res = op.run(executor.as_ref());
+            let _ = tx.send(AppEvent::OpCompleted {
+                kind,
+                label,
+                affected,
+                result: res,
+            });
+            if let Some(root) = mutated {
+                let _ = tx.send(AppEvent::WorktreesMutated { root });
+            }
+        };
+        match self.pump {
+            Pump::Spawned => {
+                std::thread::spawn(run);
+            }
+            Pump::Inline => run(),
+        }
     }
 
-    /// Like [`Self::run_git`] but attaches `retry` to the `OpCompleted`
-    /// event so a failure surfaces a `Retry` button on the toast
-    /// (issue #02).
-    pub fn run_git_with_retry<W>(
+    /// Run a cache fill on the same seam an [`Operation`] dispatches on.
+    ///
+    /// A fill is not an Operation: it has no identity, no label, no invalidation
+    /// scope and no settlement arm, and inventing a silent variant for each of
+    /// the ten of them would be the empty-variant trap this design rejects. It
+    /// is still git work, so it must not run on the render thread under
+    /// `Spawned` and must not need a thread under `Inline`. Both modes post into
+    /// the same channel and settle through the same `drain_events`.
+    pub(crate) fn pump_read(
         &mut self,
-        label: String,
-        affected: Affected,
-        retry: Option<RetryAction>,
-        work: W,
-    ) where
-        W: FnOnce(&dyn GitExecutor) -> TgResult<()> + Send + 'static,
-    {
+        work: impl FnOnce(Arc<dyn GitExecutor>, Sender<AppEvent>) + Send + 'static,
+    ) {
         let executor = self.executor.clone();
         let tx = self.tx.clone();
-        self.ui.busy = true;
-        std::thread::spawn(move || {
-            let res = work(executor.as_ref());
-            let _ = tx.send(AppEvent::OpCompleted {
-                label,
-                affected,
-                result: res,
-                retry,
-            });
-        });
+        match self.pump {
+            Pump::Spawned => {
+                std::thread::spawn(move || work(executor, tx));
+            }
+            Pump::Inline => work(executor, tx),
+        }
     }
 
-    /// Like [`Self::run_git`], but for an operation that mutates a root's
-    /// linked-worktree set (add / remove, ticket 02). The completion carries
-    /// an extra [`AppEvent::WorktreesMutated`] so the handler invalidates the
-    /// cached list AFTER the mutation has landed — invalidating at dispatch
-    /// alone loses the race against the eager per-frame fill, which would
-    /// cache the pre-mutation list and never refetch (a root refresh no
-    /// longer drops the worktree cache).
-    fn run_worktree_git<W>(&mut self, label: String, root: RootId, work: W)
-    where
-        W: FnOnce(&dyn GitExecutor) -> TgResult<()> + Send + 'static,
-    {
-        let affected = Affected::Root(root.clone());
-        let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        self.ui.busy = true;
-        std::thread::spawn(move || {
-            let res = work(executor.as_ref());
-            let _ = tx.send(AppEvent::OpCompleted {
-                label,
-                affected,
-                result: res,
-                retry: None,
-            });
-            let _ = tx.send(AppEvent::WorktreesMutated { root });
-        });
+    /// Surface a feedback message with its own auto-dismiss window.
+    ///
+    /// The clock is cleared here rather than left running: a message that
+    /// replaces another is a new notice, and inheriting the old one's elapsed
+    /// time can dismiss it on the very frame it appeared — so a fast follower
+    /// to a completed operation is never seen at all.
+    fn show_toast(&mut self, toast: Toast) {
+        self.ui.toast = Some(toast);
+        self.ui.toast_shown_at = None;
     }
 
-    /// Re-dispatch a previously-failed operation (issue #02). Called by
-    /// the toast's `Retry` button via [`crate::state::Toast::retry`]. The
-    /// action is consumed and a fresh worker thread is spawned; the
-    /// completion will surface as a normal `OpCompleted` toast (success
-    /// or a new error toast, this time without a retry by default — a
-    /// second retry belongs to the user).
-    pub fn retry(&mut self, action: RetryAction) {
-        match action {
-            RetryAction::Fetch { root, remote } => {
-                let label = match &remote {
-                    Some(r) => format!("Fetch from {r}"),
-                    None => "Fetch".to_string(),
-                };
-                let affected = Affected::from_optional_root(Some(&root));
-                self.run_git(label, affected, move |v| v.fetch(&root, remote.as_deref()));
-            }
-            RetryAction::Pull { root, rebase } => {
-                let label = if rebase { "Pull --rebase" } else { "Pull" }.to_string();
-                let affected = Affected::from_optional_root(Some(&root));
-                self.run_git(label, affected, move |v| v.pull(&root, rebase));
-            }
-            RetryAction::Push {
-                root,
-                remote,
-                branch,
-                force,
-                tags,
-                no_verify,
-                set_upstream,
-                selected_oldest,
-            } => {
-                let label = format!("Push {remote}/{branch}");
-                let affected = Affected::from_optional_root(Some(&root));
-                let sha = selected_oldest;
-                self.run_git(label, affected, move |v| {
-                    v.push(
-                        &root,
-                        &remote,
-                        &branch,
-                        force,
-                        tags,
-                        no_verify,
-                        set_upstream,
-                        sha.as_deref(),
-                    )
-                });
-            }
-            RetryAction::Shelve {
-                root,
-                changes,
-                message,
-            } => {
-                let paths: Vec<PathBuf> = changes.iter().map(|c| c.path.clone()).collect();
-                let affected = Affected::from_optional_root(Some(&root));
-                self.run_git("Shelve".to_string(), affected, move |v| {
-                    turbogit_services::shelve_stash::stash(v, &root, &message, false)?;
-                    // The stash only captures worktree changes; a clean
-                    // discard follows for the paths the user explicitly
-                    // chose. Best-effort: stash failure already errored.
-                    let _ = turbogit_services::changes::discard_changes(v, &root, &changes);
-                    let _ = paths; // kept to document intent
-                    Ok(())
-                });
-            }
+    /// Snapshot each root's remote branches before a fetch, so completion can
+    /// report what *that* fetch brought in instead of every branch there is.
+    /// Owned by dispatch because only the operation knows which roots it
+    /// covers — a multi-root fetch needs a baseline per root.
+    fn record_fetch_baseline(&mut self, roots: &[RootId]) {
+        for id in roots {
+            let before: Vec<String> = self
+                .multi
+                .by_id(id)
+                .map(|r| {
+                    r.branches
+                        .iter()
+                        .filter(|b| b.kind == BranchKind::Remote)
+                        .map(|b| b.name.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.ui.branches_fetch_before.push((id.clone(), before));
         }
     }
 
@@ -1854,41 +1807,34 @@ impl AppState {
     pub fn run_confirmed(&mut self, c: PendingConfirm) {
         match c {
             PendingConfirm::Discard { changes } => {
-                let root = self.selected_path();
-                let affected = Affected::from_optional_root(root.as_deref());
-                self.run_git("Discard changes".into(), affected, move |v| {
-                    if let Some(r) = &root {
-                        changes::discard_changes(v, r, &changes)
-                    } else {
-                        Ok(())
-                    }
-                });
+                let Some(root) = self.selected_root.clone() else {
+                    return;
+                };
+                self.dispatch(Operation::custom(
+                    "Discard changes",
+                    Affected::Root(root.clone()),
+                    move |v| changes::discard_changes(v, root.as_path(), &changes),
+                ));
             }
             PendingConfirm::DeleteLocalBranch { name } => {
-                let root = self.selected_path();
-                let affected = Affected::from_optional_root(root.as_deref());
+                let Some(root) = self.selected_root.clone() else {
+                    return;
+                };
                 // Force delete: the confirmation already discloses what is
                 // lost in human terms (issue 12) before this runs, so an
                 // unmerged branch deletes with the user's informed consent
                 // instead of a bare refusal.
-                self.run_git(format!("Delete branch {name}"), affected, move |v| {
-                    if let Some(r) = &root {
-                        v.branch_delete(r, &name, true)
-                    } else {
-                        Ok(())
-                    }
-                });
+                self.dispatch(Operation::DeleteBranch { root, name });
             }
             PendingConfirm::DeleteRemoteBranch { remote, name } => {
-                let root = self.selected_path();
-                let affected = Affected::from_optional_root(root.as_deref());
-                self.run_git("Delete remote branch".into(), affected, move |v| {
-                    if let Some(r) = &root {
-                        v.branch_delete_remote(r, &remote, &name)
-                    } else {
-                        Ok(())
-                    }
-                });
+                let Some(root) = self.selected_root.clone() else {
+                    return;
+                };
+                self.dispatch(Operation::custom(
+                    "Delete remote branch",
+                    Affected::Root(root.clone()),
+                    move |v| v.branch_delete_remote(root.as_path(), &remote, &name),
+                ));
             }
             // Issue 07: the dirty-checkout dialog dispatches its own choices;
             // this arm covers the generic confirm path (bring the changes
@@ -1900,43 +1846,37 @@ impl AppState {
             PendingConfirm::InitHere => self.init_repo(),
             PendingConfirm::CloneRepo => self.clone_repo(),
             PendingConfirm::RemoveWorktree { path } => {
-                if let Some(r) = self.selected_path() {
-                    // Ticket 02: worktree-mutating ops invalidate the cached
-                    // list at COMPLETION (a root refresh no longer drops it).
-                    let root_id = RootId(r.clone().into());
-                    self.run_worktree_git("Remove worktree".into(), root_id, move |v| {
-                        v.worktree_remove(&r, &path, false)
-                    });
+                if let Some(root) = self.selected_root.clone() {
+                    self.dispatch(Operation::WorktreeRemove { root, path });
                 }
             }
             PendingConfirm::DeinitSubmodule { path } => {
-                let root = self.selected_path();
-                let affected = Affected::from_optional_root(root.as_deref());
-                self.run_git("Deinit submodule".into(), affected, move |v| {
-                    if let Some(r) = &root {
-                        v.submodule_deinit(r, &path, false)
-                    } else {
-                        Ok(())
-                    }
-                });
+                let Some(root) = self.selected_root.clone() else {
+                    return;
+                };
+                self.dispatch(Operation::custom(
+                    "Deinit submodule",
+                    Affected::Root(root.clone()),
+                    move |v| v.submodule_deinit(root.as_path(), &path, false),
+                ));
             }
             PendingConfirm::RevertCommit { commit } => {
-                let root = self.selected_path();
-                let affected = Affected::from_optional_root(root.as_deref());
+                let Some(root) = self.selected_root.clone() else {
+                    return;
+                };
                 let settings = self.settings.clone();
-                self.run_git(
+                self.dispatch(Operation::custom(
                     format!("Revert {}", short_sha(&commit)),
-                    affected,
+                    Affected::Root(root.clone()),
                     move |v| {
-                        if let Some(r) = &root {
-                            turbogit_services::integrate_service::revert_commit(
-                                v, r, &commit, &settings,
-                            )
-                        } else {
-                            Ok(())
-                        }
+                        turbogit_services::integrate_service::revert_commit(
+                            v,
+                            root.as_path(),
+                            &commit,
+                            &settings,
+                        )
                     },
-                );
+                ));
             }
         }
     }
@@ -1945,19 +1885,23 @@ impl AppState {
     /// (issue 15 log commit action). The service guards the protected target
     /// and a dirty worktree; the original checkout is restored afterwards.
     pub fn cherry_pick_to(&mut self, commit: String, target: String) {
-        let root = self.selected_path();
-        let affected = Affected::from_optional_root(root.as_deref());
+        let Some(root) = self.selected_root.clone() else {
+            return;
+        };
         let settings = self.settings.clone();
-        let label = format!("Cherry-pick {} to {target}", short_sha(&commit));
-        self.run_git(label, affected, move |v| {
-            if let Some(r) = &root {
+        self.dispatch(Operation::custom(
+            format!("Cherry-pick {} to {target}", short_sha(&commit)),
+            Affected::Root(root.clone()),
+            move |v| {
                 turbogit_services::integrate_service::cherry_pick_to(
-                    v, r, &commit, &target, &settings,
+                    v,
+                    root.as_path(),
+                    &commit,
+                    &target,
+                    &settings,
                 )
-            } else {
-                Ok(())
-            }
-        });
+            },
+        ));
     }
 
     // -- Cherry-pick across repositories (issue 16) ---------------------------
@@ -2215,13 +2159,8 @@ impl AppState {
     /// Add a linked worktree on `branch` at `path` for the focused root
     /// (issue 14 Worktrees tab add action).
     pub fn add_worktree(&mut self, path: PathBuf, branch: String) {
-        if let Some(r) = self.selected_path() {
-            // Ticket 02: worktree-mutating ops invalidate the cached list at
-            // COMPLETION (a root refresh no longer drops it).
-            let root_id = RootId(r.clone().into());
-            self.run_worktree_git(format!("Add worktree {branch}"), root_id, move |v| {
-                v.worktree_add(&r, &path, &branch, true)
-            });
+        if let Some(root) = self.selected_root.clone() {
+            self.dispatch(Operation::WorktreeAdd { root, path, branch });
         }
     }
 
@@ -2229,20 +2168,19 @@ impl AppState {
     /// (issue 14 Submodules tab update action; `init` re-checks out an
     /// uninitialized submodule).
     pub fn update_submodule(&mut self, path: PathBuf, init: bool) {
-        let root = self.selected_path();
-        let affected = Affected::from_optional_root(root.as_deref());
+        let Some(root) = self.selected_root.clone() else {
+            return;
+        };
         let label = if init {
             "Update submodule (init)".to_string()
         } else {
             "Update submodule".to_string()
         };
-        self.run_git(label, affected, move |v| {
-            if let Some(r) = &root {
-                v.submodule_update(r, &path, init)
-            } else {
-                Ok(())
-            }
-        });
+        self.dispatch(Operation::custom(
+            label,
+            Affected::Root(root.clone()),
+            move |v| v.submodule_update(root.as_path(), &path, init),
+        ));
     }
 
     /// `git init` at the project dir, persist the mapping, then rescan.
@@ -2390,6 +2328,29 @@ impl AppState {
         self.rescan();
     }
 
+    /// Clone `url` into `dest` from the Welcome screen and enter the result.
+    ///
+    /// The Welcome flow's success is a different outcome from
+    /// [`Self::clone_repo`]'s — this one makes the clone the project
+    /// ([`Self::open_project`]) rather than mapping it as a root of the current
+    /// one — so it is its own entry point instead of a shared Operation. It is
+    /// still synchronous on the calling thread, which is what freezes the
+    /// window during a network clone; making it an [`Operation`] needs the two
+    /// success meanings settled first.
+    pub fn clone_into(&mut self, url: &str, dest: &Path, depth: Option<usize>) {
+        match GitExecutor::clone(&*self.executor, url, dest, depth) {
+            Ok(()) => {
+                self.ui.welcome_clone_url.clear();
+                self.open_project(dest);
+                self.ui.toast = Some(Toast::success("Repository cloned"));
+            }
+            Err(e) => {
+                self.last_error = Some(e.to_string());
+                self.ui.toast = Some(Toast::error(format!("Clone failed: {e}")));
+            }
+        }
+    }
+
     /// Drain worker-thread events and apply them to state. Production calls
     /// this every frame from `app.rs`; headless harnesses call it for
     /// production parity (issue #13: async diff tests).
@@ -2447,71 +2408,56 @@ impl AppState {
                     }
                 }
                 AppEvent::OpCompleted {
+                    kind,
                     label,
                     affected,
                     result,
-                    retry,
                 } => {
                     self.ui.busy = false;
                     match result {
                         Ok(()) => {
-                            self.ui.toast = Some(Toast::success(label.clone()));
+                            self.show_toast(Toast::success(label.clone()));
                             self.refresh(affected.clone());
                             granular::settle(self);
-                            // Activity log (issue #04): the durable record
-                            // the toast only summarizes. An op that leaves
-                            // conflicts behind is a warning, not a success —
-                            // the counts are read from the refreshed
-                            // snapshots.
+                            // Activity log (issue #04): the durable record the
+                            // toast only summarizes. An op that leaves conflicts
+                            // behind is a warning, not a success — the counts are
+                            // read from the refreshed snapshots.
                             let conflicts = conflicted_count(self, &affected);
-                            let (kind, message) = if conflicts > 0 {
+                            let (entry, message) = if conflicts > 0 {
                                 (
                                     crate::activity::ActivityKind::Warning,
                                     format!("{label} · {conflicts} unresolved conflicts"),
                                 )
-                            } else if label == "Fetch" {
-                                (
-                                    crate::activity::ActivityKind::Success,
-                                    self.fetch_report(&affected),
-                                )
                             } else {
                                 (
                                     crate::activity::ActivityKind::Success,
-                                    merge_report(self, &affected, &label),
+                                    report_for(self, kind, &affected, &label),
                                 )
                             };
                             self.ui.activity.push(crate::activity::ActivityEntry {
                                 at: chrono::Local::now(),
                                 repo: activity_repo_label(&affected),
-                                message,
-                                kind,
+                                message: message.clone(),
+                                kind: entry,
                             });
                             // Issue 13: a fetch reports plainly what changed —
                             // never a bare success, never a silent no-op.
-                            if label == "Fetch" {
-                                let report = self
-                                    .ui
-                                    .activity
-                                    .entries
-                                    .last()
-                                    .map(|e| e.message.clone())
-                                    .unwrap_or_else(|| "Fetch · done".into());
-                                self.ui.toast = Some(Toast::success(report));
+                            if kind == OpKind::Fetch {
+                                self.show_toast(Toast::success(message));
                             }
                             // Issue 09: a merge/rebase that landed mid-conflict
                             // hands off cleanly to the conflict experience with
                             // an explicit mid-operation state that survives
                             // switching tabs.
-                            if conflicts > 0
-                                && (label.starts_with("Merge ") || label.starts_with("Rebase "))
-                            {
+                            if conflicts > 0 && matches!(kind, OpKind::Merge | OpKind::Rebase) {
                                 self.ui.merge_in_progress = true;
                                 self.ui.conflict_resolver_open = true;
                             }
                             // Issue 12: a confirmed local-branch deletion arms
                             // the short-window undo with the captured tip.
                             if let Some(pending) = self.ui.branches_delete_pending.take()
-                                && label.starts_with("Delete branch ")
+                                && kind == OpKind::DeleteBranch
                             {
                                 self.ui.branches_undo = Some(crate::state::BranchDeleteUndo {
                                     root: pending.root,
@@ -2530,20 +2476,19 @@ impl AppState {
                             // that survives switching tabs. The reliable
                             // signal is the worktree's fresh conflict list
                             // (git's own stderr text is not stable here).
-                            let conflict =
-                                if label.starts_with("Merge ") || label.starts_with("Rebase ") {
-                                    self.refresh(affected.clone());
-                                    conflicted_count(self, &affected) > 0
-                                } else {
-                                    false
-                                };
+                            let conflict = if matches!(kind, OpKind::Merge | OpKind::Rebase) {
+                                self.refresh(affected.clone());
+                                conflicted_count(self, &affected) > 0
+                            } else {
+                                false
+                            };
                             if conflict {
                                 granular::settle(self);
                                 self.ui.merge_in_progress = true;
                                 self.ui.conflict_resolver_open = true;
                                 let conflicts = conflicted_count(self, &affected);
                                 let report = format!("{label} · {conflicts} unresolved conflicts");
-                                self.ui.toast = Some(Toast::warning(report.clone()));
+                                self.show_toast(Toast::warning(report.clone()));
                                 self.ui.activity.push(crate::activity::ActivityEntry {
                                     at: chrono::Local::now(),
                                     repo: activity_repo_label(&affected),
@@ -2552,15 +2497,10 @@ impl AppState {
                                 });
                                 continue;
                             }
-                            let mut t = Toast::error(format!("{label}: {e}"));
-                            // Attach the replay handle to the error toast
-                            // so the user can retry the exact same op
-                            // (issue #02). None → no Retry button.
-                            t.retry = retry;
-                            self.ui.toast = Some(t);
+                            self.show_toast(Toast::error(format!("{label}: {e}")));
                             self.last_error = Some(msg);
-                            // Activity log (issue #04): failures are entries
-                            // too — the toast vanishes, the feed remembers.
+                            // Activity log (issue #04): failures are entries too
+                            // — the toast vanishes, the feed remembers.
                             self.ui.activity.push(crate::activity::ActivityEntry {
                                 at: chrono::Local::now(),
                                 repo: activity_repo_label(&affected),
@@ -2686,7 +2626,6 @@ impl AppState {
                     self.ui.toast = Some(Toast {
                         kind,
                         message: message.clone(),
-                        retry: None,
                     });
                     // The remotes manager renders the per-repo outcomes of
                     // its apply (issue 33): display-ready rows in selection
@@ -2891,7 +2830,6 @@ impl AppState {
             self.ui.toast = Some(Toast {
                 kind: ToastKind::Warning,
                 message: "No selected repos have anything staged".to_string(),
-                retry: None,
             });
             return;
         }
@@ -3093,13 +3031,14 @@ impl AppState {
     /// Rename `old` to `new` in `id` through the engine seam and refresh
     /// the root. The current-branch rename is legal; git updates HEAD.
     pub fn rename_branch(&mut self, id: &RootId, old: &str, new: &str) {
-        let path = id.0.clone();
-        let affected = Affected::Root(id.clone());
+        let root = id.clone();
         let old = old.to_string();
         let new = new.to_string();
-        self.run_git(format!("Rename {old} → {new}"), affected, move |v| {
-            v.branch_rename(&path, &old, &new)
-        });
+        self.dispatch(Operation::custom(
+            format!("Rename {old} → {new}"),
+            Affected::Root(root.clone()),
+            move |v| v.branch_rename(root.as_path(), &old, &new),
+        ));
     }
 
     /// Open the compare dialog for `other` vs the root's current branch
@@ -3138,21 +3077,28 @@ impl AppState {
     /// callers. The completion refresh updates the current marker on every
     /// surface together (row, breadcrumb, metadata panel, status bar).
     pub fn checkout_branch_op(&mut self, root: &RootId, kind: BranchKind, name: &str) {
-        let path = root.0.clone();
         let affected = Affected::Root(root.clone());
         let nm = name.to_string();
         match kind {
             BranchKind::Local => {
-                self.run_git(format!("Checkout {nm}"), affected, move |v| {
-                    v.branch_checkout(&path, &nm)
-                });
+                let path = root.clone();
+                self.dispatch(Operation::custom(
+                    format!("Checkout {nm}"),
+                    affected,
+                    move |v| v.branch_checkout(path.as_path(), &nm),
+                ));
             }
             BranchKind::Remote => {
-                let start = format!("origin/{nm}");
-                self.run_git(format!("Checkout {nm} (new local)"), affected, move |v| {
-                    v.branch_create(&path, &nm, true, Some(&start))?;
-                    v.set_branch_upstream(&path, &nm, &start)
-                });
+                let path = root.clone();
+                self.dispatch(Operation::custom(
+                    format!("Checkout {nm} (new local)"),
+                    affected,
+                    move |v| {
+                        let start = format!("origin/{nm}");
+                        v.branch_create(path.as_path(), &nm, true, Some(&start))?;
+                        v.set_branch_upstream(path.as_path(), &nm, &start)
+                    },
+                ));
             }
         }
     }
@@ -3160,32 +3106,32 @@ impl AppState {
     /// Set the working tree's changes aside (stash) and switch to `name`
     /// (issue 07): the changes stay intact and are restorable afterwards.
     pub fn checkout_branch_set_aside(&mut self, root: &RootId, kind: BranchKind, name: &str) {
-        let path = root.0.clone();
         let affected = Affected::Root(root.clone());
         let nm = name.to_string();
-        let stash = "set aside before checkout".to_string();
         match kind {
             BranchKind::Local => {
-                self.run_git(
+                let path = root.clone();
+                self.dispatch(Operation::custom(
                     format!("Set aside changes · Checkout {nm}"),
                     affected,
                     move |v| {
-                        v.stash_push(&path, &stash, false)?;
-                        v.branch_checkout(&path, &nm)
+                        v.stash_push(path.as_path(), "set aside before checkout", false)?;
+                        v.branch_checkout(path.as_path(), &nm)
                     },
-                );
+                ));
             }
             BranchKind::Remote => {
-                let start = format!("origin/{nm}");
-                self.run_git(
+                let path = root.clone();
+                self.dispatch(Operation::custom(
                     format!("Set aside changes · Checkout {nm} (new local)"),
                     affected,
                     move |v| {
-                        v.stash_push(&path, &stash, false)?;
-                        v.branch_create(&path, &nm, true, Some(&start))?;
-                        v.set_branch_upstream(&path, &nm, &start)
+                        let start = format!("origin/{nm}");
+                        v.stash_push(path.as_path(), "set aside before checkout", false)?;
+                        v.branch_create(path.as_path(), &nm, true, Some(&start))?;
+                        v.set_branch_upstream(path.as_path(), &nm, &start)
                     },
-                );
+                ));
             }
         }
     }
@@ -3195,48 +3141,46 @@ impl AppState {
     /// states the direction ("Rebase feat onto main"), the cheapest
     /// guardrail against mis-applied direction.
     pub fn rebase_branch_onto_current(&mut self, root: &RootId, branch: &str, current: &str) {
-        let path = root.0.clone();
-        let affected = Affected::Root(root.clone());
-        let b = branch.to_string();
-        let c = current.to_string();
-        self.run_git(format!("Rebase {b} onto {c}"), affected, move |v| {
-            v.branch_checkout(&path, &b)?;
-            v.rebase(&path, &c, &turbogit_domain::model::RebaseOpts::default())
-        });
+        self.dispatch(Operation::rebase_branch_onto(root, branch, current));
     }
 
     /// Issue 13: report what a completed fetch changed, in plain terms —
     /// "N new remote branches" or "nothing changed". Never silence, never a
     /// bare success. Also records when the fetch happened for disclosure.
     fn fetch_report(&mut self, affected: &Affected) -> String {
-        let before: Vec<String> = match affected {
+        // Every baseline this fetch owns. A single-root fetch consumes its own
+        // snapshot; an all-roots fetch consumes one per root it covered, so a
+        // multi-root fetch counts its new branches the same way a single-root
+        // one already did rather than reporting nothing.
+        let baselines: Vec<(RootId, Vec<String>)> = match affected {
+            Affected::All => self.ui.branches_fetch_before.drain(..).collect(),
             Affected::Root(id) => {
                 let pos = self
                     .ui
                     .branches_fetch_before
                     .iter()
                     .position(|(rid, _)| rid == id);
-                pos.map(|i| self.ui.branches_fetch_before.remove(i).1)
+                pos.map(|i| vec![self.ui.branches_fetch_before.remove(i)])
                     .unwrap_or_default()
             }
-            Affected::All => Vec::new(),
         };
-        let now: Vec<String> = self
-            .multi
-            .roots
+        let new: usize = baselines
             .iter()
-            .filter(|r| match affected {
-                Affected::All => true,
-                Affected::Root(id) => &r.id == id,
-            })
-            .flat_map(|r| {
-                r.branches
+            .map(|(id, before)| {
+                self.multi
+                    .roots
                     .iter()
-                    .filter(|b| b.kind == BranchKind::Remote)
-                    .map(|b| b.name.clone())
+                    .filter(|r| &r.id == id)
+                    .flat_map(|r| {
+                        r.branches
+                            .iter()
+                            .filter(|b| b.kind == BranchKind::Remote)
+                            .map(|b| b.name.clone())
+                    })
+                    .filter(|name| !before.contains(name))
+                    .count()
             })
-            .collect();
-        let new = now.iter().filter(|n| !before.contains(n)).count();
+            .sum();
         self.ui.branches_last_fetch = Some(chrono::Utc::now());
         if new > 0 {
             format!("Fetch · {new} new remote branches")
@@ -3561,7 +3505,6 @@ impl AppState {
             self.ui.toast = Some(Toast {
                 kind: ToastKind::Error,
                 message: format!("Rollback incomplete · {} repo(s) not restored", failures),
-                retry: None,
             });
             return;
         }
@@ -3571,7 +3514,6 @@ impl AppState {
         self.ui.toast = Some(Toast {
             kind: ToastKind::Success,
             message: format!("Rolled back · {}", rec.branch),
-            retry: None,
         });
         self.refresh(Affected::All);
         self.persist_ui();
@@ -3610,14 +3552,26 @@ fn conflicted_count(state: &AppState, affected: &Affected) -> usize {
         .sum()
 }
 
+/// The success message a completed operation reports, chosen by the
+/// operation's identity (ADR-0020). The match is exhaustive on purpose: a new
+/// [`OpKind`] has to say here how it reports before it can be dispatched.
+fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &str) -> String {
+    match kind {
+        OpKind::Fetch => state.fetch_report(affected),
+        OpKind::Merge | OpKind::Rebase => push_report(state, affected, label),
+        OpKind::DeleteBranch
+        | OpKind::Shelve
+        | OpKind::WorktreeAdd
+        | OpKind::WorktreeRemove
+        | OpKind::Other => label.to_string(),
+    }
+}
+
 /// Success message for a completed merge/rebase (issue 09): the label already
 /// carries how many commits came in when the dialog knew; the push state is
 /// read from the freshly refreshed ahead/behind cache — "3 commits to push"
-/// or "nothing to push". Other operations keep their plain label.
-fn merge_report(state: &AppState, affected: &Affected, label: &str) -> String {
-    if !label.starts_with("Merge ") && !label.starts_with("Rebase ") {
-        return label.to_string();
-    }
+/// or "nothing to push".
+fn push_report(state: &AppState, affected: &Affected, label: &str) -> String {
     let ahead = state
         .multi
         .roots

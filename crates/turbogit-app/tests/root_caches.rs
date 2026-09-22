@@ -21,7 +21,8 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
 use turbogit_app::events::{AppEvent, LogPageMode};
-use turbogit_app::root_caches::{Affected, RootCaches};
+use turbogit_app::operation::OpKind;
+use turbogit_app::root_caches::{Affected, LogScope, RootCaches};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{Commit, LogOpts, RootId, Signature, SignatureState, VcsSettings};
 use turbogit_engine::GitExecutor;
@@ -104,7 +105,7 @@ fn prime_fake_entries(state: &mut AppState, roots: &[RootId]) {
 }
 
 /// Prime the remaining three caches (decorations, changed files, path-scoped
-/// history) through deterministic engine-backed `ensure_*` calls.
+/// history) through the app's own cache reads, which supply the engine.
 fn prime_engine_backed_entries(state: &mut AppState, root_dir: &Path) {
     let exec = CliExecutor {
         settings: VcsSettings::default(),
@@ -120,12 +121,8 @@ fn prime_engine_backed_entries(state: &mut AppState, root_dir: &Path) {
             deco: Ok(deco),
         })
         .expect("send RefsLoaded");
-    state
-        .caches
-        .ensure_files(&exec, &root, &head_commit(root_dir));
-    state
-        .caches
-        .ensure_path_log(&exec, &root, Path::new("file.txt"));
+    state.ensure_files(&root, &head_commit(root_dir));
+    state.ensure_log(&root, LogScope::Path(Path::new("file.txt").to_path_buf()));
     state.drain_events();
 }
 
@@ -213,10 +210,10 @@ fn scoped_op_completion_keeps_unaffected_roots_cached() {
     state
         .tx
         .send(AppEvent::OpCompleted {
+            kind: OpKind::Other,
             label: "op".to_string(),
             affected: Affected::Root(alpha_id.clone()),
             result: Ok(()),
-            retry: None,
         })
         .expect("send OpCompleted");
     state.drain_events();
@@ -260,10 +257,10 @@ fn op_outside_selected_root_does_not_refetch_selected_log() {
     state
         .tx
         .send(AppEvent::OpCompleted {
+            kind: OpKind::Other,
             label: "op".to_string(),
             affected: Affected::Root(alpha_id.clone()),
             result: Ok(()),
-            retry: None,
         })
         .expect("send OpCompleted");
     state.drain_events();
@@ -305,6 +302,10 @@ fn refresh_all_clears_every_cache_and_refetches_selected_log() {
 
     // What Ctrl+T / palette Refresh dispatch (decision 8).
     state.refresh(Affected::All);
+    // The selected root's refetch is dispatched by the refresh and settled by
+    // the pump, so the next frame's answer has to be drained before the cache
+    // says anything — the same order the shell runs it in.
+    state.drain_events();
 
     // Decorations and path-scoped history are dropped and nothing recomputes
     // them outside the Git Log window — today's manual refresh leaked them.
@@ -405,27 +406,6 @@ fn refs_loaded_error_leaves_the_cache_empty_and_surfaces_the_error() {
 
 // --- Worker fetch + in-flight guard (log-open perf, D2) ----------------------
 
-/// Drain events until the recording executor has seen at least `n`
-/// `ref_decorations` calls **and** `pred` holds — the call counter flips
-/// inside the worker before it sends the event, so a count-only wait can
-/// race the event still being in flight.
-fn wait_ref_calls(
-    state: &mut AppState,
-    recorder: &RecordingExecutor,
-    n: usize,
-    pred: impl Fn(&AppState) -> bool,
-) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        state.drain_events();
-        if recorder.ref_call_count() >= n && pred(state) {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    panic!("ref_decorations count {n} / predicate never satisfied");
-}
-
 #[test]
 fn refs_fetch_guard_dedupes_and_releases_on_refs_loaded_ok_and_err() {
     let p = two_root_project();
@@ -441,9 +421,8 @@ fn refs_fetch_guard_dedupes_and_releases_on_refs_loaded_ok_and_err() {
     // Two same-frame fetches for the same root → exactly one worker.
     state.fetch_refs(alpha_id.clone());
     state.fetch_refs(alpha_id.clone());
-    wait_ref_calls(&mut state, &recorder, 1, |s| {
-        s.caches.refs_loaded(&alpha_id)
-    });
+    state.drain_events();
+    assert!(state.caches.refs_loaded(&alpha_id), "decorations settled");
     assert_eq!(
         recorder.ref_call_count(),
         1,
@@ -452,7 +431,12 @@ fn refs_fetch_guard_dedupes_and_releases_on_refs_loaded_ok_and_err() {
 
     // The Ok drain freed the guard: a later fetch runs again.
     state.fetch_refs(alpha_id.clone());
-    wait_ref_calls(&mut state, &recorder, 2, |_| true);
+    state.drain_events();
+    assert_eq!(
+        recorder.ref_call_count(),
+        2,
+        "the guard freed after the drain"
+    );
 
     // The Err drain frees the guard too — a later fetch runs again, and the
     // failure surfaces through last_error.
@@ -471,7 +455,7 @@ fn refs_fetch_guard_dedupes_and_releases_on_refs_loaded_ok_and_err() {
         "a failing refs load must surface through last_error"
     );
     state.fetch_refs(alpha_id.clone());
-    wait_ref_calls(&mut state, &recorder, 3, |_| true);
+    state.drain_events();
     assert!(
         recorder.ref_call_count() >= 3,
         "a later fetch must run again after the Err drain"
@@ -628,10 +612,9 @@ fn hunk_stats_ensure_fills_per_root_and_refresh_invalidates() {
     let root = RootId(dir.clone().into());
     assert!(state.caches.hunk_stats(&root).is_none());
 
-    let exec = CliExecutor {
-        settings: VcsSettings::default(),
-    };
-    state.caches.ensure_hunk_stats(&exec, &root);
+    // The fill goes through the app's own cache read, which supplies the engine
+    // the harness built.
+    state.ensure_hunk_stats(&root);
     let stats = state
         .caches
         .hunk_stats(&root)
@@ -677,6 +660,6 @@ fn hunk_stats_ensure_fills_per_root_and_refresh_invalidates() {
         "refresh must drop the hunk stats with the other caches"
     );
     // And the next ensure recomputes them.
-    state.caches.ensure_hunk_stats(&exec, &root);
+    state.ensure_hunk_stats(&root);
     assert!(state.caches.hunk_stats(&root).is_some());
 }

@@ -1325,22 +1325,10 @@ pub fn keyboard_order<'a>(rows: &mut [LocalRow<'a>]) {
     });
 }
 
-/// Warm the per-root tag cache for every in-scope root (plan D10): one shared
-/// step both tree surfaces invoke before rendering, keyed by repository, so
-/// whichever tool window opens first warms the cache for both.
+/// Warm the per-root tag cache for every in-scope root (plan D10). The fill
+/// is the app layer's (["AppState::warm_branch_tags"]); both tree surfaces
+/// invoke this one shared step before rendering, so whichever opens first
+/// warms the cache for both.
 pub fn warm_tags(state: &mut turbogit_app::state::AppState) {
-    for r in &state.multi.roots {
-        if !state.ui.branches_tags.contains_key(&r.id) {
-            // The bare tag read carries no decoration states; a surface that
-            // holds real ref decorations (the Log window) upgrades them.
-            let tags = state
-                .executor
-                .tag_list(&r.id.0)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| (name, turbogit_domain::model::RefState::Default))
-                .collect();
-            state.ui.branches_tags.insert(r.id.clone(), tags);
-        }
-    }
+    state.warm_branch_tags();
 }

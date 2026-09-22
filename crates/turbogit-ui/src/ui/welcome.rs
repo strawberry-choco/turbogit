@@ -458,8 +458,8 @@ fn clone_box(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// Clone the entered URL into a picked parent folder and enter the result.
-/// Synchronous like `init_repo` (v1 simplicity); all mutation crosses the
-/// engine seam.
+/// The clone itself is the app layer's (["AppState::clone_into"]); this only
+/// gathers the URL, the folder and the folder name the URL implies.
 fn clone_from_url(state: &mut AppState) {
     let url = state
         .ui
@@ -491,17 +491,7 @@ fn clone_from_url(state: &mut AppState) {
     }
     let dest = parent.join(name);
     let depth = state.ui.welcome_shallow.then_some(1);
-    match turbogit_engine_api::GitExecutor::clone(&*state.executor, &url, &dest, depth) {
-        Ok(()) => {
-            state.ui.welcome_clone_url.clear();
-            state.open_project(&dest);
-            state.ui.toast = Some(Toast::success("Repository cloned"));
-        }
-        Err(e) => {
-            state.last_error = Some(e.to_string());
-            state.ui.toast = Some(Toast::error(format!("Clone failed: {e}")));
-        }
-    }
+    state.clone_into(&url, &dest, depth);
 }
 
 // --- Recent projects column ------------------------------------------------------------
@@ -657,16 +647,16 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     }
 }
 
-/// Branch of `path` for the welcome indicator: recomputed through the engine
-/// seam when missing or older than [`BRANCH_TTL`], otherwise served from the
-/// in-memory cache. Detached HEAD / non-repos cache as `None`.
+/// Branch of `path` for the welcome indicator: recomputed when missing or
+/// older than [`BRANCH_TTL`], otherwise served from the in-memory cache.
+/// Detached HEAD / non-repos cache as `None`.
 fn cached_branch(state: &mut AppState, path: &std::path::Path) -> Option<String> {
     if let Some((branch, at)) = state.ui.welcome_branch_cache.get(path)
         && at.elapsed() < BRANCH_TTL
     {
         return branch.clone();
     }
-    let branch = state.executor.current_branch(path).ok().flatten();
+    let branch = state.current_branch_of(path);
     state
         .ui
         .welcome_branch_cache
