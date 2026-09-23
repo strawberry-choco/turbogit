@@ -1257,7 +1257,7 @@ fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
 /// right-aligned. Renders from `ui.preview_change` every frame, so selecting a
 /// row updates the header immediately. The nav buttons retarget the preview to
 /// the adjacent changed file — the same path a file-row click uses, so
-/// `ensure_diff` loads the new diff. The interactive mode toggle, hunk nav and
+/// the diff read loads the new diff. The interactive mode toggle, hunk nav and
 /// whitespace switches stay in the diff toolbar below (issue 06 checklist);
 /// the mode pill here only states which mode that toolbar currently shows.
 fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {

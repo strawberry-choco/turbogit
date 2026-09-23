@@ -15,6 +15,7 @@ use std::sync::Arc;
 use test_support::{RecordedCall, RecordingExecutor};
 
 use turbogit_app::granular::{self, HunkTarget};
+use turbogit_app::keyed_read::{DiffTarget, Read};
 use turbogit_app::state::{AppState, CharSelection, DiffComparison, Granularity};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
@@ -120,28 +121,38 @@ fn app_state_with_recorder(
     (state, recorder)
 }
 
-/// The raw-diff cache key [`granular::dispatch`] resolves for `rel` under
-/// working-tree chips (`Local`, no whitespace ignore) or the Staged
-/// comparison — mirroring the module's own derivation so tests can seed
-/// [`crate::state`] cache entries the ops will find.
-fn preview_key(root: &Path, rel: &str, staged: bool) -> String {
-    let left: Option<String> = None;
-    let right: Option<String> = None;
-    let path: Option<PathBuf> = Some(PathBuf::from(rel));
-    let ws = false;
-    format!("{root:?}|{left:?}|{right:?}|staged={staged}|ws={ws}|{path:?}")
-}
-
-/// Seed the viewer's raw-diff cache the way a rendered preview would have,
-/// pinning the chip state the module's key derivation reads.
-fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str, staged: bool, text: String) {
+/// Populate the viewer's raw-diff cache the way a rendered preview would have:
+/// pin the chip state, then ask the read for that target and settle its answer.
+///
+/// This used to spell the cache key out by hand so it could stuff a string into
+/// the field — which pinned the very coupling this branch exists to remove: a
+/// test that agrees with the module's key format by copying it proves nothing
+/// when the two drift. Driving `read` asks the module instead, and the patch
+/// text it answers with is the one `git diff` really produces for the fixture.
+fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str, staged: bool) {
     state.ui.diff_comparison = if staged {
         DiffComparison::Staged
     } else {
         DiffComparison::Local
     };
     state.ui.diff_ignore_whitespace = false;
-    state.ui.diff_cache = Some((preview_key(root, rel, staged), text));
+    let target = DiffTarget::new(
+        root.to_path_buf(),
+        None,
+        None,
+        state.ui.diff_comparison,
+        false,
+        Some(PathBuf::from(rel)),
+    );
+    assert!(
+        matches!(state.read(target.clone()), Read::Waiting),
+        "the preview slot starts cold"
+    );
+    state.drain_events();
+    assert!(
+        matches!(state.read(target), Read::Fresh(_) | Read::Empty),
+        "the preview read settles for the fixture's own diff"
+    );
 }
 
 // ------------------------------------------------------------------ tests --
@@ -154,8 +165,7 @@ fn granular_dispatch_stages_whole_hunk_forward() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let diff_text = git(&repo.path, &["diff", "--", "words.txt"]);
-    seed_preview_cache(&mut state, &repo.path, "words.txt", false, diff_text);
+    seed_preview_cache(&mut state, &repo.path, "words.txt", false);
 
     granular::dispatch(
         &mut state,
@@ -194,8 +204,7 @@ fn granular_dispatch_stages_only_the_selected_lines_of_a_hunk() {
 
     let (mut state, _recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let diff_text = git(&repo.path, &["diff", "--", "words.txt"]);
-    seed_preview_cache(&mut state, &repo.path, "words.txt", false, diff_text);
+    seed_preview_cache(&mut state, &repo.path, "words.txt", false);
 
     // Story 3: sub-hunk selection — ordinal 1 of hunk 0 is the `+BRAVO`
     // addition (ordinals count +/- lines in order).
@@ -256,8 +265,7 @@ fn granular_dispatch_stages_exactly_the_selected_character_range() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let diff_text = git(&repo.path, &["diff", "--", "code.rs"]);
-    seed_preview_cache(&mut state, &repo.path, "code.rs", false, diff_text);
+    seed_preview_cache(&mut state, &repo.path, "code.rs", false);
 
     granular::dispatch(
         &mut state,
@@ -370,8 +378,7 @@ fn enter_stages_the_active_char_selection_and_consumes_it() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let diff_text = git(&repo.path, &["diff", "--", "code.rs"]);
-    seed_preview_cache(&mut state, &repo.path, "code.rs", false, diff_text);
+    seed_preview_cache(&mut state, &repo.path, "code.rs", false);
     state.ui.char_selection = Some(CharSelection {
         path: PathBuf::from("code.rs"),
         hunk: 0,
@@ -409,8 +416,7 @@ fn file_granularity_dispatch_stages_every_hunk_of_the_diff() {
 
     let (mut state, _recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let diff_text = git(&repo.path, &["diff", "--", "words.txt"]);
-    seed_preview_cache(&mut state, &repo.path, "words.txt", false, diff_text);
+    seed_preview_cache(&mut state, &repo.path, "words.txt", false);
     state.ui.diff_granularity = Granularity::File;
 
     granular::dispatch(
@@ -498,8 +504,7 @@ fn granular_dispatch_unstages_hunk_via_reverse_apply() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let diff_text = git(&repo.path, &["diff", "--cached", "--", "words.txt"]);
-    seed_preview_cache(&mut state, &repo.path, "words.txt", true, diff_text);
+    seed_preview_cache(&mut state, &repo.path, "words.txt", true);
 
     granular::dispatch(
         &mut state,
@@ -542,25 +547,11 @@ fn granular_dispatch_routes_untracked_stage_through_intent_to_add() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    // Creation diff in the exact shape the viewer synthesizes for untracked
-    // previews (proven appliable by partial_stage_cli.rs).
-    let creation_diff = concat!(
-        "diff --git a/new.txt b/new.txt\n",
-        "new file mode 100644\n",
-        "--- /dev/null\n",
-        "+++ b/new.txt\n",
-        "@@ -0,0 +1,3 @@\n",
-        "+one\n",
-        "+two\n",
-        "+three\n",
-    );
-    seed_preview_cache(
-        &mut state,
-        &repo.path,
-        "new.txt",
-        false,
-        creation_diff.to_owned(),
-    );
+    // An Unversioned path never reaches `git diff`: the read synthesizes the
+    // creation diff itself, in the exact shape partial-staging proves
+    // appliable (pinned by `diff_load`'s own tests), and spends no engine call
+    // doing it — which is what keeps the two-call assertion below honest.
+    seed_preview_cache(&mut state, &repo.path, "new.txt", false);
 
     granular::dispatch(
         &mut state,
@@ -617,8 +608,7 @@ fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
         .ui
         .granularly_completed
         .insert(repo.path.join("gone.txt"));
-    let diff_text = git(&repo.path, &["diff", "--", "words.txt"]);
-    seed_preview_cache(&mut state, &repo.path, "words.txt", false, diff_text);
+    seed_preview_cache(&mut state, &repo.path, "words.txt", false);
 
     granular::dispatch(
         &mut state,

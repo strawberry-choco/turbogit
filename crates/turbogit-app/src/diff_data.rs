@@ -15,6 +15,7 @@
 
 use crate::events::{DecodedImage, FetchedBlob};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
 
 // --- non-text pane cache (spec R8) -------------------------------------------
@@ -53,15 +54,20 @@ const PANE_CACHE_CAP: usize = 4;
 /// philosophy): invalidated wholesale with root refreshes through
 /// [`crate::state::AppState::refresh`], never poked field-by-field; evicts
 /// oldest beyond [`PANE_CACHE_CAP`].
+///
+/// Entries sit behind an [`Arc`] because that is the handle the keyed read
+/// hands out: a painter holds one pane's result while it writes state, and the
+/// read's `Fresh` verdict costs a refcount bump rather than a pixel copy
+/// (ADR-0021).
 #[derive(Default)]
 pub struct PaneCache {
-    map: HashMap<String, PaneEntry>,
+    map: HashMap<String, Arc<PaneEntry>>,
     order: VecDeque<String>,
 }
 
 impl PaneCache {
-    pub fn get(&self, key: &str) -> Option<&PaneEntry> {
-        self.map.get(key)
+    pub fn get(&self, key: &str) -> Option<Arc<PaneEntry>> {
+        self.map.get(key).map(Arc::clone)
     }
 
     pub fn contains(&self, key: &str) -> bool {
@@ -75,7 +81,7 @@ impl PaneCache {
     }
 
     /// Insert (or replace), evicting the oldest entry past the cap.
-    pub fn store(&mut self, key: String, entry: PaneEntry) {
+    pub fn store(&mut self, key: String, entry: Arc<PaneEntry>) {
         if !self.map.contains_key(&key) {
             self.order.push_back(key.clone());
             while self.order.len() > PANE_CACHE_CAP
@@ -120,7 +126,7 @@ mod tests {
     fn pane_cache_evicts_oldest_beyond_cap() {
         let mut cache = PaneCache::default();
         for i in 0..6 {
-            cache.store(format!("k{i}"), PaneEntry::default());
+            cache.store(format!("k{i}"), Arc::new(PaneEntry::default()));
         }
         assert_eq!(cache.len(), PANE_CACHE_CAP);
         assert!(cache.get("k0").is_none());

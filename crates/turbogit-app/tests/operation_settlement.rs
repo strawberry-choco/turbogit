@@ -1,0 +1,639 @@
+//! What a completed operation settles *as* is decided by the operation's
+//! identity, never by the wording of its label (ADR-0020).
+//!
+//! Every claim here crosses one seam: the Headless harness over the app state —
+//! `for_roots`, `dispatch`, `drain_events` — and asserts observable state after
+//! settlement: which surface opened, what the activity feed gained, which report
+//! text is present.
+//!
+//! The three rebase flavours and the all-roots fetch are the two defects this
+//! design exists to make unrepresentable; each is paired with the flavour that
+//! already settled, so a fixture problem cannot masquerade as the bug.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use tempfile::TempDir;
+use turbogit_app::activity::ActivityKind;
+use turbogit_app::operation::Operation;
+use turbogit_app::root_caches::Affected;
+use turbogit_app::state::AppState;
+use turbogit_domain::model::{MergeOpts, RebaseAction, RebaseOpts, RebasePlanEntry, RootId};
+
+// --- git fixture ---------------------------------------------------------------
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .env("GIT_EDITOR", "true")
+        .output()
+        .expect("git must be on PATH");
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// `git rev-parse <rev>` — a full commit id.
+fn rev(dir: &Path, r: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", r])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn commit_readme(repo: &Path, body: &str, message: &str) {
+    std::fs::write(repo.join("README.md"), format!("{body}\n")).unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", message]);
+}
+
+/// A repository whose history offers a pair of commits touching the same lines
+/// of one file, so replaying one in the other's place conflicts:
+///
+/// ```text
+/// main     A ─── M   ("base" then "main side")
+/// feature   ╲─── F   ("base" then "feature side")
+/// ```
+///
+/// Ends checked out on `feature`.
+fn conflicting_repo() -> (TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("alpha");
+    git(
+        tmp.path(),
+        &["init", "-q", "-b", "main", repo.to_str().unwrap()],
+    );
+    commit_readme(&repo, "base", "A: base");
+    let base = rev(&repo, "HEAD");
+    commit_readme(&repo, "main side", "M: main side");
+    git(&repo, &["checkout", "-q", "-b", "feature", &base]);
+    commit_readme(&repo, "feature side", "F: feature side");
+    (tmp, repo)
+}
+
+/// Replay `M` then `F`: `M` lands, `F` contradicts it, and the rebase stops with
+/// `README.md` conflicted.
+fn interactive_plan_conflicting(repo: &Path) -> Vec<RebasePlanEntry> {
+    let shas = [rev(repo, "main"), rev(repo, "HEAD")];
+    shas.into_iter()
+        .map(|commit| RebasePlanEntry {
+            action: RebaseAction::Pick,
+            commit,
+            subject: String::new(),
+        })
+        .collect()
+}
+
+/// The repository left mid-rebase with one conflicted file.
+fn assert_repo_is_conflicted(repo: &Path) {
+    let out = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains("UU"),
+        "the rebase must leave a conflicted file, got:\n{text}"
+    );
+}
+
+/// A repository with a same-content `origin`, so a fetch is a real operation
+/// that changes nothing and ahead/behind is a known zero.
+fn project_with_origin(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().to_path_buf();
+    let work = repo_with_origin(&project, name);
+    (tmp, project, work)
+}
+
+/// One bare `origin` plus one local repo `name` on `main`, pushed to it.
+fn repo_with_origin(project: &Path, name: &str) -> PathBuf {
+    let bare = project.join(format!("{name}.git"));
+    git(
+        project,
+        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+    );
+    let work = project.join(name);
+    git(
+        project,
+        &["init", "-q", "-b", "main", work.to_str().unwrap()],
+    );
+    commit_readme(&work, "x", "init");
+    git(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git(&work, &["push", "-q", "-u", "origin", "main"]);
+    work
+}
+
+/// A branch that exists only on `origin`, so the next fetch discovers it.
+fn push_branch_to_origin(project: &Path, name: &str, branch: &str) {
+    let work = project.join(name);
+    git(&work, &["branch", branch, "HEAD"]);
+    git(&work, &["push", "-q", "origin", branch]);
+    git(&work, &["branch", "-D", branch]);
+    git(
+        &work,
+        &["update-ref", "-d", &format!("refs/remotes/origin/{branch}")],
+    );
+}
+
+fn registered_root(state: &AppState, path: &Path) -> RootId {
+    state
+        .multi
+        .roots
+        .iter()
+        .find(|r| r.path == path)
+        .unwrap_or_else(|| panic!("{} registered", path.display()))
+        .id
+        .clone()
+}
+
+// --- pumping -------------------------------------------------------------------
+
+/// Dispatch an operation and settle it, the way the shell's next frame does.
+///
+/// The headless harness runs git work inline, so the completion is already in
+/// the channel by the time `dispatch` returns, and one drain applies it —
+/// including anything that settlement itself queues.
+fn dispatch_and_settle(state: &mut AppState, op: Operation) {
+    state.dispatch(op);
+    state.drain_events();
+    assert!(
+        !state.ui.busy,
+        "the dispatched operation settled its busy flag; feed {:?}",
+        feed(state)
+    );
+}
+
+/// The activity entries the feed gained, oldest first.
+fn feed(state: &AppState) -> Vec<String> {
+    state
+        .ui
+        .activity
+        .entries
+        .iter()
+        .map(|e| e.message.clone())
+        .collect()
+}
+
+// --- the rebase conflict hand-off ----------------------------------------------
+
+/// Every rebase flavour that stops on conflicts hands off to the conflict
+/// resolver — including the two whose labels used to miss the settlement test.
+#[test]
+fn every_rebase_flavour_that_stops_on_conflicts_opens_the_resolver() {
+    for kind in [
+        "standard",
+        "autosquash",
+        "interactive",
+        "interactive with backup",
+    ] {
+        let (_tmp, repo) = conflicting_repo();
+        let mut state = AppState::for_roots(repo.parent().unwrap(), std::slice::from_ref(&repo));
+        let root = registered_root(&state, &repo);
+        let settings = state.settings.clone();
+        let plan = interactive_plan_conflicting(&repo);
+
+        let op = match kind {
+            "standard" => {
+                Operation::rebase_onto(&root, "feature", "main", &RebaseOpts::default(), &settings)
+            }
+            "autosquash" => Operation::rebase_autosquash(
+                &root,
+                "feature",
+                "main",
+                &RebaseOpts {
+                    autosquash: true,
+                    ..Default::default()
+                },
+                &settings,
+            ),
+            "interactive" => {
+                Operation::rebase_interactive(&root, "feature", plan, &settings, false)
+            }
+            _ => Operation::rebase_interactive(&root, "feature", plan, &settings, true),
+        };
+        dispatch_and_settle(&mut state, op);
+
+        assert_repo_is_conflicted(&repo);
+        assert!(
+            state.ui.conflict_resolver_open,
+            "{kind} rebase stopped on conflicts and settled as {kind:?} — the feed read {:?}",
+            feed(&state)
+        );
+        assert!(
+            state.ui.merge_in_progress,
+            "{kind} rebase left an explicit mid-operation state"
+        );
+    }
+}
+
+/// A fourth flavour added later cannot miss the hand-off: settlement matched
+/// `Rebase`, not a kind. Asserted by driving the branch-rewriting flavour the
+/// branch tree uses, whose label names both sides.
+#[test]
+fn a_rebase_whose_label_names_both_sides_still_hands_off() {
+    let (_tmp, repo) = conflicting_repo();
+    let mut state = AppState::for_roots(repo.parent().unwrap(), std::slice::from_ref(&repo));
+    let root = registered_root(&state, &repo);
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::rebase_branch_onto(&root, "feature", "main"),
+    );
+
+    assert_repo_is_conflicted(&repo);
+    assert!(
+        state.ui.conflict_resolver_open,
+        "\"Rebase feature onto main\" hands off like any other rebase; the feed \
+         read {:?}",
+        feed(&state)
+    );
+}
+
+/// A merge that stops on conflicts hands off too, and its warning-toned report
+/// names the conflict count.
+#[test]
+fn a_merge_that_stops_on_conflicts_opens_the_resolver() {
+    let (_tmp, repo) = conflicting_repo();
+    git(&repo, &["checkout", "-q", "main"]);
+    let mut state = AppState::for_roots(repo.parent().unwrap(), std::slice::from_ref(&repo));
+    let root = registered_root(&state, &repo);
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::Merge {
+            root,
+            target: "feature".into(),
+            opts: MergeOpts::default(),
+            clean: turbogit_domain::model::CleanTreeMethod::Stash,
+            commits: 1,
+        },
+    );
+
+    assert!(
+        state.ui.conflict_resolver_open,
+        "a conflicted merge hands off; the feed read {:?}",
+        feed(&state)
+    );
+    assert!(
+        state
+            .ui
+            .activity
+            .entries
+            .iter()
+            .any(|e| e.kind == ActivityKind::Warning && e.message.contains("unresolved conflicts")),
+        "the merge reports the conflicts it left; the feed read {:?}",
+        feed(&state)
+    );
+}
+
+// --- the fetch report ----------------------------------------------------------
+
+/// A fetch reports what it brought in whether it covered one root or several —
+/// the multi-root case used to report nothing while the single-root one
+/// reported.
+#[test]
+fn a_fetch_reports_what_it_brought_in_whatever_its_scope() {
+    for scope in ["one root", "every root"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().to_path_buf();
+        let alpha = repo_with_origin(&project, "alpha");
+        push_branch_to_origin(&project, "alpha", "fresh-alpha");
+        let roots = match scope {
+            "one root" => vec![alpha.clone()],
+            _ => {
+                let beta = repo_with_origin(&project, "beta");
+                push_branch_to_origin(&project, "beta", "fresh-beta");
+                vec![alpha.clone(), beta]
+            }
+        };
+        let mut state = AppState::for_roots(&project, &roots);
+
+        let roots = roots
+            .iter()
+            .map(|p| registered_root(&state, p))
+            .collect::<Vec<_>>();
+        dispatch_and_settle(&mut state, Operation::Fetch { roots });
+
+        let reported = feed(&state)
+            .into_iter()
+            .filter(|m| m.starts_with("Fetch"))
+            .collect::<Vec<_>>();
+        assert!(
+            reported.iter().any(|m| m.contains("new remote branches")),
+            "a fetch of {scope} reports the branches it brought in; the feed \
+             read {reported:?}"
+        );
+    }
+}
+
+/// A fetch that brought nothing in still says so, rather than going quiet.
+#[test]
+fn a_fetch_that_changed_nothing_says_so() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+
+    dispatch_and_settle(&mut state, Operation::Fetch { roots: vec![root] });
+
+    assert!(
+        feed(&state).contains(&"Fetch · nothing changed".to_string()),
+        "never a bare success, never silence; the feed read {:?}",
+        feed(&state)
+    );
+}
+
+// --- settlement as a table -----------------------------------------------------
+
+/// One row per named operation: what a *successful* completion leaves in the
+/// feed. The exhaustive settlement match is what lets a row be added here
+/// without adding machinery.
+#[test]
+fn each_operation_kind_settles_to_its_own_report() {
+    for row in [
+        Row {
+            what: "fetch",
+            prepare: nothing_prepared,
+            op: |root, _| Operation::Fetch {
+                roots: vec![root.clone()],
+            },
+            expect: "Fetch · nothing changed",
+        },
+        Row {
+            what: "merge",
+            prepare: nothing_prepared,
+            op: |root, settings| Operation::Merge {
+                root: root.clone(),
+                target: "merged-branch".into(),
+                opts: MergeOpts::default(),
+                clean: settings.clean_tree_method,
+                commits: 0,
+            },
+            // Nothing came in, and the branch is level with its upstream.
+            expect: "Merge merged-branch · nothing to push",
+        },
+        Row {
+            // Rebased from a branch that is not `main`: the default settings
+            // protect `main`, and a protected branch refuses before git is
+            // touched, which would settle the row as a failure.
+            what: "rebase",
+            prepare: |repo| git(repo, &["checkout", "-q", "merged-branch"]),
+            op: |root, settings| {
+                Operation::rebase_onto(
+                    root,
+                    "merged-branch",
+                    "main",
+                    &RebaseOpts::default(),
+                    settings,
+                )
+            },
+            expect: "Rebase onto main · nothing to push",
+        },
+        Row {
+            what: "branch delete",
+            prepare: nothing_prepared,
+            op: |root, _| Operation::DeleteBranch {
+                root: root.clone(),
+                name: "spare".into(),
+            },
+            expect: "Delete branch spare",
+        },
+        Row {
+            what: "shelve",
+            prepare: |repo| {
+                std::fs::write(repo.join("NOTES.md"), "to shelve\n").unwrap();
+                git(repo, &["add", "."]);
+            },
+            op: |root, _| Operation::shelve(root.clone(), Vec::new(), "Shelved before sweep"),
+            expect: "Shelve",
+        },
+        Row {
+            what: "worktree add",
+            prepare: nothing_prepared,
+            op: |root, settings| {
+                let _ = settings;
+                Operation::WorktreeAdd {
+                    root: root.clone(),
+                    path: root.as_path().parent().unwrap().join("wt-table"),
+                    branch: "wt-table-branch".into(),
+                }
+            },
+            expect: "Add worktree wt-table-branch",
+        },
+        Row {
+            what: "display-only work",
+            prepare: nothing_prepared,
+            op: |root, _| {
+                Operation::custom(
+                    "Say something nobody inspects",
+                    Affected::Root(root.clone()),
+                    |_| Ok(()),
+                )
+            },
+            expect: "Say something nobody inspects",
+        },
+    ] {
+        let (_tmp, project, alpha) = project_with_origin("alpha");
+        // A branch pointing at HEAD: merging or replaying it changes nothing,
+        // so every row's expected report is a literal rather than a count that
+        // depends on how the fixture happened to land.
+        git(&alpha, &["branch", "merged-branch"]);
+        git(&alpha, &["branch", "spare"]);
+        (row.prepare)(&alpha);
+        let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+        let root = registered_root(&state, &alpha);
+        let settings = state.settings.clone();
+
+        dispatch_and_settle(&mut state, (row.op)(&root, &settings));
+
+        let entries = &state.ui.activity.entries;
+        assert_eq!(
+            entries.len(),
+            1,
+            "one operation, one feed entry for {:?}",
+            row.what
+        );
+        assert_eq!(
+            entries[0].kind,
+            ActivityKind::Success,
+            "{} settled as: {:?}",
+            row.what,
+            entries[0].message
+        );
+        assert_eq!(
+            entries[0].message, row.expect,
+            "{} settled to the wrong report",
+            row.what
+        );
+        assert_eq!(entries[0].repo.as_deref(), Some("alpha"));
+    }
+}
+
+/// A row of the settlement table.
+struct Row {
+    what: &'static str,
+    /// Extra worktree state the operation needs. Only Shelve dirties the tree:
+    /// a staged change there is enough to make a rebase refuse to run at all,
+    /// which would settle the row as a failure rather than a report.
+    prepare: fn(&Path),
+    op: fn(&RootId, &turbogit_domain::model::VcsSettings) -> Operation,
+    expect: &'static str,
+}
+
+fn nothing_prepared(_: &Path) {}
+
+/// Worktree-mutating operations invalidate the cached list *after* the work
+/// lands, which is the ordering ADR-0019 requires. A completion that never
+/// emits the second event would leave a stale list cached forever.
+#[test]
+fn a_worktree_mutation_invalidates_after_it_lands() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::WorktreeAdd {
+            root: root.clone(),
+            path: project.join("wt-ordering"),
+            branch: "wt-ordering-branch".into(),
+        },
+    );
+
+    assert!(
+        project.join("wt-ordering").exists(),
+        "the worktree was created"
+    );
+    // Priming the cache with a pre-mutation list is what an eager per-frame
+    // fill does; invalidating at dispatch time instead of after the work would
+    // leave exactly this stale entry cached forever (ADR-0019).
+    state
+        .caches
+        .store_worktrees(root.clone(), vec![stale_worktree(&alpha, &root)]);
+    assert!(
+        state.caches.worktrees(&root).is_some(),
+        "the pre-mutation list is cached before the add"
+    );
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::WorktreeRemove {
+            root: root.clone(),
+            path: project.join("wt-ordering"),
+        },
+    );
+    assert!(
+        state.caches.worktrees(&root).is_none(),
+        "the mutation dropped the cached list rather than refreshing under it"
+    );
+}
+
+/// A one-row worktree list that no longer describes the repository.
+fn stale_worktree(repo: &Path, root: &RootId) -> turbogit_domain::model::Worktree {
+    turbogit_domain::model::Worktree {
+        path: repo.join("gone"),
+        branch: "stale".into(),
+        dirty: None,
+        root: root.clone(),
+    }
+}
+
+// --- the undo arm --------------------------------------------------------------
+
+/// A confirmed local-branch deletion arms the short-window undo with the tip it
+/// captured. The arm used to read `Delete branch ` off the label.
+#[test]
+fn a_deleted_branch_arms_the_undo() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    git(&alpha, &["branch", "doomed"]);
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+
+    state.ui.branches_delete_pending = Some(turbogit_app::state::BranchDeletePending {
+        root: root.clone(),
+        name: "doomed".into(),
+        tip_sha: rev(&alpha, "doomed"),
+    });
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::DeleteBranch {
+            root,
+            name: "doomed".into(),
+        },
+    );
+
+    let undo = state
+        .ui
+        .branches_undo
+        .clone()
+        .expect("the deletion armed the undo window");
+    assert_eq!(undo.name, "doomed");
+    assert_eq!(undo.root, registered_root(&state, &alpha));
+}
+
+/// An unrelated operation must not consume the pending deletion without arming
+/// anything — the shape the label test used to get wrong in both directions.
+#[test]
+fn an_unrelated_operation_does_not_arm_the_undo() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+
+    state.ui.branches_delete_pending = Some(turbogit_app::state::BranchDeletePending {
+        root: root.clone(),
+        name: "doomed".into(),
+        tip_sha: rev(&alpha, "main"),
+    });
+
+    dispatch_and_settle(&mut state, Operation::Fetch { roots: vec![root] });
+
+    assert!(
+        state.ui.branches_undo.is_none(),
+        "a fetch cannot arm a branch-deletion undo"
+    );
+}
+
+// --- a failed operation --------------------------------------------------------
+
+/// A failure reports the operation and the git error, and leaves the conflict
+/// resolver alone.
+#[test]
+fn a_failed_operation_names_the_operation_and_the_failure() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::Fetch {
+            roots: vec![RootId(
+                PathBuf::from("/nonexistent/root/never/existed").into(),
+            )],
+        },
+    );
+
+    let entries = &state.ui.activity.entries;
+    assert_eq!(entries.len(), 1, "the feed read {:?}", feed(&state));
+    assert_eq!(entries[0].kind, ActivityKind::Error);
+    assert!(
+        entries[0].message.starts_with("Fetch:"),
+        "the failure names the operation: {:?}",
+        entries[0].message
+    );
+    assert!(
+        !state.ui.conflict_resolver_open,
+        "a failed fetch is not a conflict hand-off"
+    );
+    let _ = root;
+}

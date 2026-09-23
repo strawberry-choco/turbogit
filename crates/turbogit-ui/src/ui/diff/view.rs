@@ -7,9 +7,9 @@ use super::actions::{
 };
 use super::model::{
     DiffModel, DisplayRow, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W, TEXT_X,
-    diff_model, mono_font, pane_kind,
+    mono_font, pane_kind,
 };
-use super::panes::{binary_placeholder, pane_byte_lens, pane_side_requests, render_image_pane};
+use super::panes::{binary_placeholder, pane_byte_lens, render_image_pane};
 use crate::theme::Palette;
 use crate::ui::widgets;
 use egui::{
@@ -17,7 +17,8 @@ use egui::{
     Vec2, WidgetInfo, WidgetType,
 };
 use std::ops::Range;
-use turbogit_app::granular::{self, comparison_triple, diff_key};
+use turbogit_app::granular;
+use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
 use turbogit_app::state::{AppState, DiffComparison, Granularity};
 use turbogit_domain::model::ChangeStatus;
 
@@ -42,30 +43,22 @@ pub fn render_diff(
     // explicit commit-to-commit targets keep their fixed revision pair.
     let working_tree = left.is_none() && right.is_none();
     let comparison = state.ui.diff_comparison;
-    let ignore_ws = state.ui.diff_ignore_whitespace;
-    let (eff_left, eff_right, staged) = comparison_triple(left, right, comparison);
-
-    state.ensure_diff(&root, &eff_left, &eff_right, staged, ignore_ws, path);
-    let key = diff_key(&root, &eff_left, &eff_right, staged, ignore_ws, path);
-
-    // Cached display model (absent while loading / before first load).
-    // Borrowed, not cloned (plan §1.1): both probes below end the immutable
-    // borrow of `state.ui` immediately — before any `&mut state` use below —
-    // and the model itself is memoized beside the raw cache (ADR-0014).
-    let cached = state
-        .ui
-        .diff_cache
-        .as_ref()
-        .filter(|(k, _)| k == &key)
-        .is_some();
-    let model = state
-        .ui
-        .diff_cache
-        .as_ref()
-        .filter(|(k, _)| k == &key)
-        .filter(|(_, t)| !t.trim().is_empty())
-        .map(|(_, t)| diff_model(t));
-    let total_hunks = model.as_ref().map_or(0, |m| m.hunk_count());
+    let target = DiffTarget::new(
+        root,
+        left.clone(),
+        right.clone(),
+        state.ui.diff_comparison,
+        state.ui.diff_ignore_whitespace,
+        path.clone(),
+    );
+    // One ask, one verdict: the read answers from the cache, or starts the
+    // load and says it is waiting. The widget-state salt below is derived from
+    // the target, never from the cache key, which the caller cannot name.
+    let verdict = state.read(target.clone());
+    let total_hunks = match &verdict {
+        Read::Fresh(diff) => diff.model.hunk_count(),
+        _ => 0,
+    };
 
     // Toolbar chrome (spec §8.4): mode · chips · hunk nav · whitespace.
     // Wrapped so narrow panes (commit preview) push the toggle to a second
@@ -104,54 +97,55 @@ pub fn render_diff(
         });
     }
 
-    if let Some(err) = &state.ui.diff_error {
-        ui.colored_label(Palette::STATE_ERROR, err);
-        return;
-    }
-
-    let model = match model {
-        Some(model) => model,
-        None if cached => {
+    // The verdict is the whole paint contract: which of these four the
+    // surface shows is answered by the read, so there is no loading flag left
+    // to forget to check and no error field that can describe some other
+    // comparison (ADR-0021).
+    let diff = match verdict {
+        Read::Fresh(diff) => diff,
+        Read::Empty => {
             ui.label("(no differences)");
             return;
         }
-        None => {
-            if state.ui.diff_loading {
-                ui.spinner();
-                ui.label("Computing diff…");
-            } else {
-                ui.label("(no diff)");
-            }
+        Read::Waiting => {
+            ui.spinner();
+            ui.label("Computing diff…");
+            return;
+        }
+        Read::Failed(message) => {
+            ui.colored_label(Palette::STATE_ERROR, message);
             return;
         }
     };
+    let model = &diff.model;
 
     // Non-text diffs render outside the display-row model (spec R8,
     // ADR-0015): a lone binary change or an image pair replaces the rows
     // entirely — the mode toggle has no second layout to switch to, and
-    // with no hunks there is nothing to navigate or stage. The pane key
-    // inherits the diff cache key, so any reload of the patch text (ops
+    // with no hunks there is nothing to navigate or stage. The pane is
+    // addressed by the same target, so any reload of the patch text (ops
     // invalidate it) also refetches the pane bytes.
     match pane_kind(&model.files) {
         PaneKind::Text => {}
         PaneKind::Binary => {
-            let meta = &model.files[0];
-            let pane_key = format!("{key}#bin");
-            let (old, new) = pane_side_requests(&root, &eff_left, &eff_right, staged, meta);
-            state.ensure_pane_bytes(pane_key.clone(), old, new, false);
+            let pane = PaneTarget::new(
+                target.clone(),
+                PaneFlavour::Binary,
+                model.files[0].clone(),
+                false,
+            );
             // While loading (or when a side is unreadable) the sizes are
             // unresolved and the bare description shows — the graceful
             // fallback text.
-            let sizes = pane_byte_lens(state, &pane_key);
+            let sizes = match state.read(pane) {
+                Read::Fresh(entry) => pane_byte_lens(&entry),
+                _ => None,
+            };
             binary_placeholder(ui, sizes);
             return;
         }
         PaneKind::Image => {
-            let meta = &model.files[0];
-            let pane_key = format!("{key}#img");
-            render_image_pane(
-                ui, state, &pane_key, &root, &eff_left, &eff_right, staged, meta,
-            );
+            render_image_pane(ui, state, &target, &model.files[0]);
             return;
         }
     }
@@ -179,7 +173,7 @@ pub fn render_diff(
     // indices; unified slots are (display index, member) with a Pair member
     // flattened into one slot per underlying row (ADR-0014 paging, now over
     // the filtered stream).
-    let plan = paint_plan(state, &model);
+    let plan = paint_plan(state, model);
     let total_rows = if side_by_side {
         plan.sbs.len()
     } else {
@@ -201,6 +195,12 @@ pub fn render_diff(
         });
     }
 
+    // Identity of the diff being painted. The scroll-dedup and gutter widget
+    // states below must reset when the surface starts showing a different
+    // comparison, and the target is what says so — the read's cache key would
+    // do as well but is not a thing a caller can hold (ADR-0021).
+    let paint = egui::Id::new(("diff-view", &target));
+
     // Named id salt: the commit window's `ui.columns` panes share one stable
     // child id, and egui's default ScrollArea salt is constant — an unnamed
     // area here would share persisted scrollbar state with the changelist
@@ -219,7 +219,7 @@ pub fn render_diff(
             // once per (diff, hunk) — re-issuing every frame would keep the
             // ScrollArea repainting forever.
             if state.ui.diff_current_hunk < plan.hunk_first_slot.len()
-                && hunk_needs_scroll(ui, &key, state.ui.diff_current_hunk)
+                && hunk_needs_scroll(ui, paint, state.ui.diff_current_hunk)
             {
                 let row_idx = plan.hunk_first_slot[state.ui.diff_current_hunk];
                 let pitch = ROW_H + ui.spacing().item_spacing.y;
@@ -230,12 +230,13 @@ pub fn render_diff(
                 );
                 ui.scroll_to_rect(rect, Some(Align::Center));
             }
-            // The match above guarantees the rendered diff is `key`, so hunk
-            // scroll-dedup state can be namespaced per diff with it (issue #11).
+            // The verdict above guarantees the rendered diff is `target`'s, so
+            // hunk scroll-dedup state can be namespaced per diff with it
+            // (issue #11).
             if side_by_side {
-                render_side_by_side(ui, state, &model, &plan, visible, &key, status, path);
+                render_side_by_side(ui, state, model, &plan, visible, paint, status, path);
             } else {
-                render_unified(ui, state, &model, &plan, visible, &key, status, path);
+                render_unified(ui, state, model, &plan, visible, paint, status, path);
             }
         },
     );
@@ -322,8 +323,8 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
 /// Issue the hunk scroll request at most once per (diff, hunk): re-issuing
 /// the index-based scroll every frame would keep the ScrollArea repainting
 /// forever.
-fn hunk_needs_scroll(ui: &Ui, diff_key: &str, idx: usize) -> bool {
-    let id = egui::Id::new(("diff_hunk_scrolled", diff_key, idx));
+fn hunk_needs_scroll(ui: &Ui, paint: egui::Id, idx: usize) -> bool {
+    let id = egui::Id::new((paint, "diff_hunk_scrolled", idx));
     let done = ui.ctx().memory(|m| m.data.get_temp::<bool>(id)) == Some(true);
     if !done {
         ui.ctx().memory_mut(|m| m.data.insert_temp(id, true));
@@ -468,7 +469,7 @@ fn render_unified(
     model: &DiffModel,
     plan: &PaintPlan,
     visible: Range<usize>,
-    diff_key: &str,
+    paint: egui::Id,
     status: ChangeStatus,
     path: &Option<std::path::PathBuf>,
 ) {
@@ -493,7 +494,7 @@ fn render_unified(
                         width,
                         &painter,
                         &font,
-                        diff_key,
+                        paint,
                         status,
                         path,
                         plan,
@@ -509,7 +510,7 @@ fn render_unified(
                         width,
                         &painter,
                         &font,
-                        diff_key,
+                        paint,
                         status,
                         path,
                         plan,
@@ -525,7 +526,7 @@ fn render_unified(
                         width,
                         &painter,
                         &font,
-                        diff_key,
+                        paint,
                         status,
                         path,
                         plan,
@@ -552,7 +553,7 @@ fn unified_row(
     width: f32,
     painter: &egui::Painter,
     font: &FontId,
-    diff_key: &str,
+    paint: egui::Id,
     status: ChangeStatus,
     path: &Option<std::path::PathBuf>,
     plan: &PaintPlan,
@@ -615,13 +616,13 @@ fn unified_row(
                 Palette::INK_3,
                 font,
             );
-            hunk_gutter_actions(ui, state, rect, diff_key, row.hunk, status, path);
+            hunk_gutter_actions(ui, state, rect, paint, row.hunk, status, path);
             let staged_state = viewer_hunk_staged_state(state, path, &row.text);
             hunk_header_extras(
                 ui,
                 state,
                 rect,
-                diff_key,
+                paint,
                 row.hunk,
                 plan.hunk_lines.get(row.hunk).copied().unwrap_or(0),
                 state.ui.diff_collapsed.contains(&row.hunk),
@@ -798,7 +799,7 @@ fn render_side_by_side(
     model: &DiffModel,
     plan: &PaintPlan,
     visible: Range<usize>,
-    diff_key: &str,
+    paint: egui::Id,
     status: ChangeStatus,
     path: &Option<std::path::PathBuf>,
 ) {
@@ -859,13 +860,13 @@ fn render_side_by_side(
                         Palette::INK_3,
                         &font,
                     );
-                    hunk_gutter_actions(ui, state, rect, diff_key, row.hunk, status, path);
+                    hunk_gutter_actions(ui, state, rect, paint, row.hunk, status, path);
                     let staged_state = viewer_hunk_staged_state(state, path, &row.text);
                     hunk_header_extras(
                         ui,
                         state,
                         rect,
-                        diff_key,
+                        paint,
                         row.hunk,
                         plan.hunk_lines.get(row.hunk).copied().unwrap_or(0),
                         state.ui.diff_collapsed.contains(&row.hunk),

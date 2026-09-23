@@ -4,13 +4,13 @@
 //! widget vocabulary — behavior preserved, visual migration only:
 //!
 //! - **Async + cached** diff access through the app layer (Epic E7/J1): the
-//!   loads are [`turbogit_app::state::AppState::ensure_diff`] and
-//!   [`turbogit_app::state::AppState::ensure_pane_bytes`],
-//!   which compute off the frame path and cache, so no `git diff` runs
-//!   synchronously per frame. The Shell holds no Git engine.
+//!   patch text and the pane bytes both come from the keyed read
+//!   ([`turbogit_app::keyed_read`]), which computes off the frame path and
+//!   caches, so no `git diff` runs synchronously per frame. The Shell holds no
+//!   Git engine, and no caller names a cache key.
 //! - **Virtualized rendering (ADR-0014)**: rows paint through
-//!   `ScrollArea::show_rows` over a memoized display-row model built once
-//!   per diff beside `diff_cache` — parsing and side-by-side pairing never
+//!   `ScrollArea::show_rows` over the display-row model the read answers with,
+//!   built once per diff content — parsing and side-by-side pairing never
 //!   run per frame, and hunk navigation scrolls by row index so unrealized
 //!   rows stay reachable.
 //! - **Segmented control** toggles Side-by-Side | Unified rendering.
