@@ -63,6 +63,16 @@ Invalidated as one unit through one interface — per root or all roots — neve
 poked field-by-field by callers.
 _Avoid_: log cache / ref cache (as if separate concepts), cache clearing
 
+**Keyed read**:
+The one interface by which a surface reaches a cached Git value: a target goes in,
+a verdict and the value come back, and asking the question is also what starts
+getting the answer when it isn't there. Which comparison a diff is, which line a
+blame covers, which side of a pane is wanted — those are keys, and keys belong to
+the read, never to a caller. A Granular op reads through it without asking it to
+fetch anything.
+_Avoid_: ensure / ensure_diff / ensure_blame (the three calls it replaced), cache
+lookup, read slot, fetcher
+
 **Worktree lifecycle**:
 The app-side module that owns freshness policy for a root's worktree data:
 list request admission (one fetch per root in flight), mutation epochs,
@@ -80,17 +90,23 @@ pre-mutation list over the fresh refetch.
 _Avoid_: generation counter, cache version
 
 **Git engine**:
-The module that talks to git. Its interface is `GitExecutor`; production uses
-the CLI adapter, tests use an in-memory adapter.
+The module that talks to git. Its interface is `GitExecutor`; production runs the
+`Auto` backend, which answers from libgit2 and delegates to the CLI adapter for
+what libgit2 does not do, and tests may swap in the in-memory fake — which
+implements only part of the port, so most suites drive a real repository instead.
+An adapter's conventions are not guaranteed across adapters: git's own DWIM, for
+example, runs only under the CLI.
 _Avoid_: VCS manager, executor wrapper, git backend
 
 **Operation**:
 The unit the Shell dispatches: one value carrying what to run, its display
 label, the roots its results affect, whether it changes a repository root's
 worktree set, and — for the operations that have one — its identity, which is
-what settlement matches on. Named variants carry plain data and can rebuild
-themselves to be retried; `Custom` carries a one-shot closure for work whose
-label nothing inspects, and so cannot be retried. An Operation is *not* the
+what settlement matches on. Named variants carry plain data; `Custom` carries a
+one-shot closure for work whose label nothing inspects. Retrying is a property of
+that variant set rather than a method on the type: a caller that wants a second
+attempt constructs the operation again, which is what the Shelve confirmation
+already does. An Operation is *not* the
 Git engine method it eventually calls: it also owns the label, the scope and
 the settlement, none of which the engine knows about.
 _Avoid_: task, job, request, command (the palette already owns "command"), git call

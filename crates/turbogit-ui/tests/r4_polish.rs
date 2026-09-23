@@ -100,7 +100,7 @@ fn assert_visible(harness: &Harness<'_, AppState>, label: &str, vp: Rect, what: 
 /// Budgeted by wall-clock time so a contended `git` subprocess cannot starve
 /// the seeded fixtures (mirrors `diff_viewer::settle`).
 ///
-/// `diff_loading` gates too: the diff preview computes on a background thread
+/// `read_pending` gates too: the diff preview computes on a background thread
 /// without raising `busy`, and its loading chrome ("Computing diff…") is
 /// hunk-nav buttons are still disabled (zero parsed hunks), which silently
 /// breaks focus-dependent assertions (flaky on slow CI runners).
@@ -114,7 +114,7 @@ fn settle_long(harness: &mut Harness<'_, AppState>) {
             painted_text(harness),
             harness.state().ui.busy
         );
-        if fingerprint == prev && !harness.state().ui.busy && !harness.state().ui.diff_loading {
+        if fingerprint == prev && !harness.state().ui.busy && !harness.state().read_pending() {
             return;
         }
         prev = fingerprint;

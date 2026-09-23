@@ -66,23 +66,20 @@ fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
         .collect()
 }
 
-/// Step frames until the painted output stabilizes and no async blame/diff
-/// load is pending (mirrors tests/diff_viewer.rs's settle).
+/// Step frames until the painted output stabilizes and no keyed read is
+/// pending — diff or blame, the gate does not say which (mirrors
+/// tests/diff_viewer.rs's settle).
 pub fn settle(harness: &mut Harness<'_, AppState>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut prev = String::new();
     while std::time::Instant::now() < deadline {
         harness.step();
         let fingerprint = format!(
-            "{:?}|diff={}|blame={}",
+            "{:?}|read={}",
             painted_text(harness),
-            harness.state().ui.diff_loading,
-            harness.state().ui.blame_loading,
+            harness.state().read_pending(),
         );
-        if fingerprint == prev
-            && !harness.state().ui.diff_loading
-            && !harness.state().ui.blame_loading
-        {
+        if fingerprint == prev && !harness.state().read_pending() {
             return;
         }
         prev = fingerprint;

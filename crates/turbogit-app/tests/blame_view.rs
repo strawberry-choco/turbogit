@@ -1,11 +1,17 @@
 //! Issue 18 — Blame view, app seam: a blame target opened through the public
 //! state (`ui.blame`) fetches per-line attribution through the production
-//! worker path (`ensure_blame` → `BlameReady` → `drain_events`), and a
-//! completed operation's refresh (`refresh(All)`) drops the cache so the
-//! surface refetches on its next ensure.
+//! worker path (`read` → `BlameReady` → `drain_events`), and a completed
+//! operation's refresh (`refresh(All)`) drops the cached lines so the surface
+//! refetches on its next read.
+//!
+//! The verdict is what is asserted, not the cache field: the key is the read's
+//! business, and a test that spelled it out would only pin the coupling this
+//! branch exists to remove.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use turbogit_app::keyed_read::Read;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, BlameTarget};
 use turbogit_domain::model::BlameLine;
@@ -49,13 +55,35 @@ fn seeded_repo() -> (tempfile::TempDir, PathBuf, String, String) {
     (tmp, repo, c1, c2)
 }
 
-fn cached_lines(state: &AppState) -> &[BlameLine] {
-    state
-        .ui
-        .blame_cache
-        .as_ref()
-        .map(|(_, lines)| lines.as_slice())
-        .expect("blame cache must be populated")
+fn target(state: &AppState, repo: &Path, rev: &str) -> BlameTarget {
+    BlameTarget {
+        root: state
+            .multi
+            .roots
+            .iter()
+            .find(|r| r.path == repo)
+            .map(|r| r.id.clone())
+            .unwrap_or_else(|| panic!("{} registered", repo.display())),
+        path: PathBuf::from("a.txt"),
+        rev: rev.to_owned(),
+    }
+}
+
+/// Ask the read for a target's lines, settling whatever it dispatches. Answers
+/// the blamed lines, or panics with the verdict it gave instead.
+fn blamed(state: &mut AppState, target: BlameTarget) -> Arc<[BlameLine]> {
+    if matches!(state.read(target.clone()), Read::Waiting) {
+        state.drain_events();
+    }
+    match state.read(target) {
+        Read::Fresh(lines) => lines,
+        Read::Waiting => panic!(
+            "the blame answer settles; last_error={:?}",
+            state.last_error
+        ),
+        Read::Empty => panic!("blame of a two-line file is not an empty answer"),
+        Read::Failed(message) => panic!("the blame fetch failed: {message}"),
+    }
 }
 
 #[test]
@@ -64,22 +92,11 @@ fn blame_target_fetches_per_line_attribution_through_the_event_pump() {
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
 
     // The transition every entry point (footer link, context menu) makes:
-    // record the blame target, then let the surface ensure its data.
-    state.ui.blame = Some(BlameTarget {
-        root: state.selected_root.clone().unwrap(),
-        path: PathBuf::from("a.txt"),
-        rev: c2.clone(),
-    });
-    state.ensure_blame();
-    state.drain_events();
-    assert!(
-        state.ui.blame_cache.is_some(),
-        "the blame answer settles; blame_error={:?} last_error={:?}",
-        state.ui.blame_error,
-        state.last_error
-    );
+    // record the blame target, then let the surface read its data.
+    let open = target(&state, &repo, &c2);
+    state.ui.blame = Some(open.clone());
+    let lines = blamed(&mut state, open);
 
-    let lines = cached_lines(&state);
     assert_eq!(lines.len(), 2, "both lines of a.txt are blamed");
     assert_eq!(lines[0].commit, c1, "line 1 was introduced by c1");
     assert_eq!(lines[1].commit, c2, "line 2 was introduced by c2");
@@ -89,38 +106,50 @@ fn blame_target_fetches_per_line_attribution_through_the_event_pump() {
 }
 
 #[test]
-fn refresh_after_an_operation_drops_the_blame_cache_for_refetch() {
+fn refresh_after_an_operation_drops_the_blame_lines_for_refetch() {
     let (tmp, repo, _c1, c2) = seeded_repo();
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
-    state.ui.blame = Some(BlameTarget {
-        root: state.selected_root.clone().unwrap(),
-        path: PathBuf::from("a.txt"),
-        rev: c2.clone(),
-    });
-    state.ensure_blame();
-    state.drain_events();
-    assert!(
-        state.ui.blame_cache.is_some(),
-        "the blame answer settles; blame_error={:?} last_error={:?}",
-        state.ui.blame_error,
-        state.last_error
-    );
+    let open = target(&state, &repo, &c2);
+    state.ui.blame = Some(open.clone());
+    assert_eq!(blamed(&mut state, open.clone()).len(), 2);
 
-    // A completed operation refreshes the affected roots; the blame cache
+    // A completed operation refreshes the affected roots; the cached lines
     // must be dropped with it (the diff cache's wholesale rule) so the next
-    // ensure refetches — and does so successfully.
+    // read refetches — and does so successfully.
     state.refresh(Affected::All);
     assert!(
-        state.ui.blame_cache.is_none(),
-        "refresh must drop the blame cache"
+        matches!(state.read(open.clone()), Read::Waiting),
+        "a refresh must leave the blame target needing a refetch"
     );
-    state.ensure_blame();
-    state.drain_events();
+    assert_eq!(blamed(&mut state, open).len(), 2, "refetch repopulates");
+}
+
+#[test]
+fn blaming_an_earlier_revision_is_its_own_answer() {
+    let (tmp, repo, c1, c2) = seeded_repo();
+    let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
+
+    let at_c2 = target(&state, &repo, &c2);
+    assert_eq!(blamed(&mut state, at_c2.clone()).len(), 2);
+
+    // The same file at the revision before its second line existed: a
+    // different target, so a different answer — never the cached one, and the
+    // read says so with `Waiting` rather than painting what it has.
+    let at_c1 = target(&state, &repo, &c1);
     assert!(
-        state.ui.blame_cache.is_some(),
-        "the blame answer settles; blame_error={:?} last_error={:?}",
-        state.ui.blame_error,
-        state.last_error
+        matches!(state.read(at_c1.clone()), Read::Waiting),
+        "c2's lines must not answer a blame of c1"
     );
-    assert_eq!(cached_lines(&state).len(), 2, "refetch repopulates blame");
+    let lines = blamed(&mut state, at_c1);
+    assert_eq!(
+        lines.len(),
+        1,
+        "blamed at c1, the file has only the line c1 introduced"
+    );
+    assert_eq!(lines[0].commit, c1);
+
+    // Blame stores one entry, so switching back refetches — which is the
+    // single-entry policy, and the one the keyed pane-bytes map deliberately
+    // does not share.
+    assert!(matches!(state.read(at_c2), Read::Waiting));
 }

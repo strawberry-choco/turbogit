@@ -1,8 +1,9 @@
 //! Non-text pane assembly: routing a diff section to the text, image or
-//! binary renderer, the pane's texture cache, and the request building for the
-//! app layer's off-frame loads (spec R8, ADR-0015). The loads themselves are
-//! [`AppState::ensure_diff`] and [`AppState::ensure_pane_bytes`] — the Shell
-//! never holds the Git engine or an event sender.
+//! binary renderer, and the pane's GPU texture cache (spec R8, ADR-0015).
+//!
+//! Which sides a pane's bytes come from, what the pane is keyed by, and when a
+//! fetch is admitted are the read's business ([`turbogit_app::keyed_read`]);
+//! this module asks for a [`PaneTarget`] and paints the verdict it is given.
 
 use super::actions::paint_centered;
 use super::model::{FileMeta, ROW_H};
@@ -10,63 +11,13 @@ use crate::theme::Palette;
 use egui::{Align, Layout, Sense, TextureOptions, Ui, Vec2};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use turbogit_app::diff_data::PaneSide;
-use turbogit_app::diff_load::{PaneSideRequest, SideSpec};
+use turbogit_app::diff_data::{PaneEntry, PaneSide};
 use turbogit_app::events::DecodedImage;
+use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
 use turbogit_app::state::AppState;
 
-/// The two byte sources for one file section. New files have no old side;
-/// deleted files no new side — those render as the single-image case. Paths
-/// become repo-relative and slash-separated here, because that is the form
-/// `git show` takes and the metadata carries git's `a/`/`b/` prefixes.
-pub(super) fn pane_side_requests(
-    root: &std::path::Path,
-    left: &Option<String>,
-    right: &Option<String>,
-    staged: bool,
-    meta: &FileMeta,
-) -> (PaneSideRequest, PaneSideRequest) {
-    let rel = |p: &Option<String>| {
-        p.as_deref()
-            .map(super::model::repo_rel_path)
-            .unwrap_or_default()
-            .to_owned()
-    };
-    let old = if meta.new_file {
-        SideSpec::Missing
-    } else {
-        match left {
-            Some(l) => SideSpec::Rev(l.clone()),
-            None if staged => SideSpec::Rev("HEAD".to_owned()),
-            None => SideSpec::Rev(":0".to_owned()),
-        }
-    };
-    let new = if meta.deleted_file {
-        SideSpec::Missing
-    } else {
-        match right {
-            Some(r) => SideSpec::Rev(r.clone()),
-            None if staged => SideSpec::Rev(":0".to_owned()),
-            None => SideSpec::Worktree,
-        }
-    };
-    (
-        PaneSideRequest {
-            root: root.to_path_buf(),
-            spec: old,
-            path: rel(&meta.old_path),
-        },
-        PaneSideRequest {
-            root: root.to_path_buf(),
-            spec: new,
-            path: rel(&meta.new_path),
-        },
-    )
-}
-
 /// Resolved byte lengths for the binary caption, when both sides resolved.
-pub(super) fn pane_byte_lens(state: &AppState, pane_key: &str) -> Option<(u64, u64)> {
-    let entry = state.ui.pane_bytes.get(pane_key)?;
+pub(super) fn pane_byte_lens(entry: &PaneEntry) -> Option<(u64, u64)> {
     Some((entry.old.as_ref()?.byte_len, entry.new.as_ref()?.byte_len))
 }
 
@@ -99,24 +50,26 @@ fn human_size(bytes: u64) -> String {
 // (DDD split issue 04). Re-exported here so the historical `ui::diff` paths
 // keep resolving.
 
-// GPU textures for image panes are a UI-layer concern (DDD split issue 04):
-// the plain-data pane cache holds decoded bytes only, and textures are
-// uploaded lazily at first paint and cached here. Two invalidation rules
-// mirror the plain-data cache exactly: a generation change (wholesale root
-// refresh) discards everything, and cap eviction drops any texture whose
-// pane key the [`PaneCache`] no longer holds — so browsing many image files
-// never pins more GPU memory than the live entries.
-/// (pane generation, (pane key, side index) → uploaded texture).
+// GPU textures for image panes are a UI-layer concern (DDD split issue 04): the
+// plain-data pane cache holds decoded bytes only, and textures are uploaded
+// lazily at first paint and cached here. Two invalidation rules mirror the
+// plain-data cache exactly: a generation change (wholesale root refresh)
+// discards everything, and cap eviction drops any texture whose tag the app no
+// longer answers for — asked through [`AppState::pane_is_cached`], so this is
+// the last of the reads' stores that presentation code does not reach into
+// (ADR-0021). Browsing many image files therefore never pins more GPU memory
+// than the live entries.
+/// (pane generation, (pane tag, side index) → uploaded texture).
 type PaneTextureCache = (u64, HashMap<(String, usize), egui::TextureHandle>);
 
 thread_local! {
     static PANE_TEXTURES: RefCell<PaneTextureCache> = RefCell::new((0, HashMap::new()));
 }
 
-/// Align the UI-local texture cache with the app state before painting:
-/// clear on a generation change, otherwise prune to exactly the pane keys
-/// still cached in `turbogit_app::diff_data::PaneCache`.
-fn sync_pane_textures(generation: u64, live_keys: impl IntoIterator<Item = String>) {
+/// Align the UI-local texture cache with the app state before painting: clear
+/// on a generation change, otherwise prune to exactly the panes still cached.
+fn sync_pane_textures(state: &AppState) {
+    let generation = state.ui.pane_generation;
     PANE_TEXTURES.with(|slot| {
         let mut cache = slot.borrow_mut();
         if cache.0 != generation {
@@ -124,12 +77,11 @@ fn sync_pane_textures(generation: u64, live_keys: impl IntoIterator<Item = Strin
             cache.0 = generation;
             return;
         }
-        let live: std::collections::HashSet<String> = live_keys.into_iter().collect();
-        cache.1.retain(|(key, _), _| live.contains(key));
+        cache.1.retain(|(tag, _), _| state.pane_is_cached(tag));
     });
 }
 
-/// Texture for one pane side: uploaded once per (pane key, side index) and
+/// Texture for one pane side: uploaded once per (pane tag, side index) and
 /// cached so re-showing a file never re-uploads. Call [`sync_pane_textures`]
 /// first each frame.
 fn pane_texture(
@@ -197,29 +149,27 @@ fn image_cell(ui: &mut Ui, side: &PaneSide, tex: &egui::TextureHandle, max: Vec2
 /// lightweight note stands in. Over-cap / undecodable / unreadable sides
 /// fall back to the binary-change rendering with whatever sizes resolved;
 /// a new/deleted file renders its single existing side.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn render_image_pane(
     ui: &mut Ui,
     state: &mut AppState,
-    pane_key: &str,
-    root: &std::path::Path,
-    left: &Option<String>,
-    right: &Option<String>,
-    staged: bool,
+    target: &DiffTarget,
     meta: &FileMeta,
 ) {
-    let (old, new) = pane_side_requests(root, left, right, staged, meta);
-    if !state.ensure_pane_bytes(pane_key.to_owned(), old, new, true) {
-        centered_note(ui, "Loading image…");
-        return;
-    }
-    let generation = state.ui.pane_generation;
-    let live_keys: Vec<String> = state.ui.pane_bytes.keys().map(str::to_owned).collect();
-    let entry = state
-        .ui
-        .pane_bytes
-        .get(pane_key)
-        .expect("entry cached above");
+    let pane = PaneTarget::new(target.clone(), PaneFlavour::Image, meta.clone(), true);
+    // The tag addresses this pane in the UI-local texture cache below; the
+    // read derives it, and nothing here builds or compares one.
+    let tag = pane.texture_tag();
+    let entry = match state.read(pane) {
+        Read::Fresh(entry) => entry,
+        _ => {
+            centered_note(ui, "Loading image…");
+            return;
+        }
+    };
+    // Lazy GPU upload: decoding happened on the worker; each texture is
+    // built once and kept in the UI-local cache — the plain-data pane
+    // entry never holds an egui type (DDD split issue 04).
+    sync_pane_textures(state);
     let present: Vec<&PaneSide> = [entry.old.as_ref(), entry.new.as_ref()]
         .into_iter()
         .flatten()
@@ -234,18 +184,14 @@ pub(super) fn render_image_pane(
         binary_placeholder(ui, sizes);
         return;
     }
-    // Lazy GPU upload: decoding happened on the worker; each texture is
-    // built once and kept in the UI-local cache — the plain-data pane
-    // entry never holds an egui type (DDD split issue 04).
-    sync_pane_textures(generation, live_keys);
     let sides = [entry.old.as_ref(), entry.new.as_ref()];
     let textures: [Option<egui::TextureHandle>; 2] = [
         sides[0]
             .and_then(|s| s.image.as_ref())
-            .map(|img| pane_texture(ui, pane_key, 0, img)),
+            .map(|img| pane_texture(ui, &tag, 0, img)),
         sides[1]
             .and_then(|s| s.image.as_ref())
-            .map(|img| pane_texture(ui, pane_key, 1, img)),
+            .map(|img| pane_texture(ui, &tag, 1, img)),
     ];
 
     const CAPTION_H: f32 = 24.0;
@@ -308,92 +254,8 @@ pub(super) fn binary_placeholder(ui: &mut Ui, sizes: Option<(u64, u64)>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::diff::model::FileMeta;
     use turbogit_app::diff_data::PaneSide;
     use turbogit_app::events::DecodedImage;
-
-    #[test]
-    fn pane_side_requests_mirror_the_diff_invocation() {
-        let root = std::path::Path::new("/repo");
-        let ask = |left: Option<&str>, right: Option<&str>, staged: bool, meta: &FileMeta| {
-            pane_side_requests(
-                root,
-                &left.map(str::to_owned),
-                &right.map(str::to_owned),
-                staged,
-                meta,
-            )
-        };
-        let plain = FileMeta::default();
-        let added = FileMeta {
-            new_file: true,
-            ..FileMeta::default()
-        };
-        let deleted = FileMeta {
-            deleted_file: true,
-            ..FileMeta::default()
-        };
-
-        // Repo chip (HEAD↔worktree): `git diff HEAD`.
-        assert_eq!(
-            ask(Some("HEAD"), None, false, &plain),
-            (
-                side(root, SideSpec::Rev("HEAD".to_owned()), ""),
-                side(root, SideSpec::Worktree, ""),
-            )
-        );
-        // Staged chip (HEAD↔index): `git diff --cached`; index via stage-0.
-        assert_eq!(
-            ask(None, None, true, &plain),
-            (
-                side(root, SideSpec::Rev("HEAD".to_owned()), ""),
-                side(root, SideSpec::Rev(":0".to_owned()), ""),
-            )
-        );
-        // Local chip (index↔worktree): plain `git diff`.
-        assert_eq!(
-            ask(None, None, false, &plain),
-            (
-                side(root, SideSpec::Rev(":0".to_owned()), ""),
-                side(root, SideSpec::Worktree, ""),
-            )
-        );
-        // Explicit commit-to-commit targets pass their revs through.
-        assert_eq!(
-            ask(Some("abc123"), Some("def456"), false, &plain),
-            (
-                side(root, SideSpec::Rev("abc123".to_owned()), ""),
-                side(root, SideSpec::Rev("def456".to_owned()), ""),
-            )
-        );
-        // New files have no old side; deleted files no new side.
-        assert_eq!(ask(None, None, false, &added).0.spec, SideSpec::Missing);
-        assert_eq!(
-            ask(Some("HEAD"), None, false, &deleted).1.spec,
-            SideSpec::Missing
-        );
-
-        // Paths arrive repo-relative and slash-separated, stripped of git's
-        // `a/`/`b/` prefixes, because that is the form `git show` takes.
-        let renamed = FileMeta {
-            old_path: Some("a/old/dir/Art.png".into()),
-            new_path: Some("b/new/dir/Art.png".into()),
-            ..FileMeta::default()
-        };
-        let (old, new) = ask(None, None, false, &renamed);
-        assert_eq!(
-            (old.path.as_str(), new.path.as_str()),
-            ("old/dir/Art.png", "new/dir/Art.png")
-        );
-    }
-
-    fn side(root: &std::path::Path, spec: SideSpec, path: &str) -> PaneSideRequest {
-        PaneSideRequest {
-            root: root.to_path_buf(),
-            spec,
-            path: path.to_owned(),
-        }
-    }
 
     #[test]
     fn diff_human_size_formats_units() {

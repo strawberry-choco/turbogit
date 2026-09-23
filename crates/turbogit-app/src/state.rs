@@ -42,6 +42,10 @@ enum Pump {
     Inline,
 }
 
+/// One keyed-read fetch whose work is queued rather than run.
+#[cfg(test)]
+type HeldRead = Box<dyn FnOnce(Arc<dyn GitExecutor>, Sender<AppEvent>) + Send>;
+
 /// One root's outgoing commits for the push dialog tree (issue #20).
 #[derive(Clone)]
 pub struct OutgoingRoot {
@@ -509,7 +513,7 @@ pub struct DiffTarget {
 
 /// What the blame view should display (issue 18): one file at one revision
 /// in one root. Set by the changed-files pane's footer link / context menu;
-/// [`AppState::ensure_blame`] fetches its data off the frame path.
+/// it is also the target [`crate::keyed_read`] reads its lines by.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlameTarget {
     pub root: RootId,
@@ -528,7 +532,7 @@ pub struct BlameTarget {
 ///
 /// Only used when the viewer renders a working-tree comparison; explicit
 /// commit-to-commit targets (Git Log) keep their fixed revision pair.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 pub enum DiffComparison {
     /// HEAD ↔ worktree.
     Repo,
@@ -586,8 +590,9 @@ pub enum ToastKind {
 /// A toast paints `Dismiss` and nothing else: its `Retry` button was deleted
 /// as unreachable rather than repaired, because `dispatch` never had a way to
 /// hand a toast a replay handle. Re-adding the button is a feature with its own
-/// ticket (ADR-0020). Retrying work is [`Operation::retry`], which is how the
-/// Shelve confirmation re-dispatches.
+/// ticket (ADR-0020). There is no replay handle to hand it: retrying means
+/// constructing the operation again and dispatching that, which is what the
+/// Shelve confirmation already does.
 #[derive(Clone, Debug)]
 pub struct Toast {
     pub kind: ToastKind,
@@ -754,11 +759,10 @@ pub struct UiState {
     /// target file at the target revision; `None` shows the commit graph.
     pub blame: Option<BlameTarget>,
     /// Blame lines fetched for the open [`Self::blame`] target, keyed like
-    /// `diff_cache` to drop stale results. Dropped wholesale on root
-    /// refreshes so the view refetches after operations.
-    pub blame_cache: Option<(String, Vec<BlameLine>)>,
-    pub blame_loading: bool,
-    pub blame_error: Option<String>,
+    /// `diff_cache` to drop stale results, and read only through
+    /// [`crate::keyed_read`]. Dropped wholesale on root refreshes so the view
+    /// refetches after operations.
+    pub blame_cache: Option<(String, std::sync::Arc<[BlameLine]>)>,
     pub dialog: Option<Dialog>,
     pub vcs_popup: bool,
     // Topbar workspace picker (issue #34). Session-only; never persisted.
@@ -827,9 +831,10 @@ pub struct UiState {
     // commit-tab inline diff preview (Epic C3)
     pub preview_change: Option<PathBuf>,
     // diff viewer (Epic E: async cache + layout)
-    pub diff_cache: Option<(String, String)>,
-    pub diff_loading: bool,
-    pub diff_error: Option<String>,
+    /// The diff read's value: one comparison's key and the patch text with its
+    /// display model, settled by [`crate::keyed_read`], which is the only code
+    /// that reads or compares it (ADR-0021).
+    pub diff_cache: Option<(String, std::sync::Arc<crate::diff_model::DiffValue>)>,
     pub diff_side_by_side: bool,
     /// Non-text diff pane results (decoded image bytes + binary sizes, spec
     /// R8) keyed by load key — the plain-data cache lives in
@@ -843,9 +848,6 @@ pub struct UiState {
     /// the UI layer can drop its lazily-uploaded GPU textures without the
     /// application state naming any egui type (DDD split issue 04).
     pub pane_generation: u64,
-    /// Load key currently being fetched on a worker thread — one in-flight
-    /// non-text pane load at a time (mirrors `diff_loading`).
-    pub pane_bytes_loading: Option<String>,
     /// The single hunk of the open diff that all hunk navigation and
     /// granular verbs act on (CONTEXT.md "Current hunk"): buttons, hover,
     /// and keyboard navigation set it; stage/unstage consume it. Reset to
@@ -1042,6 +1044,18 @@ pub struct AppState {
     pump: Pump,
     /// own worktree-list admission and freshness policy (ticket 02).
     worktree: crate::worktree_lifecycle::WorktreeLifecycle,
+    /// The keyed read's own state (ADR-0021): which key each read has a fetch
+    /// in flight for, and which key one failed for. The values stay in
+    /// [`Self::ui`]; only the rule lives here.
+    pub(crate) reads: crate::keyed_read::Reads,
+    /// A keyed-read dispatch held back from the pump, waiting for a test to
+    /// answer it. `cfg(test)` by design: production never holds a read, and the
+    /// seam that makes lateness observable stays internal to the crate
+    /// (ADR-0021).
+    #[cfg(test)]
+    hold_reads: bool,
+    #[cfg(test)]
+    held_reads: Vec<HeldRead>,
     /// In-flight log fetches per root (log-open perf, D2): the tool-window
     /// body asks for the log every frame while the cache is cold, so the
     /// fetch gets the same one-per-root guard as the worktree fetches. The
@@ -1113,6 +1127,11 @@ impl AppState {
             dir_picker: None,
             pump: Pump::Spawned,
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
+            reads: Default::default(),
+            #[cfg(test)]
+            hold_reads: false,
+            #[cfg(test)]
+            held_reads: Vec::new(),
             log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
             fetching_stats: HashSet::new(),
@@ -1194,6 +1213,11 @@ impl AppState {
             dir_picker: None,
             pump: Pump::Inline,
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
+            reads: Default::default(),
+            #[cfg(test)]
+            hold_reads: false,
+            #[cfg(test)]
+            held_reads: Vec::new(),
             log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
             fetching_stats: HashSet::new(),
@@ -1441,50 +1465,6 @@ impl AppState {
         }
     }
 
-    /// Cache key for an open blame target: root | revision | path. A cache
-    /// entry under a different key is stale and never shown.
-    fn blame_key(target: &BlameTarget) -> String {
-        format!(
-            "{}|{}|{}",
-            target.root.0.display(),
-            target.rev,
-            target.path.display()
-        )
-    }
-
-    /// Fetch the open blame target's lines on a worker thread (issue 18),
-    /// mirroring the diff viewer's ensure pattern: a no-op when the cache
-    /// already matches the target or a fetch is in flight; the result lands
-    /// as [`AppEvent::BlameReady`]. A refresh drops the cache, so the view's
-    /// next ensure refetches after any operation.
-    pub fn ensure_blame(&mut self) {
-        let Some(target) = self.ui.blame.clone() else {
-            return;
-        };
-        let key = Self::blame_key(&target);
-        if self.ui.blame_loading
-            || self
-                .ui
-                .blame_cache
-                .as_ref()
-                .map(|(k, _)| *k == key)
-                .unwrap_or(false)
-        {
-            return;
-        }
-        self.ui.blame_loading = true;
-        self.ui.blame_error = None;
-        self.pump_read(move |executor, tx| {
-            let res = turbogit_services::history_service::blame(
-                executor.as_ref(),
-                &target.root.0,
-                &target.path,
-                Some(&target.rev),
-            );
-            let _ = tx.send(AppEvent::BlameReady { key, result: res });
-        });
-    }
-
     /// Fetch (and cache) the linked-worktree list for a root on a worker
     /// thread (issue 14 Worktrees tab). One fetch per root in flight —
     /// `fetch_worktrees` is a no-op while an earlier fetch for the same
@@ -1595,9 +1575,14 @@ impl AppState {
         // a completed op may have changed exactly what it shows (spec R2
         // story 8), so drop it and let the viewer reload asynchronously.
         self.ui.diff_cache = None;
+        // The read's own rule state goes with the values it governs: an
+        // in-flight fetch's answer is now about a worktree that no longer
+        // exists, and a failure must not keep reporting itself over a
+        // refetch that would succeed (ADR-0021).
+        self.reads.invalidate();
         // The blame view follows the same wholesale rule (issue 18): a
         // completed op may have changed exactly what the open target blames,
-        // so drop it and let the view's next ensure refetch.
+        // so drop it and let the view's next read refetch.
         self.ui.blame_cache = None;
         // Non-text pane bytes follow the same wholesale rule (spec R8):
         // dropped with root refreshes, never poked per field. Bumping the
@@ -1606,7 +1591,6 @@ impl AppState {
         // issue 04).
         self.ui.pane_bytes.clear();
         self.ui.pane_generation += 1;
-        self.ui.pane_bytes_loading = None;
         // Granular exclusions follow a refresh-scoped lifetime rule owned by
         // the granular module: they only hold while the path is still fully
         // staged.
@@ -1729,6 +1713,62 @@ impl AppState {
             }
             Pump::Inline => work(executor, tx),
         }
+    }
+
+    /// Run a [`Keyed`](crate::keyed_read::Keyed) read's fetch on the same seam
+    /// [`Self::pump_read`] uses — unless the reads are being held.
+    ///
+    /// Nothing reachable through a real adapter can answer *late*: the CLI
+    /// blocks until git returns and the fake answers inline, and lateness is the
+    /// only window in which staleness lives. Holding queues the dispatch
+    /// instead of running it, so a test can answer two reads out of order and
+    /// see what the admission rules do with a stale arrival. A held read is
+    /// still admitted — its slot is taken, and the frame is told to wait —
+    /// which is the whole point.
+    pub(crate) fn pump_keyed_read(
+        &mut self,
+        work: impl FnOnce(Arc<dyn GitExecutor>, Sender<AppEvent>) + Send + 'static,
+    ) {
+        #[cfg(test)]
+        if self.hold_reads {
+            self.held_reads.push(Box::new(work));
+            return;
+        }
+        self.pump_read(work);
+    }
+
+    /// Hold every keyed-read dispatch instead of running it. Internal to the
+    /// crate, never named by a caller, and no constructor signature moves — the
+    /// reason ADR-0020 declined executor injection.
+    #[cfg(test)]
+    pub(crate) fn hold_reads(&mut self) {
+        self.hold_reads = true;
+    }
+
+    /// How many keyed-read dispatches are waiting to be answered, oldest first.
+    #[cfg(test)]
+    pub(crate) fn held_reads(&self) -> usize {
+        self.held_reads.len()
+    }
+
+    /// Answer the held dispatch at `index` (0 = oldest) by running it — it
+    /// posts into the same channel a worker posts to, and settles nothing here,
+    /// so scripted and real answers drain identically.
+    ///
+    /// # Panics
+    ///
+    /// If `index` names no held dispatch.
+    #[cfg(test)]
+    pub(crate) fn release_held_read(&mut self, index: usize) {
+        assert!(
+            index < self.held_reads.len(),
+            "release_held_read({index}) with {} held",
+            self.held_reads.len()
+        );
+        let work = self.held_reads.remove(index);
+        let executor = self.executor.clone();
+        let tx = self.tx.clone();
+        work(executor, tx);
     }
 
     /// Surface a feedback message with its own auto-dismiss window.
@@ -2516,60 +2556,13 @@ impl AppState {
                     self.last_error = Some(msg);
                 }
                 AppEvent::DiffReady { key, result } => {
-                    self.ui.diff_loading = false;
-                    match result {
-                        Ok(text) => {
-                            self.ui.diff_error = None;
-                            self.ui.diff_cache = Some((key, text));
-                        }
-                        Err(e) => {
-                            self.ui.diff_error = Some(e.to_string());
-                            if self
-                                .ui
-                                .diff_cache
-                                .as_ref()
-                                .map(|(k, _)| k != &key)
-                                .unwrap_or(false)
-                            {
-                                self.ui.diff_cache = None;
-                            }
-                        }
-                    }
+                    crate::keyed_read::settle_diff(self, key, result);
                 }
                 AppEvent::BlameReady { key, result } => {
-                    self.ui.blame_loading = false;
-                    match result {
-                        Ok(lines) => {
-                            self.ui.blame_error = None;
-                            self.ui.blame_cache = Some((key, lines));
-                        }
-                        Err(e) => {
-                            self.ui.blame_error = Some(e.to_string());
-                            if self
-                                .ui
-                                .blame_cache
-                                .as_ref()
-                                .map(|(k, _)| k != &key)
-                                .unwrap_or(false)
-                            {
-                                self.ui.blame_cache = None;
-                            }
-                        }
-                    }
+                    crate::keyed_read::settle_blame(self, key, result);
                 }
                 AppEvent::FileBytesReady { key, old, new } => {
-                    // The in-flight slot frees for the next wanted pane even
-                    // when this result is already stale.
-                    if self.ui.pane_bytes_loading.as_deref() == Some(key.as_str()) {
-                        self.ui.pane_bytes_loading = None;
-                    }
-                    self.ui.pane_bytes.store(
-                        key,
-                        crate::diff_data::PaneEntry {
-                            old: old.map(crate::diff_data::PaneSide::from_blob),
-                            new: new.map(crate::diff_data::PaneSide::from_blob),
-                        },
-                    );
+                    crate::keyed_read::settle_pane(self, key, old, new);
                 }
                 AppEvent::AheadBehind {
                     root,
@@ -3076,6 +3069,12 @@ impl AppState {
     /// that tracks them (issue 13). Recent-branch bookkeeping belongs to the
     /// callers. The completion refresh updates the current marker on every
     /// surface together (row, breadcrumb, metadata panel, status bar).
+    ///
+    /// The upstream is written explicitly rather than left to git: only the
+    /// CLI adapter's `checkout -b <name> origin/<name>` sets it by DWIM, and
+    /// under the default `Auto` backend `branch_create` is libgit2's, which
+    /// never does. [`Self::checkout_branch_set_aside`] tracks for the same
+    /// reason, and `tests/branch_checkout.rs` pins the result for both.
     pub fn checkout_branch_op(&mut self, root: &RootId, kind: BranchKind, name: &str) {
         let affected = Affected::Root(root.clone());
         let nm = name.to_string();

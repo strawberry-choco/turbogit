@@ -171,11 +171,13 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         }
     });
 
-    // While an async op is in flight, keep frames coming so its completion
-    // (OpCompleted → refresh → preview reload) lands without waiting for
-    // unrelated input — the headless harness relies on the same signal
-    // `app.rs` gets from drain_events in production (spec R2 story 8).
-    if state.ui.busy || state.ui.diff_loading || state.ui.blame_loading {
+    // While an async op or a keyed read is in flight, keep frames coming so its
+    // completion (OpCompleted → refresh → reload, or a settled cache value)
+    // lands without waiting for unrelated input — the headless harness relies
+    // on the same signal `app.rs` gets from drain_events in production
+    // (spec R2 story 8). `busy` is dispatch's; `read_pending` is the reads',
+    // and it says only that *a* surface is working, not which.
+    if state.ui.busy || state.read_pending() {
         ui.ctx().request_repaint();
     }
 }
@@ -287,7 +289,7 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
 /// [`hunk_nav::advance_hunk`] over the active Commit sub-tab's changed-file
 /// list, then move the current hunk, show the transient edge hint, or cross
 /// files by retargeting the preview — the same path a file-list click uses,
-/// so `ensure_diff` loads the new diff and lands on its first hunk.
+/// so the diff read loads the new diff and lands on its first hunk.
 fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
     // Only meaningful over a loaded diff preview in the Commit tool window.
     if state.ui.tab != Tab::Commit || state.show_welcome() || state.ui.preview_change.is_none() {
@@ -349,8 +351,8 @@ fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
                 && let Some(path) = files.get(target)
             {
                 state.ui.preview_change = Some(path.clone());
-                // Landing hunk: ensure_diff resets to the first hunk on the
-                // fresh load.
+                // Landing hunk: the diff read resets to the first hunk on
+                // its fresh load.
             }
         }
     }

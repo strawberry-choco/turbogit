@@ -1,7 +1,7 @@
 //! Diff actions and toolbar widgets: hunk/line staging dispatch,
 //! the mode/chips/nav toolbar, and the gutter stage buttons (spec R2).
 
-use super::model::{diff_model, line_counts, mono_font};
+use super::model::{line_counts, mono_font};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
@@ -10,7 +10,8 @@ use egui::{
     WidgetInfo, WidgetType,
 };
 use std::collections::BTreeSet;
-use turbogit_app::granular::{self, comparison_triple, diff_key};
+use turbogit_app::granular;
+use turbogit_app::keyed_read::DiffTarget;
 use turbogit_app::root_caches::StatsView;
 use turbogit_app::state::{AppState, DiffComparison, Granularity};
 use turbogit_domain::model::ChangeStatus;
@@ -59,62 +60,42 @@ pub(crate) fn preview_status(state: &AppState, path: Option<&std::path::Path>) -
 
 /// Hunk count of the diff the Commit window's preview would render right
 /// now — 0 while nothing is selected, still loading, errored, or the text
-/// parses to no hunks (binary). Reads the memoized display model beside the
-/// cache (ADR-0014), so F7/Shift+F7 (spec R7) can consult it per keypress
-/// without rebuilding any row map.
+/// parses to no hunks (binary). Peeks the diff read, which answers a value
+/// that already carries its display model (ADR-0014, ADR-0021), so F7/Shift+F7
+/// (spec R7) can consult it per keypress without rebuilding any row map — and
+/// without starting a fetch the preview never asked for.
 pub(crate) fn preview_hunk_count(state: &AppState) -> usize {
-    let Some(root) = state.selected_path() else {
-        return 0;
-    };
     let Some(path) = state.ui.preview_change.clone() else {
         return 0;
     };
-    let (eff_left, eff_right, staged) = comparison_triple(&None, &None, state.ui.diff_comparison);
-    let key = diff_key(
-        &root,
-        &eff_left,
-        &eff_right,
-        staged,
-        state.ui.diff_ignore_whitespace,
-        &Some(path),
-    );
     state
-        .ui
-        .diff_cache
-        .as_ref()
-        .filter(|(k, _)| k == &key)
-        .filter(|(_, t)| !t.trim().is_empty())
-        .map(|(_, t)| diff_model(t).hunk_count())
-        .unwrap_or(0)
+        .peek(preview_target(state, path))
+        .map_or(0, |diff| diff.model.hunk_count())
 }
 
 /// (added, removed) changed-line counts of the diff the Commit window's
 /// preview would render right now — the header's `+N −M` change-size stats
 /// (issue 06, design doc §5). `(0, 0)` while nothing is selected, still
-/// loading, errored, or the text parses to no rows (binary). Reads the
-/// memoized display model beside the cache (ADR-0014), so the header never
-/// reparses the patch text per frame.
+/// loading, errored, or the text parses to no rows (binary). Reads the display
+/// model the diff value carries, so the header never reparses the patch text
+/// per frame.
 pub(crate) fn preview_line_counts(state: &AppState, path: &std::path::Path) -> (usize, usize) {
-    let Some(root) = state.selected_path() else {
-        return (0, 0);
-    };
-    let (eff_left, eff_right, staged) = comparison_triple(&None, &None, state.ui.diff_comparison);
-    let key = diff_key(
-        &root,
-        &eff_left,
-        &eff_right,
-        staged,
-        state.ui.diff_ignore_whitespace,
-        &Some(path.to_path_buf()),
-    );
     state
-        .ui
-        .diff_cache
-        .as_ref()
-        .filter(|(k, _)| k == &key)
-        .filter(|(_, t)| !t.trim().is_empty())
-        .map(|(_, t)| line_counts(&diff_model(t)))
-        .unwrap_or((0, 0))
+        .peek(preview_target(state, path.to_path_buf()))
+        .map_or((0, 0), |diff| line_counts(&diff.model))
+}
+
+/// The commit window's preview target for `path`: the live chip and whitespace
+/// state decides its sides, and a peek of it spends no git work (ADR-0021).
+fn preview_target(state: &AppState, path: std::path::PathBuf) -> DiffTarget {
+    DiffTarget::new(
+        state.selected_path().unwrap_or_default(),
+        None,
+        None,
+        state.ui.diff_comparison,
+        state.ui.diff_ignore_whitespace,
+        Some(path),
+    )
 }
 
 /// Whether one changed line currently sits in the accumulated sub-hunk
@@ -360,7 +341,7 @@ pub(super) fn hunk_gutter_actions(
     ui: &mut Ui,
     state: &mut AppState,
     band: Rect,
-    diff_key: &str,
+    paint: egui::Id,
     hunk: usize,
     status: ChangeStatus,
     path: &Option<std::path::PathBuf>,
@@ -377,7 +358,7 @@ pub(super) fn hunk_gutter_actions(
         Vec2::splat(BTN),
     );
 
-    let base_id = ui.id().with(("diff-gutter", diff_key));
+    let base_id = ui.id().with(("diff-gutter", paint));
     let n = hunk + 1;
     let stage_label = format!("Stage hunk {n}");
     let stage = gutter_button(
@@ -444,7 +425,7 @@ pub(super) fn hunk_header_extras(
     ui: &mut Ui,
     state: &mut AppState,
     band: Rect,
-    diff_key: &str,
+    paint: egui::Id,
     hunk: usize,
     changed_lines: usize,
     collapsed: bool,
@@ -510,7 +491,7 @@ pub(super) fn hunk_header_extras(
         Palette::INK_3,
     );
 
-    let base_id = ui.id().with(("diff-gutter", diff_key));
+    let base_id = ui.id().with(("diff-gutter", paint));
     let response = ui.interact(btn_rect, base_id.with(("collapse", hunk)), Sense::click());
     let fill = if response.is_pointer_button_down_on() {
         Palette::SURFACE_3

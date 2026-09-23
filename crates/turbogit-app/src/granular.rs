@@ -14,6 +14,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::keyed_read::DiffTarget;
 use crate::operation::Operation;
 use crate::root_caches::Affected;
 use crate::state::{AppState, CharSelection, DiffComparison, Granularity};
@@ -22,58 +23,25 @@ use turbogit_services::partial::{self, HunkSelection, Selection};
 
 // --- diff-cache addressing ---------------------------------------------------
 
-/// Build a cache key that uniquely identifies this diff request.
-pub fn diff_key(
-    root: &std::path::Path,
-    left: &Option<String>,
-    right: &Option<String>,
-    staged: bool,
-    ignore_whitespace: bool,
-    path: &Option<std::path::PathBuf>,
-) -> String {
-    format!("{root:?}|{left:?}|{right:?}|staged={staged}|ws={ignore_whitespace}|{path:?}")
-}
-
-/// Effective comparison triple for a diff target: the revision chips only
-/// apply to working-tree comparisons (left/right both unset, spec §8.4);
-/// explicit commit-to-commit targets pass through untouched. Shared by the
-/// viewer and [`dispatch`] so both address the same cache entry.
-pub fn comparison_triple(
-    left: &Option<String>,
-    right: &Option<String>,
-    comparison: DiffComparison,
-) -> (Option<String>, Option<String>, bool) {
-    if left.is_none() && right.is_none() {
-        match comparison {
-            DiffComparison::Repo => (Some("HEAD".to_owned()), None, false),
-            DiffComparison::Staged => (None, None, true),
-            DiffComparison::Local => (None, None, false),
-        }
-    } else {
-        (left.clone(), right.clone(), false)
-    }
-}
-
 /// Raw unified-diff text the viewer currently renders for `path` (the
 /// commit window's preview target), or None when nothing is cached. Granular
 /// ops compose their patches from exactly these bytes (ADR-0013).
+///
+/// A `peek`, not a `read`: a granular verb fired against a cold slot returns
+/// nothing and spends no git work doing it — asking the read to fetch would
+/// turn today's deliberate silent no-op into a background diff per palette
+/// verb (ADR-0021).
 fn cached_preview_diff(state: &AppState, path: &std::path::Path) -> Option<String> {
     let root = state.selected_path()?;
-    let (eff_left, eff_right, staged) = comparison_triple(&None, &None, state.ui.diff_comparison);
-    let key = diff_key(
-        &root,
-        &eff_left,
-        &eff_right,
-        staged,
+    let target = DiffTarget::new(
+        root,
+        None,
+        None,
+        state.ui.diff_comparison,
         state.ui.diff_ignore_whitespace,
-        &Some(path.to_path_buf()),
+        Some(path.to_path_buf()),
     );
-    state
-        .ui
-        .diff_cache
-        .as_ref()
-        .filter(|(k, _)| k == &key)
-        .map(|(_, t)| t.clone())
+    state.peek(target).map(|value| value.text.clone())
 }
 
 // --- dispatch ----------------------------------------------------------------
@@ -305,8 +273,9 @@ fn next_preview_candidate(state: &AppState, just_finished: &Path) -> Option<Path
 /// Selection-lifetime rule: the diff cache changed, so the per-diff
 /// selections describing the outgoing content die with it — the accumulated
 /// sub-hunk line selections refer to content no longer shown. The current
-/// hunk itself is the viewer's own fresh-load reset (`ensure_diff`), which
-/// calls this on the same path.
+/// hunk itself is the viewer's own fresh-load reset, which the diff read's
+/// admit step performs on the same path
+/// ([`crate::keyed_read::Keyed::fetch`]).
 pub fn on_diff_changed(state: &mut AppState, path: Option<&Path>) {
     if let Some(p) = path {
         state.ui.line_selections.remove(p);

@@ -12,6 +12,8 @@ use egui::{
     CornerRadius, FontFamily, FontId, Pos2, RichText, ScrollArea, Sense, Ui, Vec2, WidgetInfo,
     WidgetType,
 };
+use std::sync::Arc;
+use turbogit_app::keyed_read::Read;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::BlameLine;
 
@@ -68,23 +70,16 @@ fn short(id: &str) -> String {
     id.chars().take(7).collect()
 }
 
-/// Render the blame surface over the graph pane's region. Data flows
-/// through [`AppState::ensure_blame`] (worker thread → `BlameReady`), so
-/// this is a pure render over the cached lines.
+/// Render the blame surface over the graph pane's region. Data flows through
+/// the keyed read of the open [`turbogit_app::state::BlameTarget`] (worker
+/// thread → `BlameReady`), so this is a pure render over the verdict: which of
+/// its four answers paints is the read's question, not one this view can forget
+/// to ask.
 pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
-    state.ensure_blame();
-
-    // Split the mutable state from the borrowed data up front: rows render
-    // against the cached lines and clicks are applied after the pass ends.
-    let target = state.ui.blame.clone();
-    let Some(target) = target else { return };
-    let key = blame_view_key(&target);
-    let lines: Option<&Vec<BlameLine>> = state
-        .ui
-        .blame_cache
-        .as_ref()
-        .filter(|(k, _)| k == &key)
-        .map(|(_, lines)| lines);
+    let Some(target) = state.ui.blame.clone() else {
+        return;
+    };
+    let verdict = state.read(target.clone());
 
     // The header's close affordance sets a flag; like every interaction in
     // the log workspace it is applied after the borrow-heavy render ends.
@@ -121,21 +116,25 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     }
     ui.add_space(16.0);
 
-    if let Some(err) = &state.ui.blame_error {
-        ui.colored_label(Palette::STATE_ERROR, err);
-        return;
-    }
-    let Some(lines) = lines else {
-        ui.spinner();
-        ui.label("Computing blame…");
-        return;
+    let lines = match verdict {
+        Read::Fresh(lines) => lines,
+        Read::Empty => Arc::from(vec![]),
+        Read::Waiting => {
+            ui.spinner();
+            ui.label("Computing blame…");
+            return;
+        }
+        Read::Failed(message) => {
+            ui.colored_label(Palette::STATE_ERROR, message);
+            return;
+        }
     };
 
-    // Row clicks are deferred (plan §1.3): rows borrow the cache until the
-    // scroll pass ends.
+    // Row clicks are deferred (plan §1.3): the handle keeps the rows alive
+    // across the scroll pass, which is what the owned verdict is for.
     let mut clicked: Option<String> = None;
     ScrollArea::vertical().show(ui, |ui| {
-        for line in lines {
+        for line in lines.iter() {
             if blame_row(ui, line, &target.rev) {
                 clicked = Some(line.commit.clone());
             }
@@ -152,15 +151,6 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     if close {
         state.ui.blame = None;
     }
-}
-
-fn blame_view_key(target: &turbogit_app::state::BlameTarget) -> String {
-    format!(
-        "{}|{}|{}",
-        target.root.0.display(),
-        target.rev,
-        target.path.display()
-    )
 }
 
 /// One blamed line: highlight when the blamed-at commit introduced it,

@@ -216,21 +216,21 @@ pub fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
         .collect()
 }
 
-/// Step frames until the painted output stabilizes AND no async diff load is
-/// pending (the fingerprint includes the loading flag so a late `DiffReady`
-/// can never be mistaken for a settled frame). Budgeted by wall-clock time —
-/// not frame count — so a contended `git` subprocess cannot starve it.
+/// Step frames until painted output AND the diff read's activity stabilize
+/// (the fingerprint includes the read's verdict so a late `DiffReady` can never
+/// be mistaken for a settled frame). Budgeted by wall-clock time — not frame
+/// count — so a contended `git` subprocess cannot starve it.
 pub fn settle(harness: &mut Harness<'_, AppState>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut prev = String::new();
     while std::time::Instant::now() < deadline {
         harness.step();
         let fingerprint = format!(
-            "{:?}|loading={}",
+            "{:?}|read={}",
             painted_text(harness),
-            harness.state().ui.diff_loading
+            harness.state().read_pending()
         );
-        if fingerprint == prev && !harness.state().ui.diff_loading {
+        if fingerprint == prev && !harness.state().read_pending() {
             return;
         }
         prev = fingerprint;
@@ -308,12 +308,6 @@ fn relative_row_preview_uses_index_not_worktree_for_staged_changes() {
         assert_painted(&h, "INDEX ONLY");
         assert_not_painted(&h, "WORKTREE ONLY");
         assert_not_painted(&h, "(no differences)");
-        let patch = &h.state().ui.diff_cache.as_ref().unwrap().1;
-        assert!(patch.contains("+INDEX ONLY"), "{patch}");
-        assert!(!patch.contains("deleted file mode"), "{patch}");
-        if !original.is_empty() {
-            assert!(patch.contains("-HEAD ONLY"), "{patch}");
-        }
     }
 }
 
