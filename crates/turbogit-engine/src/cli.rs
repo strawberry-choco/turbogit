@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 use turbogit_engine_api::{ApplyDirection, GitExecutor};
@@ -24,6 +25,8 @@ fn portable_path(p: &Path) -> PathBuf {
     }
     p.to_path_buf()
 }
+
+static REBASE_TODO_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Executor that drives git through the command line.
 pub struct CliExecutor {
@@ -1402,7 +1405,12 @@ impl GitExecutor for CliExecutor {
             })
             .collect();
         let base_rev = format!("{}~1", plan[0].commit);
-        let tmp = std::env::temp_dir().join(format!("turbogit-rebase-{}.txt", plan[0].commit));
+        let sequence = REBASE_TODO_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "turbogit-rebase-{}-{}-{sequence}.txt",
+            plan[0].commit,
+            std::process::id(),
+        ));
         std::fs::write(&tmp, todo)?;
         let bin = turbogit_domain::model::git_binary(&self.settings);
         let todo_str = tmp.to_string_lossy().replace('\\', "/");
