@@ -9,18 +9,13 @@ use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::Worktree;
 
 use crate::theme::Palette;
+use crate::ui::widgets;
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    // Header: surface label + the add affordance.
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("WORKTREES")
-                .strong()
-                .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-                .color(Palette::INK_3),
-        );
-        if ui.button("Add worktree").clicked() {
+    // Header: shared tool-window title band with the add affordance in its
+    // right-aligned action slot.
+    widgets::toolwindow_header(ui, "WORKTREES", |ui| {
+        if widgets::compact_button(ui, "Add worktree").clicked() {
             state.ui.dlg.wt_path.clear();
             state.ui.dlg.wt_branch.clear();
             state.ui.dialog = Some(Dialog::NewWorktree);

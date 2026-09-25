@@ -137,10 +137,6 @@ fn truncate(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
-fn short(id: &str) -> String {
-    truncate(id, 7)
-}
-
 /// Deterministic color for the root at `idx` (stripes + legend).
 fn root_color(idx: usize) -> Color32 {
     GRAPH_COLORS[idx % GRAPH_COLORS.len()]
@@ -958,7 +954,11 @@ fn commit_row(
     // Hash | Author cells.
     let painter = ui.painter().clone();
     let cy = rect.center().y;
-    let hash_galley = painter.layout_no_wrap(short(&c.id), mono_font(), Palette::BRAND);
+    let hash_galley = painter.layout_no_wrap(
+        widgets::short_commit_ref(&c.id),
+        mono_font(),
+        Palette::BRAND,
+    );
     painter.galley(
         Pos2::new(content_left + COL_HASH, cy - hash_galley.size().y / 2.0),
         hash_galley,
@@ -1044,7 +1044,7 @@ fn commit_row(
         WidgetInfo::labeled(
             WidgetType::Button,
             true,
-            format!("{} {}", short(&c.id), subject),
+            format!("{} {}", widgets::short_commit_ref(&c.id), subject),
         )
     });
     widgets::focus_ring(ui, &response);
@@ -1431,7 +1431,13 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     // Hash: a chip whose click defers the copy; the mockup's caption states
     // what the click does, since there is no copy glyph in the icon set.
     ui.horizontal(|ui| {
-        if widgets::hash_chip(ui, &short(&commit.id), "Click to copy the full hash").clicked() {
+        if widgets::hash_chip(
+            ui,
+            &widgets::short_commit_ref(&commit.id),
+            "Click to copy the full hash",
+        )
+        .clicked()
+        {
             action = DetailAction::CopyHash;
         }
         ui.label(micro_text("click to copy full hash"));
@@ -1503,7 +1509,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
                             for p in &commit.parents {
                                 if ui
                                     .link(
-                                        RichText::new(short(p))
+                                        RichText::new(widgets::short_commit_ref(p))
                                             .font(mono_font())
                                             .color(Palette::INK),
                                     )
@@ -1660,7 +1666,10 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
             let id = state.ui.selected_commit.clone().unwrap_or_default();
             ui.ctx().copy_text(id.clone());
             state.ui.toast_shown_at = None;
-            state.ui.toast = Some(Toast::success(format!("Copied {}", short(&id))));
+            state.ui.toast = Some(Toast::success(format!(
+                "Copied {}",
+                widgets::short_commit_ref(&id)
+            )));
         }
         DetailAction::SelectParent(parent) => {
             state.ui.selected_commit = Some(parent);

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use egui::epaint::PathShape;
-use egui::{Color32, Pos2, Shape, Stroke, Ui, Vec2};
+use egui::{Color32, Pos2, Rect, Response, Shape, Stroke, Ui, UiBuilder, Vec2};
 
 /// Typed handle to one of the embedded Lucide icons (spec §5.2).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -253,8 +253,21 @@ static ICON_PATHS: &[(&str, &[&str])] = &[
 ///
 /// Unknown names paint nothing (and log at debug) — never panic (§5.3).
 pub fn icon(ui: &mut Ui, name: Icon, size: f32, color: Color32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
+    let _ = icon_response(ui, name, size, color);
+}
+
+/// Paint `name` in a square slot centered at `center` without disturbing the
+/// caller's layout. The returned response exposes the exact square slot.
+pub fn centered_icon(ui: &mut Ui, name: Icon, center: Pos2, size: f32, color: Color32) -> Response {
+    let mut child =
+        ui.new_child(UiBuilder::new().max_rect(Rect::from_center_size(center, Vec2::splat(size))));
+    icon_response(&mut child, name, size, color)
+}
+
+fn icon_response(ui: &mut Ui, name: Icon, size: f32, color: Color32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
     paint_at(ui.painter(), rect.min, size, name.name(), color);
+    response
 }
 
 /// Paint `name` looked up by string; misses are safe no-ops.

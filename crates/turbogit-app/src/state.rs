@@ -3158,7 +3158,7 @@ impl AppState {
         // multi-root fetch counts its new branches the same way a single-root
         // one already did rather than reporting nothing.
         let baselines: Vec<(RootId, Vec<String>)> = match affected {
-            Affected::All => self.ui.branches_fetch_before.drain(..).collect(),
+            Affected::All => std::mem::take(&mut self.ui.branches_fetch_before),
             Affected::Root(id) => {
                 let pos = self
                     .ui

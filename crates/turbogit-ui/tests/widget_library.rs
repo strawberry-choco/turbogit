@@ -1,4 +1,4 @@
-//! Issue #6 — Shared widget library (`src/ui/widgets.rs`).
+//! Issue #6 — Shared widget library (public facade at `src/ui/widgets/mod.rs`).
 //!
 //! Three layers of proof, mirroring spec §7 and the R1.4 plan row:
 //!
@@ -17,10 +17,11 @@ use std::rc::Rc;
 
 use egui::{Color32, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
-use turbogit_ui::theme::Palette;
+use test_support::harness::painted_galleys;
+use turbogit_ui::theme::{PILL_RADIUS, Palette};
 use turbogit_ui::ui::components::{self, RowState};
 use turbogit_ui::ui::icons::Icon;
-use turbogit_ui::ui::widgets::{self, BadgeKind, ButtonVariant, RefKind, WidgetState};
+use turbogit_ui::ui::widgets::*;
 
 // ---------------------------------------------------------------------------
 // 1. Palette-token completeness (spec §2)
@@ -86,7 +87,7 @@ fn badge_kind_maps_to_the_spec_status_colors() {
         let colors = kind.colors();
         assert_eq!(
             colors.bg,
-            widgets::tint_over_bg(kind.accent(), widgets::BADGE_TINT),
+            tint_over_bg(kind.accent(), BADGE_TINT),
             "{kind:?} bg must be its accent tinted over BG"
         );
         assert_ne!(colors.bg, Color32::TRANSPARENT);
@@ -219,17 +220,17 @@ fn tree_row_selection_logic_paints_brand_over_hover() {
 /// scales so a chip carrying any of them has a real color.
 #[test]
 fn status_badge_variants_map_to_tokens() {
-    use widgets::StatusBadge;
+    use StatusBadge;
 
     // Count direction decides ahead (success) vs behind (warning): a count
     // chip never picks the wrong hue for its direction.
     assert_eq!(
-        StatusBadge::Count(widgets::CountDirection::Ahead).accent(),
+        StatusBadge::Count(CountDirection::Ahead).accent(),
         Palette::STATE_SUCCESS,
         "ahead counts are success-green"
     );
     assert_eq!(
-        StatusBadge::Count(widgets::CountDirection::Behind).accent(),
+        StatusBadge::Count(CountDirection::Behind).accent(),
         Palette::STATE_WARNING,
         "behind counts are warning-amber"
     );
@@ -283,44 +284,44 @@ fn widgets_harness(
             }
             egui::CentralPanel::default().show(ui, |ui| {
                 // Section chrome.
-                widgets::group_title(ui, "Recent");
-                widgets::toolwindow_header(ui, "Changed files", |_ui| {});
+                group_title(ui, "Recent");
+                toolwindow_header(ui, "Changed files", |_ui| {});
 
                 // Buttons.
-                if widgets::ghost_button(ui, None, "Ghost action").clicked() {
+                if ghost_button(ui, None, "Ghost action").clicked() {
                     ghost_clicked.set(true);
                 }
-                if widgets::primary_button(ui, Some(Icon::CHECK), "Primary action").clicked() {
+                if primary_button(ui, Some(Icon::CHECK), "Primary action").clicked() {
                     // Counted via painted assertion only.
                 }
-                if widgets::compact_button(ui, "Compact action").clicked() {
+                if compact_button(ui, "Compact action").clicked() {
                     compact_clicked.set(true);
                 }
-                widgets::icon_button(ui, Icon::X);
+                icon_button(ui, Icon::X);
 
                 // Chips.
-                widgets::badge(ui, "+3", BadgeKind::Added);
-                widgets::badge(ui, "M", BadgeKind::Modified);
-                widgets::badge(ui, "D", BadgeKind::Deleted);
-                widgets::ref_label(ui, "main", RefKind::Branch);
-                widgets::ref_label(ui, "origin/main", RefKind::Remote);
-                widgets::ref_label(ui, "v1.0", RefKind::Tag);
+                badge(ui, "+3", BadgeKind::Added);
+                badge(ui, "M", BadgeKind::Modified);
+                badge(ui, "D", BadgeKind::Deleted);
+                ref_label(ui, "main", RefKind::Branch);
+                ref_label(ui, "origin/main", RefKind::Remote);
+                ref_label(ui, "v1.0", RefKind::Tag);
 
                 // Rows.
-                widgets::tree_row(ui, true, |ui| {
+                tree_row(ui, true, |ui| {
                     ui.label("selected branch row");
                 });
-                widgets::tree_row(ui, false, |ui| {
+                tree_row(ui, false, |ui| {
                     ui.label("unselected branch row");
                 });
 
                 // Inputs.
-                widgets::search_input(ui, "Search commits", &mut search_buf);
-                widgets::text_input(ui, "Branch name", &mut name_buf);
+                search_input(ui, "Search commits", &mut search_buf);
+                text_input(ui, "Branch name", &mut name_buf);
 
                 // Dialog chrome.
-                widgets::dialog_footer(ui, |ui| {
-                    widgets::primary_button(ui, None, "Footer OK");
+                dialog_footer(ui, |ui| {
+                    primary_button(ui, None, "Footer OK");
                 });
             });
         },
@@ -341,6 +342,174 @@ fn painted_text(harness: &Harness<'_, ()>) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn inline_error_composes_visible_text_with_semantic_error_ink() {
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            if !fonts_installed {
+                turbogit_ui::theme::install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.label("page context");
+                inline_error(ui, "the operation could not finish");
+            });
+        },
+        (),
+    );
+    harness.set_size(egui::vec2(480.0, 120.0));
+
+    settle(&mut harness);
+    assert_painted(&harness, "the operation could not finish");
+    assert_eq!(
+        painted_galleys(&harness)
+            .into_iter()
+            .find(|g| g.text.contains("the operation could not finish"))
+            .map(|g| g.color),
+        Some(Palette::STATE_ERROR)
+    );
+}
+
+#[test]
+fn keyed_read_presenter_renders_waiting_and_failure_from_display_inputs() {
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            if !fonts_installed {
+                turbogit_ui::theme::install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            egui::CentralPanel::default().show(ui, |ui| {
+                keyed_read_presentation(ui, KeyedReadPresentation::Waiting("Computing preview…"));
+                keyed_read_presentation(
+                    ui,
+                    KeyedReadPresentation::Failed("Could not read the preview"),
+                );
+            });
+        },
+        (),
+    );
+    harness.set_size(egui::vec2(480.0, 120.0));
+
+    settle(&mut harness);
+    assert_painted(&harness, "Computing preview…");
+    assert_painted(&harness, "Could not read the preview");
+    assert_eq!(
+        painted_galleys(&harness)
+            .into_iter()
+            .find(|g| g.text.contains("Could not read the preview"))
+            .map(|g| g.color),
+        Some(Palette::STATE_ERROR)
+    );
+}
+
+#[test]
+fn shared_note_and_alert_feedback_keep_distinct_rendered_roles() {
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            if !fonts_installed {
+                turbogit_ui::theme::install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            egui::CentralPanel::default().show(ui, |ui| {
+                note(ui, None, |ui| {
+                    ui.label("context note");
+                });
+                alert_box(ui, "contained alert");
+            });
+        },
+        (),
+    );
+    harness.set_size(egui::vec2(360.0, 180.0));
+    settle(&mut harness);
+    assert_painted(&harness, "context note");
+    assert_painted(&harness, "contained alert");
+}
+
+#[test]
+fn chip_geometry_owns_radius_padding_measurement_and_text_placement() {
+    assert_eq!(CHIP_GEOMETRY.height, CHIP_HEIGHT);
+    assert_eq!(CHIP_GEOMETRY.pad_x, CHIP_PAD_X);
+    // Radius is theme-owned: the shared chip geometry derives the full pill
+    // radius from `theme::PILL_RADIUS`, so pin the token rather than a literal.
+    assert_eq!(CHIP_GEOMETRY.radius, f32::from(PILL_RADIUS));
+    assert_eq!(chip_radius(), egui::CornerRadius::same(PILL_RADIUS));
+
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            if !fonts_installed {
+                turbogit_ui::theme::install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            egui::CentralPanel::default().show(ui, |ui| {
+                badge(ui, "main", BadgeKind::Neutral);
+            });
+        },
+        (),
+    );
+    harness.set_size(egui::vec2(240.0, 80.0));
+    harness.step();
+    let galley = harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Text(text) if text.galley.text() == "main" => Some(text.galley.clone()),
+            _ => None,
+        })
+        .expect("badge should paint a main label");
+    let size = CHIP_GEOMETRY.size(&galley);
+    assert_eq!(size.y, CHIP_HEIGHT);
+    assert_eq!(size.x, galley.size().x + 2.0 * CHIP_PAD_X);
+
+    let rect = egui::Rect::from_min_size(egui::pos2(30.0, 40.0), size);
+    let origin = chip_text_origin(rect, &galley);
+    assert!((origin.x - (rect.center().x - galley.size().x / 2.0)).abs() < 0.01);
+    assert!((origin.y - (rect.center().y - galley.size().y / 2.0)).abs() < 0.01);
+}
+
+#[test]
+fn multiple_shared_chips_coexist_without_overlap_or_geometry_regression() {
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            if !fonts_installed {
+                turbogit_ui::theme::install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    badge(ui, "added", BadgeKind::Added);
+                    badge(ui, "main", BadgeKind::Neutral);
+                    ref_label(ui, "origin", RefKind::Remote);
+                });
+            });
+        },
+        (),
+    );
+    harness.set_size(egui::vec2(400.0, 80.0));
+    settle(&mut harness);
+
+    let added = harness.get_by_label("added").rect();
+    let neutral = harness.get_by_label("main").rect();
+    let remote = harness.get_by_label("origin").rect();
+    for rect in [added, neutral, remote] {
+        assert_eq!(rect.height(), CHIP_HEIGHT);
+    }
+    assert!(added.right() <= neutral.left());
+    assert!(neutral.right() <= remote.left());
+    assert_eq!(added.top(), neutral.top());
+    assert_eq!(neutral.top(), remote.top());
 }
 
 /// Step frames until the painted output stabilizes.
@@ -429,20 +598,12 @@ fn status_badges_harness() -> (Harness<'static, ()>, tempfile::TempDir) {
                 fonts_installed = true;
             }
             egui::CentralPanel::default().show(ui, |ui| {
-                widgets::status_badge(
-                    ui,
-                    "↑3",
-                    widgets::StatusBadge::Count(widgets::CountDirection::Ahead),
-                );
-                widgets::status_badge(
-                    ui,
-                    "↓2",
-                    widgets::StatusBadge::Count(widgets::CountDirection::Behind),
-                );
-                widgets::status_badge(ui, "LOCK", widgets::StatusBadge::Lock);
-                widgets::status_badge(ui, "3d", widgets::StatusBadge::Stale);
-                widgets::status_badge(ui, "FOCUSED", widgets::StatusBadge::Focused);
-                widgets::status_badge(ui, "CASCADE", widgets::StatusBadge::Cascade);
+                status_badge(ui, "↑3", StatusBadge::Count(CountDirection::Ahead));
+                status_badge(ui, "↓2", StatusBadge::Count(CountDirection::Behind));
+                status_badge(ui, "LOCK", StatusBadge::Lock);
+                status_badge(ui, "3d", StatusBadge::Stale);
+                status_badge(ui, "FOCUSED", StatusBadge::Focused);
+                status_badge(ui, "CASCADE", StatusBadge::Cascade);
             });
         },
         (),
@@ -457,7 +618,7 @@ fn status_badges_harness() -> (Harness<'static, ()>, tempfile::TempDir) {
 /// rather than reporting an answer the implementation never delivered.
 #[test]
 fn status_badges_paint_with_their_claimed_token() {
-    use widgets::{CountDirection, StatusBadge};
+    use {CountDirection, StatusBadge};
 
     let (mut harness, _dir) = status_badges_harness();
     settle(&mut harness);
@@ -486,7 +647,7 @@ fn status_badges_paint_with_their_claimed_token() {
         StatusBadge::Cascade.accent(),
     ];
     for accent in expected {
-        let tinted = widgets::tint_over_bg(accent, widgets::BADGE_TINT);
+        let tinted = tint_over_bg(accent, BADGE_TINT);
         assert!(
             rects.contains(&tinted),
             "no rect painted with tinted fill {tinted:?} (accent {accent:?}); painted fills: {rects:?}"
@@ -506,13 +667,61 @@ fn segmented_harness() -> (Harness<'static, ()>, tempfile::TempDir) {
                 fonts_installed = true;
             }
             egui::CentralPanel::default().show(ui, |ui| {
-                widgets::segmented_control(ui, &["One", "Two", "Three"], 1);
+                segmented_control(ui, &["One", "Two", "Three"], 1);
             });
         },
         (),
     );
     harness.set_size(egui::vec2(400.0, 80.0));
     (harness, tempfile::tempdir().expect("tempdir"))
+}
+
+fn short_commit_ref_harness(reference: &'static str) -> (Harness<'static, ()>, tempfile::TempDir) {
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui(move |ui| {
+        turbogit_ui::theme::configure_style(ui.ctx());
+        if !fonts_installed {
+            turbogit_ui::theme::install_fonts(ui.ctx());
+            fonts_installed = true;
+        }
+        ui.label(short_commit_ref(reference));
+    });
+    harness.set_size(egui::vec2(240.0, 40.0));
+    (harness, tempfile::tempdir().expect("tempdir"))
+}
+
+#[test]
+fn short_commit_reference_renders_seven_characters_by_default() {
+    let (mut harness, _dir) = short_commit_ref_harness("0123456789abcdef");
+    settle(&mut harness);
+
+    assert_painted(&harness, "0123456");
+    assert!(
+        !painted_text(&harness)
+            .iter()
+            .any(|text| text.contains("01234567"))
+    );
+}
+
+#[test]
+fn already_short_commit_reference_renders_intact() {
+    let (mut harness, _dir) = short_commit_ref_harness("abc1234");
+    settle(&mut harness);
+
+    assert_painted(&harness, "abc1234");
+}
+
+#[test]
+fn non_ascii_commit_reference_renders_whole_characters() {
+    let (mut harness, _dir) = short_commit_ref_harness("界界界界界界界界尾");
+    settle(&mut harness);
+
+    assert_painted(&harness, "界界界界界界界");
+    assert!(
+        !painted_text(&harness)
+            .iter()
+            .any(|text| text.contains('界') && text.chars().count() > 7)
+    );
 }
 
 /// Public API exists; clicking a segment returns its index. This is the

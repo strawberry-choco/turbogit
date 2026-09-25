@@ -435,13 +435,6 @@ fn paint_edge_line(ui: &Ui, edge: Edge) {
     paint_edge_line_at(ui, ui.max_rect(), edge);
 }
 
-/// Paint one icon primitive centered at `origin` without disturbing layout.
-fn paint_icon_centered(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
-    let mut child =
-        ui.new_child(UiBuilder::new().max_rect(Rect::from_center_size(center, Vec2::splat(size))));
-    super::icons::icon(&mut child, icon, size, color);
-}
-
 // --- Topbar ------------------------------------------------------------------
 
 const TOPBAR_BRANDSIZE: f32 = 16.0; // brand-icon size (spec §4.2)
@@ -869,7 +862,7 @@ fn tab_item(
     let ink = if active { Palette::INK } else { Palette::INK_3 };
     let cy = rect.center().y;
     let mut cx = rect.left() + 12.0;
-    paint_icon_centered(
+    icons::centered_icon(
         ui,
         icon,
         Pos2::new(cx + TAB_ICON_SIZE / 2.0, cy),

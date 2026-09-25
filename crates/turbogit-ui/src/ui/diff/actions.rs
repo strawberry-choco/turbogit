@@ -6,8 +6,7 @@ use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
-    Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Response, Sense, Ui, UiBuilder, Vec2,
-    WidgetInfo, WidgetType,
+    Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Ui, Vec2, WidgetInfo, WidgetType,
 };
 use std::collections::BTreeSet;
 use turbogit_app::granular;
@@ -191,7 +190,12 @@ pub(crate) fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response 
     let measured = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font_id.clone(), idle_fg);
-    let size = Vec2::new(measured.size().x + pad_x * 2.0, widgets::CHIP_HEIGHT);
+    let geometry = widgets::ChipGeometry {
+        height: widgets::CHIP_HEIGHT,
+        pad_x,
+        radius: widgets::CHIP_GEOMETRY.radius,
+    };
+    let size = geometry.size(&measured);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let id = ui.id().with(("diff-chip", label));
     let response = ui.interact(rect, id, Sense::click());
@@ -210,8 +214,7 @@ pub(crate) fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response 
     } else {
         Palette::INK_2
     };
-    ui.painter().rect_filled(rect, widgets::chip_radius(), bg);
-    paint_centered(ui.painter(), rect, label, font_id, fg);
+    geometry.paint(ui.painter(), rect, measured, bg, fg);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
     widgets::focus_ring(ui, &response);
     response
@@ -272,7 +275,7 @@ fn nav_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
     } else {
         Palette::INK_2
     };
-    paint_icon_at(ui, icon, rect.center(), ICON_SIZE, ink);
+    icons::centered_icon(ui, icon, rect.center(), ICON_SIZE, ink);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
     widgets::focus_ring(ui, &response);
     response
@@ -509,7 +512,7 @@ pub(super) fn hunk_header_extras(
             fill,
         );
     }
-    paint_icon_at(ui, icon, btn_rect.center(), 12.0, Palette::INK_2);
+    icons::centered_icon(ui, icon, btn_rect.center(), 12.0, Palette::INK_2);
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));
     widgets::focus_ring(ui, &response);
     if response.clicked() {
@@ -520,17 +523,6 @@ pub(super) fn hunk_header_extras(
         }
     }
     response.on_hover_text(tooltip);
-}
-
-/// Paint one icon primitive centered at `origin` without disturbing layout.
-fn paint_icon_at(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
-    let origin = Pos2::new(center.x - size / 2.0, center.y - size / 2.0);
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(Rect::from_min_size(origin, Vec2::splat(size)))
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    icons::icon(&mut child, icon, size, color);
 }
 
 /// Paint a string centered inside `rect`.

@@ -144,7 +144,7 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
     ui.label("Start from:");
     ui.horizontal(|ui| {
         ui.label(&state.ui.dlg.new_branch_base);
-        if ui.button("Change…").clicked() {
+        if widgets::compact_button(ui, "Change…").clicked() {
             state.ui.dlg.new_branch_base_picker_open = !state.ui.dlg.new_branch_base_picker_open;
         }
     });
@@ -177,8 +177,13 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
         &mut state.ui.dlg.new_branch_checkout,
         "Switch to the new branch now",
     );
-    ui.horizontal(|ui| {
-        if ui.button("Create").clicked() {
+    widgets::dialog_footer(ui, |ui| {
+        // Right-to-left footer: the first action is the rightmost one. Cancel
+        // is called first so the visible order remains Create · Cancel.
+        if widgets::compact_button(ui, "Cancel").clicked() {
+            close(state);
+        }
+        if widgets::compact_button(ui, "Create").clicked() {
             let root = state.selected_root.clone();
             let name = state.ui.dlg.new_branch_name.clone();
             let base = state.ui.dlg.new_branch_base.clone();
@@ -198,9 +203,6 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
                     move |v| branch_service::create(v, root.as_path(), &name, start.as_deref(), co),
                 ));
             }
-            close(state);
-        }
-        if ui.button("Cancel").clicked() {
             close(state);
         }
     });
@@ -548,7 +550,7 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                     ui.label(
                         egui::RichText::new(format!(
                             "{}  {}",
-                            &entry.commit[..7.min(entry.commit.len())],
+                            widgets::short_commit_ref(&entry.commit),
                             entry.subject
                         ))
                         .monospace(),
@@ -688,11 +690,10 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
         resp.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Tag name")
         });
-        let (text, color) = match &validation {
-            Ok(()) => ("✓ valid".to_string(), Palette::STATE_SUCCESS),
-            Err(reason) => (reason.clone(), Palette::STATE_ERROR),
+        match &validation {
+            Ok(()) => ui.colored_label(Palette::STATE_SUCCESS, "✓ valid"),
+            Err(reason) => widgets::inline_error(ui, reason),
         };
-        ui.colored_label(color, text);
     });
     ui.add_space(4.0);
 
@@ -718,7 +719,7 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
             );
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let r = ui.button("Change…");
+            let r = widgets::compact_button(ui, "Change…");
             if std::env::var("TG_TAG_DEBUG").is_ok() {
                 eprintln!(
                     "CHG rect={:?} clicked={} pointer={:?}",
@@ -827,48 +828,55 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(6.0);
 
     // FOOTER
-    ui.horizontal(|ui| {
-        if ui.button("Cancel").clicked() {
+    widgets::dialog_footer(ui, |ui| {
+        // The first action in a right-to-left footer is rightmost. Create
+        // comes first so the visible order stays Cancel · Create tag.
+        let valid = validation.is_ok();
+        let create = ui
+            .scope(|ui| {
+                if !valid {
+                    ui.disable();
+                }
+                widgets::compact_button(ui, "Create tag")
+            })
+            .inner;
+        if create.clicked() {
+            let root = state.selected_root.clone();
+            let spec = turbogit_domain::model::TagSpec {
+                name: state.ui.dlg.tag_name.trim().to_string(),
+                target: (!state.ui.dlg.tag_target.is_empty())
+                    .then(|| target_commitish(&state.ui.dlg.tag_target)),
+                message: annotated
+                    .then(|| state.ui.dlg.tag_msg.clone())
+                    .filter(|m| !m.trim().is_empty()),
+                tagger: annotated
+                    .then(|| state.ui.dlg.tag_tagger.trim().to_string())
+                    .filter(|t| !t.is_empty()),
+                sign: annotated && state.ui.dlg.tag_sign,
+            };
+            let push = state.ui.dlg.tag_push;
+            let name = spec.name.clone();
+            if let Some(root) = root {
+                state.dispatch(Operation::custom(
+                    format!("Create tag {name}"),
+                    Affected::Root(root.clone()),
+                    move |v| {
+                        let r = root.as_path();
+                        tag_service::create(v, r, &spec)?;
+                        if push {
+                            // Reports the outcome: the error carries the
+                            // created-tag context when the push fails.
+                            tag_service::push_new(v, r, &name)?;
+                        }
+                        Ok(())
+                    },
+                ));
+            }
             close(state);
         }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let valid = validation.is_ok();
-            let create = ui.add_enabled(valid, egui::Button::new("Create tag"));
-            if create.clicked() {
-                let root = state.selected_root.clone();
-                let spec = turbogit_domain::model::TagSpec {
-                    name: state.ui.dlg.tag_name.trim().to_string(),
-                    target: (!state.ui.dlg.tag_target.is_empty())
-                        .then(|| target_commitish(&state.ui.dlg.tag_target)),
-                    message: annotated
-                        .then(|| state.ui.dlg.tag_msg.clone())
-                        .filter(|m| !m.trim().is_empty()),
-                    tagger: annotated
-                        .then(|| state.ui.dlg.tag_tagger.trim().to_string())
-                        .filter(|t| !t.is_empty()),
-                    sign: annotated && state.ui.dlg.tag_sign,
-                };
-                let push = state.ui.dlg.tag_push;
-                let name = spec.name.clone();
-                if let Some(root) = root {
-                    state.dispatch(Operation::custom(
-                        format!("Create tag {name}"),
-                        Affected::Root(root.clone()),
-                        move |v| {
-                            let r = root.as_path();
-                            tag_service::create(v, r, &spec)?;
-                            if push {
-                                // Reports the outcome: the error carries the
-                                // created-tag context when the push fails.
-                                tag_service::push_new(v, r, &name)?;
-                            }
-                            Ok(())
-                        },
-                    ));
-                }
-                close(state);
-            }
-        });
+        if widgets::compact_button(ui, "Cancel").clicked() {
+            close(state);
+        }
     });
 }
 
@@ -877,7 +885,7 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
 fn commit_row_label(c: &turbogit_domain::model::Commit) -> String {
     format!(
         "{}  {}",
-        &c.id[..7.min(c.id.len())],
+        widgets::short_commit_ref(&c.id),
         c.message.lines().next().unwrap_or_default()
     )
 }
@@ -1019,10 +1027,10 @@ fn compare_branches(ui: &mut Ui, state: &mut AppState) {
         .max_height(240.0)
         .show(ui, |ui| {
             for c in &commits {
-                let short = &c[..7.min(c.len())];
+                let short = widgets::short_commit_ref(c);
                 let subj = subjects.get(c).cloned().unwrap_or_default();
                 let line = if subj.is_empty() {
-                    short.to_string()
+                    short
                 } else {
                     format!("{short}  {subj}")
                 };

@@ -352,7 +352,7 @@ fn plan_rows(
                 history_editor::set_action(plan, i, act.clone());
             }
         }
-        child.monospace(short(&plan[i].commit));
+        child.monospace(widgets::short_commit_ref(&plan[i].commit));
         child.label(&plan[i].subject);
         child.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.small_button("↓").clicked() && i + 1 < n {
@@ -391,11 +391,6 @@ fn plan_rows(
     }
 }
 
-/// The first 7 chars of a commit SHA — the plan rows' short form.
-fn short(sha: &str) -> &str {
-    &sha[..7.min(sha.len())]
-}
-
 // ----------------------------------------------------------- preview tab ---
 
 /// The RESULT PREVIEW tab (screen 17): the post-plan commit sequence with
@@ -416,18 +411,22 @@ fn preview_tab(ui: &mut Ui, plan: &[turbogit_domain::model::RebasePlanEntry]) {
         for e in &preview.kept {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(verb(&e.action)).color(Palette::INK_3));
-                ui.monospace(short(&e.commit));
+                ui.monospace(widgets::short_commit_ref(&e.commit));
                 ui.label(&e.subject);
             });
         }
         ui.add_space(4.0);
         for fold in &preview.folds {
-            let folded: Vec<String> = fold.folded.iter().map(|s| short(s).to_string()).collect();
+            let folded: Vec<String> = fold
+                .folded
+                .iter()
+                .map(|s| widgets::short_commit_ref(s))
+                .collect();
             ui.label(
                 egui::RichText::new(format!(
                     "{} folded into {}",
                     folded.join(" + "),
-                    short(&fold.into)
+                    widgets::short_commit_ref(&fold.into)
                 ))
                 .color(Palette::INK_3),
             );

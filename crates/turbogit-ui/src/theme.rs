@@ -338,11 +338,12 @@ pub const MENU_RADIUS: u8 = 6;
 /// as a container rather than as a large control.
 pub const CARD_RADIUS: u8 = 8;
 /// Pill corner radius (9 px) — the full-height wrap the welcome chips and
-/// badges use. Kept with no `src` consumer (conformance issue 18): every pill
-/// now derives its radius from its own height via `widgets::chip_radius`, which
-/// is where this 9 came from, and `design_tokens.rs` plus `welcome.rs` still
-/// assert the shape by name.
+/// badges use. Shared chip geometry derives the full pill radius from this
+/// token: `widgets::CHIP_GEOMETRY.radius` is `PILL_RADIUS as f32` and
+/// `widgets::chip_radius` rounds chips with `CornerRadius::same(PILL_RADIUS)`.
 pub const PILL_RADIUS: u8 = 9;
+/// Cascade-operation accent, distinct from the shared status colors.
+pub const CASCADE_ACCENT: Color32 = Color32::from_rgb(0xa7, 0x8b, 0xfa);
 /// Mark corner radius (2 px) — the rounding on something too small to take
 /// [`CONTROL_RADIUS`]: a 3 px kind-colored accent bar, a 10 px repository dot,
 /// a 2 px focus stroke drawn *inside* a pane's own edge, a character-level diff

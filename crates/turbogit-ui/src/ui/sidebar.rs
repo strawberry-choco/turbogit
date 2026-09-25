@@ -83,14 +83,6 @@ const FOLDER_NAME_X: f32 = 54.0;
 /// Leading x of a repo row's label, with or without an expander.
 const REPO_NAME_X: f32 = 44.0;
 
-/// Paint one icon primitive centered at `origin` without disturbing layout
-/// (mirrors `shell::paint_icon_centered`).
-fn icon_at(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
-    let mut child =
-        ui.new_child(UiBuilder::new().max_rect(Rect::from_center_size(center, Vec2::splat(size))));
-    icons::icon(&mut child, icon, size, color);
-}
-
 /// The square a row's selection checkbox occupies (screen 04's leading
 /// checkbox column).
 fn checkbox_rect(row: Rect) -> Rect {
@@ -120,7 +112,7 @@ fn tri_state_checkbox(
                 CornerRadius::same(crate::theme::CHIP_RADIUS),
                 Palette::BRAND,
             );
-            icon_at(ui, Icon::CHECK, rect.center(), 10.0, Palette::BRAND_INK);
+            icons::centered_icon(ui, Icon::CHECK, rect.center(), 10.0, Palette::BRAND_INK);
         }
         CheckState::Partial => {
             painter.rect_filled(
@@ -775,14 +767,14 @@ fn render_folder_row(
     } else {
         Icon::CHEVRON_RIGHT
     };
-    icon_at(
+    icons::centered_icon(
         ui,
         chevron,
         Pos2::new(header.left() + EXPANDER_X + indent, cy),
         12.0,
         Palette::INK_3,
     );
-    icon_at(
+    icons::centered_icon(
         ui,
         Icon::FOLDER,
         Pos2::new(header.left() + FOLDER_ICON_X + indent, cy),
@@ -939,7 +931,7 @@ fn render_repo_node(
 
     let cy = row.center().y;
     if has_children {
-        icon_at(
+        icons::centered_icon(
             ui,
             if expanded {
                 Icon::CHEVRON_DOWN

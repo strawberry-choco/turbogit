@@ -23,6 +23,7 @@
 //! push can proceed for the rest.
 
 use crate::theme::Palette;
+use crate::ui::widgets;
 use egui::{RichText, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
@@ -125,12 +126,12 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 let force_blocked =
                     state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch);
                 if force_blocked {
-                    ui.colored_label(
-                        Palette::STATE_ERROR,
+                    widgets::inline_error(
+                        ui,
                         format!("⚠ '{branch}' is protected — force-push blocked."),
                     );
-                    ui.colored_label(
-                        Palette::STATE_ERROR,
+                    widgets::inline_error(
+                        ui,
                         "Uncheck force push or retarget the Branch field to continue.",
                     );
                 } else if state.ui.dlg.force_push {
@@ -167,18 +168,25 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             } else {
                 action_label(&scope, total)
             };
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
+            widgets::dialog_footer(ui, |ui| {
+                // The footer lays out right-to-left: call the primary action
+                // first so the visible order remains Cancel · Preview · Push.
+                let push = ui
+                    .scope(|ui| {
+                        if force_blocked_this_repo {
+                            ui.disable();
+                        }
+                        widgets::compact_button(ui, &label)
+                    })
+                    .inner;
+                if push.clicked() {
+                    execute_push(state);
                     close(state);
                 }
-                if ui.button("Preview dry-run").clicked() {
+                if widgets::compact_button(ui, "Preview dry-run").clicked() {
                     run_preview(state);
                 }
-                if ui
-                    .add_enabled(!force_blocked_this_repo, egui::Button::new(&label))
-                    .clicked()
-                {
-                    execute_push(state);
+                if widgets::compact_button(ui, "Cancel").clicked() {
                     close(state);
                 }
             });
@@ -315,7 +323,7 @@ fn remediation_banner(ui: &mut Ui, state: &mut AppState, scope: &[Root]) -> usiz
     } else {
         format!("Remove {} protected repos from scope", protected.len())
     };
-    if ui.button(label).clicked() {
+    if widgets::compact_button(ui, &label).clicked() {
         for p in &protected {
             state.ui.dlg.push_scope_excluded.insert(p.id.clone());
         }
@@ -563,7 +571,7 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn commit_row(ui: &mut Ui, state: &mut AppState, c: &Commit) {
-    let short = &c.id[..c.id.len().min(7)];
+    let short = widgets::short_commit_ref(&c.id);
     let subject = c.message.lines().next().unwrap_or("");
     let mut checked = state.ui.dlg.push_selected_commits.contains(&c.id);
     ui.horizontal(|ui| {

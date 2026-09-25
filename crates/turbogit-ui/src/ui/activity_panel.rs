@@ -9,8 +9,8 @@
 
 use chrono::Local;
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, RichText, ScrollArea,
-    Sense, Shape, Stroke, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, RichText, ScrollArea, Sense,
+    Shape, Stroke, Ui, Vec2, WidgetInfo, WidgetType,
 };
 
 use super::icons::{self, Icon};
@@ -151,7 +151,7 @@ fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
     let hover_tint = ui.painter().add(Shape::Noop);
 
     let (icon_rect, _) = ui.allocate_exact_size(Vec2::splat(ICON_SLOT), Sense::hover());
-    paint_icon_centered(ui, icon, icon_rect.center(), ICON_SIZE, Palette::INK_2);
+    icons::centered_icon(ui, icon, icon_rect.center(), ICON_SIZE, Palette::INK_2);
 
     let text = ui.label(
         RichText::new("ACTIVITY")
@@ -177,14 +177,6 @@ fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
         );
     }
     widgets::focus_ring(ui, &response);
-}
-
-/// Paint one icon primitive centered at `center` without disturbing layout
-/// (mirrors `shell::paint_icon_centered`).
-fn paint_icon_centered(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
-    let mut child =
-        ui.new_child(UiBuilder::new().max_rect(Rect::from_center_size(center, Vec2::splat(size))));
-    icons::icon(&mut child, icon, size, color);
 }
 
 fn header_button(label: &str) -> RichText {

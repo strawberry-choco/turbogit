@@ -17,7 +17,7 @@ use chrono::Datelike;
 use egui_kittest::{Harness, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
 use test_support::harness::{
-    PaintedGalley, assert_not_painted, assert_painted, filled_circles, galley_origin,
+    PaintedGalley, assert_not_painted, assert_painted, filled_circles, filled_rects, galley_origin,
     painted_galleys, painted_text,
 };
 use turbogit_app::state::{AppState, Tab};
@@ -978,6 +978,27 @@ fn branch_checked_out_in_another_worktree_is_flagged_up_front() {
 }
 
 // --- Cycle 12: create branch (issue 08) -------------------------------------------
+
+#[test]
+fn new_branch_dialog_footer_preserves_order_minimum_targets_and_divider() {
+    let (_project, dir) = single_repo_project();
+    let mut h = branches_harness(dir);
+    open_branches_tab(&mut h);
+    h.get_by_label("New Branch").click();
+    settle_quiet(&mut h);
+
+    let create = h.get_by_label("Create");
+    let cancel = h.get_by_label("Cancel");
+    assert!(create.rect().left() < cancel.rect().left());
+    assert!(create.rect().height() >= 28.0);
+    assert!(cancel.rect().height() >= 28.0);
+    assert!(
+        filled_rects(&h)
+            .into_iter()
+            .any(|(rect, _)| (rect.height() - 1.0).abs() < 0.01 && rect.top() < create.rect().top()),
+        "the shared footer divider must be present above the actions"
+    );
+}
 
 #[test]
 fn new_branch_is_prominent_and_defaults_base_to_current_with_switch_on() {

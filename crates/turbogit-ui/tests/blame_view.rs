@@ -14,7 +14,9 @@ use egui::{Color32, Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
 use turbogit_app::events::{AppEvent, LogPageMode};
+use turbogit_app::keyed_read::Keyed;
 use turbogit_app::state::{AppState, Tab};
+use turbogit_domain::error::TgError;
 use turbogit_domain::model::{LogOpts, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -208,6 +210,79 @@ fn select_commit_and_file(harness: &mut Harness<'_, AppState>, seed: &Seed) {
     settle(harness);
     harness.get_by_label("file.txt").click();
     settle(harness);
+}
+
+#[test]
+fn blame_renders_its_keyed_read_waiting_message_through_the_shared_presenter() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    harness.state_mut().ui.blame = Some(turbogit_app::state::BlameTarget {
+        root: harness
+            .state()
+            .selected_root
+            .clone()
+            .expect("selected root"),
+        path: seed.project.join("alpha/file.txt"),
+        rev: seed.c2.clone(),
+    });
+    harness.step();
+    assert_painted(&harness, "Computing blame…");
+}
+
+#[test]
+fn blame_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    let target = turbogit_app::state::BlameTarget {
+        root: harness
+            .state()
+            .selected_root
+            .clone()
+            .expect("selected root"),
+        path: seed.project.join("alpha/file.txt"),
+        rev: seed.c2.clone(),
+    };
+    harness.state_mut().ui.blame = Some(target.clone());
+    harness
+        .state_mut()
+        .tx
+        .send(AppEvent::BlameReady {
+            key: target.key(),
+            result: Err(TgError::Other("blame read failed".into())),
+        })
+        .expect("send blame failure");
+    harness.step();
+    assert_painted(&harness, "blame read failed");
+}
+
+#[test]
+fn blame_renders_a_page_owned_empty_message_for_an_empty_read() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    let target = turbogit_app::state::BlameTarget {
+        root: harness
+            .state()
+            .selected_root
+            .clone()
+            .expect("selected root"),
+        path: seed.project.join("alpha/file.txt"),
+        rev: seed.c2.clone(),
+    };
+    harness.state_mut().ui.blame = Some(target.clone());
+    harness
+        .state_mut()
+        .tx
+        .send(AppEvent::BlameReady {
+            key: target.key(),
+            result: Ok(Vec::new()),
+        })
+        .expect("send empty blame result");
+    harness.step();
+
+    assert_painted(&harness, "No blame lines for this revision.");
+    assert_not_painted(&harness, "Computing blame…");
+    assert_not_painted(&harness, "blame read failed");
+    assert_not_painted(&harness, "(no differences)");
 }
 
 // --- Cycle 3: footer entry + per-line attribution ------------------------------

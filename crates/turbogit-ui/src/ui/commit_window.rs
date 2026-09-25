@@ -195,7 +195,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
     if let Some(err) = &state.last_error {
         ui.separator();
-        ui.colored_label(Palette::STATE_ERROR, format!("⚠ {err}"));
+        widgets::inline_error(ui, format!("⚠ {err}"));
     }
 }
 
@@ -503,7 +503,7 @@ fn repo_group(
     };
     widgets::paint_row(ui, row, row_state);
     let cy = row.center().y;
-    icon_at(
+    icons::centered_icon(
         ui,
         if expanded {
             Icon::CHEVRON_DOWN
@@ -514,7 +514,7 @@ fn repo_group(
         12.0,
         Palette::INK_3,
     );
-    icon_at(
+    icons::centered_icon(
         ui,
         Icon::FOLDER_GIT,
         Pos2::new(row.left() + 32.0, cy),
@@ -602,14 +602,6 @@ fn indent_guide(ui: &Ui, block: Rect) {
         CornerRadius::ZERO,
         Palette::LINE_SUBTLE,
     );
-}
-
-/// Paint one icon primitive centered at `origin` without disturbing layout
-/// (mirrors the sidebar's helper of the same name).
-fn icon_at(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
-    let mut child =
-        ui.new_child(UiBuilder::new().max_rect(Rect::from_center_size(center, Vec2::splat(size))));
-    icons::icon(&mut child, icon, size, color);
 }
 
 /// One bucket's file rows inside an expanded repo group. Issue 07 removes the
@@ -1004,7 +996,7 @@ fn change_row(
             )
         };
         // Muted arrow then the renamed-from path, both dim (R8).
-        icon_at(
+        icons::centered_icon(
             ui,
             Icon::ARROW_RIGHT,
             Pos2::new(orig_x - RENAME_ARROW_W / 2.0, arrow_cy),
@@ -1356,18 +1348,14 @@ fn pill(ui: &mut Ui, label: &str, tint: Color32) {
         FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional),
         tint,
     );
-    let size = Vec2::new(galley.size().x + pad_x * 2.0, widgets::CHIP_HEIGHT);
+    let geometry = widgets::ChipGeometry {
+        height: widgets::CHIP_HEIGHT,
+        pad_x,
+        radius: widgets::CHIP_GEOMETRY.radius,
+    };
+    let size = geometry.size(&galley);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter()
-        .rect_filled(rect, widgets::chip_radius(), Palette::SURFACE_3);
-    ui.painter().galley(
-        Pos2::new(
-            rect.center().x - galley.size().x / 2.0,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        tint,
-    );
+    geometry.paint(ui.painter(), rect, galley, Palette::SURFACE_3, tint);
     let resp = ui.interact(rect, ui.auto_id_with(("pill", label)), Sense::hover());
     resp.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, label));
 }

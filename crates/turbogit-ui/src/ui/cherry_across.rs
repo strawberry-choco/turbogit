@@ -232,7 +232,7 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
         return;
     };
     let Ok(patch) = preview else {
-        ui.label(egui::RichText::new("Could not load the patch.").color(Palette::STATE_ERROR));
+        widgets::inline_error(ui, "Could not load the patch.");
         return;
     };
     let files = preview_files(&patch);
@@ -266,7 +266,7 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
-                egui::RichText::new(short(&focus))
+                egui::RichText::new(widgets::short_commit_ref(&focus))
                     .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                     .color(Palette::INK_3),
             );
@@ -291,10 +291,6 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
             );
         }
     });
-}
-
-fn short(sha: &str) -> String {
-    sha.chars().take(7).collect()
 }
 
 // --------------------------------------------------------------- targets ---

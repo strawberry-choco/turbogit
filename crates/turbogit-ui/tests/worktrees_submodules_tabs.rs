@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use test_support::harness::{assert_painted, painted_text, settle};
 use turbogit_app::state::{AppState, Tab};
+use turbogit_domain::model::{Submodule, SubmoduleState};
 
 /// Run `git` in `repo`, asserting success, and return stdout.
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -121,6 +122,24 @@ fn worktrees_tab_lists_worktrees_with_branch_without_waiting_on_dirty() {
     assert_painted(&h, "wt-feature");
     assert_painted(&h, "feature");
     assert_painted(&h, "Add worktree");
+}
+
+#[test]
+fn worktrees_header_keeps_add_action_in_the_right_aligned_action_slot() {
+    let parent = scratch("wt-sub-tabs-header");
+    let repo = temp_repo(&parent, "alpha");
+    let mut state = AppState::for_roots(&parent, &[repo]);
+    state.ui.tab = Tab::Worktrees;
+    let mut h = harness(state);
+    settle(&mut h);
+
+    assert_painted(&h, "WORKTREES");
+    let add = h.get_by_label("Add worktree");
+    assert!(
+        add.rect().center().x > 600.0,
+        "shared header action must sit in the right slot: {:?}",
+        add.rect()
+    );
 }
 
 // -- Ticket 03 — visibility-gated dirty probes fill the rows in ---------------
@@ -313,6 +332,30 @@ fn submodules_tab_lists_submodules_with_status_and_actions() {
 }
 
 #[test]
+fn submodules_tab_renders_unicode_commit_references_without_splitting_them() {
+    let parent = scratch("wt-sub-tabs-unicode-ref");
+    let repo = temp_repo(&parent, "alpha");
+    let mut state = AppState::for_roots(&parent, std::slice::from_ref(&repo));
+    state.ui.tab = Tab::Submodules;
+    let root = state.selected_root.clone().expect("selected root");
+    state.caches.store_submodules(
+        root.clone(),
+        vec![Submodule {
+            path: "child".into(),
+            head: Some("界界界界界界界界".to_string()),
+            recorded: None,
+            state: SubmoduleState::UpToDate,
+            root,
+        }],
+    );
+    let mut h = harness(state);
+    settle(&mut h);
+
+    assert_painted(&h, "界界界界界界界");
+    assert!(!painted_contains(&h, "界界界界界界界界"));
+}
+
+#[test]
 fn submodules_tab_shows_needs_update_with_pinned_vs_recorded() {
     let parent = scratch("wt-sub-tabs-sub-ahead");
     let repo = super_with_submodule(&parent, "alpha");
@@ -367,6 +410,22 @@ fn submodules_tab_deinit_action_uninitializes_the_submodule() {
     assert_painted(&h, "De-init submodule");
     h.get_by_label("OK").click();
     step_until(&mut h, |h| painted_contains(h, "Uninitialized"));
+}
+
+#[test]
+fn submodules_header_uses_shared_title_band_with_an_empty_action_slot() {
+    let parent = scratch("sub-header");
+    let repo = temp_repo(&parent, "alpha");
+    let mut state = AppState::for_roots(&parent, &[repo]);
+    state.ui.tab = Tab::Submodules;
+    let mut h = harness(state);
+    settle(&mut h);
+
+    assert_painted(&h, "SUBMODULES");
+    assert!(
+        h.query_all_by_label("Add submodule").next().is_none(),
+        "the empty header action slot must not invent a control"
+    );
 }
 
 // -- Cycle C — tab-strip badges ----------------------------------------------

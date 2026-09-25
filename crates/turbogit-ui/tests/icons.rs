@@ -80,6 +80,61 @@ fn known_icon_paints_strokes_at_requested_size_and_color() {
 }
 
 #[test]
+fn centered_icon_uses_a_square_slot_and_known_centered_geometry() {
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            Pos2::ZERO,
+            egui::vec2(200.0, 200.0),
+        )),
+        ..Default::default()
+    };
+    let center = Pos2::new(80.0, 64.0);
+    let size = 24.0;
+    let ink = Palette::STATE_WARNING;
+    let response = Mutex::new(None);
+    let mut full = ctx.run_ui(raw, |ui| {
+        *response.lock().expect("centered icon response lock") = Some(icons::centered_icon(
+            ui,
+            icons::Icon::CHECK,
+            center,
+            size,
+            ink,
+        ));
+    });
+
+    let allocation = response
+        .lock()
+        .expect("centered icon response lock")
+        .as_ref()
+        .expect("centered icon registers a square allocation")
+        .rect;
+    assert_eq!(allocation.width(), size);
+    assert_eq!(allocation.height(), size);
+    assert_eq!(allocation.center(), center);
+
+    let paths: Vec<_> = full
+        .shapes
+        .iter()
+        .filter_map(|clipped| match clipped.shape {
+            Shape::Path(ref path) if path.fill == Color32::TRANSPARENT => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(paths.len(), 1, "check has one stroked subpath");
+
+    let origin = center - egui::Vec2::splat(size / 2.0);
+    let expected_check = [
+        Pos2::new(origin.x + 20.0, origin.y + 6.0),
+        Pos2::new(origin.x + 9.0, origin.y + 17.0),
+        Pos2::new(origin.x + 4.0, origin.y + 12.0),
+    ];
+    assert_eq!(paths[0].points, expected_check);
+    assert_eq!(stroke_color(paths[0]), Some(ink));
+    full.textures_delta.clear();
+}
+
+#[test]
 fn icon_tint_derives_from_central_palette_tokens() {
     let shapes = painted_shapes(|ui| {
         icons::icon(ui, icons::Icon::CHECK, 16.0, icon_color());

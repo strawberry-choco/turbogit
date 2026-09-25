@@ -404,7 +404,7 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 });
             }
             PendingConfirm::RevertCommit { commit } => {
-                let short = &commit[..7.min(commit.len())];
+                let short = widgets::short_commit_ref(commit);
                 ui.label(format!(
                     "Revert commit {short}? A new inverse commit will be created on the current branch."
                 ));
