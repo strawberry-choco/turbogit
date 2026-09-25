@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::harness::{assert_not_painted, assert_painted, filled_rects, galley_origin};
 
-use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
+use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape, accesskit::Role};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use turbogit_app::state::AppState;
@@ -252,6 +252,15 @@ fn merge_editor_renders_three_equal_panes_with_tinted_blocks() {
     assert_painted(&h, "Result");
     assert_painted(&h, "Incoming (Theirs)");
 
+    // The editor's footer controls remain reachable as real AccessKit buttons.
+    for label in ["Apply", "Cancel"] {
+        assert_eq!(
+            h.get_by_label(label).accesskit_node().role(),
+            Role::Button,
+            "{label} must remain an accessible button"
+        );
+    }
+
     // Both sides of the first conflict block paint…
     assert_painted(&h, "MAIN-one");
     assert_painted(&h, "SIDE-one");
@@ -316,6 +325,11 @@ fn accept_buttons_resolve_blocks_update_read_only_result_and_counter() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_merge_editor(&mut h);
+    assert_eq!(
+        h.get_by_label("Accept Yours 1").accesskit_node().role(),
+        Role::Button,
+        "per-block resolution must remain an accessible button"
+    );
 
     // Resolving block 1 decrements the counter and records the choice.
     h.get_by_label("Accept Yours 1").click();

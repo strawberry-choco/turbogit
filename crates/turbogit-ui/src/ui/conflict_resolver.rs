@@ -16,11 +16,8 @@
 //! (`diff_engine::merge_segments`) is unchanged.
 
 use crate::theme::Palette;
-use crate::ui::widgets::tint_over_bg;
-use egui::{
-    Color32, CornerRadius, Frame, Key, Margin, Modifiers, Rect, RichText, ScrollArea, Stroke,
-    TextEdit, Ui, Vec2,
-};
+use crate::ui::kit::conflict_pane::{self, Side};
+use egui::{Key, Modifiers, RichText, ScrollArea, TextEdit, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Toast};
@@ -88,95 +85,6 @@ fn compose(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
     out
 }
 
-fn yours_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_INFO, crate::theme::SECTION_TINT)
-}
-fn theirs_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_ERROR, crate::theme::SECTION_TINT)
-}
-fn marker_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_WARNING, crate::theme::MARKER_TINT)
-}
-
-fn pane_header(ui: &mut Ui, title: &str, focused: bool) {
-    let resp = Frame::new()
-        .fill(Palette::SURFACE)
-        .inner_margin(Margin::symmetric(8, 5))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.set_min_height(16.0);
-            ui.label(
-                RichText::new(title)
-                    .strong()
-                    .size(crate::theme::TYPE_BODY)
-                    .color(Palette::INK),
-            );
-        });
-    if focused {
-        ui.painter().rect_stroke(
-            resp.response.rect,
-            CornerRadius::same(crate::theme::MARK_RADIUS),
-            Stroke::new(2.0, Palette::BRAND),
-            egui::StrokeKind::Inside,
-        );
-    }
-}
-
-fn marker_strip(ui: &mut Ui, glyph: &str) {
-    Frame::new()
-        .fill(marker_bg())
-        .inner_margin(Margin::symmetric(6, 2))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new(glyph)
-                    .monospace()
-                    .size(crate::theme::TYPE_CHIP)
-                    .color(Palette::STATE_WARNING),
-            );
-        });
-}
-
-fn side_section(ui: &mut Ui, text: &str, fill: Color32, strip: Color32) {
-    let resp = Frame::new()
-        .fill(fill)
-        .inner_margin(Margin::symmetric(6, 4))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(text).monospace().color(Palette::INK));
-        });
-    let r = resp.response.rect;
-    ui.painter().rect_filled(
-        Rect::from_min_size(r.left_top(), Vec2::new(3.0, r.height())),
-        0.0,
-        strip,
-    );
-}
-
-/// READ-ONLY composed-result cell.
-fn result_cell(ui: &mut Ui, chosen: Option<u8>, ours: &str, theirs: &str) {
-    let (text, fill) = match chosen {
-        Some(CHOICE_THEIRS) => (theirs.to_string(), Palette::SURFACE),
-        Some(CHOICE_BOTH_OURS_FIRST) => (format!("{ours}{theirs}"), Palette::SURFACE),
-        Some(CHOICE_BOTH_THEIRS_FIRST) => (format!("{theirs}{ours}"), Palette::SURFACE),
-        Some(_) => (ours.to_string(), Palette::SURFACE),
-        None => ("<< unresolved >>".to_string(), marker_bg()),
-    };
-    let resp = Frame::new()
-        .fill(fill)
-        .inner_margin(Margin::symmetric(6, 4))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(text).monospace().color(Palette::INK));
-        });
-    ui.painter().rect_stroke(
-        resp.response.rect,
-        CornerRadius::same(crate::theme::MARK_RADIUS),
-        Stroke::new(2.0, Palette::BRAND),
-        egui::StrokeKind::Inside,
-    );
-}
-
 /// Editable Result cell for the ACTIVE conflict. Wires a multiline TextEdit
 /// over `state.ui.conflict_text`; typing flips `conflict_resolver_edited`
 /// so Apply uses the typed text verbatim.
@@ -209,21 +117,30 @@ fn conflict_block(
     let active = state.ui.conflict_resolver_active_idx == res_i;
 
     // Marker strips frame the discrete conflict block.
-    ui.columns(3, |cols| {
-        marker_strip(&mut cols[0], "<<<<<<<");
-        marker_strip(&mut cols[1], "=======");
-        marker_strip(&mut cols[2], ">>>>>>>");
+    conflict_pane::equal_panes(ui, |cols| {
+        conflict_pane::marker_strip(&mut cols[0], "<<<<<<<");
+        conflict_pane::marker_strip(&mut cols[1], "=======");
+        conflict_pane::marker_strip(&mut cols[2], ">>>>>>>");
     });
     // Tinted yours/theirs + editable Result.
     let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
-    ui.columns(3, |cols| {
-        side_section(&mut cols[0], ours, yours_bg(), Palette::STATE_INFO);
+    conflict_pane::equal_panes(ui, |cols| {
+        conflict_pane::side_section(&mut cols[0], ours, Side::Local);
         if active {
             result_text_edit(&mut cols[1], state);
         } else {
-            result_cell(&mut cols[1], chosen, ours, theirs);
+            // Choice interpretation stays resolver-owned; only the inactive
+            // read-only path allocates text for the shared presentation kit.
+            let result_text = match chosen {
+                Some(CHOICE_THEIRS) => Some(theirs.to_owned()),
+                Some(CHOICE_BOTH_OURS_FIRST) => Some(format!("{ours}{theirs}")),
+                Some(CHOICE_BOTH_THEIRS_FIRST) => Some(format!("{theirs}{ours}")),
+                Some(_) => Some(ours.to_owned()),
+                None => None,
+            };
+            conflict_pane::result_cell(&mut cols[1], result_text);
         }
-        side_section(&mut cols[2], theirs, theirs_bg(), Palette::STATE_ERROR);
+        conflict_pane::side_section(&mut cols[2], theirs, Side::Incoming);
     });
     if active {
         // Per-conflict action row (only for the active conflict).
@@ -540,10 +457,10 @@ fn render_resolver_body(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf
 fn render_panes(ui: &mut Ui, state: &mut AppState) {
     let segs = state.ui.conflict_segs.clone();
     // Pane headers.
-    ui.columns(3, |cols| {
-        pane_header(&mut cols[0], "Local (Yours)", false);
-        pane_header(&mut cols[1], "Result", true);
-        pane_header(&mut cols[2], "Incoming (Theirs)", false);
+    conflict_pane::equal_panes(ui, |cols| {
+        conflict_pane::pane_header(&mut cols[0], "Local (Yours)", false);
+        conflict_pane::pane_header(&mut cols[1], "Result", true);
+        conflict_pane::pane_header(&mut cols[2], "Incoming (Theirs)", false);
     });
 
     // Keyboard navigation: Alt+Up / Alt+Down move the active cursor.
@@ -562,7 +479,7 @@ fn render_panes(ui: &mut Ui, state: &mut AppState) {
     for (ours, theirs, is_conf) in segs.iter() {
         if !*is_conf {
             let text = ours.as_str();
-            ui.columns(3, |cols| {
+            conflict_pane::equal_panes(ui, |cols| {
                 for col in cols.iter_mut() {
                     col.label(RichText::new(text).monospace().color(Palette::INK_2));
                 }
