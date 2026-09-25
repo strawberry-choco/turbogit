@@ -142,7 +142,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     body.allocate_exact_size(Vec2::new(header.width(), header_h), Sense::hover());
     let hp = body.painter().clone();
     let hcy = header.center().y;
-    icon_at(
+    icons::centered_icon(
         &mut body,
         Icon::LAYERS,
         Pos2::new(header.left() + 8.0, hcy),
@@ -594,14 +594,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             }
         }
     }
-}
-
-/// Paint one icon primitive centered at `origin` without disturbing layout
-/// (mirrors `sidebar::icon_at`).
-fn icon_at(ui: &mut Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
-    let mut child =
-        ui.new_child(UiBuilder::new().max_rect(Rect::from_center_size(center, Vec2::splat(size))));
-    icons::icon(&mut child, icon, size, color);
 }
 
 /// The repo whose display label equals `label`, walking the recursive tree

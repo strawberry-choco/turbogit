@@ -20,7 +20,10 @@ use std::process::Command;
 
 use egui::{Color32, Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
+use turbogit_app::events::AppEvent;
+use turbogit_app::keyed_read::{DiffTarget, Keyed};
 use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_domain::error::TgError;
 use turbogit_ui::theme::{Palette, configure_style, install_fonts};
 
 // --- git seeding -------------------------------------------------------------
@@ -154,6 +157,41 @@ fn diff_harness(repo: &Path) -> Harness<'static, AppState> {
     // tallest comparison diff plus the message editor below it.
     harness.set_size(egui::vec2(1024.0, 900.0));
     harness
+}
+
+#[test]
+fn diff_renders_its_keyed_read_waiting_message_through_the_shared_presenter() {
+    let (_tmp, repo) = repo_two_hunks();
+    let mut harness = diff_harness(&repo);
+    harness.state_mut().ui.preview_change = Some(repo.join("nav.txt"));
+    harness.step();
+    assert_painted(&harness, "Computing diff…");
+}
+
+#[test]
+fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
+    let (_tmp, repo) = repo_two_hunks();
+    let mut harness = diff_harness(&repo);
+    let path = repo.join("nav.txt");
+    harness.state_mut().ui.preview_change = Some(path.clone());
+    let target = DiffTarget::new(
+        repo.clone(),
+        None,
+        None,
+        DiffComparison::Local,
+        false,
+        Some(path),
+    );
+    harness
+        .state_mut()
+        .tx
+        .send(AppEvent::DiffReady {
+            key: target.key(),
+            result: Err(TgError::Other("diff read failed".into())),
+        })
+        .expect("send diff failure");
+    harness.step();
+    assert_painted(&harness, "diff read failed");
 }
 
 /// All text painted by the last completed frame.

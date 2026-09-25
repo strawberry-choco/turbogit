@@ -12,7 +12,6 @@ use egui::{
     CornerRadius, FontFamily, FontId, Pos2, RichText, ScrollArea, Sense, Ui, Vec2, WidgetInfo,
     WidgetType,
 };
-use std::sync::Arc;
 use turbogit_app::keyed_read::Read;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::BlameLine;
@@ -66,10 +65,6 @@ fn fmt_age(t: i64) -> String {
     }
 }
 
-fn short(id: &str) -> String {
-    id.chars().take(7).collect()
-}
-
 /// Render the blame surface over the graph pane's region. Data flows through
 /// the keyed read of the open [`turbogit_app::state::BlameTarget`] (worker
 /// thread → `BlameReady`), so this is a pure render over the verdict: which of
@@ -97,7 +92,7 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
         RichText::new(format!(
             "{} @ {}",
             target.path.display(),
-            short(&target.rev)
+            widgets::short_commit_ref(&target.rev)
         ))
         .font(micro_font())
         .color(Palette::BRAND),
@@ -117,15 +112,30 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(16.0);
 
     let lines = match verdict {
+        Read::Fresh(lines) if lines.is_empty() => {
+            ui.label("No blame lines for this revision.");
+            if close {
+                state.ui.blame = None;
+            }
+            return;
+        }
         Read::Fresh(lines) => lines,
-        Read::Empty => Arc::from(vec![]),
+        Read::Empty => {
+            ui.label("No blame lines for this revision.");
+            if close {
+                state.ui.blame = None;
+            }
+            return;
+        }
         Read::Waiting => {
-            ui.spinner();
-            ui.label("Computing blame…");
+            widgets::keyed_read_presentation(
+                ui,
+                widgets::KeyedReadPresentation::Waiting("Computing blame…"),
+            );
             return;
         }
         Read::Failed(message) => {
-            ui.colored_label(Palette::STATE_ERROR, message);
+            widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Failed(&message));
             return;
         }
     };
@@ -175,7 +185,11 @@ fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str) -> bool {
 
     let painter = ui.painter().clone();
     let cy = rect.center().y;
-    let hash = painter.layout_no_wrap(short(&line.commit), mono_font(), Palette::BRAND);
+    let hash = painter.layout_no_wrap(
+        widgets::short_commit_ref(&line.commit),
+        mono_font(),
+        Palette::BRAND,
+    );
     painter.galley(
         Pos2::new(rect.left() + HASH_X, cy - hash.size().y / 2.0),
         hash,
@@ -206,7 +220,7 @@ fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str) -> bool {
         WidgetInfo::labeled(
             WidgetType::Button,
             true,
-            format!("{} {}", short(&line.commit), content),
+            format!("{} {}", widgets::short_commit_ref(&line.commit), content),
         )
     });
     response.clicked()

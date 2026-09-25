@@ -108,12 +108,14 @@ pub fn render_diff(
             return;
         }
         Read::Waiting => {
-            ui.spinner();
-            ui.label("Computing diff…");
+            widgets::keyed_read_presentation(
+                ui,
+                widgets::KeyedReadPresentation::Waiting("Computing diff…"),
+            );
             return;
         }
         Read::Failed(message) => {
-            ui.colored_label(Palette::STATE_ERROR, message);
+            widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Failed(&message));
             return;
         }
     };

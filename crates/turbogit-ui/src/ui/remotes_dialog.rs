@@ -5,7 +5,7 @@
 //! projects the pending change can be applied across a checked repo selection
 //! with per-repo outcomes (routed through the bulk-completed pipeline).
 
-use egui::{Align, Layout, Ui};
+use egui::Ui;
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, RemoteRowAction};
@@ -13,6 +13,7 @@ use turbogit_domain::model::{BranchKind, RootId};
 use turbogit_services::remote_service::RemoteChange;
 
 use crate::theme::Palette;
+use crate::ui::widgets;
 use crate::ui::widgets::group_title;
 
 /// The dialog window: title names the focused repo; the body edits it.
@@ -70,7 +71,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                             "New remote name",
                         )
                     });
-                    if ui.button("Rename").clicked() {
+                    if widgets::compact_button(ui, "Rename").clicked() {
                         let new = state.ui.dlg.remotes_rename_new.trim().to_string();
                         if !new.is_empty() && new != name {
                             let p = root_path.clone();
@@ -84,7 +85,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                         }
                         state.ui.dlg.remotes_row_action = None;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if widgets::compact_button(ui, "Cancel").clicked() {
                         state.ui.dlg.remotes_row_action = None;
                     }
                 }
@@ -109,7 +110,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                     p.widget_info(|| {
                         egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, "Edit push URL")
                     });
-                    if ui.button("Save").clicked() {
+                    if widgets::compact_button(ui, "Save").clicked() {
                         let fetch = state.ui.dlg.remotes_edit_fetch.clone();
                         let push = state.ui.dlg.remotes_edit_push.clone();
                         let p = root_path.clone();
@@ -130,7 +131,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                         ));
                         state.ui.dlg.remotes_row_action = None;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if widgets::compact_button(ui, "Cancel").clicked() {
                         state.ui.dlg.remotes_row_action = None;
                     }
                 }
@@ -162,21 +163,21 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                             state.ui.dlg.remotes_row_action = None;
                         }
                     }
-                    if ui.button("Cancel").clicked() {
+                    if widgets::compact_button(ui, "Cancel").clicked() {
                         state.ui.dlg.remotes_row_action = None;
                     }
                 }
                 _ => {
-                    if ui.button("Set upstream…").clicked() {
+                    if widgets::compact_button(ui, "Set upstream…").clicked() {
                         state.ui.dlg.remotes_row_action =
                             Some((name.clone(), RemoteRowAction::SetUpstream));
                     }
-                    if ui.button("Rename").clicked() {
+                    if widgets::compact_button(ui, "Rename").clicked() {
                         state.ui.dlg.remotes_rename_new = name.clone();
                         state.ui.dlg.remotes_row_action =
                             Some((name.clone(), RemoteRowAction::Rename));
                     }
-                    if ui.button("Edit URL").clicked() {
+                    if widgets::compact_button(ui, "Edit URL").clicked() {
                         state.ui.dlg.remotes_edit_fetch =
                             remote.fetch_url.clone().unwrap_or_default();
                         state.ui.dlg.remotes_edit_push =
@@ -184,7 +185,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                         state.ui.dlg.remotes_row_action =
                             Some((name.clone(), RemoteRowAction::EditUrl));
                     }
-                    if ui.button("Remove").clicked() {
+                    if widgets::compact_button(ui, "Remove").clicked() {
                         let p = root_path.clone();
                         state.dispatch(Operation::custom(
                             format!("Remove remote {name}"),
@@ -245,10 +246,15 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
     let add_name = state.ui.dlg.remotes_add_name.trim().to_string();
     let add_fetch = state.ui.dlg.remotes_add_fetch.trim().to_string();
     let can_add = !add_name.is_empty() && !add_fetch.is_empty();
-    if ui
-        .add_enabled(can_add, egui::Button::new("Add remote"))
-        .clicked()
-    {
+    let add = ui
+        .scope(|ui| {
+            if !can_add {
+                ui.disable();
+            }
+            widgets::compact_button(ui, "Add remote")
+        })
+        .inner;
+    if add.clicked() {
         let add_push = state.ui.dlg.remotes_add_push.trim().to_string();
         let p = root_path.clone();
         let fetch = add_fetch.clone();
@@ -295,10 +301,14 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                 }
             }
         }
-        let apply = ui.add_enabled(
-            !state.ui.dlg.remotes_apply_scope.is_empty() && can_add,
-            egui::Button::new(if update { "Apply update" } else { "Apply add" }),
-        );
+        let apply = ui
+            .scope(|ui| {
+                if state.ui.dlg.remotes_apply_scope.is_empty() || !can_add {
+                    ui.disable();
+                }
+                widgets::compact_button(ui, if update { "Apply update" } else { "Apply add" })
+            })
+            .inner;
         if apply.clicked() {
             let scope: Vec<RootId> = state.ui.dlg.remotes_apply_scope.iter().cloned().collect();
             let change = if update {
@@ -334,11 +344,9 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
         ui.add_space(6.0);
     }
 
-    ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Close").clicked() {
-                state.ui.dialog = None;
-            }
-        });
+    widgets::dialog_footer(ui, |ui| {
+        if widgets::compact_button(ui, "Close").clicked() {
+            state.ui.dialog = None;
+        }
     });
 }

@@ -346,6 +346,26 @@ fn the_preview_tab_shows_the_result_sequence_counts_and_folds() {
 }
 
 #[test]
+fn plan_rows_render_unicode_commit_references_without_splitting_them() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = plan_repo(tmp.path(), "repo");
+    let (mut state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
+    state.ui.dlg.rebase_plan = Some(vec![plan_entry(
+        turbogit_domain::model::RebaseAction::Pick,
+        "界界界界界界界界",
+        "unicode reference",
+    )]);
+    let mut h = harness(state);
+    h.state_mut().selected_root = Some(RootId(repo.to_path_buf().into()));
+    h.state_mut().ui.dialog = Some(Dialog::InteractiveRebase);
+
+    h.run();
+
+    assert_painted(&h, "界界界界界界界");
+    assert_not_painted(&h, "界界界界界界界界");
+}
+
+#[test]
 fn editing_the_raw_todo_reparses_into_the_plan() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = plan_repo(tmp.path(), "repo");

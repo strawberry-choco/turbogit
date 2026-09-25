@@ -9,15 +9,10 @@ use turbogit_app::state::{AppState, PendingConfirm};
 use turbogit_domain::model::{Submodule, SubmoduleState};
 
 use crate::theme::Palette;
+use crate::ui::widgets;
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    ui.add_space(8.0);
-    ui.label(
-        RichText::new("SUBMODULES")
-            .strong()
-            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-            .color(Palette::INK_3),
-    );
+    widgets::toolwindow_header(ui, "SUBMODULES", |_ui| {});
     ui.add_space(4.0);
 
     let Some(id) = state.selected_root.clone() else {
@@ -78,10 +73,14 @@ fn submodule_row(ui: &mut Ui, state: &mut AppState, sub: &Submodule) {
 fn commit_summary(ui: &mut Ui, sub: &Submodule) {
     let text = match (&sub.head, &sub.recorded) {
         (Some(h), Some(r)) if h != r => {
-            format!("pinned {} → recorded {}", short(h), short(r))
+            format!(
+                "pinned {} → recorded {}",
+                widgets::short_commit_ref(h),
+                widgets::short_commit_ref(r)
+            )
         }
-        (Some(h), _) => short(h).to_string(),
-        (None, Some(r)) => format!("recorded {}", short(r)),
+        (Some(h), _) => widgets::short_commit_ref(h),
+        (None, Some(r)) => format!("recorded {}", widgets::short_commit_ref(r)),
         (None, None) => String::new(),
     };
     if !text.is_empty() {
@@ -106,9 +105,4 @@ fn status_chip(ui: &mut Ui, state: SubmoduleState) {
             .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
             .color(color),
     );
-}
-
-/// First 7 hex chars of a commit sha (the git-short sha the UI shows).
-fn short(sha: &str) -> &str {
-    &sha[..7.min(sha.len())]
 }

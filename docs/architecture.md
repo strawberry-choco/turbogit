@@ -40,11 +40,12 @@ flowchart TB
     subgraph UICrate["turbogit-ui"]
         THEME["theme.rs — dark-only palette (ADR-0003)"]
         SHELL["ui/shell.rs — IDE shell<br/>(topbar / toolbar / sidebar rail / tab strip / status bar)"]
-        WINDOWS["ui/{welcome,commit_window,log_window}.rs"]
-        DIFF["ui/diff.rs"]
-        SURFACES["ui/{conflicts,push_dialog,popups,branch_widget,dialogs,settings_modal}.rs"]
-        WIDGETS["ui/{widgets,icons,hunk_nav}.rs"]
-        SHELL --> WINDOWS & DIFF & SURFACES & WIDGETS
+        WINDOWS["ui/{welcome,commit_window,log_window,worktrees,submodules}.rs"]
+        DIFF["ui/diff/ — specialized diff component"]
+        SURFACES["ui/{conflicts,push_dialog,remotes_dialog,popups,branch_widget,dialogs,settings_modal}.rs"]
+        WIDGETS["ui/widgets/ — public façade + focused modules"]
+        ICONS["ui/icons.rs — shared icon owner"]
+        SHELL --> WINDOWS & DIFF & SURFACES & WIDGETS & ICONS
     end
 
     subgraph AppCrate["turbogit-app"]
@@ -152,7 +153,44 @@ prerequisite for anything else.
   Settings modal, and toast.
 - Reads from `AppState`; never calls git directly.
 
-### 3. State & App Services (`turbogit-app`)
+### 3. UI component boundaries
+
+- **General widget facade:** `turbogit_ui::ui::widgets` is the public compatibility
+  façade. Its private `widgets/` modules have focused ownership: `controls`
+  (states, buttons, focus, and segmented choices), `chips` (geometry and
+  semantic chip/badge wrappers), `rows`, `inputs`, `feedback`, `containers`, and
+  `text` utilities. The established names and signatures are explicitly
+  re-exported by the façade; callers do not import the private modules.
+- **Icons:** `turbogit_ui::ui::icons` remains the separate public owner of icon
+  lookup (`Icon::from_name`, `icon_by_name`) and icon path painting
+  (`paint_icon`), plus the shared centered icon primitives (`icon`,
+  `centered_icon`). Origin-based placement is a separate concern and stays with
+  the private control/feature code that needs it — e.g. the private
+  `widgets::controls::paint_icon_at` and `ui::welcome`'s local helper, each of
+  which delegates the actual painting to `ui::icons` rather than drawing
+  glyph geometry itself. The widget façade does not become a second icon
+  implementation.
+- **Branch component kit:** `turbogit_ui::ui::components` owns branch-specific
+  geometry, rows, sync/current/count facts, collapsible section headers, and
+  branch action buttons. It is a specialized public kit, not the general
+  widget vocabulary.
+- **Internal specialized kit:** crate-private `turbogit_ui::ui::kit` contains
+  `conflict_pane`, the narrow three-pane conflict presentation grammar. It does
+  not parse conflicts, choose a resolution, hold editor state, or dispatch Git.
+- **Branch-tree feature components:** `ui::branch_tree_view`,
+  `ui::branches_tree`, `ui::branches`, and `ui::branch_widget` retain their
+  branch feature vocabulary and view-model/event boundary. They render or
+  report branch events but do not call Git or dispatch operations.
+- **Diff feature component:** `turbogit_ui::ui::diff` is the current directory
+  component (`actions`, `model`, `panes`, and `view`). Diff model, pane,
+  selection, granularity, and rendering semantics remain specialized; they may
+  compose general widgets and shared chip geometry without becoming a general
+  façade.
+- **Compatibility:** the public `ui::widgets`, `ui::components`, `ui::icons`,
+  and existing feature paths remain stable. The façade is the supported import
+  seam, while focused private modules are an implementation detail.
+
+### 4. State & App Services (`turbogit-app`)
 - `state.rs` — `AppState` is the hub: owns the `Arc<dyn GitExecutor>`, the
   multi-root model, canonical settings, the crossbeam event channel, and all
   UI-only ephemeral state. Git work is dispatched as an `Operation` via
@@ -167,14 +205,14 @@ prerequisite for anything else.
 - `events.rs` — `AppEvent`, `DecodedImage`, `FetchedBlob`: the transport from
   worker threads back to the UI thread.
 - `diff_data.rs` — the plain diff-pane data types (`PaneCache`, `PaneEntry`,
-  `PaneSide`) and the hunk-nav `Dir`/`EDGE_WINDOW` that `ui/diff.rs` renders.
+  `PaneSide`) and the hunk-nav `Dir`/`EDGE_WINDOW` that `ui/diff/` renders.
   Living beside `AppState` keeps the app crate egui-free.
 - `root_caches.rs` — per-root caches keyed by `RootId`, invalidated by op-scope
   (`Affected`) so post-op refreshes stay narrow.
 - `persistence.rs` — serializes settings/state under `.turbogit/`.
 - `recents.rs` — the global recent-projects file (ADR-0005).
 
-### 4. Services (`turbogit-services`)
+### 5. Services (`turbogit-services`)
 Pure-ish services over the engine seam; no egui, no `AppState`:
 | Module | Responsibility |
 |---|---|
@@ -188,7 +226,7 @@ Pure-ish services over the engine seam; no egui, no `AppState`:
 | `shelve_stash` | stash/shelve operations |
 | `multi_root` | root discovery and multi-repo scanning |
 
-### 5. Engine
+### 6. Engine
 - **`turbogit-engine-api`** — `GitExecutor` is the **only** thing that talks to
   git, plus `ApplyDirection`. ~60 methods, all synchronous; callers run them on
   worker threads so the UI never blocks.
@@ -201,7 +239,7 @@ Pure-ish services over the engine seam; no egui, no `AppState`:
   - `fake::FakeExecutor` — test double, exported only behind the `test-util`
     cargo feature so release builds never compile it.
 
-### 6. Domain (`turbogit-domain`)
+### 7. Domain (`turbogit-domain`)
 - `model.rs` — domain types (`RootId`, `RootStatus`, `Branch`, `Commit`,
   `Change`, …). Every mutable git state is scoped to a `Root`; there is no
   global "the repository". Types are `Clone + Debug + Serialize/Deserialize`.
@@ -259,7 +297,7 @@ Tests live in the crate they exercise, and span crates only when they must:
   (`engine_golden`, `push_dry_run`, `partial_stage_cli`).
 - `crates/turbogit-services/tests/` — service behavior over the fake executor.
 - `crates/turbogit-app/tests/` — stateful staging protocol and cache invalidation.
-- `crates/turbogit-ui/tests/` — the egui/kittest suites (16 of them) plus the
+- `crates/turbogit-ui/tests/` — the egui/kittest surface suites plus the
   screenshot-acceptance suite.
 - root `tests/diff_parity.rs` — the one suite that legitimately needs every
   crate: it compares engine diff text against `turbogit_ui::ui::diff::parsed_rows`.

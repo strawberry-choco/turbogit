@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use egui_kittest::kittest::{NodeT, Queryable as _};
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
+use test_support::harness::filled_rects;
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, TagSpec, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -209,6 +210,31 @@ fn dialog_paints_the_screen_16_groups() {
             .is_some()
     );
     assert!(h.query_all_by_label("Create tag").next().is_some());
+}
+
+#[test]
+fn tag_footer_preserves_cancel_create_order_minimum_targets_and_divider() {
+    let (tmp, repo, _shas) = repo_two_commits();
+    let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
+    let mut h = harness(state);
+    open_tag(&mut h, &repo);
+
+    let cancel = h.get_by_label("Cancel");
+    let create = h
+        .query_all_by_label("Create tag")
+        .last()
+        .expect("Create tag button");
+    assert!(cancel.rect().left() < create.rect().left());
+    assert!(cancel.rect().height() >= 28.0);
+    assert!(create.rect().height() >= 28.0);
+    assert!(
+        filled_rects(&h)
+            .into_iter()
+            .any(|(rect, fill)| fill == turbogit_ui::theme::Palette::LINE
+                && (rect.height() - 1.0).abs() < 0.01
+                && rect.top() < create.rect().top()),
+        "the shared footer divider must be present above the actions"
+    );
 }
 
 #[test]

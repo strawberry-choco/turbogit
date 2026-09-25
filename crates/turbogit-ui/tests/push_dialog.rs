@@ -33,7 +33,9 @@ use egui_kittest::kittest::NodeT as _;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
-use test_support::harness::{assert_not_painted, assert_painted, painted_galleys, painted_text};
+use test_support::harness::{
+    assert_not_painted, assert_painted, filled_rects, painted_galleys, painted_text,
+};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{RootId, VcsSettings};
@@ -711,6 +713,43 @@ fn protected_branch_force_push_is_blocked_in_dialog_not_downgraded() {
         wait_until(15_000, || rec.contains_push("origin", "feature", true)),
         "unprotected target must execute with force=true at the boundary, got: {:?}",
         rec.recorded()
+    );
+}
+
+#[test]
+fn push_footer_keeps_action_order_minimum_targets_and_shared_divider() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_ahead_of_origin(parent.path(), "footer");
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
+    open_push_dialog(&mut h);
+
+    let cancel = h
+        .query_all_by_label("Cancel")
+        .last()
+        .expect("Cancel button");
+    let preview = h
+        .query_all_by_label("Preview dry-run")
+        .next()
+        .expect("Preview button");
+    let push = dialog_push_button(&h);
+    assert!(cancel.rect().left() < preview.rect().left());
+    assert!(preview.rect().left() < push.rect().left());
+    for button in [&cancel, &preview, &push] {
+        assert!(
+            button.rect().height() >= 28.0,
+            "minimum action target: {:?}",
+            button.rect()
+        );
+    }
+
+    let footer_top = preview.rect().top();
+    assert!(
+        filled_rects(&h)
+            .into_iter()
+            .any(|(rect, fill)| fill == Palette::LINE
+                && (rect.height() - 1.0).abs() < 0.01
+                && rect.top() <= footer_top),
+        "the shared footer divider must sit above the actions"
     );
 }
 

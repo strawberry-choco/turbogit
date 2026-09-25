@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable as _};
+use test_support::harness::filled_rects;
 use test_support::{RecordedCall, RecordingExecutor};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, VcsSettings};
@@ -204,6 +205,30 @@ fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+#[test]
+fn manager_footer_uses_shared_divider_and_minimum_action_target() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = fresh_repo(tmp.path(), "alpha");
+    let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
+    let mut h = harness(state);
+    h.state_mut().selected_root = Some(RootId(repo.clone().into()));
+    open_manager(&mut h);
+
+    let close = h.get_by_label("Close");
+    assert!(
+        close.rect().height() >= 28.0,
+        "Close minimum target: {:?}",
+        close.rect()
+    );
+    assert!(
+        filled_rects(&h)
+            .into_iter()
+            .any(|(rect, fill)| fill == turbogit_ui::theme::Palette::LINE
+                && (rect.height() - 1.0).abs() < 0.01),
+        "the shared footer divider must be present"
+    );
 }
 
 // ------------------------------------------------------------------ tests --
