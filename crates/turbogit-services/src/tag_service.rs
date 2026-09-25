@@ -67,17 +67,7 @@ pub fn list(vcs: &dyn GitExecutor, root: &Path) -> TgResult<Vec<String>> {
 /// fingerprint chip shown next to the dialog's "Sign with GPG key" option.
 /// `None` when no signing key is configured.
 pub fn signing_key(vcs: &dyn GitExecutor, root: &Path) -> Option<String> {
-    vcs.run_raw(
-        root,
-        &[
-            "config".to_string(),
-            "--get".to_string(),
-            "user.signingkey".to_string(),
-        ],
-    )
-    .ok()
-    .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty())
+    vcs.config_get(root, "user.signingkey").ok().flatten()
 }
 
 /// Push a freshly created tag to the repository's first remote ("Push tag to

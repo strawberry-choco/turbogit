@@ -182,6 +182,28 @@ pub fn summarize_dry_runs(results: &[(String, Result<String, String>)]) -> DryRu
 /// per-root remote resolution as [`push_roots`] — the preview must reflect
 /// what the real push would target. Root dry-runs are independent: one
 /// rejection never hides the others.
+/// The remote a push from `root` goes to — the one rule, stated once.
+///
+/// The tracked upstream's remote; failing that the root's first configured
+/// remote; failing that `origin`. This is what the push, the dry-run preview and
+/// the bulk fleet all consult, so the "does the dry-run path share the real
+/// push's rule" comment is now true by construction rather than by promise.
+pub fn push_remote(root: &Root) -> String {
+    tracked_upstream(root)
+        .map(|u| u.remote.clone())
+        .or_else(|| root.remotes.first().map(|r| r.name.clone()))
+        .unwrap_or_else(|| "origin".to_string())
+}
+
+/// The current branch's upstream, as the **Git engine**'s listing answered it.
+pub fn tracked_upstream(root: &Root) -> Option<&Upstream> {
+    root.branches
+        .iter()
+        .find(|b| Some(&b.name) == root.current_branch.as_ref())?
+        .tracking
+        .as_ref()
+}
+
 pub fn push_dry_run_roots(
     vcs: &dyn GitExecutor,
     roots: &[&Root],
@@ -193,34 +215,12 @@ pub fn push_dry_run_roots(
         .map(|root| {
             let result = match &root.current_branch {
                 Some(branch) => {
-                    let remote = match root
-                        .branches
-                        .iter()
-                        .find(|b| &b.name == branch)
-                        .and_then(|b| b.tracking.as_deref())
-                    {
-                        Some(t) if t.contains('/') => t.split('/').next().unwrap_or("origin"),
-                        _ => root
-                            .remotes
-                            .first()
-                            .map(|r| r.name.as_str())
-                            .unwrap_or("origin"),
-                    };
                     let _ = selected_oldest;
-                    vcs.push_dry_run(&root.path, remote, branch, force)
+                    vcs.push_dry_run(&root.path, &push_remote(root), branch, force)
                 }
                 None => Ok(String::new()),
             };
-            let remote = root
-                .branches
-                .iter()
-                .find(|b| Some(&b.name) == root.current_branch.as_ref())
-                .and_then(|b| b.tracking.as_deref())
-                .and_then(|t| t.split('/').next())
-                .map(|s| s.to_string())
-                .or_else(|| root.remotes.first().map(|r| r.name.clone()))
-                .unwrap_or_else(|| "origin".into());
-            (remote, result)
+            (push_remote(root), result)
         })
         .collect()
 }
@@ -341,36 +341,18 @@ pub fn push_roots(
         .iter()
         .map(|root| {
             let result = match &root.current_branch {
-                Some(branch) => {
-                    // Resolve the upstream remote from the branch's tracking ref
-                    // when present; otherwise fall back to the first remote, or
-                    // "origin" if the root has no remotes configured.
-                    let remote = match root
-                        .branches
-                        .iter()
-                        .find(|b| &b.name == branch)
-                        .and_then(|b| b.tracking.as_deref())
-                    {
-                        Some(t) if t.contains('/') => t.split('/').next().unwrap_or("origin"),
-                        _ => root
-                            .remotes
-                            .first()
-                            .map(|r| r.name.as_str())
-                            .unwrap_or("origin"),
-                    };
-                    push(
-                        vcs,
-                        &root.path,
-                        remote,
-                        branch,
-                        force,
-                        tags,
-                        no_verify,
-                        set_upstream,
-                        selected_oldest,
-                        settings,
-                    )
-                }
+                Some(branch) => push(
+                    vcs,
+                    &root.path,
+                    &push_remote(root),
+                    branch,
+                    force,
+                    tags,
+                    no_verify,
+                    set_upstream,
+                    selected_oldest,
+                    settings,
+                ),
                 None => Ok(()),
             };
             (root.id.clone(), result)
@@ -400,9 +382,11 @@ pub fn outgoing_per_root(
                         .branches
                         .iter()
                         .find(|b| &b.name == branch)
-                        .and_then(|b| b.tracking.as_deref())
+                        .and_then(|b| b.tracking.as_ref())
                     {
-                        Some(upstream) => vcs.outgoing_commits(&root.path, branch, upstream),
+                        Some(upstream) => {
+                            vcs.outgoing_commits(&root.path, branch, &upstream.git_ref())
+                        }
                         // No tracking ref = nothing known to be ahead.
                         None => Ok(Vec::new()),
                     }

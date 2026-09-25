@@ -274,43 +274,56 @@ fn backed_rows_paint_their_loaded_values() {
 // --- Cycle 2b: the Git backend selector (issue #26, screen 11) -----------------
 
 #[test]
-fn git_backend_is_a_segmented_cli_libgit2_auto_choice_and_applies() {
+fn git_backend_offers_two_options_that_select_two_different_adapters() {
     let (mut harness, project) = shell_harness();
     settle(&mut harness);
     open_settings(&mut harness);
     harness.get_by_label("Git").click();
     settle(&mut harness);
 
-    // Screen 11: a segmented control with the three strategies painted.
-    for label in ["CLI", "libgit2", "Auto"] {
+    // Two options, each naming an adapter that actually exists.
+    for label in ["CLI", "In-process reads"] {
         assert_painted(&harness, label);
     }
+    // The retired spellings named the object the other option already built.
+    for label in ["libgit2", "Auto"] {
+        assert_not_painted(&harness, label);
+    }
 
-    // Default settings ship Auto…
+    // Default settings ship the composed adapter…
     assert_eq!(
         harness.state().ui.settings_draft.as_ref().unwrap().backend,
-        GitBackend::Auto
+        GitBackend::InProcessReads
     );
 
-    // …and picking CLI then Apply persists the explicit choice.
+    // …and the two segments select *different* adapters. This is what the old
+    // round-trip test could not fail: three options, two of them one object.
     harness.get_by_label("CLI").click();
     settle(&mut harness);
     harness.get_by_label("Apply").click();
     settle(&mut harness);
-    assert_eq!(harness.state().settings.backend, GitBackend::Cli);
-    let on_disk = persistence::load_settings(project.path()).expect("state.ron readable");
-    assert_eq!(on_disk.backend, GitBackend::Cli);
+    let cli = harness.state().settings.backend;
+    assert_eq!(cli, GitBackend::Cli);
+    assert_eq!(
+        persistence::load_settings(project.path())
+            .expect("state.ron readable")
+            .backend,
+        cli
+    );
 
-    // Switching back to Auto round-trips too (the engine factory rebuilds on
-    // Apply behind the seam — covered at the engine level).
-    harness.get_by_label("Auto").click();
+    harness.get_by_label("In-process reads").click();
     settle(&mut harness);
     harness.get_by_label("Apply").click();
     settle(&mut harness);
-    assert_eq!(harness.state().settings.backend, GitBackend::Auto);
+    let composed = harness.state().settings.backend;
+    assert_ne!(
+        cli, composed,
+        "picking the other option changed nothing the engine could observe"
+    );
+    assert_eq!(composed, GitBackend::InProcessReads);
     assert_eq!(
         persistence::load_settings(project.path()).unwrap().backend,
-        GitBackend::Auto
+        composed
     );
 }
 
@@ -506,7 +519,7 @@ fn restore_defaults_resets_only_the_visible_category() {
     assert_eq!(draft.git_executable, "", "Git fields return to defaults");
     assert_eq!(
         draft.backend,
-        GitBackend::Auto,
+        GitBackend::InProcessReads,
         "Git fields return to defaults"
     );
     assert!(

@@ -288,7 +288,7 @@ fn relative_row_preview_uses_index_not_worktree_for_staged_changes() {
         let mut h = diff_harness(&repo);
         assert_eq!(
             h.state().settings.backend,
-            turbogit_domain::model::GitBackend::Auto
+            turbogit_domain::model::GitBackend::InProcessReads
         );
         assert!(h.state().settings.in_process_diffs);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);

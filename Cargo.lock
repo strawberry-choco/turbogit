@@ -3328,6 +3328,7 @@ dependencies = [
  "tempfile",
  "turbogit-app",
  "turbogit-domain",
+ "turbogit-engine",
  "turbogit-engine-api",
  "turbogit-ui",
 ]
@@ -3554,6 +3555,7 @@ dependencies = [
  "git2",
  "tempfile",
  "turbogit-domain",
+ "turbogit-engine",
  "turbogit-engine-api",
 ]
 

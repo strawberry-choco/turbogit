@@ -47,20 +47,14 @@ pub trait GitExecutor: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Per-file line counts of one commit as `(path, insertions, deletions)`
-    /// (`git diff-tree --numstat -r -M`; logs-panels redesign issue 01). Paths
-    /// are exactly the ones [`GitExecutor::commit_files`] reports — rename
-    /// targets included — so the changed-files pane can join the two lists by
-    /// path. Binary files carry `-` in git's numstat columns and read as
-    /// `0/0`. The default returns an empty list for engines that cannot answer.
-    fn commit_file_stats(
-        &self,
-        root: &Path,
-        commit: &str,
-    ) -> TgResult<Vec<(PathBuf, usize, usize)>> {
-        let _ = (root, commit);
-        Ok(Vec::new())
-    }
+    /// How much changed, per file, for one [`ChangeQuestion`] — the same read
+    /// behind the log's per-commit stats column and the integration preview's
+    /// "N files · +X −Y". Paths are exactly the ones [`GitExecutor::commit_files`]
+    /// reports — rename targets included — so the changed-files pane can join
+    /// the two lists by path. A **Binary change** carries `None` in both count
+    /// columns; the value's own totals are where that becomes a number. Rename
+    /// detection follows git's own defaults, unpinned.
+    fn change_stats(&self, root: &Path, question: &ChangeQuestion) -> TgResult<ChangeStats>;
 
     /// `git branch -vv` (+ remotes) for a root.
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>>;
@@ -88,6 +82,17 @@ pub trait GitExecutor: Send + Sync {
     /// of the canonical upstream and therefore unmerged (issue #02).
     fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool>;
 
+    /// How many commits reach `to` but not `from`. git's two-dot range
+    /// (`rev-list --count from..to`) is this read's spelling, not the caller's:
+    /// a caller cannot select a dot count by accident, and one that means
+    /// "what a merge would bring in" asks [`GitExecutor::change_stats`] instead.
+    fn commit_count_between(&self, root: &Path, from: &str, to: &str) -> TgResult<usize>;
+
+    /// The commit `name` resolves to — a branch tip captured before a delete,
+    /// a tag peeled for a push. Errors when the name resolves to nothing, which
+    /// is not an empty revision.
+    fn resolve_revision(&self, root: &Path, name: &str) -> TgResult<CommitId>;
+
     /// Configured remotes.
     fn remotes(&self, root: &Path) -> TgResult<Vec<Remote>>;
 
@@ -109,13 +114,21 @@ pub trait GitExecutor: Send + Sync {
     /// tree answers clean.
     fn worktree_dirty(&self, path: &Path) -> TgResult<bool>;
 
-    /// Submodule paths registered at this root.
-    fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>>;
-
     /// Registered submodules with pinned vs recorded commits and lifecycle
     /// state (parsed from `git submodule status` + the index gitlinks;
     /// issue 14 Submodules tab).
     fn submodule_status(&self, root: &Path) -> TgResult<Vec<Submodule>>;
+
+    /// The three index versions of one conflicted `path` — the **Conflict** the
+    /// resolver shows. A side a merge left no version of (an add/add's base, a
+    /// one-sided delete's side) answers `None`, which is not an empty side.
+    /// Errors when `path` holds no conflict at all.
+    fn conflict_versions(&self, root: &Path, path: &Path) -> TgResult<ConflictVersions>;
+
+    /// The upstream `branch` tracks, as its git config says — the pair, so no
+    /// caller reads `branch.<name>.merge` and cuts `refs/heads/` off it.
+    /// `Ok(None)` when the branch tracks nothing.
+    fn branch_upstream(&self, root: &Path, branch: &str) -> TgResult<Option<Upstream>>;
 
     /// Read a git config value (e.g. `user.name`, `core.autocrlf`).
     fn config_get(&self, root: &Path, key: &str) -> TgResult<Option<String>>;
@@ -208,6 +221,27 @@ pub trait GitExecutor: Send + Sync {
     /// (`git <op> --continue`).
     fn continue_op(&self, root: &Path, op: &str) -> TgResult<()>;
 
+    // ---- the rewrite backup: one reference the engine owns ----
+    //
+    // A history rewrite records the state it is about to destroy, restores it
+    // on abort, and discards the spent record. Which reference does that is
+    // named here and nowhere else, so nothing outside these three verbs can
+    // collide with it by guessing the spelling.
+
+    /// The name of the reference the three verbs below use, for a surface that
+    /// wants to tell the user what will be restored.
+    fn rewrite_backup_ref(&self) -> &str;
+
+    /// Record the current `HEAD` as the rewrite backup, before a rewrite runs.
+    fn save_rewrite_backup(&self, root: &Path) -> TgResult<()>;
+
+    /// Return the branch and working tree to the recorded backup. Errors when
+    /// no backup was saved — restoring nothing must not read as a success.
+    fn restore_rewrite_backup(&self, root: &Path) -> TgResult<()>;
+
+    /// Drop the spent backup reference.
+    fn discard_rewrite_backup(&self, root: &Path) -> TgResult<()>;
+
     /// Files that git auto-resolved during an in-progress merge: every
     /// path that changed between HEAD and MERGE_HEAD but is NOT in
     /// `conflicted`. Returns an empty list when no merge is in progress.
@@ -265,7 +299,7 @@ pub trait GitExecutor: Send + Sync {
     fn apply_patch_to_index(
         &self,
         root: &Path,
-        patch: &str,
+        patch: &Patch,
         direction: ApplyDirection,
     ) -> TgResult<()>;
 
@@ -279,7 +313,7 @@ pub trait GitExecutor: Send + Sync {
     /// surfaces as [`turbogit_domain::error::TgError::Cli`] carrying the
     /// verbatim stderr. The default rejects — engines that cannot run git
     /// (the git2 adapter) cannot answer.
-    fn check_patch(&self, root: &Path, patch: &str) -> TgResult<()> {
+    fn check_patch(&self, root: &Path, patch: &Patch) -> TgResult<()> {
         let _ = (root, patch);
         Err(turbogit_domain::error::TgError::Other(
             "patch checks are not supported by this git engine".into(),
@@ -323,37 +357,66 @@ pub trait GitExecutor: Send + Sync {
 
     // ---- diff / blame / history ----
     /// Produce a diff (`git diff` with the given options).
-    fn diff(&self, root: &Path, opts: &DiffOpts) -> TgResult<String>;
+    /// The diff `opts` describes, as a [`Patch`] — files, **Hunks**, line
+    /// spans and rename/binary/mode metadata. git's unified-diff text is this
+    /// read's own implementation detail (`ADR-0022`): it is the one place the
+    /// format is interpreted, and no caller upstream parses it.
+    fn diff_patch(&self, root: &Path, opts: &DiffOpts) -> TgResult<Patch>;
 
     /// `git blame` for a path (optionally at a revision).
     fn blame(&self, root: &Path, path: &Path, rev: Option<&str>) -> TgResult<Vec<BlameLine>>;
 
-    /// Content of a file at a revision (`git show <rev>:<path>`).
+    /// Raw bytes of a path as the index holds it — the staged side of a diff,
+    /// and the side an **Image diff** or **Binary change** compares. Named for
+    /// the side, not for git's `:0` stage rev, which no caller passes any more
+    /// (see [`GitExecutor::conflict_versions`], which names the other three).
+    /// Errors when the index holds no such path; never answers empty.
+    fn index_file_bytes(&self, root: &Path, path: &Path) -> TgResult<Vec<u8>>;
+
+    /// Content of a file **at a commit** — `rev` names the commit whose version
+    /// of `path` is wanted, and is not a place an index stage may be passed.
+    /// A conflicted path's sides come from [`GitExecutor::conflict_versions`]
+    /// and its staged bytes from [`GitExecutor::index_file_bytes`].
     fn show_file(&self, root: &Path, rev: &str, path: &Path) -> TgResult<String>;
 
-    /// Raw bytes of a file at a revision (`git show <rev>:<path>`), captured
-    /// binary-safe: no UTF-8 conversion is applied, so images and other
-    /// non-text blobs survive intact (R8 image/binary diffs).
+    /// Raw bytes of a file **at a commit**, captured binary-safe: no UTF-8
+    /// conversion is applied, so images and other non-text blobs survive intact
+    /// (R8 image/binary diffs). Same rule as [`GitExecutor::show_file`] about
+    /// what `rev` may name.
     fn show_file_bytes(&self, root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>>;
 
     // ---- revert / undo ----
     /// `git revert <commit>` (inverse commit).
     fn revert(&self, root: &Path, commit: &str) -> TgResult<()>;
 
-    /// Undo the most recent commit, keeping the working tree
-    /// (`git reset --soft HEAD~1`).
-    fn undo_last_commit(&self, root: &Path) -> TgResult<()>;
-
     /// `git stash apply <index>` (keeps the stash).
     fn stash_apply(&self, root: &Path, index: usize) -> TgResult<()>;
 
-    /// Run an arbitrary git command in `root` (`git <args>` verbatim, no
-    /// shell). The escape hatch behind the "Custom command…" bulk operation
-    /// (issue 13): the caller owns parsing and confirmation; the adapter only
-    /// executes and reports. Returns stdout on success; a non-zero exit
-    /// surfaces as [`turbogit_domain::error::TgError::Cli`] with the verbatim
-    /// stderr. The default rejects — engines that cannot exec git (the
-    /// git2 adapter) do not support custom commands.
+    /// Run arbitrary git in `root` (`git <args>` verbatim, no shell): the
+    /// port's **one** raw escape, and the caller that owns it is the bulk
+    /// operations grid's user-typed custom command
+    /// ([`turbogit_services::bulk_ops::run_step`]'s `BulkOp::Custom`, whose
+    /// arguments come from `parse_command`). Everything else on this trait is
+    /// an answer, and nothing else is allowed to assemble a git command line —
+    /// `tests/port_discipline.rs` fails when a second production call site
+    /// appears here.
+    ///
+    /// The honest limitation, stated once because it is a constraint on a real
+    /// feature rather than a detail of this method: what the app treats as
+    /// destructive is decided from the typed text's git grammar — the
+    /// subcommand name and a few flags, in
+    /// [`turbogit_services::bulk_ops::destructive_reason`], which gates the
+    /// two-stage confirmation. So the safety model is expressed in argv the
+    /// engine has not interpreted. `git --help reset`, an alias, or a
+    /// `--execute` that shells out all sit outside it. Narrowing that needs a
+    /// product decision about what "destructive" means for a command the app
+    /// deliberately does not understand; this port does not settle it.
+    ///
+    /// Returns stdout on success; a non-zero exit surfaces as
+    /// [`turbogit_domain::error::TgError::Cli`] with the verbatim stderr, which
+    /// is what the run reports per root. The default rejects — an engine that
+    /// cannot exec git (the git2 adapter) supports no custom commands, and says
+    /// so rather than pretending to run one.
     fn run_raw(&self, root: &Path, args: &[String]) -> TgResult<String> {
         let _ = root;
         Err(turbogit_domain::error::TgError::Other(format!(

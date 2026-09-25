@@ -9,8 +9,7 @@
 //! measured in, and the diff family's monospaced face.
 
 pub use turbogit_app::diff_model::{
-    DiffModel, DisplayRow, FileMeta, PaneKind, Row, RowKind, RowSummary, line_counts, pane_kind,
-    parsed_rows,
+    DiffModel, DisplayRow, FileMeta, PaneKind, Row, RowKind, line_counts, pane_kind,
 };
 
 // --- metrics -----------------------------------------------------------------

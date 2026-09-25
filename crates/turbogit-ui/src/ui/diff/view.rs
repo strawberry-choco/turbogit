@@ -617,7 +617,7 @@ fn unified_row(
                 font,
             );
             hunk_gutter_actions(ui, state, rect, paint, row.hunk, status, path);
-            let staged_state = viewer_hunk_staged_state(state, path, &row.text);
+            let staged_state = viewer_hunk_staged_state(state, path, row.span);
             hunk_header_extras(
                 ui,
                 state,
@@ -861,7 +861,7 @@ fn render_side_by_side(
                         &font,
                     );
                     hunk_gutter_actions(ui, state, rect, paint, row.hunk, status, path);
-                    let staged_state = viewer_hunk_staged_state(state, path, &row.text);
+                    let staged_state = viewer_hunk_staged_state(state, path, row.span);
                     hunk_header_extras(
                         ui,
                         state,

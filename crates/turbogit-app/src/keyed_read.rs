@@ -20,12 +20,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::{BlameLine, DiffOpts};
+use turbogit_domain::model::{BlameLine, DiffOpts, Patch};
 use turbogit_services::diff_engine;
 
 use crate::diff_data::{PaneEntry, PaneSide};
 use crate::diff_load::{PaneSideRequest, SideSpec};
-use crate::diff_model::{DiffValue, FileMeta, repo_rel_path};
+use crate::diff_model::{DiffValue, FileMeta};
 use crate::events::{AppEvent, FetchedBlob};
 use crate::granular;
 use crate::state::{AppState, BlameTarget, DiffComparison, UiState};
@@ -226,7 +226,7 @@ fn settle_single<V>(
 }
 
 /// Settle one [`AppEvent::DiffReady`].
-pub(crate) fn settle_diff(state: &mut AppState, key: String, result: TgResult<String>) {
+pub(crate) fn settle_diff(state: &mut AppState, key: String, result: TgResult<Patch>) {
     settle_single(
         state,
         Kind::Diff,
@@ -337,19 +337,14 @@ impl DiffTarget {
     /// because that is the form `git show` takes.
     fn pane_sides(&self, meta: &FileMeta) -> (PaneSideRequest, PaneSideRequest) {
         let (left, right, staged) = self.sides();
-        let rel = |p: &Option<String>| {
-            p.as_deref()
-                .map(repo_rel_path)
-                .unwrap_or_default()
-                .to_owned()
-        };
+        let rel = |p: &Option<String>| p.clone().unwrap_or_default();
         let old = if meta.new_file {
             SideSpec::Missing
         } else {
             match &left {
                 Some(l) => SideSpec::Rev(l.clone()),
                 None if staged => SideSpec::Rev("HEAD".to_owned()),
-                None => SideSpec::Rev(":0".to_owned()),
+                None => SideSpec::Index,
             }
         };
         let new = if meta.deleted_file {
@@ -357,7 +352,7 @@ impl DiffTarget {
         } else {
             match &right {
                 Some(r) => SideSpec::Rev(r.clone()),
-                None if staged => SideSpec::Rev(":0".to_owned()),
+                None if staged => SideSpec::Index,
                 None => SideSpec::Worktree,
             }
         };
@@ -429,9 +424,9 @@ impl Keyed for DiffTarget {
         if let Some(rel) = self.path.as_ref()
             && granular::preview_status(state, Some(rel.as_path()))
                 == turbogit_domain::model::ChangeStatus::Unversioned
-            && let Some(text) = crate::diff_load::synthetic_untracked_diff(&self.root, rel)
+            && let Some(patch) = crate::diff_load::synthetic_untracked_patch(&self.root, rel)
         {
-            state.ui.diff_cache = Some((key, DiffValue::build(text)));
+            state.ui.diff_cache = Some((key, DiffValue::build(patch)));
             return;
         }
 
@@ -453,9 +448,9 @@ impl Keyed for DiffTarget {
         let in_process = state.settings.in_process_diffs;
         state.pump_keyed_read(move |executor, tx| {
             let res = if in_process {
-                diff_engine::diff_text(executor.as_ref(), &root, &opts)
+                diff_engine::patch(executor.as_ref(), &root, &opts)
             } else {
-                executor.diff(&root, &opts)
+                executor.diff_patch(&root, &opts)
             };
             let _ = tx.send(AppEvent::DiffReady { key, result: res });
         });
@@ -676,18 +671,15 @@ mod tests {
             sides(None, None, DiffComparison::Repo, &plain),
             (SideSpec::Rev("HEAD".to_owned()), SideSpec::Worktree)
         );
-        // Staged chip (HEAD↔index): `git diff --cached`; index via stage-0.
+        // Staged chip (HEAD↔index): `git diff --cached`, the index side named.
         assert_eq!(
             sides(None, None, DiffComparison::Staged, &plain),
-            (
-                SideSpec::Rev("HEAD".to_owned()),
-                SideSpec::Rev(":0".to_owned())
-            )
+            (SideSpec::Rev("HEAD".to_owned()), SideSpec::Index)
         );
         // Local chip (index↔worktree): plain `git diff`.
         assert_eq!(
             sides(None, None, DiffComparison::Local, &plain),
-            (SideSpec::Rev(":0".to_owned()), SideSpec::Worktree)
+            (SideSpec::Index, SideSpec::Worktree)
         );
         // Explicit commit-to-commit targets pass their revs through, whatever
         // chip the surface happens to be showing.
@@ -725,15 +717,20 @@ mod tests {
         );
     }
 
-    /// Paths arrive repo-relative and slash-separated, stripped of git's
-    /// `a/`/`b/` prefixes, because that is the form `git show` takes.
+    /// Paths arrive repo-relative and slash-separated because the patch value
+    /// holds them that way — there is no prefix left here for a caller to
+    /// strip, which is what `git show` wants.
     #[test]
-    fn pane_paths_are_repo_relative_and_stripped() {
-        let renamed = FileMeta {
-            old_path: Some("a/old/dir/Art.png".into()),
-            new_path: Some("b/new/dir/Art.png".into()),
-            ..FileMeta::default()
-        };
+    fn pane_paths_are_repo_relative_because_the_value_says_so() {
+        let renamed = crate::diff_model::files_from(&turbogit_engine::patch::parse_patch(
+            "diff --git a/old/dir/Art.png b/new/dir/Art.png\n\
+             similarity index 100%\n\
+             rename from old/dir/Art.png\n\
+             rename to new/dir/Art.png\n",
+        ))
+        .into_iter()
+        .next()
+        .expect("one renamed section");
         let (old, new) = target(None, None, DiffComparison::Repo).pane_sides(&renamed);
         assert_eq!(
             (old.path.as_str(), new.path.as_str()),

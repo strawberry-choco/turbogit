@@ -9,9 +9,15 @@
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use turbogit_domain::model::VcsSettings;
+use turbogit_domain::model::{Patch, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::{ApplyDirection, GitExecutor};
+
+/// A patch value, read from git's syntax — which is what the hand-written
+/// fixtures below are written in.
+fn value(text: &str) -> Patch {
+    turbogit_engine::patch::parse_patch(text)
+}
 
 // ---------------------------------------------------------------- helpers --
 
@@ -111,7 +117,7 @@ fn stage_one_hunk_of_two() {
     std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
 
     let ex = executor();
-    ex.apply_patch_to_index(&repo.path, HUNK_ONE_PATCH, ApplyDirection::Forward)
+    ex.apply_patch_to_index(&repo.path, &value(HUNK_ONE_PATCH), ApplyDirection::Forward)
         .unwrap();
 
     let staged = git(&repo.path, &["diff", "--cached"]);
@@ -154,7 +160,7 @@ fn reverse_unstage_a_hunk() {
 
     // ...then unstage only the first hunk by reverse-applying its patch.
     let ex = executor();
-    ex.apply_patch_to_index(&repo.path, HUNK_ONE_PATCH, ApplyDirection::Reverse)
+    ex.apply_patch_to_index(&repo.path, &value(HUNK_ONE_PATCH), ApplyDirection::Reverse)
         .unwrap();
 
     let staged = git(&repo.path, &["diff", "--cached"]);
@@ -207,7 +213,7 @@ fn intent_to_add_partial_staging_of_untracked_file() {
         "+two\n",
         "+three\n",
     );
-    ex.apply_patch_to_index(&repo.path, creation_patch, ApplyDirection::Forward)
+    ex.apply_patch_to_index(&repo.path, &value(creation_patch), ApplyDirection::Forward)
         .unwrap();
 
     let staged = git(&repo.path, &["diff", "--cached"]);

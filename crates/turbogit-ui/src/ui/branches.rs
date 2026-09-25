@@ -19,7 +19,7 @@ use egui::{Align, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Ui, Ui
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, PendingConfirm};
-use turbogit_domain::model::{Branch, BranchKind, Root, RootId};
+use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, TYPE_DETAIL_TITLE, chrome_font, data_font};
 use crate::ui::branch_tree_view::{self, LocalRow, TreeEvent, TreeGroup, TreeProps};
@@ -111,7 +111,7 @@ pub struct RowMeta {
     /// Branch untouched past the ~4-week threshold → dimmed.
     pub stale: bool,
     /// Upstream tracking branch (e.g. `origin/main`), if any.
-    pub upstream: Option<String>,
+    pub upstream: Option<Upstream>,
     /// The row's sync badges — one per direction, so a diverged row carries
     /// both — when the branch tracks an upstream and has something to report.
     /// Empty when there is nothing to say.
@@ -908,7 +908,7 @@ fn detail_panel(ui: &mut Ui, state: &mut AppState) {
 fn relationship_line(ui: &mut Ui, _branch: &Branch, meta: &RowMeta) {
     let mut parts: Vec<String> = meta.badge.iter().map(|(_, label)| label.clone()).collect();
     if let Some(up) = &meta.upstream {
-        parts.push(format!("tracks {up}"));
+        parts.push(format!("tracks {}", up.git_ref()));
     }
     detail_label(
         ui,

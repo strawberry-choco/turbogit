@@ -389,16 +389,19 @@ pub(super) fn hunk_gutter_actions(
     }
 }
 
-/// Staged state of one viewer hunk (issue 20): the hunk's own `@@` header
-/// span classified against the selected root's cached staged (HEAD↔index)
-/// spans. Only the Repo comparison carries the information — staged and
-/// unstaged hunks coexist only there; `None` elsewhere or without stats.
+/// Staged state of one viewer hunk (issue 20): the hunk's span, which the row
+/// already carries, classified against the selected root's cached staged
+/// (HEAD↔index) spans. Only the Repo comparison carries the information —
+/// staged and unstaged hunks coexist only there; `None` elsewhere or without
+/// stats. This is the paint path's only question about a hunk header, and it
+/// asks it of the row rather than of git's `@@` text.
 pub(super) fn viewer_hunk_staged_state(
     state: &AppState,
     path: &Option<std::path::PathBuf>,
-    hunk_header: &str,
+    span: Option<turbogit_services::hunk_stats::HunkSpan>,
 ) -> Option<turbogit_services::hunk_stats::StagedState> {
-    use turbogit_services::hunk_stats::{self, HunkSpan};
+    use turbogit_services::hunk_stats;
+    let span = span?;
     if state.ui.diff_comparison != DiffComparison::Repo {
         return None;
     }
@@ -413,7 +416,6 @@ pub(super) fn viewer_hunk_staged_state(
         .file(StatsView::Staged, path)
         .map(|f| f.hunks.clone())
         .unwrap_or_default();
-    let span: HunkSpan = hunk_stats::parse_hunk_header(hunk_header)?;
     Some(hunk_stats::hunk_staged_state(&span, &staged))
 }
 

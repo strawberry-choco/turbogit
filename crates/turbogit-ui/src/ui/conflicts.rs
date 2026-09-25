@@ -44,7 +44,11 @@ fn merge_editor_segments(
         && let Some(root) = root
         && let Some(v) = state.merge_versions(&RootId(root.clone().into()), path)
     {
-        let segs = diff_engine::merge_segments(&v.base, &v.ours, &v.theirs);
+        let segs = diff_engine::merge_segments(
+            v.base.as_deref().unwrap_or_default(),
+            v.ours.as_deref().unwrap_or_default(),
+            v.theirs.as_deref().unwrap_or_default(),
+        );
         let n = segs.iter().filter(|(_, _, c)| *c).count();
         return (segs, n);
     }

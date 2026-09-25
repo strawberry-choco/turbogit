@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use chrono::DateTime;
-use turbogit_domain::model::{BranchKind, VcsSettings};
+use turbogit_domain::model::{BranchKind, Upstream, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 
@@ -138,7 +138,7 @@ fn branches_parse_ahead_behind_gone_and_last_touched() {
 
     // feat carries two unpushed commits and lags one pushed commit.
     let feat = local(&branches, "feat");
-    assert_eq!(feat.tracking.as_deref(), Some("origin/main"));
+    assert_eq!(feat.tracking, Upstream::from_git_ref("origin/main"));
     assert_eq!(
         (feat.ahead, feat.behind),
         (2, 1),
@@ -153,7 +153,7 @@ fn branches_parse_ahead_behind_gone_and_last_touched() {
 
     // ghost's upstream was deleted on the remote.
     let ghost = local(&branches, "ghost");
-    assert_eq!(ghost.tracking.as_deref(), Some("origin/ghost"));
+    assert_eq!(ghost.tracking, Upstream::from_git_ref("origin/ghost"));
     assert!(ghost.gone, "deleted upstream must mark the branch gone");
     assert_eq!(
         ghost.last_touched,

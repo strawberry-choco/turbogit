@@ -21,7 +21,9 @@ use std::path::Path;
 use similar::{ChangeTag, MergeResolution, TextDiffConfig, TextMerge, WhitespaceMode};
 
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::DiffOpts;
+use turbogit_domain::model::{
+    DiffOpts, Patch, PatchFile, PatchHeaderLine, PatchHunk, PatchLine, PatchLineKind,
+};
 use turbogit_engine_api::GitExecutor;
 
 /// Context lines around each change cluster — git's default.
@@ -29,39 +31,39 @@ const CONTEXT_RADIUS: usize = 3;
 
 // --- unified patch production -------------------------------------------------
 
-/// Unified diff text for `opts`: computed in-process from the two file
-/// versions when they are readable through the engine seam, otherwise the
-/// executor's CLI text verbatim (same errors, same shape).
+/// The diff `opts` describes, as a [`Patch`]: computed in-process from the two
+/// file versions when they are readable through the engine seam, otherwise the
+/// executor's own answer (same errors, same shape).
 ///
 /// In-process requires a single-path, non-stat patch with no explicit commit
 /// target; see [`in_process`] for the exact side resolution and fallback
 /// rules.
-pub fn diff_text(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> TgResult<String> {
+pub fn patch(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> TgResult<Patch> {
     match in_process(exec, root, opts) {
         Some(patch) => patch,
-        None => exec.diff(root, opts),
+        None => exec.diff_patch(root, opts),
     }
 }
 
 /// In-process patch for `opts`, or `None` when the CLI path must stay
 /// authoritative.
 ///
-/// Side resolution mirrors exactly how the viewer requests diff text:
+/// Side resolution mirrors exactly how the viewer requests a diff:
 ///
 /// | comparison       | old side   | new side     |
 /// |------------------|------------|--------------|
 /// | Repo (HEAD↔wt)   | `HEAD`     | worktree fs  |
-/// | Staged (HEAD↔ix) | `HEAD`     | index `:0`   |
-/// | Local (ix↔wt)    | index `:0` | worktree fs  |
+/// | Staged (HEAD↔ix) | `HEAD`     | index side   |
+/// | Local (ix↔wt)    | index side | worktree fs  |
 /// | explicit l..r    | `<left>`   | `<right>`    |
 ///
 /// An unreadable old side means git knows something this module cannot
 /// reconstruct in-process (rename sources, newly added files carry rename /
 /// new-file metadata we would have to guess), so those fall back. A new-side
-/// read error is not proof of deletion: unsupported index revisions, invalid
-/// revisions, and filesystem failures can all make an existing side unreadable.
+/// read error is not proof of deletion: a path the index holds no entry for,
+/// an invalid revision, and filesystem failures all look the same here.
 /// Fall back for those errors too, letting git distinguish actual deletions.
-fn in_process(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> Option<TgResult<String>> {
+fn in_process(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> Option<TgResult<Patch>> {
     // Single-path full patches only; whole-tree, stat, and commit-scoped
     // requests keep their CLI semantics.
     let path = opts
@@ -70,21 +72,19 @@ fn in_process(exec: &dyn GitExecutor, root: &Path, opts: &DiffOpts) -> Option<Tg
         .filter(|_| !opts.stat && opts.commit.is_none())?;
     let rel = forward_slashes(path);
 
-    let old_rev = opts.left.clone().unwrap_or_else(|| {
-        if opts.staged {
-            "HEAD".to_owned()
-        } else {
-            ":0".to_owned()
-        }
-    });
-    let old = match exec.show_file_bytes(root, &old_rev, path) {
+    let old = match (&opts.left, opts.staged) {
+        (Some(rev), _) => exec.show_file_bytes(root, rev, path),
+        (None, true) => exec.show_file_bytes(root, "HEAD", path),
+        (None, false) => exec.index_file_bytes(root, path),
+    };
+    let old = match old {
         Ok(bytes) => bytes,
         Err(_) => return None,
     };
 
     let new = match &opts.right {
         Some(rev) => exec.show_file_bytes(root, rev, path).ok()?,
-        None if opts.staged => exec.show_file_bytes(root, ":0", path).ok()?,
+        None if opts.staged => exec.index_file_bytes(root, path).ok()?,
         None => std::fs::read(root.join(path)).ok()?,
     };
 
@@ -114,40 +114,45 @@ fn is_binary(content: &str) -> bool {
     content.as_bytes().contains(&0)
 }
 
-/// Git-shaped unified patch for one file section from its two sides, `None`
-/// being an absent side (`/dev/null`). Covers creation (`new file mode`),
-/// deletion (`deleted file mode`), binary changes (the one-line
-/// `Binary files … differ` section), and `\ No newline at end of file`
-/// hints; equal text contents produce the empty patch, exactly like
-/// `git diff` prints nothing for an unchanged path.
+/// The in-process answer for one file section, as a patch **value**. A `None`
+/// side is a creation or a deletion; equal text contents produce no section at
+/// all, exactly like `git diff` printing nothing for an unchanged path.
+///
+/// The hunk spans are computed from `similar`'s own ranges — git's 1-based
+/// start, with a zero-length side pointing at the line it lands after — and the
+/// section heading comes from the same funcname heuristic the text producer
+/// used. Both are fields of the value now rather than a string arranged to
+/// match git byte for byte, which is what `ADR-0022` raised this seam for.
 pub fn file_patch(
     rel: &str,
     old: Option<&str>,
     new: Option<&str>,
     ignore_whitespace: bool,
-) -> String {
+) -> Patch {
     if old.is_none() && new.is_none() {
-        return String::new();
+        return Patch::default();
     }
-    let mut out = format!("diff --git a/{rel} b/{rel}\n");
+    let mut headers = Vec::new();
     match (old, new) {
-        (None, Some(_)) => out.push_str("new file mode 100644\n"),
-        (Some(_), None) => out.push_str("deleted file mode 100644\n"),
+        (None, Some(_)) => headers.push(PatchHeaderLine::NewFile {
+            mode: "100644".to_string(),
+        }),
+        (Some(_), None) => headers.push(PatchHeaderLine::DeletedFile {
+            mode: "100644".to_string(),
+        }),
         _ => {}
     }
-    let a = if old.is_some() {
-        format!("a/{rel}")
-    } else {
-        "/dev/null".to_owned()
+    let source = |side: Option<&str>, prefix: &str| {
+        if side.is_some() {
+            format!("{prefix}{rel}")
+        } else {
+            "/dev/null".to_string()
+        }
     };
-    let b = if new.is_some() {
-        format!("b/{rel}")
-    } else {
-        "/dev/null".to_owned()
-    };
+    let (a, b) = (source(old, "a/"), source(new, "b/"));
     if old.is_some_and(is_binary) || new.is_some_and(is_binary) {
-        out.push_str(&format!("Binary files {a} and {b} differ\n"));
-        return out;
+        headers.push(PatchHeaderLine::Binary);
+        return one_file(rel, headers, Vec::new());
     }
 
     let diff = TextDiffConfig::default()
@@ -160,47 +165,74 @@ pub fn file_patch(
     let mut unified = diff.unified_diff();
     unified.context_radius(CONTEXT_RADIUS);
 
-    // Hunks are serialized by hand instead of via `UnifiedDiff`'s Display so
-    // headers can carry the section heading git appends (`@@ … @@ name`),
-    // which similar's formatter leaves out.
-    let mut body = String::new();
+    let mut hunks: Vec<PatchHunk> = Vec::new();
     for hunk in unified.iter_hunks() {
-        let old_start = hunk.ops().first().map_or(0, |op| op.old_range().start);
-        body.push_str(&hunk.header().to_string());
-        if let Some(heading) = section_heading(old.unwrap_or(""), old_start) {
-            body.push(' ');
-            body.push_str(&heading);
-        }
-        body.push('\n');
+        let ops = hunk.ops();
+        let old_at = ops.first().map_or(0, |op| op.old_range().start);
+        let new_at = ops.first().map_or(0, |op| op.new_range().start);
+        let mut lines: Vec<PatchLine> = Vec::new();
+        let mut old_count = 0usize;
+        let mut new_count = 0usize;
         for change in hunk.iter_changes() {
-            body.push(match change.tag() {
-                ChangeTag::Equal => ' ',
-                ChangeTag::Delete => '-',
-                ChangeTag::Insert => '+',
+            let kind = match change.tag() {
+                ChangeTag::Equal => {
+                    old_count += 1;
+                    new_count += 1;
+                    PatchLineKind::Context
+                }
+                ChangeTag::Delete => {
+                    old_count += 1;
+                    PatchLineKind::Removed
+                }
+                ChangeTag::Insert => {
+                    new_count += 1;
+                    PatchLineKind::Added
+                }
+            };
+            lines.push(PatchLine {
+                kind,
+                text: change
+                    .value()
+                    .strip_suffix('\n')
+                    .unwrap_or(change.value())
+                    .to_string(),
+                // git terminates the bare record first, then flags it on its
+                // own line — here the flag is a property of the line.
+                no_newline: diff.newline_terminated() && change.missing_newline(),
             });
-            body.push_str(change.value());
-            if !diff.newline_terminated() {
-                body.push('\n');
-            } else if change.missing_newline() {
-                // git terminates the bare record first (`putc('\n')` in
-                // DIFF_SYMBOL_NO_LF_EOF), then flags it on its own line.
-                body.push('\n');
-                body.push_str("\\ No newline at end of file\n");
-            }
         }
+        if lines.is_empty() {
+            continue;
+        }
+        hunks.push(PatchHunk {
+            old_start: if old_count == 0 { old_at } else { old_at + 1 },
+            old_count,
+            new_start: if new_count == 0 { new_at } else { new_at + 1 },
+            new_count,
+            heading: section_heading(old.unwrap_or(""), old_at),
+            lines,
+        });
     }
-    if body.is_empty() {
+    if hunks.is_empty() {
         // No textual changes — git prints nothing at all for the path.
-        return String::new();
+        return Patch::default();
     }
-    out.push_str("--- ");
-    out.push_str(&a);
-    out.push('\n');
-    out.push_str("+++ ");
-    out.push_str(&b);
-    out.push('\n');
-    out.push_str(&body);
-    out
+    headers.push(PatchHeaderLine::Sources { old: a, new: b });
+    one_file(rel, headers, hunks)
+}
+
+/// One section, with its paths recorded repo-relative — the value's form. The
+/// `a/`/`b/` prefixes live in the source pair, not baked into a name.
+fn one_file(rel: &str, headers: Vec<PatchHeaderLine>, hunks: Vec<PatchHunk>) -> Patch {
+    Patch {
+        files: vec![PatchFile {
+            old_path: rel.to_string(),
+            new_path: rel.to_string(),
+            combined: false,
+            headers,
+            hunks,
+        }],
+    }
 }
 
 /// Section heading git appends to a hunk header: the closest line strictly
@@ -304,9 +336,11 @@ mod tests {
             ..DiffOpts::default()
         };
         assert!(in_process(&exec, root.path(), &opts).is_none());
+        // Falling back means the engine's own answer, unchanged: no synthesized
+        // deletion section.
         assert_eq!(
-            diff_text(&exec, root.path(), &opts).unwrap(),
-            exec.diff(root.path(), &opts).unwrap()
+            patch(&exec, root.path(), &opts).unwrap(),
+            exec.diff_patch(root.path(), &opts).unwrap()
         );
     }
 
@@ -347,7 +381,7 @@ mod tests {
             ..DiffOpts::default()
         };
         assert!(in_process(&exec, root.path(), &opts).is_none());
-        assert!(diff_text(&exec, root.path(), &opts).is_err());
+        assert!(patch(&exec, root.path(), &opts).is_err());
 
         std::fs::remove_file(root.path().join("file.txt")).unwrap();
         for staged in [false, true] {
@@ -359,10 +393,16 @@ mod tests {
                 staged,
                 ..DiffOpts::default()
             };
-            let patch = diff_text(&exec, root.path(), &opts).unwrap();
-            assert_eq!(patch, exec.diff(root.path(), &opts).unwrap());
-            assert!(patch.contains("deleted file mode"), "{patch}");
-            assert!(patch.contains("-old"), "{patch}");
+            let answer = patch(&exec, root.path(), &opts).unwrap();
+            let file = &answer.files[0];
+            assert!(file.deleted_file(), "a real deletion says so: {answer}");
+            assert!(
+                file.hunks
+                    .iter()
+                    .flat_map(|h| &h.lines)
+                    .any(|l| l.kind == PatchLineKind::Removed && l.text == "old"),
+                "the removed line reaches the value: {answer}"
+            );
         }
     }
 
@@ -370,7 +410,7 @@ mod tests {
     fn file_patch_renders_git_shaped_modify() {
         let patch = file_patch("src/x.txt", Some("a\nb\nc\n"), Some("a\nB\nc\n"), false);
         assert_eq!(
-            patch,
+            patch.to_string(),
             concat!(
                 "diff --git a/src/x.txt b/src/x.txt\n",
                 "--- a/src/x.txt\n",
@@ -387,72 +427,101 @@ mod tests {
     #[test]
     fn file_patch_omits_count_one_hunk_ranges_like_git() {
         let patch = file_patch("x.txt", Some("a\n"), Some("b\n"), false);
-        assert!(patch.contains("@@ -1 +1 @@\n"), "{patch}");
+        let hunk = &patch.files[0].hunks[0];
+        assert_eq!((hunk.old_count, hunk.new_count), (1, 1));
+        // The span is fields; the spelling git uses for them is derived.
+        assert_eq!(hunk.header_line(), "@@ -1 +1 @@");
     }
 
     #[test]
     fn file_patch_new_and_deleted_files_use_dev_null() {
         let added = file_patch("n.txt", None, Some("hi\n"), false);
+        let text = added.to_string();
         assert!(
-            added.starts_with("diff --git a/n.txt b/n.txt\nnew file mode 100644\n"),
-            "{added}"
+            text.starts_with("diff --git a/n.txt b/n.txt\nnew file mode 100644\n"),
+            "{text}"
         );
-        assert!(added.contains("--- /dev/null\n+++ b/n.txt\n"), "{added}");
-        assert!(added.contains("@@ -0,0 +1 @@\n+hi\n"), "{added}");
+        assert!(text.contains("--- /dev/null\n+++ b/n.txt\n"), "{text}");
+        assert!(text.contains("@@ -0,0 +1 @@\n+hi\n"), "{text}");
+        assert!(added.files[0].new_file());
 
         let deleted = file_patch("n.txt", Some("hi\n"), None, false);
+        let text = deleted.to_string();
         assert!(
-            deleted.starts_with("diff --git a/n.txt b/n.txt\ndeleted file mode 100644\n"),
-            "{deleted}"
+            text.starts_with("diff --git a/n.txt b/n.txt\ndeleted file mode 100644\n"),
+            "{text}"
         );
-        assert!(
-            deleted.contains("--- a/n.txt\n+++ /dev/null\n"),
-            "{deleted}"
-        );
-        assert!(deleted.contains("@@ -1 +0,0 @@\n-hi\n"), "{deleted}");
+        assert!(text.contains("--- a/n.txt\n+++ /dev/null\n"), "{text}");
+        assert!(text.contains("@@ -1 +0,0 @@\n-hi\n"), "{text}");
+        assert!(deleted.files[0].deleted_file());
     }
 
     #[test]
     fn file_patch_binary_sides_render_the_marker_section() {
         let patch = file_patch("b.dat", Some("\0old"), Some("\0new"), false);
+        assert!(patch.files[0].binary());
         assert_eq!(
-            patch,
+            patch.to_string(),
             "diff --git a/b.dat b/b.dat\nBinary files a/b.dat and b/b.dat differ\n"
         );
         // A binary deletion keeps both the mode header and /dev/null wording.
         let deleted = file_patch("b.dat", Some("\0old"), None, false);
+        let text = deleted.to_string();
         assert!(
-            deleted.contains("deleted file mode 100644\n")
-                && deleted.ends_with("Binary files a/b.dat and /dev/null differ\n"),
-            "{deleted}"
+            text.contains("deleted file mode 100644\n")
+                && text.ends_with("Binary files a/b.dat and /dev/null differ\n"),
+            "{text}"
         );
     }
 
     #[test]
     fn file_patch_equal_contents_is_empty_like_git() {
-        assert_eq!(
-            file_patch("x.txt", Some("same\n"), Some("same\n"), false),
-            ""
-        );
-        assert_eq!(file_patch("x.txt", None, None, false), "");
+        assert!(file_patch("x.txt", Some("same\n"), Some("same\n"), false).is_empty());
+        assert!(file_patch("x.txt", None, None, false).is_empty());
     }
 
     #[test]
     fn file_patch_marks_missing_trailing_newlines_like_git() {
         // Losing the final newline: only the new side carries the hint.
         let patch = file_patch("x.txt", Some("end\n"), Some("end"), false);
+        assert_eq!(flagged(&patch), vec!["+end"]);
         assert!(
-            patch.contains("-end\n+end\n\\ No newline at end of file\n"),
+            patch
+                .to_string()
+                .contains("-end\n+end\n\\ No newline at end of file\n"),
             "{patch}"
         );
         // Two unterminated sides: git marks both.
         let patch = file_patch("x.txt", Some("end"), Some("other"), false);
+        assert_eq!(flagged(&patch), vec!["-end", "+other"]);
         assert!(
-            patch.contains(
+            patch.to_string().contains(
                 "-end\n\\ No newline at end of file\n+other\n\\ No newline at end of file\n"
             ),
             "{patch}"
         );
+    }
+
+    /// The body lines a section flags as unterminated, with git's prefix.
+    fn flagged(patch: &Patch) -> Vec<String> {
+        patch
+            .files
+            .iter()
+            .flat_map(|f| &f.hunks)
+            .flat_map(|h| &h.lines)
+            .filter(|l| l.no_newline)
+            .map(|l| {
+                format!(
+                    "{}{}",
+                    match l.kind {
+                        PatchLineKind::Added => '+',
+                        PatchLineKind::Removed => '-',
+                        PatchLineKind::Context => ' ',
+                    },
+                    l.text
+                )
+            })
+            .collect()
     }
 
     #[test]

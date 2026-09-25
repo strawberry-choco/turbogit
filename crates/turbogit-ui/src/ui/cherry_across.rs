@@ -10,7 +10,7 @@
 use egui::{Align, Color32, FontFamily, FontId, Layout, ScrollArea, Ui};
 
 use turbogit_app::state::AppState;
-use turbogit_domain::model::Commit;
+use turbogit_domain::model::{Commit, Patch, PatchFile, PatchHeaderLine, PatchLine};
 use turbogit_services::cherry_across::{PickForecast, TargetForecast, TargetRisk};
 
 use crate::theme::Palette;
@@ -143,36 +143,82 @@ fn subject(message: &str) -> String {
 
 // --------------------------------------------------------------- preview ---
 
-/// One `diff --git` section of a patch: the new path, its hunk count, and
-/// the verbatim section body.
-struct PatchFile {
+/// One `diff --git` section of a patch: the new path, its hunk count, and the
+/// lines to paint — already classified, because the patch reached this surface
+/// as a value rather than as text to re-read (deepen-git-engine issue 11, which
+/// the ticket offers to 10 or 11 and assigns here).
+struct PreviewFile {
     path: String,
     hunks: usize,
-    body: String,
+    lines: Vec<PreviewLine>,
 }
 
-fn split_patch(patch: &str) -> Vec<PatchFile> {
-    let mut files = Vec::new();
-    for line in patch.lines() {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
-            let path = rest
-                .split_once(" b/")
-                .map(|(_, new)| new.to_string())
-                .unwrap_or_else(|| rest.to_string());
-            files.push(PatchFile {
-                path,
-                hunks: 0,
-                body: format!("{line}\n"),
-            });
-        } else if let Some(file) = files.last_mut() {
-            if line.starts_with("@@ ") {
-                file.hunks += 1;
-            }
-            file.body.push_str(line);
-            file.body.push('\n');
+/// One preview line and the role git's prefix character used to carry.
+struct PreviewLine {
+    text: String,
+    role: PreviewRole,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreviewRole {
+    /// Section and file-header lines: `diff --git`, `index`, `@@`, modes.
+    Metadata,
+    /// The `---`/`+++` pair, dimmer than other metadata by long habit.
+    Source,
+    Added,
+    Removed,
+    Context,
+}
+
+fn preview_file(file: &PatchFile) -> PreviewFile {
+    let mut lines = vec![PreviewLine {
+        text: file.section_header_line(),
+        role: PreviewRole::Metadata,
+    }];
+    for header in &file.headers {
+        // Which git line a header renders to is the value's; which ink it gets
+        // is a fact about the header, read off the variant.
+        let role = if matches!(header, PatchHeaderLine::Sources { .. }) {
+            PreviewRole::Source
+        } else {
+            PreviewRole::Metadata
+        };
+        for text in header.lines(file) {
+            lines.push(PreviewLine { text, role });
         }
     }
-    files
+    for hunk in &file.hunks {
+        lines.push(PreviewLine {
+            text: hunk.header_line(),
+            role: PreviewRole::Metadata,
+        });
+        for line in &hunk.lines {
+            let (role, prefix) = match line.kind {
+                turbogit_domain::model::PatchLineKind::Added => (PreviewRole::Added, '+'),
+                turbogit_domain::model::PatchLineKind::Removed => (PreviewRole::Removed, '-'),
+                turbogit_domain::model::PatchLineKind::Context => (PreviewRole::Context, ' '),
+            };
+            lines.push(PreviewLine {
+                text: format!("{prefix}{}", line.text),
+                role,
+            });
+            if line.no_newline {
+                lines.push(PreviewLine {
+                    text: PatchLine::NO_NEWLINE_MARKER.to_string(),
+                    role: PreviewRole::Metadata,
+                });
+            }
+        }
+    }
+    PreviewFile {
+        path: file.new_path.clone(),
+        hunks: file.hunks.len(),
+        lines,
+    }
+}
+
+fn preview_files(patch: &Patch) -> Vec<PreviewFile> {
+    patch.files.iter().map(preview_file).collect()
 }
 
 fn preview_pane(ui: &mut Ui, state: &mut AppState) {
@@ -189,7 +235,7 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
         ui.label(egui::RichText::new("Could not load the patch.").color(Palette::STATE_ERROR));
         return;
     };
-    let files = split_patch(&patch);
+    let files = preview_files(&patch);
     if files.is_empty() {
         ui.label("The commit touches no files.");
         return;
@@ -227,24 +273,18 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
         });
     });
     ScrollArea::vertical().max_height(170.0).show(ui, |ui| {
-        for line in files[idx].body.lines() {
-            let color = if let Some(_add) = line.strip_prefix('+') {
-                if line.starts_with("+++") {
-                    Palette::INK_3
-                } else {
-                    Palette::STATE_SUCCESS
-                }
-            } else if let Some(del) = line.strip_prefix('-') {
-                if line.starts_with("---") || del.is_empty() {
-                    Palette::INK_3
-                } else {
-                    Palette::STATE_ERROR
-                }
-            } else {
-                Palette::INK_2
+        for line in &files[idx].lines {
+            let color = match line.role {
+                PreviewRole::Source => Palette::INK_3,
+                PreviewRole::Added => Palette::STATE_SUCCESS,
+                // A removal of an empty line stays dim: the same rendering the
+                // prefix classifier produced, kept deliberately.
+                PreviewRole::Removed if line.text == "-" => Palette::INK_3,
+                PreviewRole::Removed => Palette::STATE_ERROR,
+                PreviewRole::Metadata | PreviewRole::Context => Palette::INK_2,
             };
             ui.label(
-                egui::RichText::new(format!("{line} "))
+                egui::RichText::new(format!("{text} ", text = line.text))
                     .monospace()
                     .font(crate::theme::data_font(crate::theme::TYPE_CONTROL))
                     .color(color),

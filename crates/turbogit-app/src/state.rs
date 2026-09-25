@@ -198,7 +198,7 @@ pub struct DialogState {
     pub cherry_search: String,
     pub cherry_stop_on_conflict: bool,
     pub cherry_focus: Option<String>,
-    pub cherry_preview: Option<Result<String, String>>,
+    pub cherry_preview: Option<Result<turbogit_domain::model::Patch, String>>,
     /// Focused file of the patch preview rail (0-based, clamped at render).
     pub cherry_preview_file: usize,
     pub cherry_forecast: Option<Vec<turbogit_services::cherry_across::TargetForecast>>,
@@ -1443,7 +1443,12 @@ impl AppState {
             return;
         }
         self.pump_read(move |executor, tx| {
-            let res = executor.commit_file_stats(&root.0, &commit);
+            let res = executor.change_stats(
+                &root.0,
+                &turbogit_domain::model::ChangeQuestion::Commit {
+                    commit: commit.to_string(),
+                },
+            );
             let _ = tx.send(AppEvent::FileStatsLoaded {
                 root,
                 commit,
@@ -2026,14 +2031,15 @@ impl AppState {
         self.cherry_reforecast();
     }
 
-    /// Focus a commit in the dialog's patch preview rail (issue 16) and
-    /// load its patch text synchronously — one engine read, like the
-    /// preflight's live git reads.
+    /// Focus a commit in the dialog's patch preview rail (issue 16) and load
+    /// its patch synchronously — one engine read, like the preflight's live git
+    /// reads. The answer is a patch value; the preview classifies its own lines
+    /// rather than re-reading git's text.
     pub fn cherry_focus_commit(&mut self, id: String) {
         let Some(source) = self.ui.dlg.cherry_source.clone() else {
             return;
         };
-        let patch = self.executor.diff(
+        let patch = self.executor.diff_patch(
             source.0.as_ref(),
             &DiffOpts {
                 commit: Some(id.clone()),
@@ -2436,7 +2442,7 @@ impl AppState {
                     // Release the in-flight guard first (log-open perf, D2).
                     self.fetching_stats.remove(&(root.clone(), commit.clone()));
                     match stats {
-                        Ok(s) => self.caches.store_file_stats(root, commit, s),
+                        Ok(s) => self.caches.store_file_stats(root, commit, s.files),
                         // A failed load stores "no counts" rather than staying
                         // unloaded: the pane asks every frame, so an unloaded
                         // entry would re-dispatch the failing call forever.

@@ -24,7 +24,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use turbogit_domain::model::{ChangeStatus, Commit, DiffOpts, LogOpts, RootId, VcsSettings};
+use turbogit_domain::model::{
+    ChangeStatus, Commit, DiffOpts, LogOpts, Patch, PatchHeaderLine, PatchLineKind, RootId,
+    VcsSettings,
+};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
@@ -136,27 +139,65 @@ fn ids(commits: &[Commit]) -> Vec<String> {
     commits.iter().map(|c| c.id.clone()).collect()
 }
 
-/// Assert `diff` is git's canonical unified diff for `path`: the four header
-/// lines (`diff --git`, `index …`, `---`, `+++`) followed by EXACTLY `body`
-/// (hunk header + patch text). The `index` line carries blob hashes, so only
-/// its shape is pinned; every other line is byte-exact.
+/// Assert `patch` is the engine's answer for one path: the section names it,
+/// carries the blob-pair and source-pair metadata git wrote, and holds exactly
+/// one hunk with `span` and `body`. The body is spelled the way the diff reads
+/// (`" alpha"`, `"-bravo"`) because that is the shape the viewer and `git apply`
+/// both depend on — but it is assembled from the value's fields, not matched
+/// against git's text.
 #[track_caller]
-fn assert_unified_diff(diff: &str, path: &str, body: &[&str]) {
-    let lines: Vec<&str> = diff.lines().collect();
-    assert_eq!(
-        lines.len(),
-        body.len() + 4,
-        "unexpected diff shape:\n{diff}"
-    );
-    assert_eq!(lines[0], format!("diff --git a/{path} b/{path}"));
+fn assert_patch_one_file(
+    patch: &Patch,
+    path: &str,
+    span: (usize, usize, usize, usize),
+    body: &[&str],
+) {
+    assert_eq!(patch.files.len(), 1, "one section, got:\n{patch}");
+    let file = &patch.files[0];
+    assert_eq!((&file.old_path[..], &file.new_path[..]), (path, path));
     assert!(
-        lines[1].starts_with("index ") && lines[1].ends_with(" 100644"),
-        "unexpected index line: {}",
-        lines[1]
+        file.headers.iter().any(|h| matches!(
+            h,
+            PatchHeaderLine::Index {
+                mode: Some(mode),
+                ..
+            } if mode == "100644"
+        )),
+        "git's blob-pair line reaches the value:\n{patch}"
     );
-    assert_eq!(lines[2], format!("--- a/{path}"));
-    assert_eq!(lines[3], format!("+++ b/{path}"));
-    assert_eq!(&lines[4..], body, "patch body mismatch:\n{diff}");
+    let (want_old, want_new) = (format!("a/{path}"), format!("b/{path}"));
+    assert!(
+        file.headers
+            .iter()
+            .any(|h| matches!(h, PatchHeaderLine::Sources { old, new }
+                if *old == want_old && *new == want_new)),
+        "the source pair reaches the value:\n{patch}"
+    );
+    assert_eq!(file.hunks.len(), 1, "one hunk, got:\n{patch}");
+    let hunk = &file.hunks[0];
+    assert_eq!(
+        (
+            hunk.old_start,
+            hunk.old_count,
+            hunk.new_start,
+            hunk.new_count
+        ),
+        span,
+        "hunk span:\n{patch}"
+    );
+    let lines: Vec<String> = hunk
+        .lines
+        .iter()
+        .map(|l| {
+            let prefix = match l.kind {
+                PatchLineKind::Context => ' ',
+                PatchLineKind::Added => '+',
+                PatchLineKind::Removed => '-',
+            };
+            format!("{prefix}{}", l.text)
+        })
+        .collect();
+    assert_eq!(lines, body, "patch body mismatch:\n{patch}");
 }
 
 // ------------------------------------------------------------ status tests --
@@ -470,21 +511,14 @@ fn engine_golden_diff_unstaged_modification_exact_text() {
     // Controlled single-line edit in the middle of the file.
     std::fs::write(repo.join("words.txt"), BASE.replace("bravo", "BRAVO")).expect("rewrite");
 
-    let diff = engine()
-        .diff(&repo, &DiffOpts::default())
+    let patch = engine()
+        .diff_patch(&repo, &DiffOpts::default())
         .expect("working-tree diff");
-    assert_unified_diff(
-        &diff,
+    assert_patch_one_file(
+        &patch,
         "words.txt",
-        &[
-            "@@ -1,5 +1,5 @@",
-            " alpha",
-            "-bravo",
-            "+BRAVO",
-            " charlie",
-            " delta",
-            " echo",
-        ],
+        (1, 5, 1, 5),
+        &[" alpha", "-bravo", "+BRAVO", " charlie", " delta", " echo"],
     );
 }
 
@@ -502,16 +536,19 @@ fn engine_golden_diff_staged_vs_worktree_semantics() {
     std::fs::write(repo.join("words.txt"), "one\nTWO!\nthree\n").expect("worktree v3");
 
     // Default opts → `git diff` (worktree vs INDEX).
-    let wt = engine().diff(&repo, &DiffOpts::default()).expect("wt diff");
-    assert_unified_diff(
+    let wt = engine()
+        .diff_patch(&repo, &DiffOpts::default())
+        .expect("wt diff");
+    assert_patch_one_file(
         &wt,
         "words.txt",
-        &["@@ -1,3 +1,3 @@", " one", "-TWO", "+TWO!", " three"],
+        (1, 3, 1, 3),
+        &[" one", "-TWO", "+TWO!", " three"],
     );
 
     // staged: true → `git diff --cached` (INDEX vs HEAD).
     let staged = engine()
-        .diff(
+        .diff_patch(
             &repo,
             &DiffOpts {
                 staged: true,
@@ -519,10 +556,11 @@ fn engine_golden_diff_staged_vs_worktree_semantics() {
             },
         )
         .expect("cached diff");
-    assert_unified_diff(
+    assert_patch_one_file(
         &staged,
         "words.txt",
-        &["@@ -1,3 +1,3 @@", " one", "-two", "+TWO", " three"],
+        (1, 3, 1, 3),
+        &[" one", "-two", "+TWO", " three"],
     );
 }
 
@@ -538,15 +576,29 @@ fn engine_golden_diff_ignore_whitespace_flag_mapping() {
     std::fs::write(repo.join("words.txt"), "alpha\nb r a v o\ncharlie\n").expect("whitespace edit");
 
     let plain = engine()
-        .diff(&repo, &DiffOpts::default())
+        .diff_patch(&repo, &DiffOpts::default())
         .expect("plain diff");
+    let spelled: Vec<String> = plain
+        .files
+        .iter()
+        .flat_map(|f| &f.hunks)
+        .flat_map(|h| &h.lines)
+        .map(|l| {
+            let prefix = match l.kind {
+                PatchLineKind::Context => ' ',
+                PatchLineKind::Added => '+',
+                PatchLineKind::Removed => '-',
+            };
+            format!("{prefix}{}", l.text)
+        })
+        .collect();
     assert!(
-        plain.contains("-bravo") && plain.contains("+b r a v o"),
+        spelled.contains(&"-bravo".to_string()) && spelled.contains(&"+b r a v o".to_string()),
         "whitespace edit must show without the flag:\n{plain}"
     );
 
     let ignored = engine()
-        .diff(
+        .diff_patch(
             &repo,
             &DiffOpts {
                 ignore_whitespace: true,
@@ -554,9 +606,9 @@ fn engine_golden_diff_ignore_whitespace_flag_mapping() {
             },
         )
         .expect("ws-insensitive diff");
-    assert_eq!(
-        ignored, "",
-        "--ignore-all-space must silence a whitespace-only edit"
+    assert!(
+        ignored.is_empty(),
+        "--ignore-all-space must silence a whitespace-only edit:\n{ignored}"
     );
 }
 

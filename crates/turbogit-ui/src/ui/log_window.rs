@@ -1526,8 +1526,8 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         .caches
         .file_stats_for(root_id, &commit.id)
         .unwrap_or(&[]);
-    let added: usize = stats.iter().map(|(_, ins, _)| *ins).sum();
-    let removed: usize = stats.iter().map(|(_, _, dels)| *dels).sum();
+    let added: usize = stats.iter().filter_map(|f| f.insertions).sum();
+    let removed: usize = stats.iter().filter_map(|f| f.deletions).sum();
     ui.add_space(6.0);
     widgets::churn_bar(ui, added, removed);
     ui.horizontal(|ui| {

@@ -256,19 +256,18 @@ fn git_page(ui: &mut Ui, s: &mut VcsSettings, version_badge: Option<&Result<Stri
     setting_row(
         ui,
         "Git backend",
-        "Auto picks libgit2 for reads and the CLI for anything libgit2 cannot do.",
+        "Runs the git executable for everything, or answers some reads inside the \
+         app and runs git for the rest. Which git runs the diffs is a separate choice.",
         |ui| {
-            let options = ["CLI", "libgit2", "Auto"];
+            let options = ["CLI", "In-process reads"];
             let selected = match s.backend {
                 GitBackend::Cli => 0,
-                GitBackend::Libgit2 => 1,
-                GitBackend::Auto => 2,
+                GitBackend::InProcessReads => 1,
             };
             if let Some(ix) = widgets::segmented_control(ui, &options, selected) {
                 s.backend = match ix {
                     0 => GitBackend::Cli,
-                    1 => GitBackend::Libgit2,
-                    _ => GitBackend::Auto,
+                    _ => GitBackend::InProcessReads,
                 };
             }
         },

@@ -34,23 +34,6 @@ pub fn blame(
     vcs.blame(root, path, rev)
 }
 
-/// Unified diff between two commits (compare view).
-pub fn compare_commits(
-    vcs: &dyn GitExecutor,
-    root: &Path,
-    left: &str,
-    right: &str,
-) -> TgResult<String> {
-    vcs.diff(
-        root,
-        &DiffOpts {
-            left: Some(left.to_string()),
-            right: Some(right.to_string()),
-            ..Default::default()
-        },
-    )
-}
-
 /// Contents of a file at a given revision (selection/dir history viewer).
 pub fn show_at(vcs: &dyn GitExecutor, root: &Path, rev: &str, path: &Path) -> TgResult<String> {
     vcs.show_file(root, rev, path)

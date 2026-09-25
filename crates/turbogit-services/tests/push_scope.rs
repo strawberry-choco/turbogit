@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use turbogit_domain::model::{Branch, BranchKind, Root, RootId, RootStatus, VcsSettings};
+use turbogit_domain::model::{Branch, BranchKind, Root, RootId, RootStatus, Upstream, VcsSettings};
 use turbogit_engine::fake::{Call, FakeExecutor};
 use turbogit_services::sync_service::{
     PushScope, protected_roots, push_dry_run_roots, push_roots, roots_in_scope, summarize_dry_runs,
@@ -35,7 +35,10 @@ fn root_tracking(path: &str, branch: &str, remote: &str) -> Root {
     r.branches = vec![Branch {
         name: branch.to_string(),
         kind: BranchKind::Local,
-        tracking: Some(format!("{remote}/{branch}")),
+        tracking: Some(Upstream {
+            remote: remote.to_string(),
+            branch: branch.to_string(),
+        }),
         favorite: false,
         protected: false,
         exists: true,

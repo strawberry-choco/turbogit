@@ -14,7 +14,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::error::{TgError, TgResult};
-use turbogit_domain::model::{Commit, DiffOpts, LogOpts, RootId};
+use turbogit_domain::model::{
+    Commit, DiffOpts, LogOpts, Patch, PatchFile, PatchHeaderLine, RootId,
+};
 use turbogit_engine_api::GitExecutor;
 
 use crate::integrate_service;
@@ -77,7 +79,7 @@ pub fn forecast(
 ) -> Vec<TargetForecast> {
     let source_subjects: HashSet<String> = picks.iter().map(|c| subject(&c.message)).collect();
     // Patch texts are per source commit, shared across targets.
-    let mut patches: HashMap<String, String> = HashMap::new();
+    let mut patches: HashMap<String, Patch> = HashMap::new();
 
     targets
         .iter()
@@ -109,7 +111,7 @@ pub fn forecast(
                     let patch = patches
                         .entry(pick.id.clone())
                         .or_insert_with(|| {
-                            exec.diff(
+                            exec.diff_patch(
                                 source,
                                 &DiffOpts {
                                     commit: Some(pick.id.clone()),
@@ -127,15 +129,9 @@ pub fn forecast(
                                 PickForecast::CleanApply
                             }
                         }
-                        Err(e) => {
-                            let stderr = match &e {
-                                TgError::Cli { stderr, .. } => stderr.clone(),
-                                other => other.to_string(),
-                            };
-                            PickForecast::Conflict {
-                                failed_hunks: failed_hunks(&patch, &stderr).max(1),
-                            }
-                        }
+                        Err(_) => PickForecast::Conflict {
+                            failed_hunks: failed_hunks(exec, path, &patch).max(1),
+                        },
                     }
                 };
                 if !matches!(pick_forecast, PickForecast::AlreadyPresent) {
@@ -190,36 +186,43 @@ fn is_dirty(status: &turbogit_domain::model::RootStatus) -> bool {
         .any(|c| !matches!(c.status, Unversioned | Ignored))
 }
 
-/// How many of the patch's hunks git reported failing. The stderr's
-/// "error: patch failed: <file>:<line>" locations are matched against the
-/// patch's `@@ -start,count` headers (per-file line numbers can alias, so
-/// this is a count of distinct matching hunks, not an exact per-file map);
-/// any unparsable non-empty stderr counts as one.
-pub fn failed_hunks(patch: &str, stderr: &str) -> usize {
-    let hunks: Vec<(usize, usize)> = patch
-        .lines()
-        .filter_map(|l| {
-            let rest = l.strip_prefix("@@ -")?;
-            let mut it = rest.split(&[',', ' '][..]);
-            let start: usize = it.next()?.parse().ok()?;
-            let count: usize = it.next().and_then(|c| c.parse().ok()).unwrap_or(1);
-            Some((start, start.saturating_sub(1) + count))
+/// How many of the patch's hunks would not apply, asked of the **Git engine**
+/// one hunk at a time.
+///
+/// This used to match git's `error: patch failed: <file>:<line>` locations
+/// against the patch's own `@@` headers — a reading that only worked under the
+/// CLI adapter, because the port's failure channel is git's prose. The value
+/// says how many hunks there are and `check_patch` says which of them apply, so
+/// neither the header scan nor the stderr parse is needed (`ADR-0022`).
+///
+/// A hunk that checks clean alone can still fail as part of the whole, so a
+/// caller that already knows the whole failed keeps `.max(1)`.
+pub fn failed_hunks(exec: &dyn GitExecutor, root: &Path, patch: &Patch) -> usize {
+    patch
+        .files
+        .iter()
+        .flat_map(|file| file.hunks.iter().map(move |hunk| (file, hunk)))
+        .filter(|(file, hunk)| {
+            let one = Patch {
+                files: vec![PatchFile {
+                    old_path: file.old_path.clone(),
+                    new_path: file.new_path.clone(),
+                    combined: file.combined,
+                    // The blob pair describes the pre-image git just checked;
+                    // per hunk it is at best redundant and at worst a stale
+                    // claim about the index.
+                    headers: file
+                        .headers
+                        .iter()
+                        .filter(|h| !matches!(h, PatchHeaderLine::Index { .. }))
+                        .cloned()
+                        .collect(),
+                    hunks: vec![(*hunk).clone()],
+                }],
+            };
+            exec.check_patch(root, &one).is_err()
         })
-        .collect();
-    if stderr.trim().is_empty() {
-        return 0;
-    }
-    let failed: HashSet<usize> = stderr
-        .lines()
-        .filter_map(|l| l.split("patch failed: ").nth(1))
-        .filter_map(|loc| loc.split(':').nth(1)?.trim().parse::<usize>().ok())
-        .filter_map(|line| {
-            hunks
-                .iter()
-                .position(|&(start, end)| line >= start && line < end)
-        })
-        .collect();
-    if failed.is_empty() { 1 } else { failed.len() }
+        .count()
 }
 
 /// The subject (first message line) of a commit — the identity used for

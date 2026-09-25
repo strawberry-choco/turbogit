@@ -1,7 +1,8 @@
-//! Issue #26 — Settings, Auto backend: `GitBackend::Auto` routes reads to
-//! libgit2 and falls back to the CLI for anything libgit2 cannot do. The
-//! factory is the seam (ADR-0001): these tests drive `build_executor` and
-//! assert the behavior contract on a real temporary repository.
+//! The in-process-reads backend: `GitBackend::InProcessReads` answers the reads
+//! `git2` has and runs the git executable for the rest. The factory is the seam
+//! (ADR-0001, as corrected by ADR-0022): these tests drive `build_executor` and
+//! assert the behavior contract on a real temporary repository. What the two
+//! backends *differ* on is pinned next door, in `backend_options.rs`.
 
 use std::path::Path;
 
@@ -40,36 +41,39 @@ fn fixture_repo() -> tempfile::TempDir {
 }
 
 #[test]
-fn auto_backend_serves_reads_and_falls_back_to_cli() {
+fn in_process_reads_backend_serves_reads_and_runs_git_for_the_rest() {
     let tmp = fixture_repo();
     let repo = tmp.path().join("repo");
     let settings = VcsSettings {
-        backend: GitBackend::Auto,
+        backend: GitBackend::InProcessReads,
         ..VcsSettings::default()
     };
     let exec = build_executor(&settings);
 
-    assert!(exec.is_repo(&repo), "Auto must serve the read path");
+    assert!(
+        exec.is_repo(&repo),
+        "the composed adapter must serve the read path"
+    );
     assert_eq!(
         exec.current_branch(&repo).unwrap().as_deref(),
         Some("main"),
-        "Auto must serve reads"
+        "the composed adapter must serve reads"
     );
     assert!(
         !exec.branches(&repo).unwrap().is_empty(),
-        "Auto must serve libgit2-native reads"
+        "the composed adapter must answer libgit2-native reads"
     );
 
-    // `run_raw` is CLI-only territory (git2 cannot spawn custom commands);
-    // Auto must fall back to the CLI executor for it.
+    // `run_raw` is territory `git2` cannot cover, so the composed adapter runs
+    // the git executable for it.
     let status = exec
         .run_raw(&repo, &["status".into(), "--porcelain".into()])
-        .expect("Auto must fall back to the CLI for unsupported ops");
+        .expect("the composed adapter must run git for what it cannot do in-process");
     assert!(status.is_empty(), "unexpected status output: {status:?}");
 }
 
 #[test]
-fn index_blob_reads_match_cli_without_reading_worktree() {
+fn the_index_side_of_a_path_answers_its_staged_bytes_not_the_worktree() {
     let tmp = fixture_repo();
     let repo = tmp.path().join("repo");
     let path = Path::new("f.txt");
@@ -78,44 +82,19 @@ fn index_blob_reads_match_cli_without_reading_worktree() {
     git(&repo, &["add", "f.txt"]);
     std::fs::write(repo.join(path), "worktree only\n").unwrap();
 
-    for backend in [GitBackend::Cli, GitBackend::Auto, GitBackend::Libgit2] {
+    for backend in [GitBackend::Cli, GitBackend::InProcessReads] {
         let exec = build_executor(&VcsSettings {
             backend,
             ..VcsSettings::default()
         });
-        assert_eq!(exec.show_file_bytes(&repo, ":0", path).unwrap(), indexed);
+        // The named read replaces the `:0` stage rev callers used to pass.
+        assert_eq!(exec.index_file_bytes(&repo, path).unwrap(), indexed);
         assert_eq!(exec.show_file_bytes(&repo, "HEAD", path).unwrap(), b"one\n");
         assert!(
-            exec.show_file_bytes(&repo, ":0", Path::new("missing.txt"))
-                .is_err()
+            exec.index_file_bytes(&repo, Path::new("missing.txt"))
+                .is_err(),
+            "an unknown path is an error, not empty bytes — a **Binary change** \
+             and an **Image diff** read through here"
         );
     }
-}
-
-#[test]
-fn auto_backend_matches_explicit_libgit2_on_reads() {
-    let tmp = fixture_repo();
-    let repo = tmp.path().join("repo");
-    let exec = |backend| {
-        build_executor(&VcsSettings {
-            backend,
-            ..VcsSettings::default()
-        })
-    };
-    let auto = exec(GitBackend::Auto);
-    let libgit2 = exec(GitBackend::Libgit2);
-
-    assert_eq!(
-        auto.current_branch(&repo).unwrap(),
-        libgit2.current_branch(&repo).unwrap()
-    );
-    assert_eq!(
-        auto.log(&repo, &turbogit_domain::model::LogOpts::default())
-            .unwrap()
-            .len(),
-        libgit2
-            .log(&repo, &turbogit_domain::model::LogOpts::default())
-            .unwrap()
-            .len()
-    );
 }

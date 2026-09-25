@@ -90,11 +90,14 @@ pre-mutation list over the fresh refetch.
 _Avoid_: generation counter, cache version
 
 **Git engine**:
-The module that talks to git. Its interface is `GitExecutor`; production runs the
-`Auto` backend, which answers from libgit2 and delegates to the CLI adapter for
-what libgit2 does not do, and tests may swap in the in-memory fake — which
-implements only part of the port, so most suites drive a real repository instead.
-An adapter's conventions are not guaranteed across adapters: git's own DWIM, for
+The module that talks to git. Its interface is `GitExecutor`, and it answers with
+domain values — a push plan, a file's conflict versions, a patch — rather than
+git's own text for callers to substring. Production runs the CLI adapter, or the
+composed adapter that answers some reads in-process and delegates the rest to it;
+those two differ only in how much is in-process, and neither is a libgit2-only
+path. Tests substitute an adapter seeded with values per repository shape, so a
+suite needs a `git` binary only when its acceptance is that git really moved. An
+adapter's conventions are not guaranteed across adapters: git's own DWIM, for
 example, runs only under the CLI.
 _Avoid_: VCS manager, executor wrapper, git backend
 

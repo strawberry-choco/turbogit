@@ -1,18 +1,16 @@
-//! Phase L1 parity — in-process `similar` diffs vs the CLI `git diff` text.
+//! Phase L1 parity — in-process `similar` diffs vs the CLI `git diff`.
 //!
 //! Drives real temporary repositories and asserts, per fixture, that the
-//! row stream the UI's parser builds from [`turbogit_services::diff_engine`]
-//! output equals the row stream built from `git diff` output. The producer
-//! switch lives at the text level (the cached raw patch), so row-stream
-//! equality is exactly the renderer-visible contract.
+//! **Git engine**'s patch value from [`turbogit_services::diff_engine`] equals
+//! the one from the executor. Both producers now answer with the same value
+//! type, so the comparison is structural equality rather than a match of two
+//! renderings of a text format: paths, **Hunk** spans, section headings, body
+//! lines and **Binary change** metadata all have to agree.
 //!
-//! Known cosmetic gap: the in-process patch carries no
-//! `index <old>..<new> <mode>` line (blob hashes are not computed
-//! in-process). Those metadata rows are filtered on both sides before
-//! comparison; every other row — hunk headers included — must match
-//! byte-for-byte. Tests additionally assert the CLI text has an `index`
-//! line while the in-process text does not, proving each side really took
-//! its own path.
+//! Known cosmetic gap: the in-process answer carries no blob-pair **Index**
+//! header (hashes are not computed in-process). That one header is stripped on
+//! both sides before comparison, and each side is separately asserted to have
+//! taken its own path by whether it states it.
 //!
 //! The 3-way merge is checked against the canonical raw-marker parser:
 //! `similar`'s own marker rendering of a merge, fed through
@@ -22,12 +20,11 @@
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use turbogit_domain::model::{DiffOpts, VcsSettings};
+use turbogit_domain::model::{DiffOpts, Patch, PatchHeaderLine, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::conflict;
 use turbogit_services::diff_engine;
-use turbogit_ui::ui::diff::{RowSummary, parsed_rows};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -83,32 +80,42 @@ fn repo_opts(path: &str) -> DiffOpts {
     }
 }
 
-/// Row streams of both texts, equalized for the known cosmetic gap: the
-/// in-process patch has no `index <hash>..<hash>` metadata line.
-fn parity_rows(cli_text: &str, ip_text: &str) -> (Vec<RowSummary>, Vec<RowSummary>) {
-    let strip = |text: &str| {
-        parsed_rows(text)
-            .into_iter()
-            .filter(|r| !(r.kind == "meta" && r.text.starts_with("index ")))
-            .collect::<Vec<_>>()
-    };
-    (strip(cli_text), strip(ip_text))
+/// Both answers, equalized for the known cosmetic gap: the in-process patch
+/// states no blob pair.
+fn without_index_pairs(patch: &Patch) -> Patch {
+    let mut out = patch.clone();
+    for file in &mut out.files {
+        file.headers
+            .retain(|h| !matches!(h, PatchHeaderLine::Index { .. }));
+    }
+    out
 }
 
-/// Assert full row-stream parity for one fixture, plus the provenance
-/// markers: git emits an `index` metadata line, the in-process patch does
-/// not.
-fn assert_row_parity(cli_text: &str, ip_text: &str) {
+fn states_a_blob_pair(patch: &Patch) -> bool {
+    patch.files.iter().any(|f| {
+        f.headers
+            .iter()
+            .any(|h| matches!(h, PatchHeaderLine::Index { .. }))
+    })
+}
+
+/// Assert the two producers agree on one fixture, plus the provenance marker:
+/// git's answer states a blob pair, the in-process one cannot.
+#[track_caller]
+fn assert_patch_parity(cli: &Patch, ip: &Patch) {
     assert!(
-        cli_text.contains("\nindex ") || cli_text.starts_with("index "),
-        "fixture must have a CLI-produced index line:\n{cli_text}"
+        states_a_blob_pair(cli),
+        "fixture must have a CLI-produced blob pair:\n{cli}"
     );
     assert!(
-        !ip_text.contains("\nindex ") && !ip_text.starts_with("index "),
-        "in-process patch must not carry blob hashes:\n{ip_text}"
+        !states_a_blob_pair(ip),
+        "in-process patch must not carry blob hashes:\n{ip}"
     );
-    let (cli_rows, ip_rows) = parity_rows(cli_text, ip_text);
-    assert_eq!(ip_rows, cli_rows, "row streams diverged");
+    assert_eq!(
+        without_index_pairs(ip),
+        without_index_pairs(cli),
+        "the two answers diverged\nfrom git:\n{cli}\nin-process:\n{ip}"
+    );
 }
 
 /// 20-line base file. Edits to `bravo` (line 2) and `quebec` (line 17) are
@@ -146,22 +153,29 @@ fn commit_words(repo: &Repo, content: &str) {
 // ------------------------------------------------------------ diff parity --
 
 #[test]
-fn parity_simple_modify_rows_match_cli() {
+fn parity_simple_modify_matches_cli() {
     let repo = temp_repo("parity-simple");
     commit_words(&repo, "one\ntwo\nthree\n");
     std::fs::write(repo.path.join("words.txt"), "one\nTWO\nthree\n").unwrap();
 
     let ex = executor();
     let opts = repo_opts("words.txt");
-    let cli = ex.diff(&repo.path, &opts).unwrap();
-    let ip = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
+    let ip = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
 
-    assert!(cli.contains("@@ -1,3 +1,3 @@"));
-    assert_row_parity(&cli, &ip);
+    assert_eq!(
+        (
+            cli.files[0].hunks[0].old_start,
+            cli.files[0].hunks[0].old_count
+        ),
+        (1, 3),
+        "the span git wrote: {cli}"
+    );
+    assert_patch_parity(&cli, &ip);
 }
 
 #[test]
-fn parity_multi_hunk_modify_rows_match_cli() {
+fn parity_multi_hunk_modify_matches_cli() {
     let repo = temp_repo("parity-multi-hunk");
     commit_words(&repo, BASE);
     let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
@@ -169,17 +183,17 @@ fn parity_multi_hunk_modify_rows_match_cli() {
 
     let ex = executor();
     let opts = repo_opts("words.txt");
-    let cli = ex.diff(&repo.path, &opts).unwrap();
-    let ip = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
+    let ip = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
 
-    for rows in [parsed_rows(&cli), parsed_rows(&ip)] {
+    for answer in [&cli, &ip] {
         assert_eq!(
-            rows.iter().filter(|r| r.kind == "hunk").count(),
+            answer.hunk_count(),
             2,
-            "expected two independent hunks"
+            "expected two independent hunks:\n{answer}"
         );
     }
-    assert_row_parity(&cli, &ip);
+    assert_patch_parity(&cli, &ip);
 }
 
 #[test]
@@ -191,9 +205,18 @@ fn parity_newline_at_eof_changes_match_cli() {
 
     let ex = executor();
     let opts = repo_opts("words.txt");
-    let cli = ex.diff(&repo.path, &opts).unwrap();
-    let ip = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
-    assert_row_parity(&cli, &ip);
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
+    let ip = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
+    assert_eq!(
+        ip.files[0].hunks[0]
+            .lines
+            .iter()
+            .filter(|l| l.no_newline)
+            .count(),
+        1,
+        "git marks only the side that lost its newline:\n{ip}"
+    );
+    assert_patch_parity(&cli, &ip);
 
     // Appending an unterminated line: hint after the appended + line.
     let repo = temp_repo("parity-eof-append");
@@ -203,31 +226,37 @@ fn parity_newline_at_eof_changes_match_cli() {
     std::fs::write(repo.path.join("words.txt"), worktree).unwrap();
 
     let opts = repo_opts("words.txt");
-    let cli = ex.diff(&repo.path, &opts).unwrap();
-    let ip = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
-    assert_row_parity(&cli, &ip);
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
+    let ip = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
+    assert_patch_parity(&cli, &ip);
 }
 
 #[test]
-fn parity_deleted_file_rows_match_cli() {
+fn parity_deleted_file_matches_cli() {
     let repo = temp_repo("parity-deleted");
     commit_words(&repo, "gone\nsoon\n");
     std::fs::remove_file(repo.path.join("words.txt")).unwrap();
 
     let ex = executor();
     let opts = repo_opts("words.txt");
-    let cli = ex.diff(&repo.path, &opts).unwrap();
-    let ip = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
+    let ip = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
 
-    assert!(cli.contains("deleted file mode"), "{cli}");
-    assert!(ip.contains("deleted file mode"), "{ip}");
-    assert!(ip.contains("--- a/words.txt\n+++ /dev/null\n"), "{ip}");
-    // A failed new-side read cannot prove deletion; preserve CLI output verbatim.
-    assert_eq!(cli, ip);
+    assert!(ip.files[0].deleted_file(), "{ip}");
+    assert!(
+        ip.files[0].headers.iter().any(|h| matches!(
+            h,
+            PatchHeaderLine::Sources { old, new }
+                if old == "a/words.txt" && new == "/dev/null"
+        )),
+        "the missing side is named: {ip}"
+    );
+    // A failed new-side read cannot prove deletion; the CLI answer is kept whole.
+    assert_eq!(ip, cli);
 }
 
 #[test]
-fn parity_binary_change_rows_match_cli() {
+fn parity_binary_change_matches_cli() {
     let repo = temp_repo("parity-binary");
     std::fs::write(repo.path.join("blob.dat"), b"\0old-bytes\0").unwrap();
     git(&repo.path, &["add", "blob.dat"]);
@@ -236,14 +265,11 @@ fn parity_binary_change_rows_match_cli() {
 
     let ex = executor();
     let opts = repo_opts("blob.dat");
-    let cli = ex.diff(&repo.path, &opts).unwrap();
-    let ip = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
+    let ip = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
 
-    assert!(
-        cli.contains("Binary files a/blob.dat and b/blob.dat differ"),
-        "{cli}"
-    );
-    assert_row_parity(&cli, &ip);
+    assert!(cli.files[0].binary(), "a **Binary change**: {cli}");
+    assert_patch_parity(&cli, &ip);
 }
 
 #[test]
@@ -253,11 +279,10 @@ fn parity_no_changes_is_empty_like_git() {
 
     let ex = executor();
     let opts = repo_opts("words.txt");
-    let cli = ex.diff(&repo.path, &opts).unwrap();
-    let ip = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
-    assert_eq!(cli, "");
-    assert_eq!(ip, "");
-    assert_eq!(parsed_rows(&ip), parsed_rows(&cli));
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
+    let ip = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
+    assert!(cli.is_empty(), "nothing changed: {cli}");
+    assert!(ip.is_empty(), "nothing changed: {ip}");
 }
 
 // ------------------------------------------------------- fallback behavior --
@@ -274,17 +299,24 @@ fn fallback_whole_tree_target_delegates_to_cli() {
         left: Some("HEAD".to_owned()),
         ..DiffOpts::default()
     };
-    let delegated = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
-    let cli = ex.diff(&repo.path, &opts).unwrap();
+    let delegated = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
     assert_eq!(delegated, cli);
-    assert!(delegated.contains("-bravo"), "{delegated}");
+    assert!(
+        delegated.files.iter().any(|f| f.hunks.iter().any(|h| {
+            h.lines.iter().any(|l| {
+                l.kind == turbogit_domain::model::PatchLineKind::Removed && l.text == "bravo"
+            })
+        })),
+        "the removed line reaches the delegated answer:\n{delegated}"
+    );
 }
 
 #[test]
 fn fallback_unreadable_old_side_delegates_to_cli() {
     let repo = temp_repo("fallback-added");
     // Staged addition: HEAD lacks the path, so rename/new-file metadata is
-    // git's call — the in-process path must defer to the CLI verbatim.
+    // git's call — the in-process path must defer to the CLI answer.
     std::fs::write(repo.path.join("added.txt"), "fresh\n").unwrap();
     git(&repo.path, &["add", "added.txt"]);
 
@@ -294,10 +326,10 @@ fn fallback_unreadable_old_side_delegates_to_cli() {
         path: Some(PathBuf::from("added.txt")),
         ..DiffOpts::default()
     };
-    let delegated = diff_engine::diff_text(&ex, &repo.path, &opts).unwrap();
-    let cli = ex.diff(&repo.path, &opts).unwrap();
+    let delegated = diff_engine::patch(&ex, &repo.path, &opts).unwrap();
+    let cli = ex.diff_patch(&repo.path, &opts).unwrap();
     assert_eq!(delegated, cli);
-    assert!(delegated.contains("new file mode"), "{delegated}");
+    assert!(delegated.files[0].new_file(), "{delegated}");
 }
 
 // ------------------------------------------------------------- 3-way merge --

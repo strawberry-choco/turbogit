@@ -19,8 +19,9 @@ use std::sync::{Arc, Mutex};
 
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
-    BlameLine, Branch, Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, MergeOpts,
-    RebaseOpts, RebasePlanEntry, Remote, RootStatus, Stash, Submodule, TagSpec, Worktree,
+    BlameLine, Branch, Change, ChangeQuestion, ChangeStats, Commit, CommitId, CommitRef,
+    ConflictVersions, DiffOpts, LogOpts, MergeOpts, Patch, RebaseOpts, RebasePlanEntry, Remote,
+    RootStatus, Stash, Submodule, TagSpec, Upstream, Worktree,
 };
 use turbogit_engine_api::GitExecutor;
 // `engine::fake` is unit-test-only (`#[cfg(test)]`), so integration tests
@@ -137,7 +138,7 @@ pub struct RecordingExecutor {
     /// `ref_decorations` invocation counter (log-open perf: the refs
     /// in-flight guard releases on Ok and Err alike).
     ref_calls: Mutex<usize>,
-    /// `commit_file_stats` invocation counter (logs-panels redesign issue 02:
+    /// `change_stats` invocation counter (logs-panels redesign issue 01:
     /// the per-commit stats request must fire once per commit id, never once
     /// per frame).
     stats_calls: Mutex<usize>,
@@ -174,7 +175,7 @@ impl RecordingExecutor {
         *self.ref_calls.lock().expect("ref mutex")
     }
 
-    /// How many `commit_file_stats` invocations have been made so far.
+    /// How many `change_stats` invocations have been made so far.
     pub fn stats_call_count(&self) -> usize {
         *self.stats_calls.lock().expect("stats mutex")
     }
@@ -286,13 +287,9 @@ impl GitExecutor for RecordingExecutor {
         self.inner.commit_files(root, commit)
     }
 
-    fn commit_file_stats(
-        &self,
-        root: &Path,
-        commit: &str,
-    ) -> TgResult<Vec<(PathBuf, usize, usize)>> {
+    fn change_stats(&self, root: &Path, question: &ChangeQuestion) -> TgResult<ChangeStats> {
         *self.stats_calls.lock().expect("stats mutex") += 1;
-        self.inner.commit_file_stats(root, commit)
+        self.inner.change_stats(root, question)
     }
 
     fn push(
@@ -338,6 +335,14 @@ impl GitExecutor for RecordingExecutor {
         upstream: &str,
     ) -> TgResult<Vec<CommitId>> {
         self.inner.outgoing_commits(root, branch, upstream)
+    }
+
+    fn commit_count_between(&self, root: &Path, from: &str, to: &str) -> TgResult<usize> {
+        self.inner.commit_count_between(root, from, to)
+    }
+
+    fn resolve_revision(&self, root: &Path, name: &str) -> TgResult<CommitId> {
+        self.inner.resolve_revision(root, name)
     }
 
     fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
@@ -414,8 +419,12 @@ impl GitExecutor for RecordingExecutor {
         self.inner.worktree_dirty(path)
     }
 
-    fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>> {
-        self.inner.submodule_paths(root)
+    fn conflict_versions(&self, root: &Path, path: &Path) -> TgResult<ConflictVersions> {
+        self.inner.conflict_versions(root, path)
+    }
+
+    fn branch_upstream(&self, root: &Path, branch: &str) -> TgResult<Option<Upstream>> {
+        self.inner.branch_upstream(root, branch)
     }
 
     fn config_get(&self, root: &Path, key: &str) -> TgResult<Option<String>> {
@@ -529,6 +538,22 @@ impl GitExecutor for RecordingExecutor {
         self.inner.continue_op(root, op)
     }
 
+    fn rewrite_backup_ref(&self) -> &str {
+        self.inner.rewrite_backup_ref()
+    }
+
+    fn save_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        self.inner.save_rewrite_backup(root)
+    }
+
+    fn restore_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        self.inner.restore_rewrite_backup(root)
+    }
+
+    fn discard_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        self.inner.discard_rewrite_backup(root)
+    }
+
     fn merge_auto_merged_files(
         &self,
         root: &Path,
@@ -603,7 +628,7 @@ impl GitExecutor for RecordingExecutor {
     fn apply_patch_to_index(
         &self,
         _root: &Path,
-        _patch: &str,
+        _patch: &Patch,
         direction: turbogit_engine_api::ApplyDirection,
     ) -> TgResult<()> {
         self.calls
@@ -619,6 +644,12 @@ impl GitExecutor for RecordingExecutor {
             .expect("calls mutex")
             .push(RecordedCall::AddIntentToAdd(paths.to_vec()));
         self.inner.add_intent_to_add(root, paths)
+    }
+
+    fn check_patch(&self, root: &Path, patch: &Patch) -> TgResult<()> {
+        // Transparent wrapper: the port's default rejects, and a CLI engine
+        // behind this wrapper can genuinely check a patch.
+        self.inner.check_patch(root, patch)
     }
 
     fn branch_create(
@@ -678,12 +709,16 @@ impl GitExecutor for RecordingExecutor {
         self.inner.tag_push(root, remote, name, all)
     }
 
-    fn diff(&self, root: &Path, opts: &DiffOpts) -> TgResult<String> {
-        self.inner.diff(root, opts)
+    fn diff_patch(&self, root: &Path, opts: &DiffOpts) -> TgResult<Patch> {
+        self.inner.diff_patch(root, opts)
     }
 
     fn blame(&self, root: &Path, path: &Path, rev: Option<&str>) -> TgResult<Vec<BlameLine>> {
         self.inner.blame(root, path, rev)
+    }
+
+    fn index_file_bytes(&self, root: &Path, path: &Path) -> TgResult<Vec<u8>> {
+        self.inner.index_file_bytes(root, path)
     }
 
     fn show_file(&self, root: &Path, rev: &str, path: &Path) -> TgResult<String> {
@@ -696,10 +731,6 @@ impl GitExecutor for RecordingExecutor {
 
     fn revert(&self, root: &Path, commit: &str) -> TgResult<()> {
         self.inner.revert(root, commit)
-    }
-
-    fn undo_last_commit(&self, root: &Path) -> TgResult<()> {
-        self.inner.undo_last_commit(root)
     }
 
     fn stash_apply(&self, root: &Path, index: usize) -> TgResult<()> {

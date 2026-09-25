@@ -68,11 +68,10 @@ pub fn merge_flags(
 /// preview box): the merge-commit count for the strategy and the
 /// file/insertion/deletion totals of what merging `target` brings in.
 ///
-/// The totals are git's own three-dot diff (`diff --numstat
-/// HEAD...<target>`): merge-base to `target`, exactly the changes a merge
-/// would apply. A target already merged into HEAD reads as up to date —
-/// zero commits, zero changes — regardless of what the three-dot diff
-/// would still show.
+/// The totals come from one **Git engine** question — `ChangeQuestion::
+/// MergeIntoHead`, whose merge-base range is the engine's to spell. A target
+/// already merged into HEAD reads as up to date — zero commits, zero changes —
+/// regardless what that comparison would still show.
 pub fn merge_preview(
     vcs: &dyn GitExecutor,
     root: &Path,
@@ -89,37 +88,21 @@ pub fn merge_preview(
             deletions: 0,
         });
     }
-    let numstat = vcs.run_raw(
+    let stats = vcs.change_stats(
         root,
-        &[
-            "diff".to_string(),
-            "--numstat".to_string(),
-            format!("HEAD...{target}"),
-        ],
+        &ChangeQuestion::MergeIntoHead {
+            target: target.to_string(),
+        },
     )?;
-    let mut files = 0usize;
-    let mut insertions = 0usize;
-    let mut deletions = 0usize;
-    for line in numstat.lines() {
-        // `added\tdeleted\tpath`; binary rows render `-` for both counts and
-        // still count as one changed file.
-        let mut cols = line.split('\t');
-        let (Some(added), Some(deleted)) = (cols.next(), cols.next()) else {
-            continue;
-        };
-        files += 1;
-        insertions += added.parse::<usize>().unwrap_or(0);
-        deletions += deleted.parse::<usize>().unwrap_or(0);
-    }
     let merge_commits = match strategy {
         MergeStrategy::FastForward => 0,
         MergeStrategy::NoCommit | MergeStrategy::Commit | MergeStrategy::Squash => 1,
     };
     Ok(MergePreview {
         merge_commits,
-        files,
-        insertions,
-        deletions,
+        files: stats.file_count(),
+        insertions: stats.insertions(),
+        deletions: stats.deletions(),
     })
 }
 
@@ -165,11 +148,11 @@ pub fn rebase_affected(roots: &[Root], focused: &RootId) -> Vec<RootId> {
         .filter(|r| r.id != focused.id)
         .filter(|r| {
             r.current_branch.as_deref() == Some(branch.as_str())
-                || tracking.as_deref().is_some_and(|up| {
+                || tracking.as_ref().is_some_and(|up| {
                     r.branches.iter().any(|b| {
                         b.kind == BranchKind::Local
                             && b.name == branch
-                            && b.tracking.as_deref() == Some(up)
+                            && b.tracking.as_ref() == Some(up)
                     })
                 })
         })
