@@ -62,6 +62,9 @@ fn app_with_selection(project: &Path, roots: &[PathBuf]) -> AppState {
 /// only means something in front of — so the dispatch seam leaves it threaded
 /// even under the headless harness, and its answer really does arrive later.
 fn settle_bulk_run(state: &mut AppState) {
+    // A completion toast survives into later runs; only a toast produced by
+    // this dispatch is a valid completion signal.
+    state.ui.toast = None;
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         state.drain_events();
