@@ -211,7 +211,7 @@ mod tests {
             vec![Branch {
                 name: "main".into(),
                 kind: BranchKind::Local,
-                tracking: Some("origin/main".into()),
+                tracking: Upstream::from_git_ref("origin/main"),
                 favorite: false,
                 protected: false,
                 exists: true,

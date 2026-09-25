@@ -1,26 +1,17 @@
 //! 3-way merge conflict model and resolution helpers.
 //!
-//! A merge conflict in Git leaves up to three versions of a file in the index:
-//! the common ancestor (`:1`), "ours" (`:2`), and "theirs" (`:3`). This module
-//! reads those versions through the [`GitExecutor`] and offers helpers to stage
-//! a resolved file or to apply the simplest automatic strategy.
+//! A merge conflict leaves up to three versions of a file in the index — the
+//! common ancestor, "ours", and "theirs" — and the [`GitExecutor`] answers them
+//! as one [`ConflictVersions`] value per path. This module reads that value and
+//! offers helpers to stage a resolved file or to apply the simplest automatic
+//! strategy.
 
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use turbogit_domain::error::TgResult;
+use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 use turbogit_engine_api::GitExecutor;
-
-/// The three sides of a 3-way conflict for a single path.
-///
-/// Each field holds the full text content of that side at conflict time.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConflictVersions {
-    pub base: String,
-    pub ours: String,
-    pub theirs: String,
-}
 
 /// Return the list of conflicted paths reported by `git status`.
 ///
@@ -30,19 +21,13 @@ pub fn detect(status: &RootStatus) -> Vec<PathBuf> {
     status.conflicted.clone()
 }
 
-/// Read the three sides of a conflicted file from the index.
-///
-/// Delegates to `git show` via [`GitExecutor::show_file`], which builds the
-/// `<rev>:<path>` refspec: `:1` = base, `:2` = ours, `:3` = theirs.
+/// The three sides of one conflicted path, as the engine answers them.
 pub fn read_versions(
     vcs: &dyn GitExecutor,
     root: &Path,
     path: &Path,
 ) -> TgResult<ConflictVersions> {
-    let base = vcs.show_file(root, ":1", path)?;
-    let ours = vcs.show_file(root, ":2", path)?;
-    let theirs = vcs.show_file(root, ":3", path)?;
-    Ok(ConflictVersions { base, ours, theirs })
+    vcs.conflict_versions(root, path)
 }
 
 /// Write `content` to the working tree copy and stage it as resolved.
@@ -56,16 +41,28 @@ pub fn write_resolution(
     vcs.add(root, &[path.to_path_buf()])
 }
 
+/// The side a resolution takes, or the error saying the merge left no such side.
+fn side(which: &str, chosen: &Option<String>) -> TgResult<String> {
+    chosen.clone().ok_or_else(|| {
+        TgError::Other(format!(
+            "this conflict has no {which} side to accept — the other side deleted \
+             the file, so resolve it as a deletion"
+        ))
+    })
+}
+
 /// Resolve a conflict by taking our side verbatim.
 pub fn accept_ours(vcs: &dyn GitExecutor, root: &Path, path: &Path) -> TgResult<()> {
     let versions = read_versions(vcs, root, path)?;
-    write_resolution(vcs, root, path, &versions.ours)
+    let ours = side("ours", &versions.ours)?;
+    write_resolution(vcs, root, path, &ours)
 }
 
 /// Resolve a conflict by taking their side verbatim.
 pub fn accept_theirs(vcs: &dyn GitExecutor, root: &Path, path: &Path) -> TgResult<()> {
     let versions = read_versions(vcs, root, path)?;
-    write_resolution(vcs, root, path, &versions.theirs)
+    let theirs = side("theirs", &versions.theirs)?;
+    write_resolution(vcs, root, path, &theirs)
 }
 
 /// Try to resolve every conflicted file with the cheapest safe strategy.
@@ -85,7 +82,11 @@ pub fn resolve_all_simple(
         .map(|path| {
             let result = read_versions(vcs, root, path).and_then(|v| {
                 if v.ours == v.theirs {
-                    write_resolution(vcs, root, path, &v.ours)
+                    match v.ours {
+                        Some(ours) => write_resolution(vcs, root, path, &ours),
+                        // Both sides absent is not a change to write.
+                        None => Ok(()),
+                    }
                 } else {
                     Ok(())
                 }

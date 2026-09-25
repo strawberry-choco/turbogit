@@ -15,51 +15,34 @@
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{
-    Commit, CommitId, LogOpts, MergeStrategy, RebasePlanEntry, RefState, Root, RootId,
+    Commit, CommitId, ConflictVersions, LogOpts, MergeStrategy, RebasePlanEntry, RefState, Root,
+    RootId,
 };
-use turbogit_services::conflict::ConflictVersions;
 use turbogit_services::history_editor::RebaseCaution;
 use turbogit_services::integrate_service::MergePreview;
 
 use crate::state::AppState;
 
 impl AppState {
-    /// A fetch of the engine's own `run_raw` escape hatch, for the two facts
-    /// that have no port method: how many commits a branch carries that the
-    /// current one does not, and a branch tip's sha before it is deleted.
-    fn rev_count(&self, root: &RootId, rev_spec: &str) -> Option<usize> {
-        let out = self
-            .executor
-            .run_raw(
-                root.as_path(),
-                &[
-                    "rev-list".to_string(),
-                    "--count".to_string(),
-                    rev_spec.to_string(),
-                ],
-            )
-            .ok()?;
-        out.trim().parse().ok()
-    }
-
     /// Commits on `branch` that are not on the current branch — the number a
-    /// delete confirmation discloses before it destroys them (issue 12).
+    /// delete confirmation discloses before it destroys them (issue 12). The
+    /// range is the engine's to spell; this names the question.
     pub fn unmerged_commit_count(&self, root: &RootId, branch: &str) -> Option<usize> {
-        self.rev_count(root, &format!("HEAD..{branch}"))
+        self.executor
+            .commit_count_between(root.as_path(), "HEAD", branch)
+            .ok()
     }
 
     /// The sha `branch` points at, captured so a deletion can be undone inside
     /// the short window even though the ref is gone (issue 12).
     pub fn branch_tip(&self, root: &RootId, branch: &str) -> Option<String> {
-        let out = self
-            .executor
-            .run_raw(
-                root.as_path(),
-                &["rev-parse".to_string(), branch.to_string()],
-            )
-            .ok()?;
-        let sha = out.trim();
-        (!sha.is_empty()).then(|| sha.to_string())
+        self.executor.resolve_revision(root.as_path(), branch).ok()
+    }
+
+    /// The reference an aborted history rewrite returns to, named by the
+    /// **Git engine** so a surface can disclose it without guessing the spelling.
+    pub fn rewrite_backup_ref(&self) -> String {
+        self.executor.rewrite_backup_ref().to_string()
     }
 
     /// The names of `root`'s tags. Both branch trees and the tag dialog ask;
@@ -102,8 +85,7 @@ impl AppState {
             .ok()
     }
 
-    /// The three stages of a conflicted file (`:1` base, `:2` ours, `:3`
-    /// theirs) for the structured merge editor.
+    /// The three sides of one conflicted path, for the structured merge editor.
     pub fn merge_versions(&self, root: &RootId, path: &Path) -> Option<ConflictVersions> {
         turbogit_services::conflict::read_versions(self.executor.as_ref(), root.as_path(), path)
             .ok()
@@ -119,43 +101,31 @@ impl AppState {
             .ok()
     }
 
-    /// One git config value, trimmed of the newline git appends.
-    fn config(&self, root: &RootId, key: &str) -> Option<String> {
-        self.executor.config_get(root.as_path(), key).ok().flatten()
-    }
-
     /// The ahead-of-upstream warning a delete-branch confirmation shows
     /// (issue #02). The branch's tracking upstream is read from git config and
     /// tested with `is_ancestor`; `Some(message)` when the branch carries
     /// commits its upstream does not, `None` when it is fully merged or when
     /// the query fails.
     ///
-    /// The tracking ref is `<remote>/<branch>` for a real remote and plain
-    /// `<remote>` when the "remote" is itself a local branch — which test
-    /// fixtures and branches cut from another local branch both do. The real
-    /// form is probed first and the plain one is the fallback.
     pub fn branch_ahead_warning(&self, branch: &str) -> Option<String> {
         let root = self.selected_root.clone()?;
-        let remote = self.config(&root, &format!("branch.{branch}.remote"))?;
-        let merge = self.config(&root, &format!("branch.{branch}.merge"))?;
-        // `merge` is a `refs/heads/<name>` path; strip the prefix.
-        let upstream = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
-        let candidates = [format!("{remote}/{upstream}"), upstream.to_string()];
-        let merged = candidates
-            .iter()
-            .find_map(|c| self.is_ancestor(&root, c, branch))?;
-        if merged {
-            return None;
-        }
-        let used = if self
-            .is_ancestor(&root, &candidates[0], branch)
+        // The engine answers the upstream as the pair it is; `git_ref` is the
+        // only place the two halves meet again, and a branch tracking another
+        // local branch already answers as its plain name.
+        let upstream = self
+            .executor
+            .branch_upstream(root.as_path(), branch)
+            .ok()??;
+        if self
+            .is_ancestor(&root, &upstream.git_ref(), branch)
             .unwrap_or(false)
         {
-            &candidates[0]
-        } else {
-            &candidates[1]
-        };
-        Some(format!("'{branch}' is ahead of '{used}' and not merged"))
+            return None;
+        }
+        Some(format!(
+            "'{branch}' is ahead of '{}' and not merged",
+            upstream.git_ref()
+        ))
     }
 
     /// What a merge of `target` into the current branch would bring in

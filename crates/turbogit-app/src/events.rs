@@ -7,7 +7,8 @@
 use std::path::PathBuf;
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
-    BlameLine, Branch, Commit, CommitId, CommitRef, RootId, RootStatus, Submodule, Worktree,
+    BlameLine, Branch, ChangeStats, Commit, CommitId, CommitRef, Patch, RootId, RootStatus,
+    Submodule, Worktree,
 };
 
 use crate::root_caches::Affected;
@@ -85,7 +86,7 @@ pub enum AppEvent {
     FileStatsLoaded {
         root: RootId,
         commit: CommitId,
-        stats: TgResult<Vec<(PathBuf, usize, usize)>>,
+        stats: TgResult<ChangeStats>,
     },
     /// A dispatched [`Operation`](crate::operation::Operation) completed.
     /// `kind` is the operation's identity — what settlement matches on — and
@@ -105,7 +106,7 @@ pub enum AppEvent {
     /// An asynchronously-computed diff is ready (keyed to avoid races).
     DiffReady {
         key: String,
-        result: TgResult<String>,
+        result: TgResult<Patch>,
     },
     /// Blame lines for the open blame target (issue 18) are ready — keyed
     /// like [`AppEvent::DiffReady`] so a result for a since-changed target

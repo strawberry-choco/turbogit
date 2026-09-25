@@ -5,12 +5,14 @@
 //! mutating call so tests can assert call sequences ("stage then commit the
 //! index") without spawning git or touching a real repository.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::*;
 use turbogit_engine_api::GitExecutor;
+
+use crate::patch::parse_patch;
 
 /// One recorded engine call (mutating operations only).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,6 +64,20 @@ pub struct FakeExecutor {
     /// consulted before [`Self::files`] so image/binary tests can stage
     /// non-UTF-8 blobs (R8).
     pub files_bytes: Mutex<HashMap<PathBuf, Vec<u8>>>,
+    /// The three sides of a conflicted path, served by `conflict_versions` —
+    /// one answer per side, so a test can tell ours from theirs.
+    pub conflicts: HashMap<PathBuf, ConflictVersions>,
+    /// How much changed, served by `change_stats` per question asked.
+    pub change_stats: HashMap<ChangeQuestion, ChangeStats>,
+    /// The `(upstream, branch)` pairs that answer `is_ancestor` — an ancestor
+    /// relation is a fact a fixture states, not something to assume.
+    pub ancestors: HashSet<(String, String)>,
+    /// Commit counts served by `commit_count_between`, keyed by `(from, to)`.
+    pub commit_counts: HashMap<(String, String), usize>,
+    /// Revisions served by `resolve_revision`, keyed by the name asked for.
+    pub revisions: HashMap<String, CommitId>,
+    /// Upstreams served by `branch_upstream`, keyed by branch name.
+    pub upstreams: HashMap<String, Upstream>,
     /// Branches returned per repo path.
     pub branches: HashMap<PathBuf, Vec<Branch>>,
     /// Current branch per repo path (`None` = detached).
@@ -70,6 +86,12 @@ pub struct FakeExecutor {
     pub remotes: HashMap<PathBuf, Vec<Remote>>,
     /// Status per repo path.
     pub status: HashMap<PathBuf, RootStatus>,
+    /// Config values served by `config_get`, keyed by `(root, key)`.
+    pub config: HashMap<(PathBuf, String), String>,
+    /// Patch text served by `diff` per repo path — the shapes a diff can take,
+    /// canned rather than computed, which is what lets a display suite run with
+    /// no `git` binary.
+    pub diffs: HashMap<PathBuf, String>,
     /// Commit log served per repo path, newest first. `log` slices it exactly
     /// like a real backend: `skip` entries off the front, then up to
     /// `max_count` (log paging) — so app-level paging tests can run without
@@ -94,10 +116,18 @@ impl FakeExecutor {
             repos: Mutex::new(Vec::new()),
             files: Mutex::new(HashMap::new()),
             files_bytes: Mutex::new(HashMap::new()),
+            conflicts: HashMap::new(),
+            diffs: HashMap::new(),
+            change_stats: HashMap::new(),
+            ancestors: HashSet::new(),
+            commit_counts: HashMap::new(),
+            revisions: HashMap::new(),
+            upstreams: HashMap::new(),
             branches: HashMap::new(),
             current_branch: HashMap::new(),
             remotes: HashMap::new(),
             status: HashMap::new(),
+            config: HashMap::new(),
             logs: HashMap::new(),
             reject_force_branches: Vec::new(),
             calls: Mutex::new(Vec::new()),
@@ -167,11 +197,13 @@ impl GitExecutor for FakeExecutor {
         Ok((0, 0))
     }
 
-    fn is_ancestor(&self, _root: &Path, _upstream: &str, _branch: &str) -> TgResult<bool> {
-        // The fake never has unmerged branches in tests; default to
-        // "merged" so existing test fixtures (which don't push a
-        // specific ahead state) don't trigger the warning.
-        Ok(true)
+    fn is_ancestor(&self, _root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
+        // Answered from what the fixture states: an ancestor relation is a
+        // fact, and an adapter that always says "merged" cannot fail a test
+        // about divergence.
+        Ok(self
+            .ancestors
+            .contains(&(upstream.to_string(), branch.to_string())))
     }
 
     fn outgoing_commits(
@@ -199,16 +231,55 @@ impl GitExecutor for FakeExecutor {
         Ok(false)
     }
 
-    fn submodule_paths(&self, _root: &Path) -> TgResult<Vec<PathBuf>> {
-        Ok(Vec::new())
-    }
-
     fn submodule_status(&self, _root: &Path) -> TgResult<Vec<Submodule>> {
         Ok(Vec::new())
     }
 
-    fn config_get(&self, _root: &Path, _key: &str) -> TgResult<Option<String>> {
-        Ok(None)
+    fn change_stats(&self, _root: &Path, question: &ChangeQuestion) -> TgResult<ChangeStats> {
+        self.change_stats.get(question).cloned().ok_or_else(|| {
+            turbogit_domain::error::TgError::Other(format!(
+                "fake executor: no change stats seeded for {question:?}"
+            ))
+        })
+    }
+
+    fn commit_count_between(&self, _root: &Path, from: &str, to: &str) -> TgResult<usize> {
+        self.commit_counts
+            .get(&(from.to_string(), to.to_string()))
+            .copied()
+            .ok_or_else(|| {
+                turbogit_domain::error::TgError::Other(format!(
+                    "fake executor: no commit count seeded for {from}..{to}"
+                ))
+            })
+    }
+
+    fn resolve_revision(&self, _root: &Path, name: &str) -> TgResult<CommitId> {
+        self.revisions.get(name).cloned().ok_or_else(|| {
+            turbogit_domain::error::TgError::Other(format!(
+                "fake executor: no revision seeded for `{name}`"
+            ))
+        })
+    }
+
+    fn branch_upstream(&self, _root: &Path, branch: &str) -> TgResult<Option<Upstream>> {
+        Ok(self.upstreams.get(branch).cloned())
+    }
+
+    fn conflict_versions(&self, _root: &Path, path: &Path) -> TgResult<ConflictVersions> {
+        self.conflicts.get(path).cloned().ok_or_else(|| {
+            turbogit_domain::error::TgError::Other(format!(
+                "fake executor: no conflict seeded for `{}`",
+                path.display()
+            ))
+        })
+    }
+
+    fn config_get(&self, root: &Path, key: &str) -> TgResult<Option<String>> {
+        Ok(self
+            .config
+            .get(&(root.to_path_buf(), key.to_string()))
+            .cloned())
     }
 
     // ---- mutating ----
@@ -330,6 +401,22 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
+    fn rewrite_backup_ref(&self) -> &str {
+        "refs/turbogit/fake-preflight-backup"
+    }
+
+    fn save_rewrite_backup(&self, _root: &Path) -> TgResult<()> {
+        Ok(())
+    }
+
+    fn restore_rewrite_backup(&self, _root: &Path) -> TgResult<()> {
+        Ok(())
+    }
+
+    fn discard_rewrite_backup(&self, _root: &Path) -> TgResult<()> {
+        Ok(())
+    }
+
     fn continue_op(&self, _root: &Path, _op: &str) -> TgResult<()> {
         Ok(())
     }
@@ -404,7 +491,7 @@ impl GitExecutor for FakeExecutor {
     fn apply_patch_to_index(
         &self,
         _root: &Path,
-        _patch: &str,
+        _patch: &turbogit_domain::model::Patch,
         direction: turbogit_engine_api::ApplyDirection,
     ) -> TgResult<()> {
         self.calls
@@ -479,25 +566,40 @@ impl GitExecutor for FakeExecutor {
 
     // ---- diff / blame / history ----
 
-    fn diff(&self, _root: &Path, _opts: &DiffOpts) -> TgResult<String> {
-        Ok(String::new())
+    fn diff_patch(&self, root: &Path, _opts: &DiffOpts) -> TgResult<Patch> {
+        // Canned per root as git's text, parsed by the engine's own reader: a
+        // display or staging suite sees every shape with no `git` binary, and
+        // unseeded stays the empty patch it always answered.
+        Ok(parse_patch(
+            self.diffs.get(root).cloned().unwrap_or_default().as_str(),
+        ))
     }
 
     fn blame(&self, _root: &Path, _path: &Path, _rev: Option<&str>) -> TgResult<Vec<BlameLine>> {
         Ok(Vec::new())
     }
 
+    fn index_file_bytes(&self, _root: &Path, path: &Path) -> TgResult<Vec<u8>> {
+        // The index side is what `files` / `files_bytes` hold here: this fake
+        // has no separate worktree, so the staged bytes are the seeded ones.
+        if let Some(bytes) = self.files_bytes.lock().unwrap().get(path) {
+            return Ok(bytes.clone());
+        }
+        if let Some(text) = self.files.lock().unwrap().get(path) {
+            return Ok(text.clone().into_bytes());
+        }
+        Err(turbogit_domain::error::TgError::Other(format!(
+            "fake executor: no index entry for `{}`",
+            path.display()
+        )))
+    }
+
     fn show_file(&self, _root: &Path, rev: &str, path: &Path) -> TgResult<String> {
-        // Conflict reads use index revs ":1"/":2"/":3"; the fake serves one
-        // content per path regardless of rev — enough for resolution tests.
+        // One content per path whatever the rev: a commit-scoped read is not
+        // modelled here. A conflict's three sides are — seed `conflicts`.
         let _ = rev;
-        Ok(self
-            .files
-            .lock()
-            .unwrap()
-            .get(path)
-            .cloned()
-            .unwrap_or_default())
+        let bytes = self.show_file_bytes(_root, rev, path)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     fn show_file_bytes(&self, _root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
@@ -520,10 +622,6 @@ impl GitExecutor for FakeExecutor {
     // ---- revert / undo ----
 
     fn revert(&self, _root: &Path, _commit: &str) -> TgResult<()> {
-        Ok(())
-    }
-
-    fn undo_last_commit(&self, _root: &Path) -> TgResult<()> {
         Ok(())
     }
 

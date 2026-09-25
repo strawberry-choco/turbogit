@@ -1007,7 +1007,7 @@ fn branch_row(
         )
         .add(
             egui::Label::new(
-                RichText::new(up.clone())
+                RichText::new(up.git_ref())
                     .font(data_font(TYPE_CONTROL))
                     .color(Palette::T_MUTED),
             )
@@ -1137,7 +1137,8 @@ fn rename_editor(
             ui.add_space(PAD_LIST);
             ui.label(
                 RichText::new(format!(
-                    "tracking {up} does not follow the new name — set it again after"
+                    "tracking {} does not follow the new name — set it again after",
+                    up.git_ref()
                 ))
                 .font(chrome_font(TYPE_CONTROL))
                 .color(Palette::T_MUTED),

@@ -12,6 +12,7 @@ use std::process::Command;
 
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{RebaseAction, RebasePlanEntry, VcsSettings};
+use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::history_editor;
 
@@ -276,7 +277,11 @@ fn a_single_author_raises_no_identity_caution() {
 
 // ------------------------------------------------- backup ref & recovery --
 
-use turbogit_services::history_editor::BACKUP_REF;
+/// The reference the engine keeps its rewrite safety net in. Asked of the
+/// engine, because spelling it out here is what this suite used to do.
+fn backup_ref() -> String {
+    engine().rewrite_backup_ref().to_string()
+}
 
 /// The all-drop plan rewrites `feature` to nothing, so a successful replay
 /// provably moves HEAD away from the pre-rebase tip.
@@ -304,7 +309,7 @@ fn executing_writes_the_backup_ref_at_the_pre_rebase_head() {
     )
     .expect("the guarded replay runs");
 
-    let backup = run_git(&repo, &["rev-parse", BACKUP_REF])
+    let backup = run_git(&repo, &["rev-parse", &backup_ref()])
         .trim()
         .to_string();
     assert_eq!(
@@ -342,7 +347,7 @@ fn abort_to_backup_restores_the_pre_rebase_state() {
     // The safety net is spent after it restores: the ref goes with it.
     assert!(
         !Command::new("git")
-            .args(["rev-parse", "--verify", "--quiet", BACKUP_REF])
+            .args(["rev-parse", "--verify", "--quiet", &backup_ref()])
             .current_dir(&repo)
             .output()
             .expect("spawning git")
@@ -367,7 +372,7 @@ fn a_protected_branch_refuses_before_any_backup_ref_is_written() {
     assert!(err.to_string().contains("protected"), "{err}");
     assert!(
         !Command::new("git")
-            .args(["rev-parse", "--verify", "--quiet", BACKUP_REF])
+            .args(["rev-parse", "--verify", "--quiet", &backup_ref()])
             .current_dir(&repo)
             .output()
             .expect("spawning git")

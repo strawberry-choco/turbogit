@@ -385,13 +385,9 @@ fn run_preview(state: &mut AppState) {
             let name = scope
                 .iter()
                 .find(|r| {
-                    r.branches.iter().any(|b| {
-                        b.tracking
-                            .as_deref()
-                            .and_then(|t| t.split('/').next())
-                            .map(|rname| rname == remote.as_str())
-                            .unwrap_or(false)
-                    })
+                    r.branches
+                        .iter()
+                        .any(|b| b.tracking.as_ref().is_some_and(|t| t.remote == remote))
                 })
                 .map(|r| {
                     r.path
@@ -478,9 +474,8 @@ fn ensure_target_defaults(state: &mut AppState) {
         })
     {
         if let Some(t) = &b.tracking {
-            let parts: Vec<&str> = t.splitn(2, '/').collect();
-            state.ui.dlg.push_remote = parts[0].to_string();
-            state.ui.dlg.push_branch = parts.get(1).copied().unwrap_or(b.name.as_str()).to_string();
+            state.ui.dlg.push_remote = t.remote.clone();
+            state.ui.dlg.push_branch = t.branch.clone();
         } else {
             state.ui.dlg.push_remote = root
                 .remotes

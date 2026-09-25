@@ -257,7 +257,7 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
     ui.label(
         "Abort any time to restore the pre-rebase state. A backup ref is          written before the first commit is replayed.",
     );
-    ui.monospace(history_editor::BACKUP_REF);
+    ui.monospace(state.rewrite_backup_ref());
     if turbogit_services::integrate_service::in_progress(
         state.selected_path().as_deref().unwrap_or(Path::new(".")),
     ) && ui.button("Abort & restore").clicked()

@@ -151,19 +151,20 @@ pub enum StatsView {
     Local,
 }
 
-/// One file's line counts within a commit, as the engine's numstat reports
-/// them: `(path, insertions, deletions)`.
-pub type FileStat = (PathBuf, usize, usize);
+/// One file's line counts within a change, as the **Git engine** answers them.
+/// Re-exported from the domain so the log's panes never name a numstat tuple.
+pub use turbogit_domain::model::FileStat;
 
-/// The `(insertions, deletions)` of `path` within one commit's stats slice, or
-/// `None` when the path is absent — which covers both "counts still in flight"
-/// and "this commit did not touch that file". A row with no stat renders
-/// neither number, never a `+0 −0` that claims a measured zero.
+/// The `(insertions, deletions)` of `path` within one change's stats slice, or
+/// `None` when there is nothing to render: the path is absent, the counts are
+/// still in flight, or git measured no line counts at all — a **Binary change**
+/// has `-` where the numbers would be. A row with no stat renders neither
+/// number, never a `+0 −0` that claims a measured zero.
 pub fn file_stat(stats: &[FileStat], path: &Path) -> Option<(usize, usize)> {
     stats
         .iter()
-        .find(|(p, _, _)| p == path)
-        .map(|(_, ins, dels)| (*ins, *dels))
+        .find(|f| f.path == path)
+        .and_then(|f| Some((f.insertions?, f.deletions?)))
 }
 
 impl RootCaches {
@@ -373,7 +374,7 @@ impl RootCaches {
             return;
         }
         let repo = exec
-            .diff(
+            .diff_patch(
                 &root.0,
                 &DiffOpts {
                     left: Some("HEAD".to_owned()),
@@ -382,7 +383,7 @@ impl RootCaches {
             )
             .unwrap_or_default();
         let staged = exec
-            .diff(
+            .diff_patch(
                 &root.0,
                 &DiffOpts {
                     staged: true,
@@ -390,13 +391,15 @@ impl RootCaches {
                 },
             )
             .unwrap_or_default();
-        let local = exec.diff(&root.0, &DiffOpts::default()).unwrap_or_default();
+        let local = exec
+            .diff_patch(&root.0, &DiffOpts::default())
+            .unwrap_or_default();
         self.hunk_stats.insert(
             root.clone(),
             RootHunkStats {
-                repo: hunk_stats::parse_file_hunks(&repo),
-                staged: hunk_stats::parse_file_hunks(&staged),
-                local: hunk_stats::parse_file_hunks(&local),
+                repo: hunk_stats::file_hunks(&repo),
+                staged: hunk_stats::file_hunks(&staged),
+                local: hunk_stats::file_hunks(&local),
             },
         );
     }

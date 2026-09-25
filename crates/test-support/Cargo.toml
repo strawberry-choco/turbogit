@@ -32,6 +32,11 @@ optional = true
 workspace = true
 optional = true
 
+# Only the suites that prove the recording executor forwards to a real engine.
+[dev-dependencies]
+tempfile = { workspace = true }
+turbogit-engine = { workspace = true }
+
 [features]
 default = []
 harness = ["dep:egui", "dep:egui_kittest", "dep:turbogit-ui", "dep:turbogit-app", "dep:tempfile"]

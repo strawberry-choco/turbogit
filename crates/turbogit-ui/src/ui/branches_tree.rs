@@ -140,9 +140,10 @@ pub struct BranchView {
 }
 
 /// Intermediate builder node; dirs and leaves share a label so they sort
-/// together within a containing group.
+/// together within a containing group. The leaf is boxed because a `BranchLeaf`
+/// carries a whole `Branch`, which the directory variant never pays for.
 enum B {
-    Leaf(BranchLeaf),
+    Leaf(Box<BranchLeaf>),
     Dir(String, Vec<B>),
 }
 
@@ -186,7 +187,7 @@ fn insert(nodes: &mut Vec<B>, dirs: &[&str], leaf: BranchLeaf) {
                 insert(c, rest, leaf);
             }
         }
-        None => nodes.push(B::Leaf(leaf)),
+        None => nodes.push(B::Leaf(Box::new(leaf))),
     }
 }
 
@@ -222,7 +223,7 @@ fn convert(nodes: Vec<B>) -> Vec<BranchNode> {
     nodes
         .into_iter()
         .map(|n| match n {
-            B::Leaf(l) => BranchNode::Leaf(l),
+            B::Leaf(l) => BranchNode::Leaf(*l),
             B::Dir(label, children) => BranchNode::Dir(DirNode {
                 label,
                 count: count_leaves(&children),
@@ -336,15 +337,11 @@ pub fn build_branch_view(
 
         let locals_tree = build_tree(&locals, current, None);
 
-        // Group remotes by their `remote` field (falling back to the first
-        // path segment of the name).
+        // Group remotes by the remote each row already carries — a
+        // remote-tracking listing names its own remote, so nothing splits here.
         let mut by_remote: Vec<(String, Vec<Branch>)> = Vec::new();
         for b in &remotes {
-            let remote = b
-                .remote
-                .clone()
-                .or_else(|| b.name.split('/').next().map(|s| s.to_string()))
-                .unwrap_or_else(|| "origin".to_string());
+            let remote = b.remote.clone().unwrap_or_else(|| "origin".to_string());
             match by_remote.iter_mut().find(|(r, _)| *r == remote) {
                 Some((_, list)) => list.push(b.clone()),
                 None => by_remote.push((remote, vec![b.clone()])),
@@ -406,7 +403,7 @@ mod tests {
 
     use chrono::{DateTime, Utc};
     use turbogit_domain::model::{
-        Branch, BranchKind, BranchTip, Change, ChangeStatus, Root, RootId, RootStatus,
+        Branch, BranchKind, BranchTip, Change, ChangeStatus, Root, RootId, RootStatus, Upstream,
     };
 
     use super::*;
@@ -420,7 +417,7 @@ mod tests {
             name: name.to_string(),
             kind: BranchKind::Local,
             tracking: if ahead + behind > 0 {
-                Some("origin/main".to_string())
+                Upstream::from_git_ref("origin/main")
             } else {
                 None
             },

@@ -122,5 +122,5 @@ pub(crate) fn current_branch_upstream(
     Ok(branches
         .iter()
         .find(|b| b.kind == BranchKind::Local && cur.as_deref() == Some(&b.name))
-        .and_then(|b| b.tracking.clone().map(|up| (b.name.clone(), up))))
+        .and_then(|b| b.tracking.clone().map(|up| (b.name.clone(), up.git_ref()))))
 }

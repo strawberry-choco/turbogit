@@ -1,17 +1,21 @@
-//! The diff display model: unified-diff text in, renderable rows out.
+//! The diff display model: the **Git engine**'s patch value in, renderable rows
+//! out.
 //!
 //! Plain data owned by the application layer, imported back up by the UI
 //! modules (the same DDD split that put [`crate::diff_data`]'s pane types
 //! here): nothing in this file references egui, and every layout constant and
 //! typeface stayed with the painters.
 //!
-//! It is built once per diff *content*, beside the patch text, and handed out
-//! as the display model the keyed read's diff answer carries (ADR-0014,
-//! ADR-0021). It used to be memoized on the paint path in a thread-local keyed
-//! by the whole patch text, which paid a full-text compare every frame to
-//! answer a question the read already knows the answer to.
+//! It reads a [`Patch`], so git's unified-diff syntax is interpreted in exactly
+//! one place — the engine's parser — and no line of this file tests a string
+//! prefix to decide what a line is. It is built once per diff *content*, beside
+//! the patch text, and handed out as the display model the keyed read's diff
+//! answer carries (ADR-0014, ADR-0021).
 
 use std::sync::Arc;
+
+use turbogit_domain::model::{Patch, PatchHeaderLine, PatchLine, PatchLineKind};
+use turbogit_services::hunk_stats::HunkSpan;
 
 // --- row model ---------------------------------------------------------------
 
@@ -42,144 +46,130 @@ pub struct Row {
     pub old_no: usize,
     /// 1-based new-file line number (0 when not applicable).
     pub new_no: usize,
+    /// The hunk's span, present on a `Hunk` row and nowhere else. The paint
+    /// path classifies a hunk's staged state from this, which is what retired
+    /// the second read of git's `@@` header.
+    pub span: Option<HunkSpan>,
 }
 
-/// `@@ -a,b +c,d @@` → `(a, c)` (defaults to 1 when absent).
-fn hunk_starts(header: &str) -> (usize, usize) {
-    let mut old = 1usize;
-    let mut new = 1usize;
-    for tok in header.split_whitespace() {
-        if let Some(rest) = tok.strip_prefix('-') {
-            if let Some(n) = rest.split(',').next().and_then(|v| v.parse().ok()) {
-                old = n;
-            }
-        } else if let Some(rest) = tok.strip_prefix('+')
-            && let Some(n) = rest.split(',').next().and_then(|v| v.parse().ok())
-        {
-            new = n;
-        }
-    }
-    (old, new)
-}
-
-/// Parse unified-diff text into renderable rows, tracking 1-based line
-/// numbers from each hunk header so gutters can show real positions, and
-/// per-hunk changed-line ordinals so rows can carry sub-hunk selection
-/// (spec R2 story 3).
-fn parse(text: &str) -> Vec<Row> {
+/// Build the renderable rows from the patch value: 1-based gutter numbers from
+/// each hunk's span, per-hunk changed-line ordinals for sub-hunk selection
+/// (spec R2 story 3), and each hunk's span carried on the row so the paint path
+/// asks the row rather than re-reading git's header.
+fn rows_from(patch: &Patch) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut hunk = 0usize;
     let mut enclosing = 0usize;
-    let mut changed = 0usize;
+    let mut changed;
     let mut old_no = 1usize;
     let mut new_no = 1usize;
-    for line in text.lines() {
-        if line.starts_with("@@") {
-            let (o, n) = hunk_starts(line);
-            old_no = o;
-            new_no = n;
-            changed = 0;
+
+    let meta = |text: String, rows: &mut Vec<Row>| {
+        rows.push(Row {
+            kind: RowKind::Meta,
+            text,
+            hunk: 0,
+            line_ord: 0,
+            old_no: 0,
+            new_no: 0,
+            span: None,
+        });
+    };
+
+    for file in &patch.files {
+        meta(file.section_header_line(), &mut rows);
+        for header in &file.headers {
+            // Which of these the viewer paints as section metadata is a fact
+            // about the header, not about the text it renders to.
+            let painted_as_meta = matches!(
+                header,
+                PatchHeaderLine::Index { .. }
+                    | PatchHeaderLine::Sources { .. }
+                    | PatchHeaderLine::NewFile { .. }
+                    | PatchHeaderLine::Binary
+            );
+            for line in header.lines(file) {
+                if painted_as_meta {
+                    meta(line, &mut rows);
+                    continue;
+                }
+                // A header the row model does not name — a similarity percent, a
+                // rename pair, a mode change — reaches the viewer as an ordinary
+                // line, advancing both gutters like the context it sits among.
+                rows.push(Row {
+                    kind: RowKind::Context,
+                    text: line,
+                    hunk: enclosing,
+                    line_ord: 0,
+                    old_no,
+                    new_no,
+                    span: None,
+                });
+                old_no += 1;
+                new_no += 1;
+            }
+        }
+
+        for h in &file.hunks {
             rows.push(Row {
                 kind: RowKind::Hunk,
-                text: line.to_string(),
+                text: h.header_line(),
                 hunk,
                 line_ord: 0,
                 old_no: 0,
                 new_no: 0,
+                span: Some(HunkSpan {
+                    old_start: h.old_start,
+                    old_lines: h.old_count,
+                    new_start: h.new_start,
+                    new_lines: h.new_count,
+                }),
             });
             enclosing = hunk;
             hunk += 1;
-        } else if line.starts_with("diff --git")
-            || line.starts_with("index ")
-            || line.starts_with("---")
-            || line.starts_with("+++")
-            || line.starts_with("new file")
-            || line.starts_with("Binary")
-            || line.starts_with('\\')
-        {
-            rows.push(Row {
-                kind: RowKind::Meta,
-                text: line.to_string(),
-                hunk: 0,
-                line_ord: 0,
-                old_no: 0,
-                new_no: 0,
-            });
-        } else if let Some(body) = line.strip_prefix('+') {
-            rows.push(Row {
-                kind: RowKind::Add,
-                text: body.to_string(),
-                hunk: enclosing,
-                line_ord: changed,
-                old_no: 0,
-                new_no,
-            });
-            changed += 1;
-            new_no += 1;
-        } else if let Some(body) = line.strip_prefix('-') {
-            rows.push(Row {
-                kind: RowKind::Del,
-                text: body.to_string(),
-                hunk: enclosing,
-                line_ord: changed,
-                old_no,
-                new_no: 0,
-            });
-            changed += 1;
-            old_no += 1;
-        } else {
-            let body = line.strip_prefix(' ').unwrap_or(line);
-            rows.push(Row {
-                kind: RowKind::Context,
-                text: body.to_string(),
-                hunk: enclosing,
-                line_ord: 0,
-                old_no,
-                new_no,
-            });
-            old_no += 1;
-            new_no += 1;
+            old_no = h.old_start.max(1);
+            new_no = h.new_start.max(1);
+            changed = 0;
+
+            for line in &h.lines {
+                let row_kind = match line.kind {
+                    PatchLineKind::Added => RowKind::Add,
+                    PatchLineKind::Removed => RowKind::Del,
+                    PatchLineKind::Context => RowKind::Context,
+                };
+                let this_old = matches!(line.kind, PatchLineKind::Removed | PatchLineKind::Context);
+                let this_new = matches!(line.kind, PatchLineKind::Added | PatchLineKind::Context);
+                rows.push(Row {
+                    kind: row_kind,
+                    text: line.text.clone(),
+                    hunk: enclosing,
+                    line_ord: if row_kind == RowKind::Context {
+                        0
+                    } else {
+                        changed
+                    },
+                    old_no: if this_old { old_no } else { 0 },
+                    new_no: if this_new { new_no } else { 0 },
+                    span: None,
+                });
+                if row_kind != RowKind::Context {
+                    changed += 1;
+                }
+                if this_old {
+                    old_no += 1;
+                }
+                if this_new {
+                    new_no += 1;
+                }
+                if line.no_newline {
+                    meta(PatchLine::NO_NEWLINE_MARKER.to_string(), &mut rows);
+                }
+            }
         }
     }
     // Raw paging ordinals are assigned by [`build_model`] over the
     // header-prefixed space (ADR-0014, spec R8).
     rows
-}
-
-/// Normalized view of one parsed row (Phase L1 parity seam): the kind tag,
-/// display text, and gutter numbers — exactly what rendering keys on,
-/// flattened for cross-module comparison.
-#[doc(hidden)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RowSummary {
-    /// `"meta" | "hunk" | "context" | "del" | "add"`.
-    pub kind: &'static str,
-    pub text: String,
-    pub old_no: usize,
-    pub new_no: usize,
-}
-
-/// Row stream [`parse`] builds from unified-diff text, normalized into
-/// [`RowSummary`]s. Doc-hidden test seam: lets integration tests assert
-/// in-process (`similar`) vs CLI (`git diff`) row-stream equality without
-/// exposing the renderer's private model.
-#[doc(hidden)]
-pub fn parsed_rows(text: &str) -> Vec<RowSummary> {
-    parse(text)
-        .into_iter()
-        .map(|row| RowSummary {
-            kind: match row.kind {
-                RowKind::Meta | RowKind::RenameHeader => "meta",
-                RowKind::Hunk => "hunk",
-                RowKind::Context => "context",
-                RowKind::Del => "del",
-                RowKind::Add => "add",
-            },
-            text: row.text,
-            old_no: row.old_no,
-            new_no: row.new_no,
-        })
-        .collect()
 }
 
 // --- per-file section metadata (R8) ------------------------------------------
@@ -207,65 +197,24 @@ pub struct FileMeta {
     pub binary: bool,
 }
 
-/// Split the remainder of a `diff --git` line into `(old, new)` paths.
-/// Handles git's quoted form for unusual paths; the plain `a/… b/…` form
-/// splits at the first ` b/` separator.
-fn split_git_paths(rest: &str) -> (Option<String>, Option<String>) {
-    if let Some(first) = rest.strip_prefix('"')
-        && let Some(end) = first.find('"')
-    {
-        let old = &first[..end];
-        let tail = first[end + 1..].trim_start();
-        if let Some(new) = tail.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
-            return (Some(old.to_owned()), Some(new.to_owned()));
-        }
-    }
-    match rest.find(" b/") {
-        Some(sep) => (
-            Some(rest[..sep].to_owned()),
-            Some(rest[sep + 1..].to_owned()),
-        ),
-        None => (None, None),
-    }
-}
-
-/// Scan the patch text into per-file section metadata: each `diff --git`
-/// line opens a section that following headers refine. Lines before the
-/// first section (e.g. `git log -p` commit headers) are ignored.
-fn scan_files(text: &str) -> Vec<FileMeta> {
-    let mut files = Vec::new();
-    let mut current: Option<FileMeta> = None;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
-            if let Some(done) = current.take() {
-                files.push(done);
-            }
-            let (old_path, new_path) = split_git_paths(rest);
-            current = Some(FileMeta {
-                old_path,
-                new_path,
-                ..FileMeta::default()
-            });
-        } else if let Some(meta) = current.as_mut() {
-            if let Some(pct) = line
-                .strip_prefix("similarity index ")
-                .and_then(|v| v.trim().strip_suffix('%'))
-                .and_then(|v| v.parse().ok())
-            {
-                meta.similarity = Some(pct);
-            } else if line.starts_with("rename from ") || line.starts_with("rename to ") {
-                meta.renamed = true;
-            } else if line.starts_with("new file mode") {
-                meta.new_file = true;
-            } else if line.starts_with("deleted file mode") {
-                meta.deleted_file = true;
-            } else if line.starts_with("Binary files ") && line.ends_with(" differ") {
-                meta.binary = true;
-            }
-        }
-    }
-    files.extend(current);
-    files
+/// Per-file section metadata, read off the patch value — paths, rename
+/// detection, file-mode changes and binary-ness are fields the engine answered,
+/// not a scan of git's syntax. Rename detection rides on git's own defaults, so
+/// rename/similarity headers may be absent; absence is handled gracefully.
+pub(crate) fn files_from(patch: &Patch) -> Vec<FileMeta> {
+    patch
+        .files
+        .iter()
+        .map(|file| FileMeta {
+            old_path: (!file.old_path.is_empty()).then(|| file.old_path.clone()),
+            new_path: (!file.new_path.is_empty()).then(|| file.new_path.clone()),
+            similarity: file.similarity().map(u32::from),
+            renamed: file.renamed(),
+            new_file: file.new_file(),
+            deleted_file: file.deleted_file(),
+            binary: file.binary(),
+        })
+        .collect()
 }
 
 /// Formatted rename-header line (CONTEXT.md "Rename header") for a file
@@ -275,11 +224,7 @@ fn rename_header_text(meta: &FileMeta) -> Option<String> {
     if !meta.renamed {
         return None;
     }
-    let old = meta
-        .old_path
-        .as_deref()
-        .map(repo_rel_path)
-        .unwrap_or("(unknown)");
+    let old = meta.old_path.as_deref().unwrap_or("(unknown)");
     Some(match meta.similarity {
         Some(pct) => format!("Renamed from {old} · {pct}% similar"),
         None => format!("Renamed from {old}"),
@@ -328,13 +273,6 @@ pub fn pane_kind(files: &[FileMeta]) -> PaneKind {
     } else {
         PaneKind::Text
     }
-}
-
-/// Repo-relative form of a diff-side path: drops git's `a/`/`b/` prefix.
-pub fn repo_rel_path(path: &str) -> &str {
-    path.strip_prefix("a/")
-        .or_else(|| path.strip_prefix("b/"))
-        .unwrap_or(path)
 }
 
 // --- display-row model (ADR-0014) --------------------------------------------
@@ -454,6 +392,7 @@ fn build_model(rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
             line_ord: 0,
             old_no: 0,
             new_no: 0,
+            span: None,
         }));
     }
 
@@ -481,36 +420,50 @@ fn build_model(rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
     }
 }
 
-/// The diff read's value: one comparison's patch text and the display model
-/// built from it, behind one handle. Cloning the handle is a refcount bump —
-/// once per frame, never per row — which is what leaves `&mut AppState` free
-/// for a painter to write the hunk cursor and collapse set (ADR-0021).
+/// The diff read's value: one comparison's patch and the display model built
+/// from it, behind one handle. Cloning the handle is a refcount bump — once per
+/// frame, never per row — which is what leaves `&mut AppState` free for a
+/// painter to write the hunk cursor and collapse set (ADR-0021).
 pub struct DiffValue {
-    pub text: String,
+    pub patch: Patch,
     pub model: DiffModel,
 }
 
 impl DiffValue {
-    /// Parse and fold the patch text once, at the moment the content is
-    /// settled — which is the whole point of the read owning it: the paint
-    /// path never reparses, and nothing compares patch text to decide.
-    pub(crate) fn build(text: String) -> Arc<Self> {
+    /// Fold the patch value once, at the moment the content is settled — which
+    /// is the whole point of the read owning it: the paint path never parses,
+    /// and nothing compares patch text to decide (`ADR-0022`).
+    pub(crate) fn build(patch: Patch) -> Arc<Self> {
         Arc::new(Self {
-            model: build_model(parse(&text), scan_files(&text)),
-            text,
+            model: build_model(rows_from(&patch), files_from(&patch)),
+            patch,
         })
     }
 
     /// A cached entry with no visible rows is a settled answer of "nothing to
     /// show", not a missing one (spec R2).
     pub fn is_blank(&self) -> bool {
-        self.text.trim().is_empty()
+        self.patch.is_empty()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two readers under test, reached the only way they are reachable now:
+    /// through the engine's one patch parser.
+    fn patch(text: &str) -> Patch {
+        turbogit_engine::patch::parse_patch(text)
+    }
+
+    fn parse(text: &str) -> Vec<Row> {
+        rows_from(&patch(text))
+    }
+
+    fn scan_files(text: &str) -> Vec<FileMeta> {
+        files_from(&patch(text))
+    }
 
     /// Rename with content edits: headers plus one hunk (spec R8).
     const RENAME_WITH_SIMILARITY: &str = "diff --git a/src/old.rs b/src/new.rs\n\
@@ -529,8 +482,8 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert!(files[0].renamed);
         assert_eq!(files[0].similarity, Some(92));
-        assert_eq!(files[0].old_path.as_deref(), Some("a/src/old.rs"));
-        assert_eq!(files[0].new_path.as_deref(), Some("b/src/new.rs"));
+        assert_eq!(files[0].old_path.as_deref(), Some("src/old.rs"));
+        assert_eq!(files[0].new_path.as_deref(), Some("src/new.rs"));
         assert_eq!(
             rename_header_text(&files[0]).as_deref(),
             Some("Renamed from src/old.rs · 92% similar")
@@ -622,23 +575,38 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files[0].new_file && !files[0].deleted_file);
         assert!(files[1].deleted_file && !files[1].renamed);
-        assert_eq!(files[1].old_path.as_deref(), Some("a/gone.txt"));
+        assert_eq!(files[1].old_path.as_deref(), Some("gone.txt"));
     }
 
+    /// The pair arrives as two repo-relative names. Four readers
+    /// used to split that pair out of the header themselves, and only one of
+    /// them handled git's quoted form — which is why a name git quotes (a tab,
+    /// a byte above ASCII) is the case to pin here rather than a name with a
+    /// plain space, which git does not quote at all.
     #[test]
-    fn diff_git_paths_parse_quoted_and_plain() {
+    fn diff_git_paths_arrive_resolved_from_the_value() {
+        let paths = |text: &str| {
+            let files = scan_files(text);
+            (files[0].old_path.clone(), files[0].new_path.clone())
+        };
         assert_eq!(
-            split_git_paths("a/src/lib.rs b/src/lib.rs"),
-            (
-                Some("a/src/lib.rs".to_owned()),
-                Some("b/src/lib.rs".to_owned())
-            )
+            paths("diff --git a/src/lib.rs b/src/lib.rs\n"),
+            (Some("src/lib.rs".to_owned()), Some("src/lib.rs".to_owned()))
         );
         assert_eq!(
-            split_git_paths("\"a/we ird\" \"b/ot her\""),
-            (Some("a/we ird".to_owned()), Some("b/ot her".to_owned()))
+            paths("diff --git \"a/we\\tird\" \"b/ot\\ther\"\n"),
+            (Some("we\tird".to_owned()), Some("ot\ther".to_owned()))
         );
-        assert_eq!(split_git_paths("nothing"), (None, None));
+        let spaced = scan_files("diff --git a/keep me.txt b/kept me.txt\n");
+        assert_eq!(
+            spaced[0].new_path.as_deref(),
+            Some("kept me.txt"),
+            "a space in a name must not be read as a field separator"
+        );
+        assert!(
+            scan_files("nothing at all\n").is_empty(),
+            "no section, no file"
+        );
     }
 
     #[test]
@@ -649,18 +617,15 @@ mod tests {
             ..FileMeta::default()
         };
         // Case-insensitive sniff on both sides.
-        assert_eq!(pane_kind(&[meta("a/x.PNG", "b/x.png")]), PaneKind::Image);
+        assert_eq!(pane_kind(&[meta("x.PNG", "x.png")]), PaneKind::Image);
         // SVG never decodes: a binary-flagged SVG change stays binary…
-        let mut svg_bin = meta("a/logo.svg", "b/logo.svg");
+        let mut svg_bin = meta("logo.svg", "logo.svg");
         svg_bin.binary = true;
         assert_eq!(pane_kind(&[svg_bin]), PaneKind::Binary);
         // …and a textual SVG diff keeps its text rows.
-        assert_eq!(
-            pane_kind(&[meta("a/logo.svg", "b/logo.svg")]),
-            PaneKind::Text
-        );
+        assert_eq!(pane_kind(&[meta("logo.svg", "logo.svg")]), PaneKind::Text);
         // A non-image text change stays text.
-        assert_eq!(pane_kind(&[meta("a/x.rs", "b/x.rs")]), PaneKind::Text);
+        assert_eq!(pane_kind(&[meta("x.rs", "x.rs")]), PaneKind::Text);
         // No section metadata at all → text rows.
         assert_eq!(pane_kind(&[]), PaneKind::Text);
     }

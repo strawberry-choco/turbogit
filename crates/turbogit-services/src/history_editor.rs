@@ -70,14 +70,10 @@ pub fn execute(vcs: &dyn GitExecutor, root: &Path, plan: &[RebasePlanEntry]) -> 
     vcs.rebase_interactive(root, plan)
 }
 
-/// The safety-net ref written before the first replayed commit (issue 30,
-/// screen 17's RECOVERY panel): points at the pre-rebase HEAD, so an abort
-/// ([`abort_to_backup`]) can always restore the rewritten branch.
-pub const BACKUP_REF: &str = "refs/turbogit/preflight-backup";
-
 /// Execute a rebase plan with the backup-ref safety net (issue 30): the
-/// guarded dispatch (protected branches refuse before anything runs), then
-/// [`BACKUP_REF`] is written at the current HEAD, then the plan replays.
+/// guarded dispatch (protected branches refuse before anything runs), then the
+/// engine's rewrite backup is written at the current HEAD, then the plan
+/// replays. Which reference that is, the engine decides.
 pub fn execute_with_backup(
     vcs: &dyn GitExecutor,
     root: &Path,
@@ -90,44 +86,21 @@ pub fn execute_with_backup(
     } else if !branch.is_empty() {
         crate::integrate_service::ensure_rebase_allowed(settings, branch)?;
     }
-    let head = vcs.run_raw(root, &["rev-parse".to_string(), "HEAD".to_string()])?;
-    vcs.run_raw(
-        root,
-        &[
-            "update-ref".to_string(),
-            BACKUP_REF.to_string(),
-            head.trim().to_string(),
-        ],
-    )?;
+    vcs.save_rewrite_backup(root)?;
     vcs.rebase_interactive(root, plan)
 }
 
-/// Abort the running rebase and restore the pre-rebase state from
-/// [`BACKUP_REF`] (screen 17's RECOVERY action): an in-progress rebase is
-/// aborted first, then the branch resets hard to the backup ref, and the
-/// spent backup ref is deleted. Errors when no backup ref exists — the net
-/// is only present while a [`execute_with_backup`] replay is the last
-/// rewrite.
+/// Abort the running rebase and restore the pre-rebase state from the engine's
+/// rewrite backup (screen 17's RECOVERY action): an in-progress rebase is
+/// aborted first, then the branch returns to the backup, and the spent backup is
+/// discarded. Errors when no backup exists — the net is only present while an
+/// [`execute_with_backup`] replay is the last rewrite.
 pub fn abort_to_backup(vcs: &dyn GitExecutor, root: &Path) -> TgResult<()> {
     if crate::integrate_service::in_progress(root) {
         vcs.abort(root, "rebase")?;
     }
-    vcs.run_raw(
-        root,
-        &[
-            "reset".to_string(),
-            "--hard".to_string(),
-            BACKUP_REF.to_string(),
-        ],
-    )?;
-    vcs.run_raw(
-        root,
-        &[
-            "update-ref".to_string(),
-            "-d".to_string(),
-            BACKUP_REF.to_string(),
-        ],
-    )?;
+    vcs.restore_rewrite_backup(root)?;
+    vcs.discard_rewrite_backup(root)?;
     Ok(())
 }
 

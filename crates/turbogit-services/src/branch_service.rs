@@ -60,28 +60,6 @@ pub fn set_protected(mgr: &mut MultiRootManager, root: &RootId, name: &str, prot
     }
 }
 
-/// Diff the working tree against `name` (branch vs working tree).
-pub fn compare(vcs: &dyn GitExecutor, root: &Path, name: &str) -> TgResult<String> {
-    vcs.diff(
-        root,
-        &DiffOpts {
-            left: Some(name.to_string()),
-            ..Default::default()
-        },
-    )
-}
-
-/// Diff the working tree against `name` (alias of [`compare`]).
-pub fn compare_working(vcs: &dyn GitExecutor, root: &Path, name: &str) -> TgResult<String> {
-    vcs.diff(
-        root,
-        &DiffOpts {
-            left: Some(name.to_string()),
-            ..Default::default()
-        },
-    )
-}
-
 /// Local branch names present in EVERY root.
 pub fn common_branches(mgr: &MultiRootManager) -> Vec<String> {
     let mut iter = mgr.roots.iter();

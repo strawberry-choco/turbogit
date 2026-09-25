@@ -1,20 +1,16 @@
-//! Pure patch composition for partial staging (ADR-0013).
+//! Partial staging: composing a stageable patch from the **Git engine**'s patch
+//! value (`ADR-0022`, superseding `ADR-0013`'s raw-text composition).
 //!
-//! Composes a stageable patch by filtering raw unified-diff text: git's
-//! original `@@` headers and file meta lines are preserved (with line
-//! counts recounted to match the kept body) while unselected hunks are
-//! dropped. The engine applies patches with `git apply --recount`; the
-//! recount here keeps libgit2 — which has no `--recount` knob —
-//! honest about the body it ships.
+//! A selection is applied to the value — hunks are its structure, a line's kind
+//! is a field, and a kept hunk's counts are arithmetic — and the text the index
+//! takes is rendered from the composed value at the moment of applying.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::hunk_stats;
 use turbogit_domain::error::{TgError, TgResult};
-use turbogit_domain::model::ChangeStatus;
+use turbogit_domain::model::{ChangeStatus, Patch, PatchFile, PatchHunk, PatchLine, PatchLineKind};
 use turbogit_engine_api::{ApplyDirection, GitExecutor};
 
 /// What part of a single hunk is selected.
@@ -47,120 +43,86 @@ pub struct Selection {
     pub hunks: BTreeMap<usize, HunkSelection>,
 }
 
-/// Compose `diff` down to the selected hunks of `selection`.
+/// Compose `patch` down to the selected hunks of `selection` — as the value it
+/// already is. Hunk boundaries are the value's structure, the counts in a
+/// `@@` header are arithmetic on the kept lines, and a line's kind is a field,
+/// not a prefix character to strip (`ADR-0022`, retiring `ADR-0013`'s
+/// raw-text composition).
 ///
-/// Returns an empty string when nothing is selected; callers treat that as a
-/// no-op.
-pub fn compose_patch(diff: &str, selection: &Selection) -> String {
-    let mut meta = String::new();
-    let mut hunks: Vec<(&str, String)> = Vec::new();
-    for line in diff.split_inclusive('\n') {
-        if line.starts_with("@@") {
-            hunks.push((line, String::new()));
-        } else if let Some((_, body)) = hunks.last_mut() {
-            body.push_str(line);
-        } else {
-            meta.push_str(line);
-        }
-    }
-
-    let mut out = String::new();
-    for (idx, (header, body)) in hunks.iter().enumerate() {
-        let kept: Option<Cow<'_, str>> = match selection.hunks.get(&idx) {
-            Some(HunkSelection::Whole) => Some(Cow::Borrowed(body.as_str())),
-            Some(HunkSelection::Lines(lines)) if !lines.is_empty() => {
-                Some(Cow::Owned(filter_body(body, &Filter::Lines(lines))))
+/// Empty when nothing is selected; callers treat that as a no-op.
+pub fn compose(patch: &Patch, selection: &Selection) -> Patch {
+    let files = patch
+        .files
+        .iter()
+        .filter_map(|file| {
+            let hunks: Vec<PatchHunk> = file
+                .hunks
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, hunk)| {
+                    let kept = match selection.hunks.get(&idx)? {
+                        HunkSelection::Whole => hunk.lines.clone(),
+                        HunkSelection::Lines(lines) if !lines.is_empty() => {
+                            filter_lines(&hunk.lines, &Filter::Lines(lines))
+                        }
+                        HunkSelection::Chars { ord, start, end } => filter_lines(
+                            &hunk.lines,
+                            &Filter::Chars {
+                                ord: *ord,
+                                start: *start,
+                                end: *end,
+                            },
+                        ),
+                        HunkSelection::Lines(_) => return None,
+                    };
+                    if kept.is_empty() {
+                        return None;
+                    }
+                    // The counts a header will carry are the kept lines' own
+                    // totals, computed here rather than rewritten into a string.
+                    let (old_count, new_count) = body_line_counts(&kept);
+                    Some(PatchHunk {
+                        old_start: hunk.old_start,
+                        old_count,
+                        new_start: hunk.new_start,
+                        new_count,
+                        heading: hunk.heading.clone(),
+                        lines: kept,
+                    })
+                })
+                .collect();
+            if hunks.is_empty() {
+                return None;
             }
-            Some(HunkSelection::Chars { ord, start, end }) => Some(Cow::Owned(filter_body(
-                body,
-                &Filter::Chars {
-                    ord: *ord,
-                    start: *start,
-                    end: *end,
-                },
-            ))),
-            _ => None,
-        };
-        if let Some(body) = kept {
-            if out.is_empty() {
-                out.push_str(&meta);
-            }
-            let header: Cow<'_, str> =
-                if matches!(selection.hunks.get(&idx), Some(HunkSelection::Whole)) {
-                    Cow::Borrowed(*header)
-                } else {
-                    Cow::Owned(recount_header(header, &body))
-                };
-            out.push_str(&header);
-            out.push_str(&body);
-        }
-    }
-    out
+            Some(PatchFile {
+                old_path: file.old_path.clone(),
+                new_path: file.new_path.clone(),
+                combined: file.combined,
+                headers: file.headers.clone(),
+                hunks,
+            })
+        })
+        .collect();
+    Patch { files }
 }
 
-/// Count the old-side and new-side lines of a filtered hunk body so the
-/// header can be rewritten to match. Context and kept `-` lines count on
-/// the old side; context and kept `+` lines count on the new side. `\`
-/// markers (`\ No newline at end of file`) ride on the changed line above
-/// them and contribute nothing themselves.
-fn body_line_counts(body: &str) -> (usize, usize) {
+/// Old-side and new-side line counts of kept body lines. A context line counts
+/// on both sides; the `\ No newline at end of file` marker rides on the changed
+/// line above it and contributes nothing of its own.
+fn body_line_counts(lines: &[PatchLine]) -> (usize, usize) {
     let mut old = 0usize;
     let mut new = 0usize;
-    for line in body.split_inclusive('\n') {
-        if line.starts_with('+') {
-            new += 1;
-        } else if line.starts_with('-') {
-            old += 1;
-        } else if line.starts_with('\\') {
-            // Marker for the changed line above; not counted.
-        } else {
-            old += 1;
-            new += 1;
+    for line in lines {
+        match line.kind {
+            PatchLineKind::Context => {
+                old += 1;
+                new += 1;
+            }
+            PatchLineKind::Removed => old += 1,
+            PatchLineKind::Added => new += 1,
         }
     }
     (old, new)
-}
-
-/// Rewrite `header` so `-old_count` / `+new_count` match the lines actually
-/// present in `body` — the count-1 default that the parser drops when
-/// omitted is restored, and the optional trailing heading (`@@ … @@ fn alpha`)
-/// is preserved verbatim.
-///
-/// Compose only drops additions and demotes deletions to context, never
-/// removes context lines, so the first kept line is always context and
-/// both start positions stay put. When the body genuinely shrinks on a
-/// side (added line gone, no replacement), the count follows.
-fn recount_header(header: &str, body: &str) -> String {
-    let Some(span) = hunk_stats::parse_hunk_header(header) else {
-        return header.to_owned();
-    };
-    let (old_count, new_count) = body_line_counts(body);
-    // Keep the trailing heading after `@@ … @@` verbatim: empty, a
-    // function label like `fn alpha`, or the diff-context marker. The
-    // string after the last `@` is either the heading + `\n`, or just the
-    // `\n` (no heading); treat any pure-whitespace remainder as no heading.
-    // Header shape: `@@ -a,b +c,d @@ [<heading>]\n`.
-    let tail = header
-        .rsplit('@')
-        .next()
-        .map(|t| t.trim_start_matches(' ').trim_end_matches('\n'))
-        .filter(|t| !t.is_empty())
-        .unwrap_or("");
-    let old = if old_count == 1 {
-        format!("-{}", span.old_start)
-    } else {
-        format!("-{},{}", span.old_start, old_count)
-    };
-    let new = if new_count == 1 {
-        format!("+{}", span.new_start)
-    } else {
-        format!("+{},{}", span.new_start, new_count)
-    };
-    if tail.is_empty() {
-        format!("@@ {old} {new} @@\n")
-    } else {
-        format!("@@ {old} {new} @@ {tail}\n")
-    }
 }
 
 /// Granular operations are forbidden on conflicted files (spec R2): a patch
@@ -209,45 +171,46 @@ pub(crate) fn retry_on_transient_lock<T>(mut op: impl FnMut() -> TgResult<T>) ->
     }
 }
 
-/// Stage the selected hunks/lines of one file's diff into the index.
+/// Stage the selected hunks/lines of one file's patch into the index.
 ///
-/// Composes the patch from raw diff text (ADR-0013) and applies it forward.
-/// An empty selection is a no-op — nothing touches the engine. Conflicted
-/// files are rejected before anything reaches the engine.
+/// Composes the selection off the patch value and applies the rendered result
+/// forward (`ADR-0022`, superseding `ADR-0013`'s raw-text composition). An
+/// empty selection is a no-op — nothing touches the engine. Conflicted files
+/// are rejected before anything reaches the engine.
 pub fn stage_selection(
     vcs: &dyn GitExecutor,
     root: &Path,
-    diff: &str,
+    patch: &Patch,
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
     ensure_granular_allowed(status)?;
-    let patch = compose_patch(diff, selection);
-    if patch.is_empty() {
+    let composed = compose(patch, selection);
+    if composed.is_empty() {
         return Ok(());
     }
-    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &patch, ApplyDirection::Forward))
+    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &composed, ApplyDirection::Forward))
 }
 
-/// Unstage the selected hunks/lines of one file's diff from the index.
+/// Unstage the selected hunks/lines of one file's patch from the index.
 ///
-/// Composes the patch from raw diff text (ADR-0013) and reverse-applies it
-/// against the index (`git apply --cached --reverse`), matching git's own
+/// Composes the selection off the patch value and reverse-applies the rendered
+/// result against the index (`git apply --cached --reverse`), matching git's own
 /// unstage semantics. An empty selection is a no-op. Conflicted files are
 /// rejected before anything reaches the engine.
 pub fn unstage_selection(
     vcs: &dyn GitExecutor,
     root: &Path,
-    diff: &str,
+    patch: &Patch,
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
     ensure_granular_allowed(status)?;
-    let patch = compose_patch(diff, selection);
-    if patch.is_empty() {
+    let composed = compose(patch, selection);
+    if composed.is_empty() {
         return Ok(());
     }
-    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &patch, ApplyDirection::Reverse))
+    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &composed, ApplyDirection::Reverse))
 }
 
 /// Stage part of an untracked file's content into the index.
@@ -259,19 +222,19 @@ pub fn stage_untracked_selection(
     vcs: &dyn GitExecutor,
     root: &Path,
     paths: &[PathBuf],
-    diff: &str,
+    patch: &Patch,
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
     ensure_granular_allowed(status)?;
-    let patch = compose_patch(diff, selection);
-    if patch.is_empty() {
+    let composed = compose(patch, selection);
+    if composed.is_empty() {
         return Ok(());
     }
     // Both calls take the index lock (`add -N` writes the index too), so
     // each gets the transient-collision retry independently.
     retry_on_transient_lock(|| vcs.add_intent_to_add(root, paths))?;
-    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &patch, ApplyDirection::Forward))
+    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &composed, ApplyDirection::Forward))
 }
 
 /// Which changed lines of one hunk body survive composition, and how.
@@ -296,7 +259,7 @@ enum Filter<'a> {
 /// outright would misalign every later old-side line of the hunk. A
 /// `\ No newline at end of file` marker annotates the changed line above it,
 /// so it survives only when that line does.
-fn filter_body(body: &str, filter: &Filter) -> String {
+fn filter_lines(lines: &[PatchLine], filter: &Filter) -> Vec<PatchLine> {
     /// The selected slice of one addition body (char-indexed, clamped,
     /// end exclusive), or None when the range selects nothing.
     fn char_slice(text: &str, start: usize, end: usize) -> Option<String> {
@@ -306,50 +269,48 @@ fn filter_body(body: &str, filter: &Filter) -> String {
         (start < end).then(|| chars[start..end].iter().collect::<String>())
     }
 
-    let mut out = String::new();
+    let mut out: Vec<PatchLine> = Vec::new();
     let mut changed = 0usize;
-    let mut prev_kept = true;
-    for line in body.split_inclusive('\n') {
-        if let Some(rest) = line.strip_prefix('-') {
-            let keep = match filter {
-                Filter::Lines(selected) => selected.contains(&changed),
-                // A Chars selection never stages a deletion: the old line
-                // stays in the index and only the selected bytes are added.
-                Filter::Chars { .. } => false,
-            };
-            changed += 1;
-            prev_kept = true;
-            if keep {
-                out.push_str(line);
-            } else {
-                out.push(' ');
-                out.push_str(rest);
+    for line in lines {
+        match line.kind {
+            PatchLineKind::Context => out.push(line.clone()),
+            PatchLineKind::Removed => {
+                let keep = match filter {
+                    Filter::Lines(selected) => selected.contains(&changed),
+                    // A Chars selection never stages a deletion: the old line
+                    // stays in the index and only the selected bytes are added.
+                    Filter::Chars { .. } => false,
+                };
+                changed += 1;
+                out.push(PatchLine {
+                    kind: if keep {
+                        PatchLineKind::Removed
+                    } else {
+                        PatchLineKind::Context
+                    },
+                    text: line.text.clone(),
+                    no_newline: keep && line.no_newline,
+                });
             }
-        } else if let Some(rest) = line.strip_prefix('+') {
-            let kept_line: Option<String> = match filter {
-                Filter::Lines(selected) => selected.contains(&changed).then(|| line.to_owned()),
-                Filter::Chars { ord, start, end } => {
-                    // Char offsets index the line's text without its newline;
-                    // the newline is re-added uniformly below.
-                    let text = rest.strip_suffix('\n').unwrap_or(rest);
-                    (changed == *ord)
-                        .then(|| char_slice(text, *start, *end))
+            PatchLineKind::Added => {
+                let kept = match filter {
+                    Filter::Lines(selected) => selected.contains(&changed).then(|| PatchLine {
+                        kind: PatchLineKind::Added,
+                        text: line.text.clone(),
+                        no_newline: line.no_newline,
+                    }),
+                    Filter::Chars { ord, start, end } => (changed == *ord)
+                        .then(|| char_slice(&line.text, *start, *end))
                         .flatten()
-                        .map(|s| format!("+{s}\n"))
-                }
-            };
-            changed += 1;
-            prev_kept = kept_line.is_some();
-            if let Some(kept_line) = kept_line {
-                out.push_str(&kept_line);
+                        .map(|text| PatchLine {
+                            kind: PatchLineKind::Added,
+                            text,
+                            no_newline: line.no_newline,
+                        }),
+                };
+                changed += 1;
+                out.extend(kept);
             }
-        } else if line.starts_with('\\') {
-            if prev_kept {
-                out.push_str(line);
-            }
-        } else {
-            prev_kept = true;
-            out.push_str(line);
         }
     }
     out
@@ -379,6 +340,19 @@ mod tests {
         "+PAPA\n",
     );
 
+    /// The staging path composes from the value, so that is what a test hands
+    /// it. git's syntax has exactly one reader and it lives with the adapters;
+    /// nothing in this crate's production code calls it.
+    fn patch(text: &str) -> Patch {
+        turbogit_engine::patch::parse_patch(text)
+    }
+
+    /// …and the composed value's *text* is the staging guarantee (ADR-0013 as
+    /// superseded by issue 11), so a test states what those bytes are.
+    fn compose_patch(text: &str, selection: &Selection) -> String {
+        compose(&patch(text), selection).to_string()
+    }
+
     fn whole_hunk(idx: usize) -> Selection {
         Selection {
             hunks: [(idx, HunkSelection::Whole)].into_iter().collect(),
@@ -393,7 +367,7 @@ mod tests {
         stage_selection(
             &engine,
             &root,
-            TWO_HUNK_DIFF,
+            &patch(TWO_HUNK_DIFF),
             &whole_hunk(0),
             ChangeStatus::Modified,
         )
@@ -416,7 +390,7 @@ mod tests {
         stage_selection(
             &engine,
             &root,
-            TWO_HUNK_DIFF,
+            &patch(TWO_HUNK_DIFF),
             &Selection::default(),
             ChangeStatus::Modified,
         )
@@ -436,7 +410,7 @@ mod tests {
         unstage_selection(
             &engine,
             &root,
-            TWO_HUNK_DIFF,
+            &patch(TWO_HUNK_DIFF),
             &whole_hunk(0),
             ChangeStatus::Modified,
         )
@@ -459,7 +433,7 @@ mod tests {
         unstage_selection(
             &engine,
             &root,
-            TWO_HUNK_DIFF,
+            &patch(TWO_HUNK_DIFF),
             &Selection::default(),
             ChangeStatus::Modified,
         )
@@ -493,7 +467,7 @@ mod tests {
             &engine,
             &root,
             &[PathBuf::from("new.txt")],
-            UNTRACKED_DIFF,
+            &patch(UNTRACKED_DIFF),
             &whole_hunk(0),
             ChangeStatus::Unversioned,
         )
@@ -520,7 +494,7 @@ mod tests {
             &engine,
             &root,
             &[PathBuf::from("new.txt")],
-            UNTRACKED_DIFF,
+            &patch(UNTRACKED_DIFF),
             &Selection::default(),
             ChangeStatus::Unversioned,
         )
@@ -611,7 +585,7 @@ mod tests {
         let result = stage_selection(
             &engine,
             &root,
-            TWO_HUNK_DIFF,
+            &patch(TWO_HUNK_DIFF),
             &whole_hunk(0),
             ChangeStatus::Conflicted,
         );

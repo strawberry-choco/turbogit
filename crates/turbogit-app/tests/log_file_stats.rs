@@ -81,8 +81,8 @@ fn file_stats_are_requested_once_per_commit_and_served_from_the_cache() {
         .caches
         .file_stats_for(&root, &head)
         .expect("cached stats");
-    let total_added: usize = counts.iter().map(|(_, ins, _)| *ins).sum();
-    let total_removed: usize = counts.iter().map(|(_, _, dels)| *dels).sum();
+    let total_added: usize = counts.iter().filter_map(|f| f.insertions).sum();
+    let total_removed: usize = counts.iter().filter_map(|f| f.deletions).sum();
     assert_eq!((total_added, total_removed), (2, 2), "churn totals");
     assert_eq!(file_stat(counts, Path::new("a.txt")), Some((2, 1)));
     assert_eq!(file_stat(counts, Path::new("b.txt")), Some((0, 1)));

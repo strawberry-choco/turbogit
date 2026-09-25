@@ -13,6 +13,16 @@ use std::process::Command;
 use turbogit_app::diff_model::FileMeta;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
 use turbogit_app::state::{AppState, BlameTarget, DiffComparison};
+use turbogit_domain::model::{Patch, PatchHeaderLine, PatchLineKind};
+
+/// Every body line the patch holds, whatever side it belongs to.
+fn body_lines(patch: &Patch) -> impl Iterator<Item = &turbogit_domain::model::PatchLine> {
+    patch
+        .files
+        .iter()
+        .flat_map(|f| &f.hunks)
+        .flat_map(|h| &h.lines)
+}
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -93,9 +103,12 @@ fn a_cold_read_waits_and_the_next_one_answers_fresh() {
         panic!("the settled answer must be the one the target asked for");
     };
     assert!(
-        diff.text.contains("+++ b/README.md"),
-        "the value carries its patch text:\n{}",
-        diff.text
+        diff.patch.files[0].headers.iter().any(|h| matches!(
+            h,
+            PatchHeaderLine::Sources { new, .. } if new == "b/README.md"
+        )),
+        "the value carries its source pair:\n{}",
+        diff.patch
     );
     assert_eq!(diff.model.hunk_count(), 1, "and the model built from it");
 }
@@ -156,9 +169,9 @@ fn a_different_comparison_is_not_answered_by_the_cached_one() {
         panic!("the worktree comparison settles");
     };
     assert!(
-        diff.text.contains("+three"),
+        body_lines(&diff.patch).any(|l| l.kind == PatchLineKind::Added && l.text == "three"),
         "HEAD vs worktree reaches the unstaged edit too:\n{}",
-        diff.text
+        diff.patch
     );
 
     // Switching chips is where a hand-written key comparison goes wrong: the
@@ -181,9 +194,9 @@ fn a_different_comparison_is_not_answered_by_the_cached_one() {
         panic!("the staged comparison has its own answer now");
     };
     assert!(
-        !diff.text.contains("three"),
+        body_lines(&diff.patch).all(|l| !l.text.contains("three")),
         "staged shows the index, not the worktree edit:\n{}",
-        diff.text
+        diff.patch
     );
 }
 
@@ -214,8 +227,10 @@ fn a_pane_answers_with_both_sides_and_keeps_them() {
         Some(PathBuf::from("art.png")),
     );
     let file = FileMeta {
-        old_path: Some("a/art.png".into()),
-        new_path: Some("b/art.png".into()),
+        // Repo-relative, as the patch value answers it — the pane read no
+        // longer strips a `b/` off somebody else's string.
+        old_path: Some("art.png".into()),
+        new_path: Some("art.png".into()),
         binary: true,
         ..FileMeta::default()
     };
@@ -300,10 +315,12 @@ fn a_synthesized_answer_leaves_nothing_pending() {
         panic!("an untracked file's creation diff is synthesized, not fetched");
     };
     assert!(
-        diff.text
-            .starts_with("diff --git a/brand-new.txt b/brand-new.txt\nnew file mode"),
+        diff.patch.files[0]
+            .headers
+            .iter()
+            .any(|h| matches!(h, PatchHeaderLine::Sources { new, .. } if new == "b/brand-new.txt")),
         "the whole file reads as an addition:\n{}",
-        diff.text
+        diff.patch
     );
     assert!(
         !state.read_pending(),

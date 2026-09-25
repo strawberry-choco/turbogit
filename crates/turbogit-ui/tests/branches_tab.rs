@@ -1303,7 +1303,7 @@ fn rename_discloses_that_tracking_does_not_follow() {
         if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id)
             && let Some(b) = r.branches.iter_mut().find(|b| b.name == "feature-a")
         {
-            b.tracking = Some("origin/feature-a".into());
+            b.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/feature-a");
         }
     }
     open_branches_tab(&mut harness);
@@ -1600,7 +1600,10 @@ fn switching_to_a_remote_branch_creates_a_tracking_local_in_one_intent() {
                         && r.branches.iter().any(|b| {
                             b.kind == turbogit_domain::model::BranchKind::Local
                                 && b.name == "remote-only"
-                                && b.tracking.as_deref() == Some("origin/remote-only")
+                                && b.tracking
+                                    == turbogit_domain::model::Upstream::from_git_ref(
+                                        "origin/remote-only",
+                                    )
                         })
                 })
                 .unwrap_or(false)
@@ -1672,11 +1675,14 @@ mod pure {
         use turbogit_ui::ui::components::SyncKind;
         let now = Utc::now();
         let mut br = b("feat", Some(now.timestamp()));
-        br.tracking = Some("origin/main".into());
+        br.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/main");
         br.ahead = 2;
         br.behind = 1;
         let meta = row_meta(&br, now);
-        assert_eq!(meta.upstream.as_deref(), Some("origin/main"));
+        assert_eq!(
+            meta.upstream,
+            turbogit_domain::model::Upstream::from_git_ref("origin/main")
+        );
         assert_eq!(
             meta.badge,
             vec![
@@ -1696,7 +1702,7 @@ mod pure {
     fn row_meta_leaves_in_sync_unmarked() {
         let now = Utc::now();
         let mut br = b("main", Some(now.timestamp()));
-        br.tracking = Some("origin/main".into());
+        br.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/main");
         let meta = row_meta(&br, now);
         assert!(meta.badge.is_empty());
     }
@@ -1706,7 +1712,7 @@ mod pure {
         use turbogit_ui::ui::components::SyncKind;
         let now = Utc::now();
         let mut br = b("ghost", Some(now.timestamp()));
-        br.tracking = Some("origin/ghost".into());
+        br.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/ghost");
         br.gone = true;
         let meta = row_meta(&br, now);
         assert_eq!(meta.badge, vec![(SyncKind::Gone, "gone".to_string())]);
@@ -2592,7 +2598,7 @@ fn unpulled_branch_names_read_amber() {
             r.branches.push(turbogit_domain::model::Branch {
                 name: "unpulled".into(),
                 kind: turbogit_domain::model::BranchKind::Local,
-                tracking: Some("origin/main".into()),
+                tracking: turbogit_domain::model::Upstream::from_git_ref("origin/main"),
                 favorite: false,
                 protected: false,
                 exists: true,
@@ -2637,7 +2643,7 @@ fn repo_status_dots_paint_their_status_color() {
             .iter_mut()
             .find(|b| b.kind == turbogit_domain::model::BranchKind::Local && b.name == "main")
             .expect("beta main");
-        main.tracking = Some("origin/main".into());
+        main.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/main");
         main.ahead = 0;
         main.behind = 3;
     }

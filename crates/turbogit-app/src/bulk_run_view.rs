@@ -101,15 +101,7 @@ impl BulkRunView {
                     format!("git merge {}", self.branch)
                 }
             }
-            BulkOp::Custom => {
-                // Show the command as typed; only supply the binary name the
-                // executor will add when the user left it off.
-                if self.command.starts_with("git ") || self.command == "git" {
-                    self.command.clone()
-                } else {
-                    format!("git {}", self.command)
-                }
-            }
+            BulkOp::Custom => turbogit_services::bulk_ops::echo_command(&self.command),
         }
     }
 

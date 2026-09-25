@@ -183,9 +183,13 @@ pub fn popup_entries(
     let mut rem_rows: Vec<PopupEntry> = remotes
         .iter()
         .map(|b| {
-            let local = locals
-                .iter()
-                .find(|l| l.tracking.as_deref() == Some(&format!("origin/{}", b.name)));
+            let local = locals.iter().find(|l| {
+                // Two fields compared, not a rebuilt git name: this is the
+                // site that used to construct `origin/<name>` to test it.
+                l.tracking.as_ref().is_some_and(|u| {
+                    u.branch == b.name && b.remote.as_ref().is_some_and(|r| *r == u.remote)
+                })
+            });
             PopupEntry::Remote {
                 name: b.name.clone(),
                 ahead: local.map_or(0, |l| l.ahead),
@@ -200,11 +204,12 @@ pub fn popup_entries(
         let Some(track) = &local.tracking else {
             continue;
         };
-        // A tracking ref is `remote/name`; a bare local branch name is not a
+        // A branch tracking another *local* branch (git's `.` remote) is not a
         // remote row.
-        let Some((_remote, name)) = track.split_once('/') else {
+        if track.remote == "." {
             continue;
-        };
+        }
+        let name = &track.branch;
         if seen.iter().any(|s| s == name) {
             continue;
         }

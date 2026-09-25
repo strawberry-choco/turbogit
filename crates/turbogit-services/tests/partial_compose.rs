@@ -3,7 +3,15 @@
 //! Every expected value below is an independent hand-written literal; nothing
 //! is computed by mirroring the code under test.
 
-use turbogit_services::partial::{HunkSelection, Selection, compose_patch};
+use turbogit_services::partial::{HunkSelection, Selection, compose};
+
+/// Composition in the two text forms this lane asks about: git's diff in, the
+/// composed patch's bytes out. The selection happens on the patch **value**;
+/// the assertion is on the text `git apply` will be fed, which is what
+/// `ADR-0013` guarantees.
+fn compose_patch(text: &str, selection: &Selection) -> String {
+    compose(&turbogit_engine::patch::parse_patch(text), selection).to_string()
+}
 
 // --- fixtures (hand-written unified-diff text) -------------------------------
 

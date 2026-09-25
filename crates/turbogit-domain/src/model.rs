@@ -96,13 +96,51 @@ pub enum BranchKind {
     Remote,
 }
 
+/// A branch's upstream: the remote it tracks and the branch name there. Stored
+/// as the pair it always was in the app's own terms — git's `<remote>/<branch>`
+/// spelling is assembled only where argv wants it, so no surface splits one
+/// string to get half of it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Upstream {
+    pub remote: String,
+    pub branch: String,
+}
+
+impl Upstream {
+    /// git's `<remote>/<branch>` form, for the argv and rev-spec positions that
+    /// need it. Not a thing to compare two upstreams by. A branch tracking
+    /// *another local branch* has git's `.` remote, whose rev-spec is the plain
+    /// branch name.
+    pub fn git_ref(&self) -> String {
+        if self.remote == "." {
+            self.branch.clone()
+        } else {
+            format!("{}/{}", self.remote, self.branch)
+        }
+    }
+
+    /// Read git's spelling back. Only the first slash separates, because branch
+    /// names contain them; a name with no remote part is not an upstream.
+    pub fn from_git_ref(s: &str) -> Option<Upstream> {
+        let (remote, branch) = s.split_once('/')?;
+        if remote.is_empty() || branch.is_empty() {
+            return None;
+        }
+        Some(Upstream {
+            remote: remote.to_string(),
+            branch: branch.to_string(),
+        })
+    }
+}
+
 /// A git branch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Branch {
     pub name: String,
     pub kind: BranchKind,
-    /// Upstream tracking branch (e.g. `origin/main`), if any.
-    pub tracking: Option<String>,
+    /// The upstream this branch tracks, as the **Git engine**'s branch read
+    /// answers it.
+    pub tracking: Option<Upstream>,
     pub favorite: bool,
     pub protected: bool,
     /// Whether the branch currently exists on disk (false for a "create" preview).
@@ -355,6 +393,21 @@ pub struct Conflict {
     pub root: RootId,
 }
 
+/// The three index versions of a conflicted path, as the **Git engine** answers
+/// them for one path — the glossary's **Conflict**. Named for the sides, not for
+/// git's stage numbering, and the engine that reads the index is the one that
+/// knows which stage is which.
+///
+/// A side is `None` when the index holds no version of it: an add/add conflict
+/// has no base, and a one-sided delete has no side. That is not the same answer
+/// as an empty one, and a resolver that conflates them merges against a phantom.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConflictVersions {
+    pub base: Option<String>,
+    pub ours: Option<String>,
+    pub theirs: Option<String>,
+}
+
 /// IDE patch store entry (shelve).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Shelf {
@@ -495,19 +548,22 @@ pub enum DateFormat {
     Iso,
 }
 
-/// Which engine implementation performs git operations
-/// (library-migration plan Phase L2). `Auto` is the default strategy: reads
-/// go to libgit2 and anything libgit2 cannot do falls back to the CLI.
+/// Which **Git engine** adapter performs git operations. There are two, and
+/// they differ in how much is answered in-process — not in whether libgit2 can
+/// run the whole job, which no adapter does. `InProcessReads` is the default
+/// and the spelling `Auto` and `Libgit2` in an older `state.ron` still load
+/// onto: both of those built this same object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum GitBackend {
     /// Shell out to the system `git` binary for every operation.
     Cli,
-    /// In-process libgit2 via `git2` for supported operations.
-    Libgit2,
-    /// Reads go to libgit2; anything libgit2 cannot do falls back to the
-    /// CLI (issue #26). The factory maps this to the composed executor.
+    /// Answers the reads `git2` has in-process and delegates the rest to the
+    /// CLI adapter. Not a libgit2-only path: it holds no fallback *policy*, and
+    /// most of it is CLI delegation.
     #[default]
-    Auto,
+    #[serde(alias = "Auto")]
+    #[serde(alias = "Libgit2")]
+    InProcessReads,
 }
 
 /// Project + per-root settings, serialized under `.turbogit/`.
@@ -545,7 +601,7 @@ pub struct VcsSettings {
     pub date_format: DateFormat,
     /// IDE-wide "do not run git commit hooks".
     pub no_commit_hooks: bool,
-    /// Git engine backend (library-migration plan Phase L2).
+    /// Which **Git engine** adapter runs — see [`GitBackend`].
     #[serde(default)]
     pub backend: GitBackend,
     /// Compute unified diffs in-process with `similar` instead of
@@ -725,6 +781,424 @@ pub struct DiffOpts {
     pub ignore_whitespace: bool,
     /// Produce a `--stat` summary instead of a full patch.
     pub stat: bool,
+}
+
+/// One file's line counts in a change, as the **Git engine** answers them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileStat {
+    pub path: PathBuf,
+    /// Lines added. `None` is git's `-`: a **Binary change** has no line count,
+    /// which is a different answer from a count of zero. This is the one place
+    /// that decision lives; callers that want a number read `unwrap_or(0)`.
+    pub insertions: Option<usize>,
+    /// Lines removed, with the same `None`-means-binary rule.
+    pub deletions: Option<usize>,
+}
+
+/// How much a change brings, one row per file touched.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChangeStats {
+    pub files: Vec<FileStat>,
+}
+
+impl ChangeStats {
+    /// Files the change touches. A **Binary change** counts.
+    pub fn file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Lines added across every file; the ones git reported as `-` add nothing.
+    pub fn insertions(&self) -> usize {
+        self.files.iter().filter_map(|f| f.insertions).sum()
+    }
+
+    /// Lines removed across every file, same rule.
+    pub fn deletions(&self) -> usize {
+        self.files.iter().filter_map(|f| f.deletions).sum()
+    }
+}
+
+/// The question the engine's `change_stats` read answers. One read serves both
+/// asks because both are the same question about a different pair.
+///
+/// Rename detection is inherited, not pinned: git's own defaults decide whether
+/// a copied file's stat is the same question as a modified file's, and the
+/// engine follows whatever the repository configures — the same policy the
+/// glossary's **Rename header** entry states.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ChangeQuestion {
+    /// What one commit introduced against its first parent (a parentless
+    /// commit against the empty tree) — the log's per-file stats.
+    Commit { commit: String },
+    /// What merging `target` into the current `HEAD` would bring in: the merge
+    /// base to `target`. The three-dot spelling belongs to the engine.
+    MergeIntoHead { target: String },
+}
+
+/// One line of a patch hunk's body, with what git's prefix character meant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatchLine {
+    pub kind: PatchLineKind,
+    /// The line's text, prefix character removed.
+    pub text: String,
+    /// git's `\ No newline at end of file` marker, attached to the line it
+    /// qualifies rather than left as a line of its own.
+    pub no_newline: bool,
+}
+
+/// What a patch body line is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PatchLineKind {
+    Context,
+    Added,
+    Removed,
+}
+
+/// One hunk: where it lands on each side, and its body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatchHunk {
+    /// 1-based first line on the old side.
+    pub old_start: usize,
+    pub old_count: usize,
+    /// 1-based first line on the new side.
+    pub new_start: usize,
+    pub new_count: usize,
+    /// The section heading git appends after the second `@@` — the enclosing
+    /// function name. Carried, because re-emitting a hunk without it produces
+    /// text that differs from git's byte for byte, and because the viewer shows
+    /// it. `None` when git found no heading.
+    pub heading: Option<String>,
+    pub lines: Vec<PatchLine>,
+}
+
+/// One metadata line of a file section, kept in the order git wrote it.
+///
+/// Each variant is a fact the viewer and the staging path ask about — not a
+/// prefix to test. The order is part of the value because the diff view paints
+/// these lines as section metadata, in git's sequence, and a **Rename header**
+/// leads the content it describes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PatchHeaderLine {
+    /// `index <old>..<new>[ <mode>]` — the blob pair git computed.
+    Index {
+        old: String,
+        new: String,
+        mode: Option<String>,
+    },
+    /// `similarity index N%`
+    Similarity { percent: u8 },
+    /// `rename from <path>`
+    RenameFrom { path: String },
+    /// `rename to <path>`
+    RenameTo { path: String },
+    /// `new file mode <mode>`
+    NewFile { mode: String },
+    /// `deleted file mode <mode>`
+    DeletedFile { mode: String },
+    /// `old mode <mode>`
+    OldMode { mode: String },
+    /// `new mode <mode>`
+    NewMode { mode: String },
+    /// `Binary files a/x and b/y differ` — a **Binary change**. Carries no
+    /// paths of its own: the section already names both sides, and git's
+    /// marker is those two paths in one fixed sentence.
+    Binary,
+    /// The `--- <old>` / `+++ <new>` source pair, each side git's own form
+    /// (`a/path`, `b/path`, or `/dev/null` for the side that does not exist)
+    /// with quoting already resolved. Which side is `/dev/null` is what makes a
+    /// composed patch appliable, so the pair is one fact: a patch's two sides
+    /// are one question.
+    Sources { old: String, new: String },
+}
+
+/// One file's section of a patch.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct PatchFile {
+    /// Repository-relative, git's `a/` prefix removed and its quoted form
+    /// unescaped. Never split out of a header line by a caller.
+    pub old_path: String,
+    /// Repository-relative, `b/` removed.
+    pub new_path: String,
+    /// This is git's **combined** view of an unmerged path (`diff --cc`), which
+    /// names one path and compares it against every parent at once. Its hunks
+    /// keep the first parent's range and the new side's, because the value has
+    /// two sides; the staging verbs refuse a conflicted file anyway, so the
+    /// reading is for the pane, not for `git apply`.
+    pub combined: bool,
+    /// The section's metadata lines, in git's order.
+    pub headers: Vec<PatchHeaderLine>,
+    pub hunks: Vec<PatchHunk>,
+}
+
+impl PatchFile {
+    fn has(&self, want: impl Fn(&PatchHeaderLine) -> bool) -> bool {
+        self.headers.iter().any(want)
+    }
+
+    fn first<T>(&self, want: impl Fn(&PatchHeaderLine) -> Option<T>) -> Option<T> {
+        self.headers.iter().find_map(want)
+    }
+
+    /// The rename similarity percent, when git detected a rename. Follows
+    /// git's own defaults, unpinned (CONTEXT.md **Rename header**).
+    pub fn similarity(&self) -> Option<u8> {
+        self.first(|l| match l {
+            PatchHeaderLine::Similarity { percent } => Some(*percent),
+            _ => None,
+        })
+    }
+
+    /// A `rename from`/`rename to` pair is present. A rename with no hunks is
+    /// expressible here, which the text format can only say by absence.
+    pub fn renamed(&self) -> bool {
+        self.has(|l| matches!(l, PatchHeaderLine::RenameFrom { .. }))
+    }
+
+    pub fn new_file(&self) -> bool {
+        self.has(|l| matches!(l, PatchHeaderLine::NewFile { .. }))
+    }
+
+    pub fn deleted_file(&self) -> bool {
+        self.has(|l| matches!(l, PatchHeaderLine::DeletedFile { .. }))
+    }
+
+    /// A **Binary change**: the section describes it and carries no hunks.
+    pub fn binary(&self) -> bool {
+        self.has(|l| matches!(l, PatchHeaderLine::Binary))
+    }
+
+    pub fn old_mode(&self) -> Option<&str> {
+        self.headers.iter().find_map(|l| match l {
+            PatchHeaderLine::OldMode { mode } | PatchHeaderLine::DeletedFile { mode } => {
+                Some(mode.as_str())
+            }
+            _ => None,
+        })
+    }
+
+    pub fn new_mode(&self) -> Option<&str> {
+        self.headers.iter().find_map(|l| match l {
+            PatchHeaderLine::NewMode { mode } | PatchHeaderLine::NewFile { mode } => {
+                Some(mode.as_str())
+            }
+            _ => None,
+        })
+    }
+
+    /// A file whose only change is its mode: no content hunks, not binary, not
+    /// created or deleted, and not the no-content case of a rename.
+    pub fn mode_only(&self) -> bool {
+        self.hunks.is_empty()
+            && !self.binary()
+            && !self.new_file()
+            && !self.deleted_file()
+            && !self.renamed()
+            && (self.old_mode().is_some() || self.new_mode().is_some())
+    }
+}
+
+/// A whole patch: one section per file. What the **Git engine** answers where
+/// unified-diff text used to be the interface.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Patch {
+    pub files: Vec<PatchFile>,
+}
+
+impl Patch {
+    /// An empty diff is an answer, not a missing one (spec R2).
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    /// Total hunks across every file — the count whole-**File** staging gates on.
+    pub fn hunk_count(&self) -> usize {
+        self.files.iter().map(|f| f.hunks.len()).sum()
+    }
+}
+
+// --- saying it back in git's syntax ------------------------------------------
+//
+// The engine's adapters read git's unified diff into the value; only two places
+// still need git's *text*, and both are the value's own business rather than a
+// layer's: the index is fed bytes by `git apply`, and the viewer paints header
+// lines as labels. Writing them here keeps the format's rules — when a count is
+// omitted, when a path is quoted, which side is `/dev/null` — in one file
+// instead of in every caller that ever had to arrange a string to look like a
+// diff (`ADR-0022`).
+
+impl PatchLine {
+    /// git's own marker text, which the diff viewer paints verbatim.
+    pub const NO_NEWLINE_MARKER: &'static str = "\\ No newline at end of file";
+}
+
+impl PatchHunk {
+    /// `@@ -<old> +<new> @@[ <heading>]`, with a count of one omitted the way
+    /// `git diff` omits it.
+    pub fn header_line(&self) -> String {
+        let mut out = String::from("@@ -");
+        out.push_str(&span_text(self.old_start, self.old_count));
+        out.push_str(" +");
+        out.push_str(&span_text(self.new_start, self.new_count));
+        out.push_str(" @@");
+        if let Some(heading) = &self.heading {
+            out.push(' ');
+            out.push_str(heading);
+        }
+        out
+    }
+}
+
+impl PatchFile {
+    /// The section's opening line: git's two-path form, or the one name a
+    /// **combined** section carries.
+    pub fn section_header_line(&self) -> String {
+        if self.combined {
+            return format!("diff --cc {}", quote_path(&self.new_path));
+        }
+        format!(
+            "diff --git {} {}",
+            git_side("a/", &self.old_path),
+            git_side("b/", &self.new_path)
+        )
+    }
+}
+
+impl PatchHeaderLine {
+    /// This metadata line in git's syntax. The source pair is two lines and
+    /// every other header is one; `file` supplies the paths that git's binary
+    /// marker states instead of storing.
+    pub fn lines(&self, file: &PatchFile) -> Vec<String> {
+        match self {
+            PatchHeaderLine::Index { old, new, mode } => {
+                let mut line = format!("index {old}..{new}");
+                if let Some(mode) = mode {
+                    line.push(' ');
+                    line.push_str(mode);
+                }
+                vec![line]
+            }
+            PatchHeaderLine::Similarity { percent } => {
+                vec![format!("similarity index {percent}%")]
+            }
+            PatchHeaderLine::RenameFrom { path } => {
+                vec![format!("rename from {}", quote_path(path))]
+            }
+            PatchHeaderLine::RenameTo { path } => {
+                vec![format!("rename to {}", quote_path(path))]
+            }
+            PatchHeaderLine::NewFile { mode } => vec![format!("new file mode {mode}")],
+            PatchHeaderLine::DeletedFile { mode } => vec![format!("deleted file mode {mode}")],
+            PatchHeaderLine::OldMode { mode } => vec![format!("old mode {mode}")],
+            PatchHeaderLine::NewMode { mode } => vec![format!("new mode {mode}")],
+            PatchHeaderLine::Binary => vec![format!(
+                "Binary files {} and {} differ",
+                // git spells a side that does not exist `/dev/null` here too;
+                // which side that is, the section's own mode header already says.
+                if file.new_file() {
+                    "/dev/null".to_string()
+                } else {
+                    git_side("a/", &file.old_path)
+                },
+                if file.deleted_file() {
+                    "/dev/null".to_string()
+                } else {
+                    git_side("b/", &file.new_path)
+                }
+            )],
+            PatchHeaderLine::Sources { old, new } => {
+                vec![
+                    format!("--- {}", quote_side(old)),
+                    format!("+++ {}", quote_side(new)),
+                ]
+            }
+        }
+    }
+}
+
+/// A hunk span as git spells it: `<start>` when the count is one, `<start>,0`
+/// when a side is empty.
+fn span_text(start: usize, count: usize) -> String {
+    if count == 1 {
+        format!("{start}")
+    } else {
+        format!("{start},{count}")
+    }
+}
+
+/// One side of a `diff --git` line: the `a/` or `b/` prefix joined to the
+/// repository-relative path, then quoted as one name.
+fn git_side(prefix: &str, path: &str) -> String {
+    quote_side(&format!("{prefix}{path}"))
+}
+
+/// One side of the source pair, which git spells with its prefix already on it
+/// — or names nothing at all.
+fn quote_side(side: &str) -> String {
+    if side == "/dev/null" {
+        return side.to_string();
+    }
+    quote_path(side)
+}
+
+fn quote_path(path: &str) -> String {
+    if needs_quote(path) {
+        format!("\"{}\"", escape_c(path))
+    } else {
+        path.to_string()
+    }
+}
+
+/// git's `quote_c_style` trigger: a control byte, a non-ASCII byte, or one of
+/// the two characters the quoting itself uses. A plain space is **not** on the
+/// list, which is why a path with a space reaches the reader unquoted.
+fn needs_quote(s: &str) -> bool {
+    s.bytes()
+        .any(|b| !(0x20..0x7f).contains(&b) || matches!(b, b'"' | b'\\'))
+}
+
+fn escape_c(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for b in s.bytes() {
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\t' => out.push_str("\\t"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            0x20..=0x7e => out.push(b as char),
+            _ => out.push_str(&format!("\\{b:03o}")),
+        }
+    }
+    out
+}
+
+impl std::fmt::Display for Patch {
+    /// The whole patch as `git apply` reads it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for file in &self.files {
+            writeln!(f, "{}", file.section_header_line())?;
+            for header in &file.headers {
+                for line in header.lines(file) {
+                    writeln!(f, "{line}")?;
+                }
+            }
+            for hunk in &file.hunks {
+                writeln!(f, "{}", hunk.header_line())?;
+                for line in &hunk.lines {
+                    let prefix = match line.kind {
+                        PatchLineKind::Context => ' ',
+                        PatchLineKind::Added => '+',
+                        PatchLineKind::Removed => '-',
+                    };
+                    writeln!(f, "{prefix}{}", line.text)?;
+                    if line.no_newline {
+                        writeln!(f, "{}", PatchLine::NO_NEWLINE_MARKER)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One line of `git blame` output, tied to the commit that introduced it.

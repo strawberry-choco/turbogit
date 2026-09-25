@@ -31,7 +31,7 @@ use test_support::harness::{
     PaintedGalley, filled_circles, filled_rects, painted_galleys, painted_text, settle,
 };
 use turbogit_app::state::TreeState;
-use turbogit_domain::model::{Branch, BranchKind, Root, RootId};
+use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
 use turbogit_ui::theme::{Palette, configure_style, install_fonts};
 use turbogit_ui::ui::branch_tree_view::{
     TreeEvent, TreeGroup, TreeProps, branch_tree, remotes_revealed,
@@ -52,7 +52,7 @@ fn local(name: &str, favorite: bool, ahead: usize, behind: usize) -> Branch {
         name: name.to_string(),
         kind: BranchKind::Local,
         tracking: if ahead + behind > 0 {
-            Some("origin/main".to_string())
+            Upstream::from_git_ref("origin/main")
         } else {
             None
         },

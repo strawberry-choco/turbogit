@@ -115,3 +115,27 @@ fn push_new_without_a_remote_is_a_clear_error() {
     let err = tag_service::push_new(&v, &root, "v0.9.0").unwrap_err();
     assert!(matches!(err, TgError::Other(ref m) if m.contains("remote")));
 }
+
+// --------------------------------------------------------------- signing key --
+
+#[test]
+fn signing_key_answers_the_configured_value_with_no_git() {
+    let root = PathBuf::from("/repo");
+    let mut v = FakeExecutor::new();
+    v.config.insert(
+        (root.clone(), "user.signingkey".to_string()),
+        "4E1F 9C2A B7D3 0F55".to_string(),
+    );
+    assert_eq!(
+        tag_service::signing_key(&v, &root).as_deref(),
+        Some("4E1F 9C2A B7D3 0F55"),
+        "the dialog's fingerprint chip comes from the port's config read"
+    );
+}
+
+#[test]
+fn signing_key_is_none_when_no_key_is_configured() {
+    let root = PathBuf::from("/repo");
+    let v = FakeExecutor::new();
+    assert_eq!(tag_service::signing_key(&v, &root), None);
+}

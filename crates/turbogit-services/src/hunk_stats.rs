@@ -1,11 +1,13 @@
-//! Hunk-span statistics over unified diff text (issue 20, screen 06).
+//! Hunk-span statistics over the **Git engine**'s patch value (issue 20,
+//! screen 06).
 //!
-//! Pure parsing and classification: which files a whole-root diff touches,
-//! the `@@ -a,b +c,d @@` span of each hunk, and — by comparing the three
-//! working-tree views of one file (HEAD↔worktree, HEAD↔index,
-//! index↔worktree) — how much of each hunk is already staged. No engine
-//! access; callers fetch the diff text through the [`crate::changes`] seam
-//! and cache the result per root.
+//! Pure classification: which files a whole-root diff touches, the span of each
+//! hunk, and — by comparing the three working-tree views of one file
+//! (HEAD↔worktree, HEAD↔index, index↔worktree) — how much of each hunk is
+//! already staged. No engine access; callers read the patch value through the
+//! [`crate::changes`] seam and cache the result per root.
+
+use turbogit_domain::model::Patch;
 
 /// One hunk's line-range span, parsed from its `@@ -a,b +c,d @@` header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,66 +42,28 @@ pub struct FileHunks {
     pub hunks: Vec<HunkSpan>,
 }
 
-/// Parse `@@ -a,b +c,d @@ …` into a [`HunkSpan`]; counts default to 1 when
-/// omitted, and a header without both sides is `None`.
-pub fn parse_hunk_header(header: &str) -> Option<HunkSpan> {
-    let mut old: Option<(usize, usize)> = None;
-    let mut new: Option<(usize, usize)> = None;
-    for tok in header.split_whitespace() {
-        if let Some(rest) = tok.strip_prefix('-') {
-            old = Some(parse_range(rest));
-        } else if let Some(rest) = tok.strip_prefix('+') {
-            new = Some(parse_range(rest));
-        }
-    }
-    // `-`/`+` also prefix diff body lines, so the parse only counts when the
-    // line carried both a `-` and a `+` range (a lone `-` body line yields
-    // None).
-    let (o, n) = (old?, new?);
-    Some(HunkSpan {
-        old_start: o.0,
-        old_lines: o.1,
-        new_start: n.0,
-        new_lines: n.1,
-    })
-}
-
-/// Parse git's `-a,b` / `+c,d` range token; the count defaults to 1.
-fn parse_range(rest: &str) -> (usize, usize) {
-    let mut parts = rest.split(',');
-    let start = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    let lines = parts.next().and_then(|v| v.parse().ok()).unwrap_or(1);
-    (start, lines)
-}
-
-/// Split a multi-file unified diff into per-file hunk spans. Lines before
-/// the first `diff --git` header belong to no file.
-pub fn parse_file_hunks(diff: &str) -> Vec<FileHunks> {
-    let mut files: Vec<FileHunks> = Vec::new();
-    for line in diff.lines() {
-        if let Some(rest) = line.strip_prefix("diff --git ") {
-            let path = git_b_side(rest);
-            files.push(FileHunks {
-                path,
-                hunks: Vec::new(),
-            });
-        } else if line.starts_with("@@")
-            && let Some(file) = files.last_mut()
-            && let Some(span) = parse_hunk_header(line)
-        {
-            file.hunks.push(span);
-        }
-    }
-    files
-}
-
-/// Repo-relative path from the remainder of a `diff --git` line: git's
-/// `b/` side (the post-change path), matching the viewer's row model.
-fn git_b_side(rest: &str) -> String {
-    match rest.find(" b/") {
-        Some(sep) => rest[sep + 3..].to_owned(),
-        None => rest.to_owned(),
-    }
+/// The per-file hunk spans of a patch value — the same list one file section
+/// answers with, so the whole-root listings and the display model read one
+/// parser of one shape (`ADR-0022`). The four numbers a header carries are
+/// fields here; nothing re-reads `@@ -a,b +c,d`.
+pub fn file_hunks(patch: &Patch) -> Vec<FileHunks> {
+    patch
+        .files
+        .iter()
+        .map(|file| FileHunks {
+            path: file.new_path.clone(),
+            hunks: file
+                .hunks
+                .iter()
+                .map(|h| HunkSpan {
+                    old_start: h.old_start,
+                    old_lines: h.old_count,
+                    new_start: h.new_start,
+                    new_lines: h.new_count,
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// Whether two line ranges touch. Zero-length ranges (pure insertions) act
@@ -149,6 +113,13 @@ pub fn staged_hunk_partial(staged: &HunkSpan, local: &[HunkSpan]) -> bool {
 mod tests {
     use super::*;
 
+    /// git's diff syntax has exactly one reader, and it lives with the
+    /// adapters. A services test may build a value with it; nothing in this
+    /// crate's production code does.
+    fn patch(text: &str) -> Patch {
+        turbogit_engine::patch::parse_patch(text)
+    }
+
     /// Two well-separated hunks in one file, as `git diff HEAD` emits.
     const TWO_HUNK_DIFF: &str = "\
 diff --git a/src/a.rs b/src/a.rs
@@ -176,42 +147,8 @@ index 3333333..4444444 100644
 ";
 
     #[test]
-    fn hunk_header_parses_spans_with_default_counts() {
-        assert_eq!(
-            parse_hunk_header("@@ -10,4 +10,5 @@ fn alpha"),
-            Some(HunkSpan {
-                old_start: 10,
-                old_lines: 4,
-                new_start: 10,
-                new_lines: 5,
-            })
-        );
-        // Counts default to 1 when omitted.
-        assert_eq!(
-            parse_hunk_header("@@ -1 +1 @@"),
-            Some(HunkSpan {
-                old_start: 1,
-                old_lines: 1,
-                new_start: 1,
-                new_lines: 1,
-            })
-        );
-        // Pure insertion: zero-length old range at the insertion point.
-        assert_eq!(
-            parse_hunk_header("@@ -5,0 +6,2 @@"),
-            Some(HunkSpan {
-                old_start: 5,
-                old_lines: 0,
-                new_start: 6,
-                new_lines: 2,
-            })
-        );
-        assert_eq!(parse_hunk_header("not a header"), None);
-    }
-
-    #[test]
     fn file_hunks_split_per_file_with_repo_relative_paths() {
-        let files = parse_file_hunks(TWO_HUNK_DIFF);
+        let files = file_hunks(&patch(TWO_HUNK_DIFF));
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].path, "src/a.rs");
         assert_eq!(

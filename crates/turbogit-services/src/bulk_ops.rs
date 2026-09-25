@@ -157,7 +157,7 @@ pub fn preflight(
                         root.branches
                             .iter()
                             .find(|b| b.name == branch)
-                            .and_then(|b| b.tracking.as_deref())
+                            .and_then(|b| b.tracking.as_ref())
                     })
                     .is_some();
                 let outcome = classify(op, dirty, ahead, behind, upstream);
@@ -306,7 +306,39 @@ pub fn run_bulk_with_merge(
 /// whitespace-separated, with single- or double-quoted runs grouping into
 /// one argument. `None` when nothing remains to run (empty input, or just
 /// the bare "git").
+///
+/// [`echo_command`] is the other reader of the same rule: what the run reports
+/// back is decided here, so the echo cannot disagree with what executed.
 pub fn parse_command(input: &str) -> Option<Vec<String>> {
+    let mut args = tokenize(input)?;
+    if args.first().map(String::as_str) == Some(GIT) {
+        args.remove(0);
+    }
+    if args.is_empty() { None } else { Some(args) }
+}
+
+/// The git binary's own name, which the user may or may not type: the engine
+/// supplies it, so [`parse_command`] drops it from the arguments and
+/// [`echo_command`] supplies it for display.
+const GIT: &str = "git";
+
+/// The typed command as the run should be reported: git's name first, then what
+/// the user typed — which is exactly the text they typed, because a leading
+/// `git` is kept rather than doubled. Quoting survives untouched, since this is
+/// an echo and not an argv.
+pub fn echo_command(input: &str) -> String {
+    let typed = input.trim();
+    match tokenize(typed) {
+        Some(words) if words.first().map(String::as_str) == Some(GIT) => typed.to_string(),
+        _ if typed.is_empty() => GIT.to_string(),
+        _ => format!("{GIT} {typed}"),
+    }
+}
+
+/// Split typed text into words the way a shell would for the two quote
+/// characters, and nothing else: no escapes, no expansion, no `$`. `None` when
+/// a quote never closes.
+fn tokenize(input: &str) -> Option<Vec<String>> {
     let mut args: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;
@@ -337,10 +369,7 @@ pub fn parse_command(input: &str) -> Option<Vec<String>> {
     if started {
         args.push(cur);
     }
-    if args.first().map(String::as_str) == Some("git") {
-        args.remove(0);
-    }
-    if args.is_empty() { None } else { Some(args) }
+    Some(args)
 }
 
 /// Why a parsed command counts as destructive-looking and needs the extra
@@ -349,6 +378,11 @@ pub fn parse_command(input: &str) -> Option<Vec<String>> {
 /// moves branches and can discard commits, `clean` deletes untracked files,
 /// `rebase`/`filter-branch`/`filter-repo` rewrite history, a `push` with a
 /// force flag rewrites the remote, and `branch -D` force-deletes branches.
+///
+/// That is a match on git's own subcommand names and flags, and the limit it
+/// puts on the app's safety model is stated once, on
+/// [`GitExecutor::run_raw`](turbogit_engine_api::GitExecutor::run_raw) — the
+/// port's one raw escape, which this is the only production caller of.
 pub fn destructive_reason(args: &[String]) -> Option<&'static str> {
     let first = args.first().map(String::as_str)?;
     let has_flag = |flags: &[&str]| args.iter().any(|a| flags.contains(&a.as_str()));
@@ -451,11 +485,11 @@ fn run_branch_step(
         match (root.current_branch.as_deref(), tracking) {
             (Some(cur), Some(up))
                 if vcs
-                    .ahead_behind(&root.path, cur, &up)
+                    .ahead_behind(&root.path, cur, &up.git_ref())
                     .map(|(_, behind)| behind > 0)
                     .unwrap_or(false) =>
             {
-                Some(up)
+                Some(up.git_ref())
             }
             _ => None,
         }
@@ -465,9 +499,8 @@ fn run_branch_step(
     super::branch_service::create(vcs, &root.path, name, start_point.as_deref(), true)
 }
 
-/// Push one root's current branch, resolving the upstream remote from the
-/// branch's tracking ref when present, else the first remote, else "origin"
-/// (the [`sync_service::push_all`] resolution, scoped to one root).
+/// Push one root's current branch through [`sync_service::push_remote`] — the
+/// one remote-resolution rule the whole fleet shares.
 fn push_root(
     vcs: &dyn turbogit_engine_api::GitExecutor,
     root: &Root,
@@ -477,21 +510,11 @@ fn push_root(
         .current_branch
         .as_deref()
         .ok_or_else(|| TgError::Other("no current branch to push".into()))?;
-    let remote = match root
-        .branches
-        .iter()
-        .find(|b| b.name == branch)
-        .and_then(|b| b.tracking.as_deref())
-    {
-        Some(t) if t.contains('/') => t.split('/').next().unwrap_or("origin"),
-        _ => root
-            .remotes
-            .first()
-            .map(|r| r.name.as_str())
-            .unwrap_or("origin"),
-    };
+    // The same rule the push dialog and the dry-run preview consult — not a
+    // fourth copy of a split.
+    let remote = super::sync_service::push_remote(root);
     super::sync_service::push(
-        vcs, &root.path, remote, branch, false, false, false, false, None, settings,
+        vcs, &root.path, &remote, branch, false, false, false, false, None, settings,
     )
 }
 
@@ -615,7 +638,7 @@ pub fn branch_preflight(
                     BranchAction::CheckoutExisting
                 } else if from_upstream && behind > 0 {
                     match tracking {
-                        Some(up) => BranchAction::CreateFromUpstream { from: up },
+                        Some(up) => BranchAction::CreateFromUpstream { from: up.git_ref() },
                         None => BranchAction::CreateFromHead,
                     }
                 } else {
@@ -651,7 +674,7 @@ mod tests {
             (Some(b), Some(t)) => vec![Branch {
                 name: b.to_string(),
                 kind: BranchKind::Local,
-                tracking: Some(t.to_string()),
+                tracking: Upstream::from_git_ref(t),
                 favorite: false,
                 protected: false,
                 exists: true,
@@ -993,8 +1016,52 @@ mod tests {
         assert_eq!(
             parse_command("git"),
             None,
-            "the bare binary name is no command"
+            "the binary alone is nothing to run"
         );
+    }
+
+    /// The echo the run is reported with and the arguments it ran are decided by
+    /// one rule, so the text on screen re-parses to exactly the command that
+    /// went to git. The view layer used to re-derive the rule itself with
+    /// `starts_with("git ")`, which a quoted `"git status"` defeated: the echo
+    /// named a binary the parser then swallowed as an argument.
+    #[test]
+    fn an_echoed_command_re_parses_to_the_arguments_that_ran() {
+        for typed in [
+            "git gc",
+            "gc",
+            "  git   prune origin ",
+            "\"git status\"",
+            "git",
+            "commit -m 'two words'",
+            "remote prune origin",
+        ] {
+            let echoed = echo_command(typed);
+            assert_eq!(
+                parse_command(&echoed),
+                parse_command(typed),
+                "the echo drifted from what runs: {typed:?} → {echoed:?}"
+            );
+            assert!(
+                echoed == "git" || echoed.starts_with("git "),
+                "the echo names the binary, which the engine always runs: {echoed:?}"
+            );
+            assert_ne!(
+                echoed
+                    .strip_prefix("git ")
+                    .and_then(parse_command)
+                    .and_then(|args| args.first().map(String::from)),
+                Some("git".to_string()),
+                "one binary name, not two: the user's own typing is an argument, \
+                 not a second chance to say `git`: {echoed:?} from {typed:?}"
+            );
+        }
+        // Quoting is the user's, and an echo is not an argv: it survives.
+        assert_eq!(
+            echo_command("commit -m 'two words'"),
+            "git commit -m 'two words'"
+        );
+        assert_eq!(echo_command("\"git status\""), "git \"git status\"");
     }
 
     #[test]

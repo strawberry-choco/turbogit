@@ -92,8 +92,8 @@ fn branch_tip_from_commit(c: &git2::Commit<'_>) -> BranchTip {
 ///
 /// Returns `None` when the branch tracks nothing. A `"."` remote means a
 /// local branch tracks another local branch, so the ref to probe is
-/// `refs/heads/<name>`.
-fn tracking_state(repo: &git2::Repository, name: &str) -> Option<(String, bool)> {
+/// `refs/heads/<name>` — which is what [`Upstream::git_ref`] answers for one.
+fn tracking_state(repo: &git2::Repository, name: &str) -> Option<(Upstream, bool)> {
     let config = repo.config().ok()?;
     let remote = config.get_string(&format!("branch.{name}.remote")).ok()?;
     let merge = config.get_string(&format!("branch.{name}.merge")).ok()?;
@@ -101,15 +101,14 @@ fn tracking_state(repo: &git2::Repository, name: &str) -> Option<(String, bool)>
         .strip_prefix("refs/heads/")
         .unwrap_or(&merge)
         .to_string();
-    if remote == "." {
-        let exists = repo.find_reference(&format!("refs/heads/{branch}")).is_ok();
-        return Some((branch, !exists));
-    }
-    let track = format!("{remote}/{branch}");
-    let exists = repo
-        .find_reference(&format!("refs/remotes/{track}"))
-        .is_ok();
-    Some((track, !exists))
+    let upstream = Upstream { remote, branch };
+    let probe = if upstream.remote == "." {
+        format!("refs/heads/{}", upstream.branch)
+    } else {
+        format!("refs/remotes/{}", upstream.git_ref())
+    };
+    let exists = repo.find_reference(&probe).is_ok();
+    Some((upstream, !exists))
 }
 
 /// Tip commit OIDs of a local branch and its tracking ref, or `None` when
@@ -331,12 +330,16 @@ impl GitExecutor for Git2Executor {
         }
     }
 
+    fn index_file_bytes(&self, root: &Path, path: &Path) -> TgResult<Vec<u8>> {
+        // The index stage spec is not something libgit2's rev parser accepts,
+        // so the staged side comes from the CLI path.
+        self.cli.index_file_bytes(root, path)
+    }
+
     fn show_file_bytes(&self, root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
-        // libgit2's rev parser does not support index-stage specs. Keep these
-        // reads on the CLI path so staged/conflict blobs never use worktree bytes.
-        if matches!(rev, ":0" | ":1" | ":2" | ":3") {
-            return self.cli.show_file_bytes(root, rev, path);
-        }
+        // `rev` is a commit-ish naming this commit's version of the path; the
+        // index stages it cannot parse have their own reads now, so the spec is
+        // assembled straight onto libgit2's rev parser.
         let repo = self.open(root)?;
         let spec = format!("{}:{}", rev, path.to_string_lossy());
         let obj = repo.revparse_single(&spec).map_err(err)?;
@@ -409,31 +412,56 @@ impl GitExecutor for Git2Executor {
         Ok(changes)
     }
 
-    fn commit_file_stats(
-        &self,
-        root: &Path,
-        commit: &str,
-    ) -> TgResult<Vec<(PathBuf, usize, usize)>> {
+    fn change_stats(&self, root: &Path, question: &ChangeQuestion) -> TgResult<ChangeStats> {
+        // A merge preview asks about a merge base. libgit2 can compute that
+        // pair, but this adapter has no in-process line-count path for it, so
+        // the range question goes to the CLI — which owns the three-dot
+        // spelling that no caller sees any more.
+        if matches!(question, ChangeQuestion::MergeIntoHead { .. }) {
+            return self.cli.change_stats(root, question);
+        }
+        let commit = match question {
+            ChangeQuestion::Commit { commit } => commit,
+            ChangeQuestion::MergeIntoHead { .. } => return self.cli.change_stats(root, question),
+        };
         // libgit2 has no numstat: walk the line events of the very diff
         // `commit_files` reports and count each delta's `+` / `-` side, so the
-        // two lists can never disagree about which paths a commit touched. The
-        // file callback opens one `0/0` row per delta and the line callback
-        // fills it in, which is also what a binary file stays at — libgit2
-        // emits no line events for one, matching git's `-` `-` columns.
+        // two lists can never disagree about which paths a commit touched.
+        // A binary delta emits no line events, so its row keeps `None` counts —
+        // the same answer git's two dashes give the CLI parser.
         let repo = self.open(root)?;
         let diff = commit_tree_diff(&repo, commit)?;
-        let counts = std::cell::RefCell::new(Vec::<(PathBuf, usize, usize)>::new());
+        let rows = std::cell::RefCell::new(Vec::<FileStat>::new());
+        // libgit2 sets no BINARY flag on an added or deleted blob, so ask the
+        // blob itself — the same classification git's two dashes report.
+        let is_binary = |delta: &git2::DiffDelta<'_>| -> bool {
+            let id = delta.new_file().id();
+            let id = if id.is_zero() {
+                delta.old_file().id()
+            } else {
+                id
+            };
+            if id.is_zero() {
+                return false;
+            }
+            repo.find_blob(id).map(|b| b.is_binary()).unwrap_or(false)
+        };
         let row_of = |delta: &git2::DiffDelta<'_>| -> Option<usize> {
             let path = delta
                 .new_file()
                 .path()
                 .or_else(|| delta.old_file().path())?;
-            let mut counts = counts.borrow_mut();
-            match counts.iter().position(|(p, _, _)| p.as_path() == path) {
+            let mut rows = rows.borrow_mut();
+            match rows.iter().position(|r| r.path.as_path() == path) {
                 Some(idx) => Some(idx),
                 None => {
-                    counts.push((path.to_path_buf(), 0, 0));
-                    Some(counts.len() - 1)
+                    let counted = (!is_binary(delta)).then_some(0);
+                    rows.push(FileStat {
+                        path: path.to_path_buf(),
+                        insertions: counted,
+                        deletions: counted,
+                    });
+                    Some(rows.len() - 1)
                 }
             }
         };
@@ -448,17 +476,19 @@ impl GitExecutor for Git2Executor {
                 let Some(idx) = row_of(&delta) else {
                     return true;
                 };
-                let mut counts = counts.borrow_mut();
+                let mut rows = rows.borrow_mut();
                 match line.origin() {
-                    '+' => counts[idx].1 += 1,
-                    '-' => counts[idx].2 += 1,
+                    '+' => rows[idx].insertions = Some(rows[idx].insertions.unwrap_or(0) + 1),
+                    '-' => rows[idx].deletions = Some(rows[idx].deletions.unwrap_or(0) + 1),
                     _ => {}
                 }
                 true
             }),
         )
         .map_err(err)?;
-        Ok(counts.into_inner())
+        Ok(ChangeStats {
+            files: rows.into_inner(),
+        })
     }
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
@@ -511,7 +541,10 @@ impl GitExecutor for Git2Executor {
             let (ahead, behind) = if gone {
                 (0, 0)
             } else {
-                match tracking.as_deref().and_then(|t| tip_oids(&repo, &name, t)) {
+                match tracking
+                    .as_ref()
+                    .and_then(|t| tip_oids(&repo, &name, &t.git_ref()))
+                {
                     Some((local_oid, up_oid)) => repo
                         .graph_ahead_behind(local_oid, up_oid)
                         .ok()
@@ -617,6 +650,18 @@ impl GitExecutor for Git2Executor {
             .graph_ahead_behind(branch_oid, upstream_oid)
             .map_err(err)?;
         Ok((ahead, behind))
+    }
+
+    fn commit_count_between(&self, root: &Path, from: &str, to: &str) -> TgResult<usize> {
+        // Counting a range is a walk libgit2 can do but this adapter has no
+        // reason to duplicate: the CLI answers it with git's own revision walk.
+        self.cli.commit_count_between(root, from, to)
+    }
+
+    fn resolve_revision(&self, root: &Path, name: &str) -> TgResult<CommitId> {
+        let repo = self.open(root)?;
+        let obj = repo.revparse_single(name).map_err(err)?;
+        Ok(obj.peel_to_commit().map_err(err)?.id().to_string())
     }
 
     fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
@@ -809,23 +854,23 @@ impl GitExecutor for Git2Executor {
         Ok(probe.unwrap_or(false))
     }
 
-    fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>> {
-        let repo = self.open(root)?;
-        let subs = repo.submodules().map_err(err)?;
-        let mut result = Vec::new();
-        for sub in subs {
-            let mut rel = PathBuf::new();
-            rel.push(sub.path());
-            result.push(rel);
-        }
-        Ok(result)
-    }
-
     /// Submodule reads parse `git submodule status` output — delegate to the
     /// CLI adapter (the git2 submodule API carries no pinned-vs-recorded
     /// pairing).
     fn submodule_status(&self, root: &Path) -> TgResult<Vec<Submodule>> {
         self.cli.submodule_status(root)
+    }
+
+    fn conflict_versions(&self, root: &Path, path: &Path) -> TgResult<ConflictVersions> {
+        // libgit2's rev parser has no index-stage spec, so the sides come from
+        // the CLI path — which is the only place in this adapter that knows the
+        // stage numbering at all.
+        self.cli.conflict_versions(root, path)
+    }
+
+    fn branch_upstream(&self, root: &Path, branch: &str) -> TgResult<Option<Upstream>> {
+        let repo = self.open(root)?;
+        Ok(tracking_state(&repo, branch).map(|(up, _)| up))
     }
 
     fn config_get(&self, root: &Path, key: &str) -> TgResult<Option<String>> {
@@ -941,6 +986,21 @@ impl GitExecutor for Git2Executor {
     fn continue_op(&self, root: &Path, op: &str) -> TgResult<()> {
         self.cli.continue_op(root, op)
     }
+    fn rewrite_backup_ref(&self) -> &str {
+        self.cli.rewrite_backup_ref()
+    }
+
+    fn save_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        self.cli.save_rewrite_backup(root)
+    }
+
+    fn restore_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        self.cli.restore_rewrite_backup(root)
+    }
+
+    fn discard_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        self.cli.discard_rewrite_backup(root)
+    }
 
     fn merge_auto_merged_files(
         &self,
@@ -1047,7 +1107,7 @@ impl GitExecutor for Git2Executor {
     fn apply_patch_to_index(
         &self,
         root: &Path,
-        patch: &str,
+        patch: &Patch,
         direction: ApplyDirection,
     ) -> TgResult<()> {
         // Forward maps 1:1 onto libgit2's `git apply --cached` emulation:
@@ -1061,17 +1121,21 @@ impl GitExecutor for Git2Executor {
         if direction == ApplyDirection::Reverse {
             return self.cli.apply_patch_to_index(root, patch, direction);
         }
-        if patch.trim().is_empty() {
+        if patch.is_empty() {
             // `git apply` succeeds silently on empty input.
             return Ok(());
         }
         let repo = self.open(root)?;
-        let diff = git2::Diff::from_buffer(patch.as_bytes()).map_err(err)?;
+        // libgit2 takes the patch as git's text, so this adapter renders the
+        // value it was handed — the only place upstream of the CLI that still
+        // speaks the format, and it speaks it as an output.
+        let text = patch.to_string();
+        let diff = git2::Diff::from_buffer(text.as_bytes()).map_err(err)?;
         repo.apply(&diff, ApplyLocation::Index, None).map_err(err)?;
         Ok(())
     }
 
-    fn check_patch(&self, root: &Path, patch: &str) -> TgResult<()> {
+    fn check_patch(&self, root: &Path, patch: &Patch) -> TgResult<()> {
         // Delegated to the CLI: libgit2's GIT_APPLY_CHECK has no `--check`
         // equivalent with the `--recount` tolerance the patch previews rely
         // on, and the verbatim git stderr is the forecast's signal (issue 16).
@@ -1246,8 +1310,8 @@ impl GitExecutor for Git2Executor {
 
     // ------------------------------------------------------- diff / blame ----
 
-    fn diff(&self, root: &Path, opts: &DiffOpts) -> TgResult<String> {
-        self.cli.diff(root, opts)
+    fn diff_patch(&self, root: &Path, opts: &DiffOpts) -> TgResult<Patch> {
+        self.cli.diff_patch(root, opts)
     }
 
     fn blame(&self, root: &Path, path: &Path, rev: Option<&str>) -> TgResult<Vec<BlameLine>> {
@@ -1258,10 +1322,6 @@ impl GitExecutor for Git2Executor {
 
     fn revert(&self, root: &Path, commit: &str) -> TgResult<()> {
         self.cli.revert(root, commit)
-    }
-
-    fn undo_last_commit(&self, root: &Path) -> TgResult<()> {
-        self.cli.undo_last_commit(root)
     }
 
     fn stash_push(&self, root: &Path, message: &str, keep_index: bool) -> TgResult<()> {

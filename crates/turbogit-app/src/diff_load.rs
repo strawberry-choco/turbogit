@@ -1,16 +1,16 @@
 //! The diff surface's off-frame loads that are *not* cached values.
 //!
-//! The patch text and the pane bytes both used to be loaded from here by name
+//! The patch and the pane bytes both used to be loaded from here by name
 //! (`ensure_diff`, `ensure_pane_bytes`), each with the staleness rule written
-//! out at its own call site. The patch text now crosses the keyed read
-//! ([`crate::keyed_read`]) with it; the pane bytes joined it in ticket 03. What
-//! stays is the sourcing an image/binary pane does for itself: the side specs a
-//! fetch reads, the decode limits that decide whether a pane shows pixels or
-//! the binary caption, and the untracked creation diff the read synthesizes
-//! instead of asking git.
+//! out at its own call site. Both now cross the keyed read
+//! ([`crate::keyed_read`]) — the patch as a value. What stays is the sourcing an
+//! image/binary pane does for itself: the side specs a fetch reads, the decode
+//! limits that decide whether a pane shows pixels or the binary caption, and the
+//! untracked creation patch the read synthesizes instead of asking git.
 
 use std::path::{Path, PathBuf};
 
+use turbogit_domain::model::Patch;
 use turbogit_engine_api::GitExecutor;
 
 use crate::events::{DecodedImage, FetchedBlob};
@@ -33,11 +33,12 @@ pub const IMAGE_MAX_PIXELS: u64 = 80_000_000;
 /// | Local (ix↔wt)    | index `:0` | worktree fs  |
 /// | explicit l..r    | `<left>`   | `<right>`    |
 ///
-/// Index revs use git's stage syntax (`:<n>:<path>`), the same style the
-/// conflict reader uses for `:1`/`:2`/`:3`.
+/// Index side is the named engine read, not git's stage syntax: a caller names
+/// the side it wants and the **Git engine** knows which stage that is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SideSpec {
     Rev(String),
+    Index,
     Worktree,
     Missing,
 }
@@ -76,6 +77,7 @@ pub(crate) fn fetch_side(
             std::fs::read(full).ok()?
         }
         SideSpec::Rev(rev) => exec.show_file_bytes(root, rev, rel).ok()?,
+        SideSpec::Index => exec.index_file_bytes(root, rel).ok()?,
     };
     let byte_len = bytes.len() as u64;
     let decoded = decode.then(|| decode_image(&bytes)).flatten();
@@ -102,39 +104,30 @@ fn decode_image(bytes: &[u8]) -> Option<DecodedImage> {
     })
 }
 
-/// A creation diff for an untracked file, from worktree content, in the exact
-/// shape the partial-staging path proves appliable. `None` falls back to engine
-/// behaviour (unreadable, binary, or empty files).
-pub(crate) fn synthetic_untracked_diff(root: &Path, rel: &Path) -> Option<String> {
+/// A creation patch for an untracked file, from worktree content, as the
+/// **Git engine** answers it: the same producer the in-process diff path uses,
+/// so an untracked preview is not a second hand-written rendering of git's
+/// format. `None` falls back to engine behaviour (unreadable, binary, or empty
+/// files).
+pub(crate) fn synthetic_untracked_patch(root: &Path, rel: &Path) -> Option<Patch> {
     let bytes = std::fs::read(root.join(rel)).ok()?;
     // Binary (NUL byte) or empty content has no meaningful granular diff.
     if bytes.is_empty() || bytes.contains(&0) {
         return None;
     }
     let content = String::from_utf8(bytes).ok()?;
-    // Patch headers need slash-separated repo-relative paths.
+    // Patch paths are slash-separated repo-relative on every platform.
     let display = rel
         .components()
         .map(|c| c.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/");
-    let n = content.lines().count();
-    let mut out = format!(
-        "diff --git a/{display} b/{display}\n\
-         new file mode 100644\n\
-         --- /dev/null\n\
-         +++ b/{display}\n\
-         @@ -0,0 +1,{n} @@\n"
-    );
-    for line in content.lines() {
-        out.push('+');
-        out.push_str(line);
-        out.push('\n');
-    }
-    if !content.ends_with('\n') {
-        out.push_str("\\ No newline at end of file\n");
-    }
-    Some(out)
+    Some(turbogit_services::diff_engine::file_patch(
+        &display,
+        None,
+        Some(content.as_str()),
+        false,
+    ))
 }
 
 #[cfg(test)]
@@ -230,22 +223,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src/deep")).unwrap();
         std::fs::write(dir.path().join("src/deep/new.rs"), "fn a() {}\n").unwrap();
-        let text =
-            synthetic_untracked_diff(dir.path(), Path::new("src/deep/new.rs")).expect("built");
+        let patch =
+            synthetic_untracked_patch(dir.path(), Path::new("src/deep/new.rs")).expect("built");
+        assert!(patch.files[0].new_file(), "a creation says so: {patch}");
+        let text = patch.to_string();
         assert!(
             text.starts_with(
                 "diff --git a/src/deep/new.rs b/src/deep/new.rs\nnew file mode 100644\n"
             ),
             "patch headers are repo-relative and slash-separated: {text}"
         );
-        assert!(text.contains("@@ -0,0 +1,1 @@\n+fn a() {}\n"), "{text}");
+        // One line on the new side, and git's spelling of a count of one is no
+        // count at all — the same text `git diff` would have written.
+        assert!(text.contains("@@ -0,0 +1 @@\n+fn a() {}\n"), "{text}");
 
         // Empty, binary and absent sides stay the engine's problem.
         std::fs::write(dir.path().join("blob.bin"), [b'a', 0, b'b']).unwrap();
-        assert!(synthetic_untracked_diff(dir.path(), Path::new("blob.bin")).is_none());
+        assert!(synthetic_untracked_patch(dir.path(), Path::new("blob.bin")).is_none());
         std::fs::write(dir.path().join("empty.md"), "").unwrap();
-        assert!(synthetic_untracked_diff(dir.path(), Path::new("empty.md")).is_none());
-        assert!(synthetic_untracked_diff(dir.path(), Path::new("absent.md")).is_none());
+        assert!(synthetic_untracked_patch(dir.path(), Path::new("empty.md")).is_none());
+        assert!(synthetic_untracked_patch(dir.path(), Path::new("absent.md")).is_none());
     }
 
     /// A file without a trailing newline says so, or the last row of the patch
@@ -254,10 +251,23 @@ mod tests {
     fn a_missing_final_newline_is_disclosed_in_the_patch() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("tight.txt"), "one\ntwo").unwrap();
-        let text = synthetic_untracked_diff(dir.path(), Path::new("tight.txt")).expect("built");
+        let patch = synthetic_untracked_patch(dir.path(), Path::new("tight.txt")).expect("built");
+        let flagged: Vec<_> = patch.files[0].hunks[0]
+            .lines
+            .iter()
+            .filter(|l| l.no_newline)
+            .map(|l| l.text.as_str())
+            .collect();
+        assert_eq!(
+            flagged,
+            vec!["two"],
+            "the last line is the unterminated one"
+        );
         assert!(
-            text.ends_with("+two\n\\ No newline at end of file\n"),
-            "{text}"
+            patch
+                .to_string()
+                .ends_with("+two\n\\ No newline at end of file\n"),
+            "{patch}"
         );
     }
 }

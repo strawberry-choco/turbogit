@@ -18,7 +18,7 @@ use crate::keyed_read::DiffTarget;
 use crate::operation::Operation;
 use crate::root_caches::Affected;
 use crate::state::{AppState, CharSelection, DiffComparison, Granularity};
-use turbogit_domain::model::ChangeStatus;
+use turbogit_domain::model::{ChangeStatus, Patch};
 use turbogit_services::partial::{self, HunkSelection, Selection};
 
 // --- diff-cache addressing ---------------------------------------------------
@@ -31,7 +31,7 @@ use turbogit_services::partial::{self, HunkSelection, Selection};
 /// nothing and spends no git work doing it — asking the read to fetch would
 /// turn today's deliberate silent no-op into a background diff per palette
 /// verb (ADR-0021).
-fn cached_preview_diff(state: &AppState, path: &std::path::Path) -> Option<String> {
+fn cached_preview_patch(state: &AppState, path: &std::path::Path) -> Option<Patch> {
     let root = state.selected_path()?;
     let target = DiffTarget::new(
         root,
@@ -41,7 +41,7 @@ fn cached_preview_diff(state: &AppState, path: &std::path::Path) -> Option<Strin
         state.ui.diff_ignore_whitespace,
         Some(path.to_path_buf()),
     );
-    state.peek(target).map(|value| value.text.clone())
+    state.peek(target).map(|value| value.patch.clone())
 }
 
 // --- dispatch ----------------------------------------------------------------
@@ -57,19 +57,22 @@ pub enum HunkTarget {
     Chars(usize, usize, usize, usize),
 }
 
-/// Dispatch one granular stage/unstage op (spec R2): resolve the diff text,
-/// change status, untracked routing, op label, and [`Affected`] scope here,
-/// then apply the composed patch through the async op seam. Missing inputs →
-/// silent no-op (the palette verbs' contract).
+/// Dispatch one granular stage/unstage op (spec R2): resolve the diff into a
+/// patch value, read the change status, decide untracked routing, the op label
+/// and the [`Affected`] scope here, then apply the composed patch through the
+/// async op seam. Missing inputs → silent no-op (the palette verbs' contract).
 pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: bool) {
     let Some(root) = state.selected_root.clone() else {
         return;
     };
-    let Some(diff_text) = cached_preview_diff(state, &path) else {
+    let Some(patch) = cached_preview_patch(state, &path) else {
         return;
     };
     let status = change_status(state, &path);
-    let selection = selection_for(&target, &diff_text);
+    // The selection is resolved against the same patch value the viewer drew its
+    // hunks from, so a hunk the user can see is exactly a hunk that can be
+    // staged (`ADR-0022`).
+    let selection = selection_for(&target, &patch);
     let label = if stage { "Stage hunk" } else { "Unstage hunk" };
     // Only staging reroutes for untracked files (intent-to-add + forward
     // apply using the repo-relative path — the only form git accepts there);
@@ -91,22 +94,22 @@ pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: 
                     v,
                     root,
                     std::slice::from_ref(&path),
-                    &diff_text,
+                    &patch,
                     &selection,
                     status,
                 )
             } else if stage {
-                partial::stage_selection(v, root, &diff_text, &selection, status)
+                partial::stage_selection(v, root, &patch, &selection, status)
             } else {
-                partial::unstage_selection(v, root, &diff_text, &selection, status)
+                partial::unstage_selection(v, root, &patch, &selection, status)
             }
         },
     ));
 }
 
-fn selection_for(target: &HunkTarget, diff_text: &str) -> Selection {
+fn selection_for(target: &HunkTarget, patch: &turbogit_domain::model::Patch) -> Selection {
     match target {
-        HunkTarget::File => file_selection(diff_text),
+        HunkTarget::File => file_selection(patch),
         HunkTarget::Whole(hunk) => Selection {
             hunks: [(*hunk, HunkSelection::Whole)].into_iter().collect(),
         },
@@ -130,12 +133,13 @@ fn selection_for(target: &HunkTarget, diff_text: &str) -> Selection {
     }
 }
 
-/// Every hunk of `diff_text`, whole (File granularity): the selection that
-/// stages the file's entire cached diff through the same patch pipeline as
-/// every other granular op.
-fn file_selection(diff_text: &str) -> Selection {
+/// Every hunk of the patch, whole (File granularity): the selection that stages
+/// the file's entire cached diff through the same pipeline as every other
+/// granular op. A hunk count is the value's own, not a substring tally of
+/// header lines over the cached text.
+fn file_selection(patch: &turbogit_domain::model::Patch) -> Selection {
     Selection {
-        hunks: (0..diff_text.lines().filter(|l| l.starts_with("@@")).count())
+        hunks: (0..patch.hunk_count())
             .map(|h| (h, HunkSelection::Whole))
             .collect(),
     }

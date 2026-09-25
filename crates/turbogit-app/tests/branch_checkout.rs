@@ -76,8 +76,8 @@ fn checking_out_a_remote_branch_tracks_it() {
         })
         .expect("the checkout created a local `feat`");
     assert_eq!(
-        feat.tracking.as_deref(),
-        Some("origin/feat"),
+        feat.tracking,
+        turbogit_domain::model::Upstream::from_git_ref("origin/feat"),
         "checking out a remote branch must leave the local branch tracking it"
     );
     assert_eq!(

@@ -331,34 +331,73 @@ fn forecast_blocks_a_dirty_target() {
     assert_eq!(t.applies, 0);
 }
 
-#[test]
-fn failed_hunks_counts_the_distinct_failing_hunks() {
-    // Two hunks, the second reported failing by git's stderr.
-    let patch_text = "\
-diff --git a/f.txt b/f.txt
---- a/f.txt
-+++ b/f.txt
-@@ -1,3 +1,4 @@
- one
-+ins
- two
- three
-@@ -10,3 +11,4 @@
- four
- five
-+ins2
- six
-";
-    let stderr = "error: patch failed: f.txt:10\nerror: f.txt: patch does not apply\n";
-    assert_eq!(cherry_across::failed_hunks(patch_text, stderr), 1);
-    let both = "error: patch failed: f.txt:1\nerror: patch failed: f.txt:10\n";
-    assert_eq!(cherry_across::failed_hunks(patch_text, both), 2);
-    // A stderr without parseable locations still reports at least one.
-    assert_eq!(cherry_across::failed_hunks(patch_text, "boom"), 1);
-    // A clean check has no stderr at all.
-    assert_eq!(cherry_across::failed_hunks(patch_text, ""), 0);
+/// The count of failing hunks is the **Git engine**'s answer hunk by hunk, not
+/// A patch value, read from git's syntax. That reader belongs to the adapters,
+/// so a service's test reaches into the engine only to build a fixture.
+fn value(text: &str) -> turbogit_domain::model::Patch {
+    turbogit_engine::patch::parse_patch(text)
 }
 
+/// a reading of git's stderr prose. Real repository, real `git apply --check`.
+#[test]
+fn failed_hunks_asks_the_engine_per_hunk() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("target");
+    init_repo(&repo);
+    commit_file(&repo, "f.txt", "one\ntwo\nthree\n", "base");
+    let exec = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+
+    // Two hunks: the first describes this repository, the tenth-line one does
+    // not — its context lines do not exist here.
+    let patch = value(
+        "diff --git a/f.txt b/f.txt\n\
+         --- a/f.txt\n\
+         +++ b/f.txt\n\
+         @@ -1,3 +1,4 @@\n\
+          one\n\
+         +ins\n\
+          two\n\
+          three\n\
+         @@ -10,3 +11,4 @@\n\
+          four\n\
+          five\n\
+         +ins2\n\
+          six\n",
+    );
+    assert_eq!(
+        cherry_across::failed_hunks(&exec, &repo, &patch),
+        1,
+        "one hunk's context is not in this repository"
+    );
+
+    // Nothing fails when the patch describes the tree it is checked against.
+    let clean = value(
+        "diff --git a/f.txt b/f.txt\n\
+         --- a/f.txt\n\
+         +++ b/f.txt\n\
+         @@ -1,3 +1,4 @@\n\
+          one\n\
+         +ins\n\
+          two\n\
+          three\n",
+    );
+    assert_eq!(cherry_across::failed_hunks(&exec, &repo, &clean), 0);
+
+    // Every hunk of a patch against an unrelated tree fails.
+    let wrong = value(
+        "diff --git a/f.txt b/f.txt\n\
+         --- a/f.txt\n\
+         +++ b/f.txt\n\
+         @@ -1,3 +1,4 @@\n\
+          alpha\n\
+         +ins\n\
+          beta\n\
+          gamma\n",
+    );
+    assert_eq!(cherry_across::failed_hunks(&exec, &repo, &wrong), 1);
+}
 #[test]
 fn apply_to_root_refuses_a_dirty_target_before_touching_git() {
     let (_tmp, alpha, beta, commits) = two_repos();

@@ -12,6 +12,10 @@ turbogit-engine-api = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# A self-dev-dependency so the engine's own suites can drive the fake — the
+# substitutable adapter is feature-gated, and the question "can a fixture answer
+# this read without a git binary?" is an engine question.
+turbogit-engine = { path = ".", features = ["test-util"] }
 
 [features]
 test-util = []

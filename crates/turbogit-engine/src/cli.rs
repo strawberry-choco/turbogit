@@ -51,7 +51,32 @@ fn ls_remote_invocation(remote: &str) -> (Vec<String>, Vec<(&'static str, String
     (args, envs)
 }
 
+/// The reference a history rewrite records its safety net in. Named here and
+/// nowhere else: the port's three backup verbs are the only way to touch it.
+pub const REWRITE_BACKUP_REF: &str = "refs/turbogit/preflight-backup";
+
 impl CliExecutor {
+    /// `git show :<stage>:<path>`. Index stages are this adapter's own
+    /// spelling: the port's file-content reads take a commit-ish, and the only
+    /// reader that means a stage is `conflict_versions`.
+    fn show_index_stage(&self, root: &Path, stage: &str, path: &Path) -> TgResult<String> {
+        let spec = format!(":{stage}:{}", path.to_string_lossy());
+        let bytes = self.run_bytes(root, &["show", &spec])?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// A `:`-prefixed rev is git's index-stage syntax, which the raised reads
+    /// exist to retire. Refuse it, and name the read that answers the ask.
+    fn reject_stage_rev(rev: &str) -> TgResult<()> {
+        if rev.starts_with(':') {
+            return Err(TgError::Other(format!(
+                "{rev:?} is an index stage, not a revision: use conflict_versions \
+                 for a conflicted path's sides, or index_file_bytes for its staged bytes"
+            )));
+        }
+        Ok(())
+    }
+
     /// Spawn `git` in `root` (used as the working directory), capturing stdout,
     /// stderr and the exit code. On a non-zero exit, return
     /// [`TgError::Cli`]; on success return `(stdout, stderr, 0)`.
@@ -482,27 +507,38 @@ impl GitExecutor for CliExecutor {
         Ok(out.lines().filter_map(parse_name_status_line).collect())
     }
 
-    fn commit_file_stats(
-        &self,
-        root: &Path,
-        commit: &str,
-    ) -> TgResult<Vec<(PathBuf, usize, usize)>> {
-        // The numstat twin of `commit_files` above: the same `-M` rename
-        // detection, so both lists report the same (new-side) paths, and the
-        // same `--root`, so a parentless commit still answers.
-        let (out, _, _) = self.run(
-            root,
-            &[
-                "diff-tree",
-                "--no-commit-id",
-                "--numstat",
-                "-r",
-                "--root",
-                "-M",
-                commit,
-            ],
-        )?;
-        Ok(parse_numstat(&out))
+    fn change_stats(&self, root: &Path, question: &ChangeQuestion) -> TgResult<ChangeStats> {
+        let out = match question {
+            // The numstat twin of `commit_files` above: the same `-M` rename
+            // detection, so both lists report the same (new-side) paths, and the
+            // same `--root`, so a parentless commit still answers.
+            ChangeQuestion::Commit { commit } => {
+                let (out, _, _) = self.run(
+                    root,
+                    &[
+                        "diff-tree",
+                        "--no-commit-id",
+                        "--numstat",
+                        "-r",
+                        "--root",
+                        "-M",
+                        commit,
+                    ],
+                )?;
+                out
+            }
+            // What merging `target` into `HEAD` brings in. The three-dot range
+            // is git's spelling of "since their merge base", and it lives here
+            // rather than in the service that asks.
+            ChangeQuestion::MergeIntoHead { target } => {
+                let (out, _, _) =
+                    self.run(root, &["diff", "--numstat", &format!("HEAD...{target}")])?;
+                out
+            }
+        };
+        Ok(ChangeStats {
+            files: parse_numstat(&out),
+        })
     }
 
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>> {
@@ -583,7 +619,12 @@ impl GitExecutor for CliExecutor {
             // Bracket annotation: `[upstream]`, `[upstream: ahead 2, behind 1]`,
             // or `[upstream: gone]`. The part after the first `:` carries the
             // sync markers; `upstream` is the tracking ref.
-            let (mut tracking, mut ahead, mut behind, mut gone) = (None, 0, 0, false);
+            let (mut tracking, mut ahead, mut behind, mut gone): (
+                Option<Upstream>,
+                usize,
+                usize,
+                bool,
+            ) = (None, 0, 0, false);
             if let (Some(s), Some(e)) = (content.find('['), content.find(']'))
                 && s < e
             {
@@ -592,9 +633,14 @@ impl GitExecutor for CliExecutor {
                     Some(i) => (inner[..i].trim(), &inner[i + 1..]),
                     None => (inner, ""),
                 };
-                if !up.is_empty() {
-                    tracking = Some(up.to_string());
-                }
+                // `<remote>/<branch>`, or a bare name when the "remote" is
+                // itself a local branch — git's own `.` remote.
+                tracking = Upstream::from_git_ref(up).or_else(|| {
+                    (!up.is_empty()).then(|| Upstream {
+                        remote: ".".to_string(),
+                        branch: up.to_string(),
+                    })
+                });
                 for part in rest.split(',') {
                     let p = part.trim();
                     if p.contains("gone") {
@@ -683,6 +729,23 @@ impl GitExecutor for CliExecutor {
             .and_then(|s| s.trim().parse::<usize>().ok())
             .unwrap_or(0);
         Ok((ahead, behind))
+    }
+
+    fn commit_count_between(&self, root: &Path, from: &str, to: &str) -> TgResult<usize> {
+        // The two-dot range is assembled here — `git rev-list --count from..to`.
+        let (out, _, _) = self.run(root, &["rev-list", "--count", &format!("{from}..{to}")])?;
+        out.trim()
+            .parse()
+            .map_err(|e| TgError::Other(format!("could not read a commit count from {out:?}: {e}")))
+    }
+
+    fn resolve_revision(&self, root: &Path, name: &str) -> TgResult<CommitId> {
+        let (out, _, _) = self.run(root, &["rev-parse", &format!("{name}^{{commit}}")])?;
+        let sha = out.trim();
+        if sha.is_empty() {
+            return Err(TgError::Other(format!("`{name}` resolves to nothing")));
+        }
+        Ok(sha.to_string())
     }
 
     fn is_ancestor(&self, root: &Path, upstream: &str, branch: &str) -> TgResult<bool> {
@@ -861,14 +924,6 @@ impl GitExecutor for CliExecutor {
         Ok(probe.unwrap_or(false))
     }
 
-    fn submodule_paths(&self, root: &Path) -> TgResult<Vec<PathBuf>> {
-        Ok(self
-            .submodule_status(root)?
-            .into_iter()
-            .map(|s| s.path)
-            .collect())
-    }
-
     fn submodule_status(&self, root: &Path) -> TgResult<Vec<Submodule>> {
         // `git submodule status` lines: "<status><sha> <path> [(<describe>)]"
         // with status ' ' in sync, '+' head off the record, '-' uninitialized,
@@ -937,6 +992,44 @@ impl GitExecutor for CliExecutor {
             });
         }
         Ok(result)
+    }
+
+    fn conflict_versions(&self, root: &Path, path: &Path) -> TgResult<ConflictVersions> {
+        // The index stages holding a merge's three sides: 1 = base, 2 = ours,
+        // 3 = theirs. They are this adapter's business — the port names sides,
+        // and a caller never assembles a stage rev.
+        let read = |stage: &str| match self.show_index_stage(root, stage, path) {
+            Ok(text) => Ok(Some(text)),
+            // git has no such stage for this path: an add/add has no base, a
+            // one-sided delete has no side. That is not an empty side.
+            Err(TgError::Cli { .. }) => Ok(None),
+            Err(e) => Err(e),
+        };
+        let base = read("1")?;
+        let ours = read("2")?;
+        let theirs = read("3")?;
+        if base.is_none() && ours.is_none() && theirs.is_none() {
+            return Err(TgError::Other(format!(
+                "`{}` holds no conflicted index versions",
+                path.display()
+            )));
+        }
+        Ok(ConflictVersions { base, ours, theirs })
+    }
+
+    fn branch_upstream(&self, root: &Path, branch: &str) -> TgResult<Option<Upstream>> {
+        let Some(remote) = self.config_get(root, &format!("branch.{branch}.remote"))? else {
+            return Ok(None);
+        };
+        let Some(merge) = self.config_get(root, &format!("branch.{branch}.merge"))? else {
+            return Ok(None);
+        };
+        // `merge` is git's full ref path; the branch name is the answer.
+        let name = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
+        Ok(Some(Upstream {
+            remote,
+            branch: name.to_string(),
+        }))
     }
 
     fn config_get(&self, root: &Path, key: &str) -> TgResult<Option<String>> {
@@ -1223,6 +1316,35 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
+    fn rewrite_backup_ref(&self) -> &str {
+        REWRITE_BACKUP_REF
+    }
+
+    fn save_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        let head = self.resolve_revision(root, "HEAD")?;
+        self.run(root, &["update-ref", REWRITE_BACKUP_REF, &head])?;
+        Ok(())
+    }
+
+    fn restore_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        self.run(
+            root,
+            &["rev-parse", "--verify", "--quiet", REWRITE_BACKUP_REF],
+        )
+        .map_err(|_| {
+            TgError::Other(format!(
+                "no rewrite backup to restore: {REWRITE_BACKUP_REF} was never written"
+            ))
+        })?;
+        self.run(root, &["reset", "--hard", REWRITE_BACKUP_REF])?;
+        Ok(())
+    }
+
+    fn discard_rewrite_backup(&self, root: &Path) -> TgResult<()> {
+        self.run(root, &["update-ref", "-d", REWRITE_BACKUP_REF])?;
+        Ok(())
+    }
+
     fn merge_auto_merged_files(
         &self,
         root: &Path,
@@ -1431,9 +1553,10 @@ impl GitExecutor for CliExecutor {
     fn apply_patch_to_index(
         &self,
         root: &Path,
-        patch: &str,
+        patch: &Patch,
         direction: ApplyDirection,
     ) -> TgResult<()> {
+        let patch = patch.to_string();
         let bin = turbogit_domain::model::git_binary(&self.settings);
         let mut args: Vec<&str> = vec!["apply", "--cached", "--recount"];
         if direction == ApplyDirection::Reverse {
@@ -1460,7 +1583,8 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
-    fn check_patch(&self, root: &Path, patch: &str) -> TgResult<()> {
+    fn check_patch(&self, root: &Path, patch: &Patch) -> TgResult<()> {
+        let patch = patch.to_string();
         let bin = turbogit_domain::model::git_binary(&self.settings);
         let mut child = Command::new(&bin)
             .args(["apply", "--check", "--recount"])
@@ -1624,7 +1748,7 @@ impl GitExecutor for CliExecutor {
 
     // ------------------------------------------------------- diff / blame ----
 
-    fn diff(&self, root: &Path, opts: &DiffOpts) -> TgResult<String> {
+    fn diff_patch(&self, root: &Path, opts: &DiffOpts) -> TgResult<Patch> {
         let mut a: Vec<String> = vec!["diff".to_string()];
         if opts.staged {
             a.push("--cached".to_string());
@@ -1648,7 +1772,8 @@ impl GitExecutor for CliExecutor {
         }
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         let (out, _, _) = self.run(root, &args)?;
-        Ok(out)
+        // git's format is interpreted here and stops existing here.
+        Ok(crate::patch::parse_patch(&out))
     }
 
     fn blame(&self, root: &Path, path: &Path, rev: Option<&str>) -> TgResult<Vec<BlameLine>> {
@@ -1663,7 +1788,16 @@ impl GitExecutor for CliExecutor {
         Ok(parse_blame(&out))
     }
 
+    fn index_file_bytes(&self, root: &Path, path: &Path) -> TgResult<Vec<u8>> {
+        // Stage 0 is the plain index entry; it is this adapter's spelling, not
+        // the port's.
+        let spec = format!(":0:{}", path.to_string_lossy());
+        let args = ["show", &spec];
+        self.run_bytes(root, &args)
+    }
+
     fn show_file(&self, root: &Path, rev: &str, path: &Path) -> TgResult<String> {
+        Self::reject_stage_rev(rev)?;
         let spec = format!("{}:{}", rev, path.to_string_lossy());
         let args = ["show", &spec];
         let bytes = self.run_bytes(root, &args)?;
@@ -1673,6 +1807,7 @@ impl GitExecutor for CliExecutor {
     fn show_file_bytes(&self, root: &Path, rev: &str, path: &Path) -> TgResult<Vec<u8>> {
         // Same spec convention as `show_file` (`<rev>:<path>`); `run_bytes`
         // keeps the blob bytes intact for binary content.
+        Self::reject_stage_rev(rev)?;
         let spec = format!("{}:{}", rev, path.to_string_lossy());
         let args = ["show", &spec];
         self.run_bytes(root, &args)
@@ -1682,12 +1817,6 @@ impl GitExecutor for CliExecutor {
 
     fn revert(&self, root: &Path, commit: &str) -> TgResult<()> {
         let args = ["revert", "--no-edit", commit];
-        self.run(root, &args)?;
-        Ok(())
-    }
-
-    fn undo_last_commit(&self, root: &Path) -> TgResult<()> {
-        let args = ["reset", "--soft", "HEAD~1"];
         self.run(root, &args)?;
         Ok(())
     }
@@ -1815,7 +1944,7 @@ fn parse_name_status_line(line: &str) -> Option<Change> {
 
 /// Parse `git diff-tree --numstat` output into `(path, insertions, deletions)`.
 /// Binary rows carry `-` in both count columns and read as `0/0`.
-fn parse_numstat(s: &str) -> Vec<(PathBuf, usize, usize)> {
+fn parse_numstat(s: &str) -> Vec<FileStat> {
     let mut out = Vec::new();
     for line in s.lines() {
         let mut parts = line.splitn(3, '\t');
@@ -1827,11 +1956,13 @@ fn parse_numstat(s: &str) -> Vec<(PathBuf, usize, usize)> {
         if path.is_empty() {
             continue;
         }
-        out.push((
-            PathBuf::from(numstat_path(path)),
-            insertions.parse().unwrap_or_default(),
-            deletions.parse().unwrap_or_default(),
-        ));
+        // A dash in a count column is git saying "this file has no line count"
+        // — a **Binary change**. It is one row either way, so the file counts.
+        out.push(FileStat {
+            path: PathBuf::from(numstat_path(path)),
+            insertions: insertions.parse().ok(),
+            deletions: deletions.parse().ok(),
+        });
     }
     out
 }
@@ -1937,6 +2068,14 @@ mod tests {
     }
 
     /// Verbatim `git diff-tree --no-commit-id --numstat -r --root -M` output from
+    fn stat(path: &str, insertions: usize, deletions: usize) -> FileStat {
+        FileStat {
+            path: PathBuf::from(path),
+            insertions: Some(insertions),
+            deletions: Some(deletions),
+        }
+    }
+
     /// a fixture repository (one edited file, one deleted file).
     #[test]
     fn numstat_lines_carry_per_file_line_counts() {
@@ -1947,26 +2086,31 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                (
-                    PathBuf::from("app/src/main/java/com/example/prom/PrometheusCollector.java"),
+                stat(
+                    "app/src/main/java/com/example/prom/PrometheusCollector.java",
                     4,
                     1
                 ),
-                (PathBuf::from("src/gone.txt"), 0, 1),
+                stat("src/gone.txt", 0, 1),
             ]
         );
     }
 
     /// git reports a binary change as `-\t-\t<path>`: the row still exists, it
-    /// just has no line counts, so it reads as `0/0` rather than disappearing.
+    /// just has no line counts. That is its own case, not a measured zero — the
+    /// dash is decided here, once, and no caller sees it.
     #[test]
-    fn binary_numstat_rows_read_as_zero_counts() {
+    fn binary_numstat_rows_have_no_line_counts() {
         let out = parse_numstat("-\t-\tlogo.png\n2\t0\tsrc/renamed.txt\n");
         assert_eq!(
             out,
             vec![
-                (PathBuf::from("logo.png"), 0, 0),
-                (PathBuf::from("src/renamed.txt"), 2, 0),
+                FileStat {
+                    path: PathBuf::from("logo.png"),
+                    insertions: None,
+                    deletions: None,
+                },
+                stat("src/renamed.txt", 2, 0),
             ]
         );
     }
@@ -1985,9 +2129,9 @@ mod tests {
         assert_eq!(
             out,
             vec![
-                (PathBuf::from("src/renamed.txt"), 2, 0),
-                (PathBuf::from("docs/b/guide.md"), 6, 0),
-                (PathBuf::from("elsewhere/deep/two.txt"), 0, 0),
+                stat("src/renamed.txt", 2, 0),
+                stat("docs/b/guide.md", 6, 0),
+                stat("elsewhere/deep/two.txt", 0, 0),
             ]
         );
     }
