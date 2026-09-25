@@ -30,9 +30,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::harness::{assert_painted, filled_rects, galley_origin};
 
-use egui::{Color32, Pos2, Rect, Shape};
+use egui::{Color32, Pos2, Rect, Shape, accesskit::Role};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use turbogit_app::state::AppState;
 
 use turbogit_ui::theme::Palette;
@@ -216,7 +216,6 @@ fn theirs_bg() -> Color32 {
 fn marker_bg() -> Color32 {
     tint_over_bg(Palette::STATE_WARNING, 0.15)
 }
-#[allow(dead_code)]
 fn stroked_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
     harness
         .output()
@@ -294,10 +293,11 @@ fn redesigned_resolver_renders_three_panes_and_header_actions() {
     assert_painted(&h, "Auto-advance to next conflict");
 }
 
-/// RED: The Result pane is a free-text editable surface — typing into it
-/// replaces the composed buffer that Apply writes to disk.
+/// The active Result cell is a real multiline TextEdit exposed through
+/// AccessKit; typing through that widget must reach the resolver's public
+/// editing state.
 #[test]
-fn result_pane_accepts_free_text_edits() {
+fn result_pane_exposes_multiline_editor_and_accepts_text_input() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "edit-repo");
     let branch = repo.branch();
@@ -306,17 +306,30 @@ fn result_pane_accepts_free_text_edits() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
 
-    // kittest's TextEdit doesn't drive multi-line edits cleanly in headless
-    // mode — we exercise the public seam (state.ui.conflict_text) directly.
-    // A separate manual smoke verifies the actual TextEdit widget renders.
-
+    let editor = h
+        .query_all_by_role(Role::MultilineTextInput)
+        .find(|node| node.value().is_some_and(|value| value.contains("MAIN-one")))
+        .expect("the active Result cell must expose its composed value");
+    editor.focus();
     h.run();
-    h.state_mut().ui.conflict_text = "CUSTOM-RESULT\n".to_string();
+    let focused_editor = h
+        .query_all_by_role(Role::MultilineTextInput)
+        .find(|node| node.value().is_some_and(|value| value.contains("MAIN-one")))
+        .expect("the active Result editor must remain in the accessibility tree");
+    assert!(
+        focused_editor.is_focused(),
+        "the multiline Result editor must accept keyboard focus"
+    );
+
+    focused_editor.type_text("CUSTOM-RESULT\n");
     h.run();
 
-    // The free-text edit IS the resolved content (no longer a single
-    // read-only composed galley).
-    assert_eq!(h.state().ui.conflict_text, "CUSTOM-RESULT\n");
+    assert!(h.state().ui.conflict_resolver_edited);
+    assert!(
+        h.state().ui.conflict_text.contains("CUSTOM-RESULT"),
+        "text typed into the Result TextEdit must update the resolver buffer: {:?}",
+        h.state().ui.conflict_text
+    );
 }
 
 /// RED: "Take both · theirs first" resolves a conflict by keeping both
@@ -331,6 +344,11 @@ fn take_both_theirs_first_keeps_both_with_theirs_before_ours() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     open_resolver(&mut h);
+    assert_eq!(
+        h.get_by_label("Take both 1").accesskit_node().role(),
+        Role::Button,
+        "resolver choices must remain accessible buttons"
+    );
 
     h.get_by_label("Take both 1").click();
     h.run();
@@ -586,4 +604,48 @@ fn resolver_renders_equal_width_panes_with_tinted_blocks() {
         filled_rects(&h).iter().any(|(_, c)| *c == marker_bg()),
         "conflict marker strips must be painted"
     );
+
+    // The shared kit keeps the focused Result treatment on the header and on
+    // the inactive read-only cell, observable through painted strokes.
+    let result_header_pos = galley_origin(&h, "Result").expect("Result header painted");
+    assert!(
+        stroked_rects(&h)
+            .iter()
+            .any(|(r, c)| *c == Palette::BRAND && r.contains(result_header_pos)),
+        "resolver Result header must carry the shared BRAND focus outline"
+    );
+    let inactive_result_pos =
+        origin_of(&h, "<< unresolved >>").expect("inactive Result placeholder painted");
+    assert!(
+        stroked_rects(&h)
+            .iter()
+            .any(|(r, c)| *c == Palette::BRAND && r.contains(inactive_result_pos)),
+        "inactive resolver Result cell must carry the shared BRAND focus outline"
+    );
+}
+
+#[test]
+fn resolver_panes_and_controls_remain_reachable_at_small_window() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "small-window-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_resolver(&mut h);
+
+    let size = egui::vec2(720.0, 640.0);
+    h.set_size(size);
+    h.run_steps(4);
+    let viewport = Rect::from_min_size(Pos2::ZERO, size);
+
+    for label in ["Result", "Take ours 1", "Apply"] {
+        h.get_by_label(label).scroll_to_me();
+        h.run_steps(4);
+        let rect = h.get_by_label(label).rect();
+        assert!(
+            viewport.intersects(rect),
+            "{label} must remain reachable at 720x640; rect={rect:?}, viewport={viewport:?}"
+        );
+    }
 }

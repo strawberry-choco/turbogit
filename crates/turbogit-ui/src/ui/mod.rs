@@ -31,6 +31,7 @@ pub mod diff;
 pub mod hunk_nav;
 pub mod icons;
 pub mod interactive_rebase;
+pub(crate) mod kit;
 pub mod log_window;
 pub mod multi_selection;
 pub mod popups;

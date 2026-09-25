@@ -7,8 +7,8 @@
 //! explicitly deferred).
 
 use crate::theme::Palette;
-use crate::ui::widgets::tint_over_bg;
-use egui::{Color32, CornerRadius, Margin, Rect, RichText, ScrollArea, Stroke, Ui, Vec2};
+use crate::ui::kit::conflict_pane::Side;
+use egui::{RichText, ScrollArea, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Toast};
@@ -121,21 +121,6 @@ fn compose_impl(segs: &[(String, String, bool)], res: &[Option<u8>], placeholder
     out
 }
 
-/// Conflict "yours" section background (spec §8.7: STATE_INFO @ ~12% over BG).
-fn yours_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_INFO, crate::theme::SECTION_TINT)
-}
-
-/// Conflict "theirs" section background (spec §8.7: STATE_ERROR @ ~12% over BG).
-fn theirs_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_ERROR, crate::theme::SECTION_TINT)
-}
-
-/// Conflict marker-strip background (spec §8.7: STATE_WARNING @ ~15% over BG).
-fn marker_bg() -> Color32 {
-    tint_over_bg(Palette::STATE_WARNING, crate::theme::MARKER_TINT)
-}
-
 /// Record one block resolution and refresh the composed read-only result.
 fn resolve(state: &mut AppState, seg_idx: usize, choice: u8) {
     state.ui.conflict_res[seg_idx] = Some(choice);
@@ -148,90 +133,6 @@ fn remaining_text(n: usize) -> String {
         1 => "1 conflict remaining".to_string(),
         n => format!("{n} conflicts remaining"),
     }
-}
-
-/// Pane header band (~28px SURFACE); `focused` adds the 2px BRAND outline
-/// that marks the Result pane as the focused surface (spec §8.7).
-fn pane_header(ui: &mut Ui, title: &str, focused: bool) {
-    let resp = egui::Frame::new()
-        .fill(Palette::SURFACE)
-        .inner_margin(Margin::symmetric(8, 5))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.set_min_height(16.0);
-            ui.label(
-                RichText::new(title)
-                    .strong()
-                    .size(crate::theme::TYPE_BODY)
-                    .color(Palette::INK),
-            );
-        });
-    if focused {
-        ui.painter().rect_stroke(
-            resp.response.rect,
-            CornerRadius::same(crate::theme::MARK_RADIUS),
-            Stroke::new(2.0, Palette::BRAND),
-            egui::StrokeKind::Inside,
-        );
-    }
-}
-
-/// Raw-marker strip row: warning-tinted band carrying the conflict glyph.
-fn marker_strip(ui: &mut Ui, glyph: &str) {
-    egui::Frame::new()
-        .fill(marker_bg())
-        .inner_margin(Margin::symmetric(6, 2))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new(glyph)
-                    .monospace()
-                    .size(crate::theme::TYPE_CHIP)
-                    .color(Palette::STATE_WARNING),
-            );
-        });
-}
-
-/// Tinted side section (yours/theirs) with its 3px colored left border strip.
-fn side_section(ui: &mut Ui, text: &str, fill: Color32, strip: Color32) {
-    let resp = egui::Frame::new()
-        .fill(fill)
-        .inner_margin(Margin::symmetric(6, 4))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(text).monospace().color(Palette::INK));
-        });
-    let r = resp.response.rect;
-    ui.painter().rect_filled(
-        Rect::from_min_size(r.left_top(), Vec2::new(3.0, r.height())),
-        0.0,
-        strip,
-    );
-}
-
-/// READ-ONLY composed-result cell: chosen text once resolved, a visible
-/// placeholder while unresolved; every cell carries the BRAND focus outline.
-fn result_cell(ui: &mut Ui, chosen: Option<u8>, ours: &str, theirs: &str) {
-    let (text, fill) = match chosen {
-        Some(1) => (theirs.to_string(), Palette::SURFACE),
-        Some(2) => (format!("{ours}{theirs}"), Palette::SURFACE),
-        Some(3) => (format!("{theirs}{ours}"), Palette::SURFACE),
-        Some(_) => (ours.to_string(), Palette::SURFACE),
-        None => ("<< unresolved >>".to_string(), marker_bg()),
-    };
-    let resp = egui::Frame::new()
-        .fill(fill)
-        .inner_margin(Margin::symmetric(6, 4))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            ui.label(RichText::new(text).monospace().color(Palette::INK));
-        });
-    ui.painter().rect_stroke(
-        resp.response.rect,
-        CornerRadius::same(crate::theme::MARK_RADIUS),
-        Stroke::new(2.0, Palette::BRAND),
-        egui::StrokeKind::Inside,
-    );
 }
 
 /// Render the conflict section inside the Commit tab (only when conflicts exist).
@@ -328,10 +229,18 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 let remaining = state.ui.conflict_res.iter().filter(|r| r.is_none()).count();
 
                 // Pane headers: three EQUAL panes; Result is outlined as focused.
-                ui.columns(3, |cols| {
-                    pane_header(&mut cols[0], "Local (Yours)", false);
-                    pane_header(&mut cols[1], "Result", true);
-                    pane_header(&mut cols[2], "Incoming (Theirs)", false);
+                crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
+                    crate::ui::kit::conflict_pane::pane_header(
+                        &mut cols[0],
+                        "Local (Yours)",
+                        false,
+                    );
+                    crate::ui::kit::conflict_pane::pane_header(&mut cols[1], "Result", true);
+                    crate::ui::kit::conflict_pane::pane_header(
+                        &mut cols[2],
+                        "Incoming (Theirs)",
+                        false,
+                    );
                 });
 
                 ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
@@ -341,7 +250,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     for (ours, theirs, is_conf) in segs.iter() {
                         if !*is_conf {
                             let text = ours.as_str();
-                            ui.columns(3, |cols| {
+                            crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
                                 for col in cols.iter_mut() {
                                     col.label(
                                         RichText::new(text).monospace().color(Palette::INK_2),
@@ -353,21 +262,45 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             ci += 1;
                             let block = res_i + 1;
                             // Marker strips frame the discrete conflict block.
-                            ui.columns(3, |cols| {
-                                marker_strip(&mut cols[0], "<<<<<<<");
-                                marker_strip(&mut cols[1], "=======");
-                                marker_strip(&mut cols[2], ">>>>>>>");
+                            crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
+                                crate::ui::kit::conflict_pane::marker_strip(
+                                    &mut cols[0],
+                                    "<<<<<<<",
+                                );
+                                crate::ui::kit::conflict_pane::marker_strip(
+                                    &mut cols[1],
+                                    "=======",
+                                );
+                                crate::ui::kit::conflict_pane::marker_strip(
+                                    &mut cols[2],
+                                    ">>>>>>>",
+                                );
                             });
                             // Tinted yours/theirs sections + read-only result.
                             let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
-                            ui.columns(3, |cols| {
-                                side_section(&mut cols[0], ours, yours_bg(), Palette::STATE_INFO);
-                                result_cell(&mut cols[1], chosen, ours, theirs);
-                                side_section(
+                            // Keep the legacy ordinal mapping (including Some(3)) at
+                            // the surface; the kit only receives composed visual text.
+                            let result_text = match chosen {
+                                Some(1) => Some(theirs.to_owned()),
+                                Some(2) => Some(format!("{ours}{theirs}")),
+                                Some(3) => Some(format!("{theirs}{ours}")),
+                                Some(_) => Some(ours.to_owned()),
+                                None => None,
+                            };
+                            crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
+                                crate::ui::kit::conflict_pane::side_section(
+                                    &mut cols[0],
+                                    ours,
+                                    Side::Local,
+                                );
+                                crate::ui::kit::conflict_pane::result_cell(
+                                    &mut cols[1],
+                                    result_text,
+                                );
+                                crate::ui::kit::conflict_pane::side_section(
                                     &mut cols[2],
                                     theirs,
-                                    theirs_bg(),
-                                    Palette::STATE_ERROR,
+                                    Side::Incoming,
                                 );
                             });
                             // Per-block resolutions drive the composed Result.
