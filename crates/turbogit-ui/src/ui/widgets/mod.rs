@@ -23,6 +23,7 @@ mod containers;
 mod controls;
 mod feedback;
 mod inputs;
+mod menu;
 mod rows;
 mod text;
 
@@ -46,6 +47,7 @@ pub use controls::{
 };
 pub use feedback::{KeyedReadPresentation, accent_bar, inline_error, keyed_read_presentation};
 pub use inputs::{search_input, text_input};
+pub use menu::{MenuItemKind, MenuItemProps, menu_item, menu_rule, menu_surface};
 pub use rows::paint_row;
 pub use text::{SHORT_COMMIT_REF_CHARS, paint_centered_text, short_commit_ref};
 

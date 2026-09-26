@@ -20,8 +20,10 @@ use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
+use turbogit_services::sync_service::PushScope;
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, TYPE_DETAIL_TITLE, chrome_font, data_font};
+use crate::ui::branch_menu::{BranchMenuAction, BranchMenuProps, branch_menu};
 use crate::ui::branch_tree_view::{self, LocalRow, TreeEvent, TreeGroup, TreeProps};
 use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches_tree::{self, BranchNode, BranchView};
@@ -192,10 +194,14 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     });
 
     // Esc clears the filter first, then closes the detail area (§9). Read at
-    // the very top of the frame, before any widget could consume it.
+    // the very top of the frame, before any widget could consume it. The
+    // context menu slots above the overflow in the ladder: one press closes
+    // the menu and disturbs nothing else.
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         if !state.ui.branches_filter.trim().is_empty() {
             state.ui.branches_filter.clear();
+        } else if state.ui.branches_tree.context_menu.is_some() {
+            state.ui.branches_tree.context_menu = None;
         } else {
             state.ui.branches_tree.selected = None;
             state.ui.branches_tree.selected_root = None;
@@ -503,6 +509,7 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         last_fetch: state.ui.branches_last_fetch,
         now: chrono::Utc::now(),
         allows_rename: true,
+        allows_context_menu: true,
         shows_row_actions: true,
         id_salt: "branches_list",
         full_height: true,
@@ -567,6 +574,69 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
                 });
         }
     }
+
+    // The right-click context menu floats over the list, anchored at the
+    // pointer position where the row was right-clicked. Events were applied
+    // before this paint, so it opens in the frame it was clicked — the same
+    // contract the ⋯ overflow holds.
+    if let Some((root_id, name)) = state.ui.branches_tree.context_menu.clone() {
+        let anchor = ui.ctx().memory(|m| {
+            m.data.get_temp::<Pos2>(egui::Id::new((
+                "branches_context_menu_anchor",
+                &root_id,
+                &name,
+            )))
+        });
+        // A click outside only dismisses once the menu was visible on the
+        // PREVIOUS frame, so the right-click that opened it cannot also
+        // close it (egui's own dropdown idiom, `popups.rs`).
+        let was_open_id = egui::Id::new(("branches_context_menu_was_open", &root_id, &name));
+        let was_open = ui
+            .ctx()
+            .memory(|m| m.data.get_temp::<bool>(was_open_id) == Some(true));
+        ui.ctx()
+            .memory_mut(|m| m.data.insert_temp(was_open_id, true));
+        if let Some(pos) = anchor {
+            let ctx = ui.ctx().clone();
+            let mut area_rect = Rect::NOTHING;
+            egui::Area::new(egui::Id::new(("branches_context_menu", &root_id, &name)))
+                .fixed_pos(pos)
+                .show(&ctx, |ui| {
+                    widgets::menu_surface(ui).show(ui, |ui| {
+                        let repo_name = root_id.name();
+                        if let Some(root) = state.multi.by_id(&root_id).cloned()
+                            && let Some(branch) =
+                                root.branches.iter().find(|b| b.name == name).cloned()
+                        {
+                            let props = BranchMenuProps {
+                                repo_name: &repo_name,
+                                multi_repo: state.multi.roots.len() > 1,
+                                is_current: root.current_branch.as_deref() == Some(name.as_str()),
+                            };
+                            if let Some(action) = branch_menu(ui, &props, &branch) {
+                                apply_branch_menu_action(state, &root.id, &branch, action);
+                            }
+                        }
+                    });
+                    area_rect = ui.min_rect();
+                });
+            if was_open {
+                let clicked_outside = ui.input(|i| {
+                    i.pointer.any_click()
+                        && i.pointer
+                            .interact_pos()
+                            .is_some_and(|p| !area_rect.contains(p))
+                });
+                if clicked_outside {
+                    state.ui.branches_tree.context_menu = None;
+                }
+            }
+        } else {
+            // The anchor is gone (memory cleared): close rather than park a
+            // menu with no home.
+            state.ui.branches_tree.context_menu = None;
+        }
+    }
 }
 
 /// Apply one tree event (plan D4): the surface owns the policy — selection,
@@ -587,6 +657,7 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
                 state.ui.branches_tree.selected_root = Some(root);
             }
             state.ui.branches_tree.overflow = None;
+            state.ui.branches_tree.context_menu = None;
         }
         TreeEvent::RowActivated { root, branch } => {
             // Double-click (and the row's hover Checkout button) checks out —
@@ -602,11 +673,17 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
         }
         TreeEvent::OverflowToggled { root, branch } => {
             let key = (root, branch);
+            // One menu per row at a time.
+            state.ui.branches_tree.context_menu = None;
             if state.ui.branches_tree.overflow.as_ref() == Some(&key) {
                 state.ui.branches_tree.overflow = None;
             } else {
                 state.ui.branches_tree.overflow = Some(key);
             }
+        }
+        TreeEvent::ContextMenuRequested { root, branch } => {
+            state.ui.branches_tree.overflow = None;
+            state.ui.branches_tree.context_menu = Some((root, branch));
         }
         TreeEvent::GroupToggled(group) => match group {
             TreeGroup::Local => {
@@ -1001,6 +1078,94 @@ fn detail_actions(
         action = Some(BranchAction::Delete);
     }
     action
+}
+
+/// Turn one context-menu pick into what the app already knows how to do —
+/// no new named `Operation`, no git call from the UI. The menu closes first,
+/// exactly as [`apply_action`] closes the overflow.
+fn apply_branch_menu_action(
+    state: &mut AppState,
+    root: &RootId,
+    branch: &Branch,
+    action: BranchMenuAction,
+) {
+    state.ui.branches_tree.context_menu = None;
+    match action {
+        BranchMenuAction::Checkout => checkout_branch(state, root, branch),
+        BranchMenuAction::NewBranchFrom => {
+            // The same prefill `CreateBranchRequested` performs, with the
+            // clicked row as the base.
+            state.ui.dlg.new_branch_name.clear();
+            state.ui.dlg.new_branch_start.clear();
+            state.ui.dlg.new_branch_base = branch.name.clone();
+            state.ui.dlg.new_branch_base_picker_open = false;
+            state.ui.dlg.new_branch_checkout = true;
+            state.ui.dialog = Some(Dialog::NewBranch);
+        }
+        BranchMenuAction::CheckoutAndPull => {
+            // One composite operation, modelled on the branches popup's
+            // checkout-then-pull. It must not also fire the standalone
+            // checkout confirmation — that guard belongs to `Checkout`.
+            let root_id = root.clone();
+            let name = branch.name.clone();
+            let rebase =
+                state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
+            state.dispatch(Operation::custom(
+                "Checkout and pull",
+                Affected::Root(root_id.clone()),
+                move |v| {
+                    let path = root_id.as_path();
+                    v.branch_checkout(path, &name)?;
+                    v.pull(path, rebase)
+                },
+            ));
+        }
+        BranchMenuAction::Pull => {
+            // The port's pull has no branch parameter, which is exactly why
+            // this item is gated to the checked-out branch.
+            let rebase =
+                state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
+            let r = root.clone();
+            state.dispatch(Operation::custom(
+                "Pull",
+                Affected::Root(r.clone()),
+                move |v| v.pull(r.as_path(), rebase),
+            ));
+        }
+        BranchMenuAction::Push => {
+            // Prefilled at that branch, consistent with Ctrl+Shift+K: the
+            // engine's push takes an explicit branch, so a non-current
+            // branch needs no checkout first.
+            // `ensure_target_defaults` re-fills Remote/Branch while the
+            // remote field is empty, so the prefill states both.
+            let remote = branch
+                .tracking
+                .as_ref()
+                .map(|t| t.remote.clone())
+                .or_else(|| {
+                    state
+                        .multi
+                        .by_id(root)
+                        .and_then(|r| r.remotes.first())
+                        .map(|r| r.name.clone())
+                })
+                .unwrap_or_else(|| "origin".to_string());
+            state.ui.dlg.push_remote = remote;
+            state.ui.dlg.push_branch = branch.name.clone();
+            state.ui.dlg.push_scope = PushScope::ThisRepo;
+            state.ui.dialog = Some(Dialog::Push);
+        }
+        BranchMenuAction::Rename => {
+            // The tree's inline rename — one rename experience per surface.
+            // The selection follows the row so the editor opens on the
+            // branch that was right-clicked.
+            state.ui.branches_tree.overflow = None;
+            state.ui.branches_tree.renaming = Some(branch.name.clone());
+            state.ui.branches_tree.rename_draft = branch.name.clone();
+            state.ui.branches_tree.selected = Some(branch.name.clone());
+            state.ui.branches_tree.selected_root = Some(root.clone());
+        }
+    }
 }
 
 /// Dispatch one branch action from the detail panel or the ⋯ overflow

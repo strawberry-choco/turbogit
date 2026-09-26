@@ -15,6 +15,7 @@
 pub mod activity_panel;
 pub mod banner;
 pub mod blame_view;
+pub mod branch_menu;
 pub mod branch_tree_view;
 pub mod branch_widget;
 pub mod branches;

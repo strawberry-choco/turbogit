@@ -160,6 +160,7 @@ struct Fixture {
     last_fetch: Option<chrono::DateTime<chrono::Utc>>,
     now: chrono::DateTime<chrono::Utc>,
     allows_rename: bool,
+    allows_context_menu: bool,
     shows_row_actions: bool,
     /// Mirrors `TreeProps::collapse_remotes_by_default` (false = Branches-style
     /// expanded-by-default, true = Log-pane-style collapsed-by-default).
@@ -181,6 +182,7 @@ impl Fixture {
             last_fetch: None,
             now: now(),
             allows_rename: true,
+            allows_context_menu: true,
             shows_row_actions: true,
             collapse_remotes_by_default: false,
             events: Vec::new(),
@@ -286,6 +288,7 @@ fn fixture_harness_at(fx: Fixture, width: f32) -> Harness<'static, Fixture> {
                 last_fetch: fx.last_fetch,
                 now: fx.now,
                 allows_rename: fx.allows_rename,
+                allows_context_menu: fx.allows_context_menu,
                 shows_row_actions: fx.shows_row_actions,
                 id_salt: "fixture_tree",
                 full_height: true,
@@ -1474,5 +1477,66 @@ fn repo_scope_narrows_to_one_section() {
     assert!(
         !texts.iter().any(|t| t.contains("alpha")),
         "the narrowed tree never paints another repo's section"
+    );
+}
+
+// --- right-click asks for the context menu (branch-context-menu ticket 03) ----
+
+/// A right-click on a branch row reports the owning repository and the
+/// branch, exactly like every other row event.
+#[test]
+fn a_right_click_on_a_row_asks_for_the_context_menu() {
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+
+    button(&h, "wip").click_secondary();
+    h.step();
+    let events = h.state().events.clone();
+    assert!(
+        events.contains(&TreeEvent::ContextMenuRequested {
+            root: RootId(Arc::from(PathBuf::from("/beta"))),
+            branch: "wip".to_string(),
+        }),
+        "a right-click reports its row: {events:#?}"
+    );
+}
+
+/// The capability is a prop: a surface that does not allow the menu (the Git
+/// Log pane today) emits nothing on a right-click.
+#[test]
+fn a_surface_without_the_capability_emits_nothing_on_right_click() {
+    let mut fx = Fixture::two_repos();
+    fx.allows_context_menu = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    button(&h, "wip").click_secondary();
+    h.step();
+    let events = h.state().events.clone();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, TreeEvent::ContextMenuRequested { .. })),
+        "the shared component must not open a menu the surface forbade: {events:#?}"
+    );
+}
+
+/// Ordering is load-bearing: the ⋯ button interacts before the row and keeps
+/// its clicks — a right-click on it must not reach the context menu.
+#[test]
+fn a_right_click_on_the_overflow_button_never_opens_the_context_menu() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    button(&h, "More actions").click_secondary();
+    h.step();
+    let events = h.state().events.clone();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, TreeEvent::ContextMenuRequested { .. })),
+        "a right-click on ⋯ belongs to the overflow: {events:#?}"
     );
 }

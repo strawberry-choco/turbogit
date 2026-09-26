@@ -402,6 +402,10 @@ pub struct TreeState {
     /// Which branch's ⋯ overflow menu is open; carries the owning root so
     /// hover-only opens still resolve (issue 14).
     pub overflow: Option<(RootId, String)>,
+    /// Which branch row's right-click context menu is open — same shape and
+    /// ownership as `overflow`; the anchor lives in egui memory, not here,
+    /// because this crate has no egui dependency.
+    pub context_menu: Option<(RootId, String)>,
     /// Current vertical scroll offset of the list (issue 06).
     pub scroll: f32,
     /// The pre-filter scroll offset, while a filter is active.
