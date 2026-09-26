@@ -170,8 +170,6 @@ fn tab_opens_with_groups_counts_and_nothing_selected() {
     // Tags are collapsed by default, so v1.0 stays hidden (covered by the
     // expand/collapse test).
 
-    // Nothing selected yet → the detail panel shows the quiet prompt.
-    assert_painted(&harness, "Select a branch");
     assert_eq!(
         harness.state().ui.branches_tree.selected,
         None,
@@ -246,32 +244,23 @@ fn fresh_repo_shows_one_sentence_and_create_action_not_headers() {
     }
 }
 
-// --- Cycle 5: detail panel geometry -----------------------------------------------
+// --- Cycle 5: the list owns the whole width --------------------------------------
 
 #[test]
-fn detail_panel_is_280px_on_the_right_and_never_blocks_the_list() {
+fn the_branch_list_fills_the_width_the_detail_panel_used_to_take() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    // The detail panel is a filled ~280px rect near the content area's right
-    // edge (the harness window is 1024 wide).
-    let fills = test_support::harness::filled_rects(&harness);
-    let panel = fills
-        .iter()
-        .filter(|(r, _)| (r.width() - 280.0).abs() < 4.0 && r.right() >= 900.0)
-        .max_by_key(|(r, _)| r.width() as i64)
-        .map(|(r, _)| *r);
-    let panel = panel.expect("a ~280px detail panel rect near the right edge");
+    // The 280px panel is gone: a row reaches into the strip it reserved.
+    let row = row_node(&harness, "feature-a");
     assert!(
-        panel.left() > 400.0,
-        "detail panel sits to the right of the list, was {panel:?}"
+        row.rect().right() > 1024.0 - 280.0 + 40.0,
+        "a row spans the content width, was {:?}",
+        row.rect()
     );
-
-    // The list rows and the prompt are both painted → the detail never blocks
-    // the list (they coexist on the same frame).
     assert_painted(&harness, "feature-a");
-    assert_painted(&harness, "Select a branch");
+    assert_not_painted(&harness, "Select a branch");
 }
 
 // --- Cycle 6: reading state is first-class (no blank panel) -----------------------
@@ -450,20 +439,6 @@ fn rows_render_icon_count_pairs_in_sync_gone_and_upstream() {
 /// The detail panel's relationship line and the row's badges must say the same
 /// thing the same way — `sync_badge` is the only place the words are built.
 #[test]
-fn the_detail_panels_relationship_line_matches_the_rows_badges() {
-    let (_project, dir) = sync_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-
-    row_node(&harness, "feat").click();
-    settle_quiet(&mut harness);
-
-    assert_painted(&harness, "2 ahead · 1 behind · tracks origin/main");
-    assert_painted(&harness, "2 ahead");
-    assert_painted(&harness, "1 behind");
-}
-
-#[test]
 fn rows_never_paint_absolute_dates() {
     let (_project, dir) = sync_repo_project();
     let mut harness = branches_harness(dir);
@@ -477,13 +452,21 @@ fn rows_never_paint_absolute_dates() {
     );
 }
 
-// --- Cycle 9: selection + detail panel (issue 05) ---------------------------------
+// --- Cycle 9: selection (issue 05) ------------------------------------------------
 
 #[test]
-fn click_selects_and_fills_detail_and_never_checks_out() {
+fn click_selects_the_row_visibly_and_never_checks_out() {
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
+
+    // An unselected row carries no selection fill at all.
+    assert!(
+        !filled_rects(&harness)
+            .iter()
+            .any(|(_, fill)| *fill == turbogit_ui::theme::Palette::SELECTION),
+        "nothing is selected at rest"
+    );
 
     // The local row (first match; the remote group repeats short names).
     harness
@@ -493,21 +476,19 @@ fn click_selects_and_fills_detail_and_never_checks_out() {
         .click();
     settle_quiet(&mut harness);
 
-    // Selection fills the detail panel: full name, relationship, latest
-    // commit block, and the action list in spec order, naming the target.
+    // Selection still has a job after the detail panel went: it marks the row.
     assert_eq!(
         harness.state().ui.branches_tree.selected.as_deref(),
         Some("feature-a")
     );
-    assert_painted(&harness, "feature-a");
-    assert_painted(&harness, "Checkout");
-    assert_painted(&harness, "Merge into main");
-    assert_painted(&harness, "Rebase onto main");
-    assert_painted(&harness, "Compare with main");
-    assert_painted(&harness, "Rename");
-    assert_painted(&harness, "Delete");
-    // Latest-commit block: the shared `init` commit message.
-    assert_painted(&harness, "init");
+    let row = row_node(&harness, "feature-a").rect();
+    assert!(
+        filled_rects(&harness)
+            .iter()
+            .any(|(r, fill)| *fill == turbogit_ui::theme::Palette::SELECTION
+                && (r.center() - row.center()).length() < 2.0),
+        "the selected row is filled with the selection token, rows: {row:?}"
+    );
 
     // Clicking never checks out.
     let cur = harness
@@ -518,6 +499,10 @@ fn click_selects_and_fills_detail_and_never_checks_out() {
         .and_then(|r| r.current_branch.clone());
     assert_eq!(cur.as_deref(), Some("main"));
 }
+
+/// The list spans the whole content width, so the only bound separating a
+/// list control from a topbar one is the window's own right edge.
+const LIST_RIGHT: f32 = 1024.0;
 
 /// Step frames until `pred` holds on public state (async op completion).
 fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&AppState) -> bool) {
@@ -536,6 +521,27 @@ fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&Ap
         harness.state().ui.conflict_resolver_open,
         painted_text(harness)
     );
+}
+
+/// Open a row's context menu — now the only place a branch action lives, so
+/// every former detail-panel click-through starts here.
+fn open_row_menu(harness: &mut Harness<'_, AppState>, branch: &str) {
+    row_node(harness, branch).click_secondary();
+    harness.step();
+    harness.step();
+    harness.remove_cursor();
+    harness.step();
+}
+
+/// Run one menu item against `branch`.
+fn menu_action(harness: &mut Harness<'_, AppState>, branch: &str, label: &str) {
+    open_row_menu(harness, branch);
+    harness
+        .get_all_by_label(label)
+        .next()
+        .unwrap_or_else(|| panic!("menu item {label}"))
+        .click();
+    settle_quiet(harness);
 }
 
 /// The row's clickable node: the row is a Button whose accessible label is
@@ -592,50 +598,6 @@ fn double_click_on_row_checks_it_out() {
             .as_deref()
             == Some("zebra")
     });
-}
-
-#[test]
-fn hover_reveals_row_actions() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-
-    // Nothing selected, so "Checkout" can only come from the hovered row.
-    row_node(&harness, "zebra").hover();
-    settle_quiet(&mut harness);
-    assert_painted(&harness, "Checkout");
-    assert_eq!(
-        harness.state().ui.branches_tree.selected,
-        None,
-        "hovering must not select"
-    );
-}
-
-#[test]
-fn overflow_menu_carries_the_same_actions_as_the_detail() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-
-    // Hover zebra (nothing selected) and open its ⋯ overflow. Every row carries
-    // one now, so the row's own is the one whose rect sits inside its strip.
-    let row_rect = row_node(&harness, "zebra").rect();
-    row_node(&harness, "zebra").hover();
-    settle_quiet(&mut harness);
-    harness
-        .get_all_by_label("More actions")
-        .find(|n| row_rect.contains(n.rect().center()))
-        .expect("zebra's own ⋯")
-        .click();
-    settle_quiet(&mut harness);
-
-    // The menu carries the same items as the detail panel (checked against
-    // the zebra row, which is not current): order + wording intact.
-    assert_painted(&harness, "Merge into main");
-    assert_painted(&harness, "Rebase onto main");
-    assert_painted(&harness, "Compare with main");
-    assert_painted(&harness, "Rename");
-    assert_painted(&harness, "Delete");
 }
 
 // --- Cycle 10: search & jump (issue 06) -------------------------------------------
@@ -1106,10 +1068,7 @@ fn merge_from_detail_opens_the_preflighted_dialog() {
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    row_node(&harness, "feature-a").click();
-    settle_quiet(&mut harness);
-    harness.get_by_label("Merge into main").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "feature-a", "Merge into main");
 
     // The direction is preset and the preflight (preview) is computed before
     // anything runs.
@@ -1130,8 +1089,7 @@ fn rebase_from_detail_states_direction_and_runs() {
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    row_node(&harness, "feature-b").click();
-    settle_quiet(&mut harness);
+    open_row_menu(&mut harness, "feature-b");
     harness.get_by_label("Rebase onto main").click();
 
     // The direction is stated in the label; the branch is checked out then
@@ -1201,10 +1159,7 @@ fn conflicted_merge_hands_off_to_the_conflict_experience() {
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    row_node(&harness, "conflict-a").click();
-    settle_quiet(&mut harness);
-    harness.get_by_label("Merge into main").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "conflict-a", "Merge into main");
     harness.get_by_label("Merge").click();
 
     // The merge conflicts mid-way: the screen hands off to the conflict
@@ -1237,8 +1192,7 @@ fn compare_from_detail_opens_read_only_and_closes_back_to_the_same_place() {
     row_node(&harness, "feature-a").click();
     settle_quiet(&mut harness);
     let scroll_before = harness.state().ui.branches_tree.scroll;
-    harness.get_by_label("Compare with main").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "feature-a", "Compare with main");
 
     // The compare surface names both sides and is read-only: a commit list
     // with only view/close controls (feature-a shares main's commit, so it
@@ -1280,10 +1234,7 @@ fn rename_is_inline_on_the_row_and_resorts_correctly() {
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
 
-    row_node(&harness, "feature-a").click();
-    settle_quiet(&mut harness);
-    harness.get_by_label("Rename").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "feature-a", "Rename branch");
 
     // Inline on the row — not a separate form screen.
     assert!(harness.state().ui.dialog.is_none());
@@ -1329,10 +1280,7 @@ fn rename_discloses_that_tracking_does_not_follow() {
     }
     open_branches_tab(&mut harness);
 
-    row_node(&harness, "feature-a").click();
-    settle_quiet(&mut harness);
-    harness.get_by_label("Rename").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "feature-a", "Rename branch");
 
     // The one thing the person must know before confirming.
     assert_painted(
@@ -1348,10 +1296,7 @@ fn rename_current_branch_keeps_the_marker_and_leaves_the_tree_untouched() {
     open_branches_tab(&mut harness);
 
     let tree_changes_before = harness.state().multi.roots[0].status.changes.len();
-    row_node(&harness, "main").click();
-    settle_quiet(&mut harness);
-    harness.get_by_label("Rename").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "main", "Rename branch");
     harness.state_mut().ui.branches_tree.rename_draft = "main2".into();
     harness.get_by_label("Apply rename").click();
 
@@ -1382,10 +1327,7 @@ fn delete_names_the_consequence_and_undo_restores() {
 
     // conflict-a carries a commit not on main: the confirmation says what
     // would become unreachable, in human terms.
-    row_node(&harness, "conflict-a").click();
-    settle_quiet(&mut harness);
-    harness.get_by_label("Delete").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "conflict-a", "Delete branch");
     assert_painted(&harness, "Delete local branch 'conflict-a'?");
     assert_painted(&harness, "has 1 commit(s) not on main");
     assert_painted(&harness, "unreachable after deleting");
@@ -1419,27 +1361,11 @@ fn safe_to_delete_is_said_in_human_terms() {
 
     // feature-a shares main's commit: safe to delete, and the confirmation
     // says so.
-    row_node(&harness, "feature-a").click();
-    settle_quiet(&mut harness);
-    harness.get_by_label("Delete").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "feature-a", "Delete branch");
     assert_painted(
         &harness,
         "everything on this branch already exists on main — safe to delete",
     );
-}
-
-#[test]
-fn the_current_branch_cannot_be_deleted() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-
-    // Selecting the current branch never offers Delete in the detail panel.
-    row_node(&harness, "main").click();
-    settle_quiet(&mut harness);
-    assert_not_painted(&harness, "Delete");
-    assert!(harness.state().ui.confirm.is_none());
 }
 
 #[test]
@@ -1461,10 +1387,7 @@ fn delete_refuses_a_branch_checked_out_elsewhere() {
     }
     open_branches_tab(&mut harness);
 
-    row_node(&harness, "feature-a").click();
-    settle_quiet(&mut harness);
-    harness.get_by_label("Delete").click();
-    settle_quiet(&mut harness);
+    menu_action(&mut harness, "feature-a", "Delete branch");
     assert_painted(&harness, "already checked out in another worktree");
     assert_painted(&harness, "C:\\wt\\feature-a");
     assert!(
@@ -1518,7 +1441,7 @@ fn remote_rows_group_under_their_remote_and_are_quiet() {
 /// topbar carries its own "Fetch" button, so the search is bounded to the list
 /// area: below the toolbar strip and left of the §12 detail panel.
 fn click_fetch(harness: &mut Harness<'_, AppState>) {
-    let list_x = 1024.0 - 280.0; // harness width minus the §12 detail panel
+    let list_x = LIST_RIGHT;
     let nodes: Vec<_> = harness.get_all_by_label("Fetch").collect();
     let node = nodes
         .iter()
@@ -1531,7 +1454,7 @@ fn click_fetch(harness: &mut Harness<'_, AppState>) {
 /// all a multi-repo refresh can be asked for from a header. One per frame: two
 /// synthetic clicks in the same frame collapse into one.
 fn click_repo_fetches(harness: &mut Harness<'_, AppState>) {
-    let list_x = 1024.0 - 280.0;
+    let list_x = LIST_RIGHT;
     let nth_fetch = |harness: &Harness<'_, AppState>, n: usize| {
         let mut rects: Vec<egui::Rect> = harness
             .get_all_by_label("Fetch")
@@ -1836,7 +1759,7 @@ fn two_repo_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
 /// toolbar, left of the detail panel — a same-named topbar breadcrumb or
 /// metadata button never leaks in), ordered top-to-bottom.
 fn row_nodes<'h>(harness: &'h Harness<'_, AppState>, name: &str) -> Vec<egui_kittest::Node<'h>> {
-    let list_x = 1024.0 - 280.0; // harness width minus the §12 detail panel
+    let list_x = LIST_RIGHT;
     let mut nodes: Vec<_> = harness
         .get_all_by_role(egui::accesskit::Role::Button)
         .filter(|n| {
@@ -1928,24 +1851,6 @@ fn rows_never_repeat_the_repo_name_their_section_already_states() {
 }
 
 #[test]
-fn branch_actions_state_their_scope_before_running() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
-
-    // The row action names the repo it will act on — never a bare "Checkout"
-    // that leaves the scope ambiguous between two repos.
-    row_node(&harness, "clever").hover();
-    settle_quiet(&mut harness);
-    assert_painted(&harness, "Checkout in beta");
-
-    // The same scope rides the detail panel's primary action.
-    row_node(&harness, "feature-a").click();
-    settle_quiet(&mut harness);
-    assert_painted(&harness, "Checkout in alpha");
-}
-
-#[test]
 fn repo_filter_narrows_the_list_and_the_header_says_so() {
     let (_project, dir) = two_repo_project();
     let mut harness = two_repo_harness(dir);
@@ -2028,7 +1933,7 @@ fn a_headers_fetch_fetches_only_its_own_repository() {
     let mut harness = two_repo_harness(dir);
     open_branches_tab(&mut harness);
 
-    let list_x = 1024.0 - 280.0;
+    let list_x = LIST_RIGHT;
     let mut fetches: Vec<_> = harness
         .get_all_by_label("Fetch")
         .filter(|n| n.rect().top() > 80.0 && n.rect().min.x < list_x)
@@ -2055,63 +1960,6 @@ fn a_headers_fetch_fetches_only_its_own_repository() {
 
 /// The detail panel's actions are one ladder, not a stack of differently-wide
 /// buttons — and the spec's order is part of that shape.
-#[test]
-fn the_detail_panels_action_ladder_is_one_width_in_one_order() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-    row_node(&harness, "feature-a").click();
-    settle_quiet(&mut harness);
-
-    // Everything right of the list is the detail panel.
-    let panel_x = row_node(&harness, "feature-a").rect().right();
-    let ladder = [
-        "Checkout",
-        "Merge into",
-        "Rebase onto",
-        "Compare",
-        "Rename",
-        "Delete",
-    ];
-    let rects: Vec<(String, egui::Rect)> = harness
-        .get_all_by_role(egui::accesskit::Role::Button)
-        .filter(|n| n.rect().left() >= panel_x - 1.0)
-        .filter_map(|n| {
-            let label = n.accesskit_node().label()?;
-            let head = ladder.iter().find(|verb| label.starts_with(**verb))?;
-            Some((head.to_string(), n.rect()))
-        })
-        .collect();
-
-    let mut seen: Vec<String> = Vec::new();
-    for (head, _) in &rects {
-        if seen.last().is_some_and(|last| last == head) {
-            continue;
-        }
-        seen.push(head.clone());
-    }
-    assert_eq!(
-        seen,
-        vec![
-            "Checkout",
-            "Merge into",
-            "Rebase onto",
-            "Compare",
-            "Rename",
-            "Delete"
-        ],
-        "the ladder keeps the spec's order: {rects:?}"
-    );
-
-    let lefts: Vec<f32> = rects.iter().map(|(_, r)| r.left()).collect();
-    let rights: Vec<f32> = rects.iter().map(|(_, r)| r.right()).collect();
-    assert!(
-        lefts.iter().all(|l| (l - lefts[0]).abs() < 1.0)
-            && rights.iter().all(|r| (r - rights[0]).abs() < 1.0),
-        "every action spans the panel's content width: {rects:?}"
-    );
-}
-
 /// A quiet read reports on the list; it never moves it.
 #[test]
 fn a_quiet_read_never_shifts_the_list() {
@@ -2367,7 +2215,7 @@ fn fetch_sits_at_the_repo_level_while_remotes_are_hidden() {
     // every repo's section still offers it, one control per repo.
     assert!(!harness.state().ui.branches_tree.show_remotes);
     assert_not_painted(&harness, "remote-only");
-    let list_x = 1024.0 - 280.0;
+    let list_x = LIST_RIGHT;
     let fetches: Vec<_> = harness
         .get_all_by_label("Fetch")
         .filter(|n| n.rect().top() > 80.0 && n.rect().min.x < list_x)
@@ -2671,7 +2519,7 @@ fn repo_status_dots_paint_their_status_color() {
     open_branches_tab(&mut harness);
 
     // One status dot per repo section (a 4px dot — the sidebar's are 3.5px).
-    let list_x = 1024.0 - 280.0;
+    let list_x = LIST_RIGHT;
     let dots: Vec<_> = filled_circles(&harness)
         .into_iter()
         .filter(|(c, r, _)| c.y > 80.0 && c.x < list_x && *r == 4.0)

@@ -49,7 +49,7 @@ and import paths are part of the contract.
 | --- | --- | --- | --- |
 | Design tokens and style | `turbogit_ui::theme` | The only authority for shared presentation tokens, semantic mappings, typography, spacing, radii, and egui style/font setup. It does not own component behavior. | Public token and style API. |
 | General widget vocabulary | `turbogit_ui::ui::widgets` (public façade) over private `widgets::{controls, chips, rows, inputs, feedback, containers, text}` modules | Reusable, policy-free controls and presentation primitives. The focused modules own implementation details; the façade explicitly re-exports the established names and signatures. | Public façade; implementation modules are private. |
-| Branch component kit | `turbogit_ui::ui::components` (`KitButton`, `RowState`, branch fills, `section_header`, `pill`, sync helpers, branch geometry, and branch detail primitives) | Branch-screen grammar: fixed branch geometry, branch rows, sync relationships, current/count pills, collapsible branch sections, and branch actions. It is not a general button or title library. | Public branch-kit path, with a specialized role. |
+| Branch component kit | `turbogit_ui::ui::components` (`KitButton`, `RowState`, branch fills, `section_header`, `pill`, sync helpers, and branch geometry) | Branch-screen grammar: fixed branch geometry, branch rows, sync relationships, current/count pills, collapsible branch sections, and branch actions. It is not a general button or title library. | Public branch-kit path, with a specialized role. |
 | General icon primitive | `turbogit_ui::ui::icons` | Centered icon painting and icon lookup/painting primitives. It does not decide what an icon means. | Public shared primitive. |
 | Branch feature components | `ui::branch_widget`, `ui::branches`, `ui::branches_tree`, and `ui::branch_tree_view` | Branch popup, branch status indicator, branch view model, and branch-tree rendering. The branch tree returns events and consumes caller-owned tree state; it does not perform Git operations. These remain feature components, not generic widgets. | Public feature modules with feature-specific APIs. |
 | Diff feature component | `turbogit_ui::ui::diff` (`render_diff` and its diff data/actions) | Diff-specific data, panes, actions, and rendering. Diff rows and diff state must not be generalized merely because they share a row or chip primitive. The `actions`, `model`, `panes`, and `view` submodules are implementation details. | Public specialized feature component; internal submodules are not a general façade. |
@@ -75,9 +75,12 @@ diff module is still a feature component.
 - `components::KitButton` and `components::kit_button` /
   `kit_button_at` are the **branch-kit button role**. They use the branch
   screen's compact 28px kit height, minimum target rules, four branch action
-  variants (`Primary`, `Secondary`, `Quiet`, and `Danger`), and—when needed—an
-  explicit width so row actions line up as a column. `Danger` is a branch/destructive
-  action treatment, not a general `ButtonVariant` replacement.
+  variants (`Primary`, `Secondary`, `Quiet`, and `Danger`). `kit_button_at` is
+  the explicit-width form: `kit_button` measures a label and calls it, and a
+  caller that needs a column of equal widths passes its own. Since ADR-0023 no
+  branch screen lays out such a column, so `kit_button_at` has no caller
+  outside the kit. `Danger` is a branch/destructive action treatment, not a
+  general `ButtonVariant` replacement.
 - The two families may share theme tokens and state math. They must not be
   merged into one API until a separate design decision proves that their
   geometry, semantics, and call-site contracts are equivalent. A generic button
@@ -103,8 +106,9 @@ diff module is still a feature component.
   pill, an expand/collapse hit target, and an optional trailing action. The
   strip toggle and a trailing action have separate interaction precedence.
 - `widgets::toolwindow_header` is the tool-window title/action strip, not either
-  of the above. `components::detail_panel_header` is the branch detail-panel
-  header, not a generic group title.
+  of the above. The branch kit's `detail_panel_header` left with the detail
+  panel it headed (ADR-0023), so a header for a future detail surface starts by
+  establishing its own role.
 - A surface-specific region band (for example, a repo block or a diff pane
   header) is not automatically a title widget. Its geometry belongs to that
   feature unless a shared role is explicitly established.
@@ -272,8 +276,8 @@ The row layer is **one painter and one state grammar**, not a row widget.
   lays its own row out and calls `paint_row`; that is a real cost of the
   retirement, recorded here rather than hidden.
 - `components::RowState`, `row_fill`, and `current_row_fill` belong to the
-  branch/shared row-state grammar and are unchanged. The branch row, repo
-  section, and branch detail surfaces add branch-specific geometry,
+  branch/shared row-state grammar and are unchanged. The branch row and repo
+  section add branch-specific geometry,
   current-branch facts, sync markers, stale ink, and operation labels on top of
   that grammar.
 - Commit rows, file rows, diff rows, blame rows, log rows, rebase rows, and

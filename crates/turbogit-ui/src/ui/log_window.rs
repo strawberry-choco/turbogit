@@ -519,7 +519,6 @@ fn branches_pane(ui: &mut Ui, state: &mut AppState) {
         now: chrono::Utc::now(),
         allows_rename: false,
         allows_context_menu: false,
-        shows_row_actions: false,
         id_salt: "log_branch_tree",
         full_height: false,
         collapse_remotes_by_default: true,

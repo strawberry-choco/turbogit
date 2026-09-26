@@ -285,6 +285,13 @@ sequenceDiagram
 | ADR-0014 | Diff rendering virtualizes over `ScrollArea::show_rows`, not `egui_extras::Table` |
 | ADR-0015 | Non-text diffs render outside the display-row model |
 | ADR-0016 | Mockups are the single source of truth for the UI redesign |
+| ADR-0017 | Switching workspaces happens from the topbar picker, reachable from the palette |
+| ADR-0018 | The sidebar PROJECTS tree nests folders and collapses single-repo chains into path labels |
+| ADR-0019 | Worktree lifecycle owns worktree-list freshness policy |
+| ADR-0020 | `Operation` is the dispatch unit; label text is display-only |
+| ADR-0021 | The keyed read is the diff surface's only way to reach cached git data |
+| ADR-0022 | The Git engine answers with domain values, over one honest adapter |
+| ADR-0023 | Branch actions live in the context menu, and nowhere else |
 
 The crate-per-layer split, the sanctioned edge, and the deferred options are
 specified in `docs/ddd-subcrate-proposal.md`.

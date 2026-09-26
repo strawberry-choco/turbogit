@@ -161,7 +161,6 @@ struct Fixture {
     now: chrono::DateTime<chrono::Utc>,
     allows_rename: bool,
     allows_context_menu: bool,
-    shows_row_actions: bool,
     /// Mirrors `TreeProps::collapse_remotes_by_default` (false = Branches-style
     /// expanded-by-default, true = Log-pane-style collapsed-by-default).
     collapse_remotes_by_default: bool,
@@ -183,7 +182,6 @@ impl Fixture {
             now: now(),
             allows_rename: true,
             allows_context_menu: true,
-            shows_row_actions: true,
             collapse_remotes_by_default: false,
             events: Vec::new(),
         }
@@ -253,7 +251,6 @@ impl Fixture {
                     self.tree.selected = Some(branch.clone());
                     self.tree.selected_root = Some(root.clone());
                 }
-                self.tree.overflow = None;
             }
             _ => {}
         }
@@ -289,7 +286,6 @@ fn fixture_harness_at(fx: Fixture, width: f32) -> Harness<'static, Fixture> {
                 now: fx.now,
                 allows_rename: fx.allows_rename,
                 allows_context_menu: fx.allows_context_menu,
-                shows_row_actions: fx.shows_row_actions,
                 id_salt: "fixture_tree",
                 full_height: true,
                 collapse_remotes_by_default: fx.collapse_remotes_by_default,
@@ -651,10 +647,10 @@ fn the_tracking_zone_has_one_left_edge_regardless_of_name_length() {
     );
 }
 
-/// The ⋯ column belongs to every row at rest, and every row leads with an icon
-/// so the names line up — local and remote alike.
+/// Every row leads with an icon so the names line up — local and remote
+/// alike — and the names share one left edge down the list.
 #[test]
-fn every_row_leads_with_an_icon_and_carries_its_overflow_at_rest() {
+fn every_row_leads_with_an_icon_at_its_name_edge() {
     use test_support::harness::painted_paths;
 
     let mut fx = Fixture::two_repos();
@@ -663,13 +659,7 @@ fn every_row_leads_with_an_icon_and_carries_its_overflow_at_rest() {
     settle(&mut h);
     // Nothing was ever hovered: `settle` only steps frames.
 
-    let rows = row_buttons(&h);
-    assert!(rows > 0, "the fixture paints branch rows");
-    let overflows = count_label(&h, "More actions");
-    assert_eq!(
-        overflows, rows,
-        "one ⋯ per branch row, at rest ({overflows} overflow vs {rows} rows)"
-    );
+    assert!(row_buttons(&h) > 0, "the fixture paints branch rows");
 
     // Every row leads with an icon stroked in the slot before its name — local
     // and remote alike — and rows at the same depth share one name edge.
@@ -715,41 +705,6 @@ fn every_row_leads_with_an_icon_and_carries_its_overflow_at_rest() {
     assert!(
         (edges[0] - edges[1]).abs() < 0.5,
         "the name column has one fixed left edge down the list: {edges:?}"
-    );
-}
-
-/// The Log pane renders the same rows without the action column; the zones stay
-/// lined up all the same.
-#[test]
-fn the_log_panes_rows_have_no_overflow_yet_still_align() {
-    let mut fx = Fixture::two_repos();
-    fx.tree.show_remotes = false;
-    fx.shows_row_actions = false;
-    fx.roots = vec![root_with(
-        "/track",
-        &[
-            local("a", false, 1, 0),
-            local("a-name-long-enough-to-push-an-inline-upstream", false, 1, 0),
-        ],
-        Some("a"),
-    )];
-    let mut h = fixture_harness(fx);
-    settle(&mut h);
-
-    assert_eq!(
-        count_label(&h, "More actions"),
-        0,
-        "no ⋯ where row actions are not shown"
-    );
-
-    let xs: Vec<f32> = galleys_for(&h, "origin/main")
-        .iter()
-        .map(|g| g.pos.x)
-        .collect();
-    assert_eq!(xs.len(), 2, "both rows track origin/main: {xs:?}");
-    assert!(
-        (xs[0] - xs[1]).abs() < 0.5,
-        "the tracking zone keeps one left edge without the action column: {xs:?}"
     );
 }
 
@@ -1366,6 +1321,39 @@ fn rename_capability_disabled_never_edits_inline() {
 }
 
 #[test]
+fn the_rename_editors_buttons_stay_inside_its_row() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    fx.tree.selected = Some("wip".to_string());
+    fx.tree.selected_root = Some(RootId(Arc::from(PathBuf::from("/beta"))));
+    fx.tree.renaming = Some("wip".to_string());
+    fx.tree.rename_draft = "renamed-wip".to_string();
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    // The list's own right edge, read off a sibling row at full width.
+    let row_right = button(&h, "main").rect().right();
+    let apply = button(&h, "Apply rename");
+    assert!(
+        apply.rect().right() <= row_right + 0.5,
+        "Apply must sit inside the row (its edge {:?} vs the row's {row_right:?})",
+        apply.rect()
+    );
+    // …and so it answers a click: the button is the mouse path to committing.
+    apply.click();
+    h.step();
+    assert!(
+        h.state()
+            .events
+            .iter()
+            .any(|e| matches!(e, TreeEvent::RenameCommitted { new, .. }
+                if new == "renamed-wip")),
+        "{:?}",
+        h.state().events
+    );
+}
+
+#[test]
 fn rename_editor_commits_the_draft_as_an_event() {
     let mut fx = Fixture::two_repos();
     fx.tree.show_remotes = false;
@@ -1380,10 +1368,9 @@ fn rename_editor_commits_the_draft_as_an_event() {
         painted_text(&h).iter().any(|t| t.contains("renamed-wip")),
         "with the capability the draft paints on the row"
     );
-    // Commit via the keyboard path (Enter on the editor). The editor's
-    // Apply/Cancel buttons overflow their row today — `widgets::text_input`
-    // consumes the full row width — so a click cannot reach them inside this
-    // bare-fixture window; Enter is the pixel-frozen commit gesture.
+    // Commit via the keyboard path (Enter on the editor), which the row's
+    // Apply button also answers — see
+    // `the_rename_editors_buttons_stay_inside_its_row` for the mouse path.
     h.key_press(egui::Key::Enter);
     h.step();
     h.step();
@@ -1417,23 +1404,62 @@ fn row_click_emits_owner_and_branch_not_a_bare_name() {
 }
 
 #[test]
-fn checkout_row_action_activation_carries_owner_and_branch() {
+fn double_clicking_a_row_emits_activation_with_its_owner() {
     let mut fx = Fixture::two_repos();
     fx.tree.show_remotes = false;
     let mut h = fixture_harness(fx);
     settle(&mut h);
 
-    // Hover the row so its per-row action appears, then click Checkout.
-    let row = button(&h, "wip");
-    row.hover();
-    h.step();
-    let events = click_events(&mut h, "Checkout in beta");
+    // Two presses 0.1 s of *simulated* time apart. The harness's own step
+    // advances the clock by more than egui's 0.3 s double-click window, so
+    // the input time is stated here rather than left to the frame cadence.
+    for i in 0..2 {
+        *h.input_mut() = egui::RawInput {
+            time: Some(1.0 + 0.1 * i as f64),
+            ..Default::default()
+        };
+        button(&h, "wip").click();
+        h.step();
+    }
+    let events = h.state().events.clone();
     assert!(
         events.contains(&TreeEvent::RowActivated {
             root: RootId(Arc::from(PathBuf::from("/beta"))),
             branch: "wip".to_string(),
         }),
-        "activation must carry the owning repository, not a bare name: {events:#?}"
+        "double-click activates, and names its repository: {events:#?}"
+    );
+}
+
+/// The row's status badges are its own, permanently: a hover must not blank
+/// them. The context menu is the only place a row's actions live.
+#[test]
+fn a_hovered_row_keeps_painting_its_sync_badges() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    assert_eq!(
+        galleys_for(&h, "2 ahead").len(),
+        1,
+        "the unhovered row states its sync state"
+    );
+    button(&h, "wip").hover();
+    h.step();
+    h.step();
+    for label in ["2 ahead", "1 behind"] {
+        assert_eq!(
+            galleys_for(&h, label).len(),
+            1,
+            "hovering must not take the badges away: {:?}",
+            painted_text(&h)
+        );
+    }
+    assert_eq!(
+        count_label(&h, "Checkout in beta"),
+        0,
+        "and no button takes their slot"
     );
 }
 
@@ -1518,25 +1544,5 @@ fn a_surface_without_the_capability_emits_nothing_on_right_click() {
             .iter()
             .any(|e| matches!(e, TreeEvent::ContextMenuRequested { .. })),
         "the shared component must not open a menu the surface forbade: {events:#?}"
-    );
-}
-
-/// Ordering is load-bearing: the ⋯ button interacts before the row and keeps
-/// its clicks — a right-click on it must not reach the context menu.
-#[test]
-fn a_right_click_on_the_overflow_button_never_opens_the_context_menu() {
-    let mut fx = Fixture::two_repos();
-    fx.tree.show_remotes = false;
-    let mut h = fixture_harness(fx);
-    settle(&mut h);
-
-    button(&h, "More actions").click_secondary();
-    h.step();
-    let events = h.state().events.clone();
-    assert!(
-        !events
-            .iter()
-            .any(|e| matches!(e, TreeEvent::ContextMenuRequested { .. })),
-        "a right-click on ⋯ belongs to the overflow: {events:#?}"
     );
 }

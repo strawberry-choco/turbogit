@@ -1372,9 +1372,10 @@ fn history_tab_is_gone_and_navigation_lands_only_on_valid_windows() {
 
 // --- ticket 02: the current branch's one treatment -----------------------------
 
-/// The Log pane renders the same tree component with `shows_row_actions:
-/// false`, so the current branch must be marked there too — and only there, in
-/// the branches pane, not smeared across the graph or the details column.
+/// The Log pane renders the same tree component as the Branches tab, without
+/// its context menu, so the current branch must be marked there too — and only
+/// there, in the branches pane, not smeared across the graph or the details
+/// column.
 #[test]
 fn the_branches_pane_marks_the_current_branch_with_its_badge() {
     let seed = seeded_project();

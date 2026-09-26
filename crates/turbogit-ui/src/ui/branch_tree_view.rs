@@ -16,7 +16,8 @@
 //! [`TreeEvent`]. The component takes no application state, makes no git
 //! calls, and decides no policy — the caller applies the returned events
 //! between painting the tree and painting any floating surface that depends
-//! on them (the ⋯ overflow menu still opens in the frame it is clicked).
+//! on them (the right-click context menu still opens in the frame it was
+//! requested).
 //!
 //! The inline-rename draft is the one deliberate exception to "events out":
 //! egui's text input needs mutable access to the string while rendering, so
@@ -45,8 +46,8 @@ use crate::ui::branches_tree::{
     self, BranchNode, BranchView, RemoteGroup, RepoSection, RepoStatus,
 };
 use crate::ui::components::{
-    BRANCH_ROW_H, CLICK_TARGET_MIN, KIT_ICON, KitButton, PAD_LIST, PillKind, RowState, SECTION_H,
-    current_row_fill, kit_button, middle_truncate_to_width, overflow_button, pill, pill_width,
+    BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, PillKind, RowState, SECTION_H,
+    current_row_fill, kit_button, kit_button_width, middle_truncate_to_width, pill, pill_width,
     row_fill, row_ink, section_header, sync_badge, sync_bg, sync_ink,
 };
 use crate::ui::icons::{self, Icon};
@@ -75,8 +76,6 @@ pub enum TreeEvent {
     /// A row was double-clicked: activation (checkout in Branches, graph
     /// scope in the Log window).
     RowActivated { root: RootId, branch: String },
-    /// The row's ⋯ overflow button toggled the menu for this branch.
-    OverflowToggled { root: RootId, branch: String },
     /// The row was right-clicked: the surface owns the context menu — its
     /// open state, its anchor, and what its items do.
     ContextMenuRequested { root: RootId, branch: String },
@@ -147,8 +146,6 @@ pub struct TreeProps<'a> {
     /// [`TreeEvent::ContextMenuRequested`]. The Branches surface sets it;
     /// the Git Log pane's branches pane does not.
     pub allows_context_menu: bool,
-    /// Capability: rows reveal per-row action buttons on hover.
-    pub shows_row_actions: bool,
     /// egui id salt for the scroll area — unique per surface.
     pub id_salt: &'a str,
     /// Whether the scroll area claims all remaining height (`true` for the
@@ -792,8 +789,8 @@ fn remote_rollup_row(
     }
 }
 
-/// One 30px branch row, laid out as four measured zones — icon + name, tracking
-/// branch, status badges, ⋯ overflow — each painted at an explicit x so the
+/// One 30px branch row, laid out as three measured zones — icon + name,
+/// tracking branch, status badges — each painted at an explicit x so the
 /// columns line up down the list. Its fill comes from [`row_fill`], or from
 /// [`current_row_fill`] when it carries the current branch, which also takes the
 /// `current` badge. Clicking reports [`TreeEvent::RowClicked`] (never checks out —
@@ -861,19 +858,11 @@ fn branch_row(
             .rect_filled(rect, CornerRadius::same(crate::theme::CHIP_RADIUS), fill);
     }
 
-    // --- The row's four zones, laid out once over the full rect ----------------
-    // icon + name | tracking branch | status badges | overflow. Every boundary
-    // comes from measuring what actually paints there, so nothing drifts with
-    // the length of a branch name.
+    // --- The row's three zones, laid out once over the full rect ---------------
+    // icon + name | tracking branch | status badges. Every boundary comes from
+    // measuring what actually paints there, so nothing drifts with the length
+    // of a branch name.
     let chips = &meta.badge;
-    let overflow_id = egui::Id::new(("branches_overflow_anchor", id, &branch.name));
-    // The action names its repo's scope in multi-repo projects so a bare
-    // "Checkout" never applies to an ambiguous repo (issue 14).
-    let scope = if props.multi_repo {
-        format!(" in {}", section.repo_name)
-    } else {
-        String::new()
-    };
 
     let name_x = rect.left() + PAD_LIST + indent;
     let text_x = name_x + KIT_ICON + 6.0;
@@ -883,15 +872,7 @@ fn branch_row(
     } else {
         0.0
     };
-    // The ⋯ column belongs to every row at rest, so its space is reserved
-    // whether or not the pointer is on the row.
-    let shows_overflow = props.shows_row_actions;
-    let overflow_x = rect.right() - PAD_LIST - CLICK_TARGET_MIN;
-    let content_right = if shows_overflow {
-        overflow_x - 8.0
-    } else {
-        rect.right() - PAD_LIST
-    };
+    let content_right = rect.right() - PAD_LIST;
     let mut badges_w: f32 = chips
         .iter()
         .map(|(_kind, label)| sync_chip_width(ui, label) + 4.0)
@@ -903,53 +884,26 @@ fn branch_row(
     let share_x = text_x + (content_right - 8.0 - text_x).max(0.0) * NAME_ZONE_SHARE;
     let name_w = (share_x - 8.0 - text_x).max(0.0);
 
-    // Space is then yielded in a stated order: the ⋯ column and the `current`
-    // badge never give way and the name keeps its share; the tracking line
-    // shrinks to whatever lies between the name zone and the group, and the
-    // status badges give up entirely before they would cross into the name zone.
-    // In the ~210px Git Log pane this ordering is the difference between marking
-    // the current branch and not marking it.
+    // Space is then yielded in a stated order: the `current` badge never gives
+    // way and the name keeps its share; the tracking line shrinks to whatever
+    // lies between the name zone and the group, and the status badges give up
+    // entirely before they would cross into the name zone. In the ~210px Git
+    // Log pane this ordering is the difference between marking the current
+    // branch and not marking it.
     let name_right = share_x - 8.0;
     let shows_badges = name_right - badges_w - pill_w >= text_x;
     if !shows_badges {
         badges_w = 0.0;
     }
-    // Right to left: ⋯, then the current badge, then the status badges.
+    // Right to left: the current badge, then the status badges.
     let pill_x = content_right - pill_w;
     let badges_right = pill_x - if shows_pill { 6.0 } else { 0.0 };
     let badges_x = badges_right - badges_w;
     let track_x = share_x;
     let track_w = (badges_x - 8.0 - share_x).max(0.0);
 
-    let mut activated = false;
-    if shows_overflow {
-        let overflow_rect = Rect::from_min_max(
-            Pos2::new(overflow_x, rect.top()),
-            Pos2::new(overflow_x + CLICK_TARGET_MIN, rect.bottom()),
-        );
-        ui.new_child(
-            UiBuilder::new()
-                .max_rect(overflow_rect)
-                .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
-        )
-        .with_layout(
-            Layout::centered_and_justified(egui::Direction::LeftToRight),
-            |ui| {
-                let more = overflow_button(ui, "More actions");
-                ui.ctx()
-                    .memory_mut(|m| m.data.insert_temp(overflow_id, more.rect));
-                if more.clicked() {
-                    events.push(TreeEvent::OverflowToggled {
-                        root: section.root_id.clone(),
-                        branch: branch.name.clone(),
-                    });
-                }
-            },
-        );
-    }
-
-    // The badges zone. Hover reveals the row's Checkout button, which takes the
-    // same right-anchored slot the badges rest in.
+    // The badges zone: right-anchored and permanent. A row's actions live in
+    // its context menu, so hovering never takes its status chips away.
     let actions_rect = Rect::from_min_max(
         Pos2::new(rect.left(), rect.top()),
         Pos2::new(badges_right, rect.bottom()),
@@ -960,43 +914,35 @@ fn branch_row(
             .layout(Layout::right_to_left(Align::Center)),
     );
     zone.spacing_mut().item_spacing.x = 0.0;
-    if hovered && shows_overflow {
-        zone.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if kit_button(ui, KitButton::Quiet, &format!("Checkout{scope}")).clicked() {
-                activated = true;
+    zone.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        // Mid-operation state is first-class on the row (issue 09): a
+        // merge in progress reads "merging…" and survives tab switches.
+        if is_current && props.merge_in_progress {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(crate::ui::components::mid_op_label("merging"))
+                    .font(data_font(TYPE_CONTROL))
+                    .color(Palette::STATE_WARNING),
+            );
+        }
+        if shows_badges {
+            for (kind, label) in chips.iter().rev() {
+                sync_chip(ui, *kind, label);
+                ui.add_space(4.0);
             }
-        });
-    } else {
-        zone.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            // Mid-operation state is first-class on the row (issue 09): a
-            // merge in progress reads "merging…" and survives tab switches.
-            if is_current && props.merge_in_progress {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(crate::ui::components::mid_op_label("merging"))
-                        .font(data_font(TYPE_CONTROL))
-                        .color(Palette::STATE_WARNING),
-                );
-            }
-            if shows_badges {
-                for (kind, label) in chips.iter().rev() {
-                    sync_chip(ui, *kind, label);
-                    ui.add_space(4.0);
-                }
-            }
-            // A remote-tracking ref deleted upstream reads "gone" (issue 17,
-            // carried over from the Log pane's decoration states via the
-            // branch snapshot the caller assembles).
-            if branch.kind == BranchKind::Remote && branch.gone {
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new("gone")
-                        .font(chrome_font(TYPE_CHIP))
-                        .color(Palette::STATE_ERROR),
-                );
-            }
-        });
-    }
+        }
+        // A remote-tracking ref deleted upstream reads "gone" (issue 17,
+        // carried over from the Log pane's decoration states via the
+        // branch snapshot the caller assembles).
+        if branch.kind == BranchKind::Remote && branch.gone {
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("gone")
+                    .font(chrome_font(TYPE_CHIP))
+                    .color(Palette::STATE_ERROR),
+            );
+        }
+    });
 
     // The tracking zone: its own left edge, its own truncation budget, and no
     // zone at all when the row is too narrow to hold one.
@@ -1077,20 +1023,15 @@ fn branch_row(
         });
     }
 
-    if activated {
-        events.push(TreeEvent::RowActivated {
-            root: section.root_id.clone(),
-            branch: branch.name.clone(),
-        });
-    } else if response.clicked() {
+    if response.clicked() {
         events.push(TreeEvent::RowClicked {
             root: section.root_id.clone(),
             branch: branch.name.clone(),
         });
     } else if props.allows_context_menu && response.secondary_clicked() {
         // The anchor is the pointer position at the right-click, stashed in
-        // egui memory exactly like the ⋯ overflow's anchor rect — the app
-        // crate has no egui types to carry it in `TreeState`.
+        // egui memory — the app crate has no egui types to carry it in
+        // `TreeState`.
         let anchor_id = egui::Id::new(("branches_context_menu_anchor", id, &branch.name));
         let pos = ui
             .input(|i| i.pointer.interact_pos())
@@ -1136,8 +1077,18 @@ fn rename_editor(
     let enter = child.input(|i| i.key_pressed(egui::Key::Enter));
     child.horizontal(|ui| {
         ui.add_space(PAD_LIST);
-        let input = widgets::text_input(ui, &branch.name, &mut tree.rename_draft);
-        input.request_focus();
+        // The buttons claim their space first: `widgets::text_input` takes every
+        // pixel the row has left, which pushed Apply and Cancel past its edge.
+        let buttons_w = kit_button_width(ui, "Apply rename")
+            + ui.spacing().item_spacing.x
+            + kit_button_width(ui, "Cancel");
+        let input_w = (ui.available_width() - buttons_w).max(120.0);
+        let input = ui.allocate_ui_with_layout(
+            Vec2::new(input_w, KIT_BUTTON_H),
+            Layout::left_to_right(Align::Center),
+            |ui| widgets::text_input(ui, &branch.name, &mut tree.rename_draft),
+        );
+        input.inner.request_focus();
         if kit_button(ui, KitButton::Secondary, "Apply rename").clicked() || enter {
             events.push(TreeEvent::RenameCommitted {
                 root: section.root_id.clone(),
