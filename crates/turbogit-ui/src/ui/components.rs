@@ -29,8 +29,6 @@ pub const TOOLBAR_H: f32 = 36.0;
 pub const SECTION_H: f32 = 26.0;
 /// Branch row height — dense IDE list row.
 pub const BRANCH_ROW_H: f32 = 30.0;
-/// Branch detail panel width (inside the content area, right side).
-pub const DETAIL_W: f32 = 280.0;
 /// Left repo-tree sidebar / right metadata panel width.
 pub const SIDE_PANEL_W: f32 = 220.0;
 /// Horizontal padding inside list rows and headers.
@@ -446,12 +444,18 @@ impl KitButton {
 /// floor). Renders the four interactive states through [`KitButton::fill`]/
 /// [`ink`] with the §13 control radius and a brand focus ring.
 pub fn kit_button(ui: &mut Ui, kind: KitButton, label: &str) -> Response {
-    let natural = 12.0 * 2.0
+    kit_button_at(ui, kind, label, kit_button_width(ui, label))
+}
+
+/// The width [`kit_button`] gives `label` — its 12 px padding on either side
+/// plus the measured text. A caller laying out a row of controls measures here
+/// rather than duplicating the formula.
+pub fn kit_button_width(ui: &Ui, label: &str) -> f32 {
+    12.0 * 2.0
         + ui.painter()
             .layout_no_wrap(label.to_owned(), chrome_font(TYPE_BODY), Color32::WHITE)
             .size()
-            .x;
-    kit_button_at(ui, kind, label, natural)
+            .x
 }
 
 /// [`kit_button`] at an explicit width. A caller laying out a column of actions
@@ -544,27 +548,4 @@ pub fn overflow_button(ui: &mut Ui, label: &str) -> Response {
 
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
     response
-}
-
-// --- Detail panel building blocks ------------------------------------------------
-
-/// The detail panel header: 13px title in data type, with a 1px divider
-/// underneath (§13 type detail title, §12 padding 16).
-pub fn detail_panel_header(ui: &mut Ui, title: &str) {
-    let width = ui.available_width();
-    ui.allocate_ui_with_layout(
-        Vec2::new(width, 36.0),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.add_space(PAD_PANEL);
-            ui.add(egui::Label::new(
-                RichText::new(title)
-                    .font(data_font(crate::theme::TYPE_DETAIL_TITLE))
-                    .color(Palette::T_PRIMARY),
-            ));
-        },
-    );
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 1.0), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::ZERO, Palette::DIVIDER);
 }

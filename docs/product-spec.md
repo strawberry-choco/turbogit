@@ -343,6 +343,12 @@ flowchart LR
 
 ### E. Branch Management
 
+> In the Branches view every branch action is reached the same way: right-click
+> the row and pick it from the context menu (ADR-0023). The view has no
+> per-row button and no detail panel, so the wording below names the action,
+> not a second place to find it. The branches *popup* (E1/E2) keeps its own
+> per-row controls.
+
 #### E1. VCS branch widget
 - **What:** Header/status-bar indicator of current branch; click → branch popup. Shows incoming/outgoing arrows.
 
@@ -356,8 +362,8 @@ flowchart LR
 - **UX:** name suggestions based on existing local prefixes.
 
 #### E4. Checkout
-- **Local:** select → Checkout.
-- **Remote as new local:** select remote → Checkout → creates tracking local branch.
+- **Local:** right-click the row → Checkout.
+- **Remote as new local:** right-click the remote row → Checkout → creates tracking local branch.
 - **Name collision (no loss, already tracking):** auto-reset local to remote & checkout. **If local commits could be lost:** offer **Drop Local Commits** or **Rebase onto Remote**.
 
 #### E5. Smart checkout (conflict handling on switch)

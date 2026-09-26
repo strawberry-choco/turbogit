@@ -2,9 +2,9 @@
 //! (`ui::branch_menu`).
 //!
 //! Two seams. The gating table is a pure function over one `Branch` and the
-//! repository's current branch — every row's six outcomes are asserted
+//! repository's current branch — every row's ten outcomes are asserted
 //! without rendering. The component itself is props-in / action-out: the
-//! designed item order, the two rules, the multi-repo wording, and the
+//! designed item order, the three rules, the multi-repo wording, and the
 //! `BranchMenuAction` each clicked item returns, asserted through painted
 //! output and the accessibility tree.
 
@@ -161,6 +161,71 @@ fn a_remote_row_cannot_be_renamed() {
     );
 }
 
+// --- cycle 6: the panel's three omissions became four reasons ---------------------
+
+/// The union's new items gate on the two facts the panel enforced by hiding
+/// them. Blocked means rendered-and-explained, never absent: a row for the
+/// checked-out branch says so, a remote-tracking row says it cannot be
+/// merged or rebased, and a plain local row is free of all four.
+#[test]
+fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
+    let side = local("side", Some("origin/side"), 0, 0);
+    let plain = |item: BranchMenuAction| state(&side, Some("main"), item);
+    assert_eq!(plain(BranchMenuAction::Merge), MenuItemState::enabled());
+    assert_eq!(plain(BranchMenuAction::Rebase), MenuItemState::enabled());
+    assert_eq!(plain(BranchMenuAction::Compare), MenuItemState::enabled());
+    assert_eq!(plain(BranchMenuAction::Delete), MenuItemState::enabled());
+
+    let main = local("main", Some("origin/main"), 0, 0);
+    let current = |item: BranchMenuAction| state(&main, Some("main"), item);
+    assert_eq!(
+        current(BranchMenuAction::Merge),
+        MenuItemState::disabled("this is the current branch")
+    );
+    assert_eq!(
+        current(BranchMenuAction::Rebase),
+        MenuItemState::disabled("this is the current branch")
+    );
+    assert_eq!(
+        current(BranchMenuAction::Compare),
+        MenuItemState::disabled("this is the current branch")
+    );
+    assert_eq!(
+        current(BranchMenuAction::Delete),
+        MenuItemState::disabled("the current branch cannot be deleted")
+    );
+
+    // A remote-tracking row is reference material for history verbs, yet it
+    // is still deletable — that is what `git push origin :name` means.
+    let up = Branch {
+        kind: BranchKind::Remote,
+        remote: Some("origin".to_string()),
+        ..local("up", None, 0, 0)
+    };
+    let remote = |item: BranchMenuAction| state(&up, Some("main"), item);
+    assert_eq!(
+        remote(BranchMenuAction::Merge),
+        MenuItemState::disabled("remote branches cannot be merged")
+    );
+    assert_eq!(
+        remote(BranchMenuAction::Rebase),
+        MenuItemState::disabled("remote branches cannot be rebased")
+    );
+    assert_eq!(remote(BranchMenuAction::Compare), MenuItemState::enabled());
+    assert_eq!(remote(BranchMenuAction::Delete), MenuItemState::enabled());
+}
+
+/// [`BranchMenuAction::ORDER`] and [`BranchMenuAction::index`] are maintained
+/// by hand in step with the gate array; the compiler cannot see them disagree,
+/// so this is the one check that they do not.
+#[test]
+fn the_designed_order_is_the_array_slots() {
+    assert_eq!(BranchMenuAction::ORDER.len(), 10);
+    for (slot, action) in BranchMenuAction::ORDER.iter().enumerate() {
+        assert_eq!(action.index(), slot, "{action:?} is painted in slot {slot}");
+    }
+}
+
 // --- the component: props in, action out -------------------------------------------
 
 use std::cell::RefCell;
@@ -202,26 +267,29 @@ fn menu_harness(
     (harness, returned)
 }
 
-/// The six items in the designed order — Checkout strongest, the name in
-/// the data face, two rules splitting switch / create / update / edit —
-/// with Push's real accelerator in the shortcut column.
+/// The union of the three affordances in the designed order — Checkout
+/// strongest, the name in the data face, three rules splitting switch /
+/// history / update / edit — with Push's real accelerator in the shortcut
+/// column.
 #[test]
-fn the_menu_renders_the_six_items_in_the_designed_order() {
+fn the_menu_renders_the_ten_items_in_the_designed_order() {
     let target = local("feature/cascade-views", Some("origin/f"), 1, 0);
     let (harness, _returned) = menu_harness(target, || BranchMenuProps {
         repo_name: "alpha",
         multi_repo: false,
-        is_current: false,
+        current_branch: Some("main"),
     });
 
     let mut galleys = painted_galleys(&harness);
     // Bucket by menu row (a 26 px pitch): the two segments of one row are
-    // each vertically centered, so their exact tops differ.
+    // each vertically centered, so their exact tops differ. The pitch is the
+    // one place a scroll container would move.
+    let row_pitch = 26.0;
     let first = galleys
         .iter()
         .map(|g| g.pos.y)
         .fold(f32::INFINITY, f32::min);
-    let row = |y: f32| ((y - first) / 26.0).round() as i32;
+    let row = |y: f32| ((y - first) / row_pitch).round() as i32;
     galleys.sort_by(|a, b| {
         row(a.pos.y)
             .cmp(&row(b.pos.y))
@@ -235,10 +303,14 @@ fn the_menu_renders_the_six_items_in_the_designed_order() {
             "New branch from",
             "feature/cascade-views",
             "Checkout and pull",
+            "Merge into main",
+            "Rebase onto main",
+            "Compare with main",
             "Pull",
             "Push",
             "Ctrl+Shift+K",
             "Rename branch",
+            "Delete branch",
         ],
         "item order, the data segment, and the one accelerator"
     );
@@ -250,13 +322,13 @@ fn the_menu_renders_the_six_items_in_the_designed_order() {
         .expect("name painted");
     assert_eq!(data.family, egui::FontFamily::Monospace);
 
-    // Two rules: update actions and editing each start behind a hairline.
+    // Three rules: history, update and editing each start behind a hairline.
     let rules: Vec<Color32> = filled_rects(&harness)
         .into_iter()
         .filter(|(_, fill)| *fill == Palette::LINE_SUBTLE)
         .map(|(_, fill)| fill)
         .collect();
-    assert_eq!(rules.len(), 2, "exactly two menu rules");
+    assert_eq!(rules.len(), 3, "exactly three menu rules");
 
     // Checkout is the primary item.
     assert!(
@@ -264,6 +336,29 @@ fn the_menu_renders_the_six_items_in_the_designed_order() {
             .iter()
             .any(|(_, fill)| *fill == Palette::BRAND),
         "the primary item carries the brand fill"
+    );
+}
+
+/// With no named branch checked out (detached HEAD) the history verbs state
+/// no destination rather than painting a dangling "Merge into ".
+#[test]
+fn the_history_verbs_drop_their_destination_when_no_branch_is_checked_out() {
+    let target = local("side", Some("origin/side"), 0, 0);
+    let (harness, _returned) = menu_harness(target, || BranchMenuProps {
+        repo_name: "alpha",
+        multi_repo: false,
+        current_branch: None,
+    });
+    let texts: Vec<String> = painted_galleys(&harness)
+        .into_iter()
+        .map(|g| g.text)
+        .collect();
+    assert!(texts.iter().any(|t| t == "Merge"));
+    assert!(texts.iter().any(|t| t == "Rebase"));
+    assert!(texts.iter().any(|t| t == "Compare"));
+    assert!(
+        !texts.iter().any(|t| t.ends_with("into ")),
+        "never a verb with a dangling preposition: {texts:?}"
     );
 }
 
@@ -275,7 +370,7 @@ fn the_primary_item_names_its_repository_when_more_than_one_is_in_scope() {
     let (harness, _returned) = menu_harness(target, || BranchMenuProps {
         repo_name: "alpha",
         multi_repo: true,
-        is_current: false,
+        current_branch: Some("main"),
     });
     assert!(
         painted_galleys(&harness)
@@ -295,7 +390,7 @@ fn clicking_an_item_returns_its_action() {
     let (mut harness, returned) = menu_harness(target, || BranchMenuProps {
         repo_name: "alpha",
         multi_repo: false,
-        is_current: false,
+        current_branch: Some("main"),
     });
     harness.get_by_label("Checkout").click();
     harness.step();
@@ -310,7 +405,7 @@ fn clicking_an_item_returns_its_action() {
     let (mut harness, returned) = menu_harness(target, || BranchMenuProps {
         repo_name: "alpha",
         multi_repo: false,
-        is_current: true,
+        current_branch: Some("main"),
     });
     assert!(
         painted_galleys(&harness)
@@ -533,8 +628,8 @@ mod surface {
         assert_painted(&harness, "feature-a");
     }
 
-    /// Escape joins the existing ladder above the ⋯ overflow: the first
-    /// press closes the context menu and leaves the selection alone.
+    /// Escape joins the existing ladder: the first press closes the context
+    /// menu and leaves the selection alone.
     #[test]
     fn escape_closes_the_menu_before_anything_else() {
         let project = one_repo_project("escape");
@@ -587,32 +682,6 @@ mod surface {
             context_menu_target(&harness),
             None,
             "a click outside after one visible frame closes it"
-        );
-    }
-
-    /// One menu per row at a time: opening the context menu closes the ⋯
-    /// overflow, and toggling the overflow closes the context menu.
-    #[test]
-    fn the_two_menus_never_share_the_screen() {
-        let project = one_repo_project("menus");
-        let mut harness = branches_harness(project);
-        open_branches(&mut harness);
-
-        row_node(&harness, "More actions").click();
-        harness.step();
-        assert!(harness.state().ui.branches_tree.overflow.is_some());
-        right_click_row(&mut harness, "feature-a");
-        assert!(
-            harness.state().ui.branches_tree.overflow.is_none(),
-            "opening the context menu clears the overflow"
-        );
-
-        row_node(&harness, "More actions").click();
-        harness.step();
-        assert_eq!(
-            context_menu_target(&harness),
-            None,
-            "opening the overflow clears the context menu"
         );
     }
 
@@ -923,5 +992,177 @@ mod surface {
         assert_eq!(context_menu_target(&harness), None);
         // The editor paints on the row itself.
         assert_painted(&harness, "plain-b");
+    }
+
+    // --- ticket 01: the four actions the menu used not to offer ----------
+
+    /// Merge names its destination and opens the same preflighted dialog the
+    /// detail panel opened: source = the right-clicked row, preview computed
+    /// before anything runs.
+    #[test]
+    fn merge_into_opens_the_preflighted_dialog() {
+        let project = one_repo_project("dispatch-merge");
+        let mut harness = branches_harness(project);
+        open_branches(&mut harness);
+
+        right_click_row(&mut harness, "feature-a");
+        click_menu_item(&mut harness, "Merge into main");
+        let st = harness.state();
+        assert_eq!(st.ui.dialog, Some(turbogit_app::state::Dialog::Merge));
+        assert_eq!(st.ui.dlg.merge_target, "feature-a");
+        assert!(
+            st.ui.dlg.merge_preview.is_some(),
+            "pre-flight preview is computed before starting"
+        );
+    }
+
+    /// Rebase states its direction in the label and runs that rebase — the
+    /// report names both branches in the order the item did.
+    #[test]
+    fn rebase_onto_runs_the_rebase_it_names() {
+        let project = one_repo_project("dispatch-rebase");
+        let mut harness = branches_harness(project);
+        open_branches(&mut harness);
+
+        right_click_row(&mut harness, "feature-a");
+        click_menu_item(&mut harness, "Rebase onto main");
+        wait_for(&mut harness, |st| {
+            activity_has(st, "Rebase feature-a onto main")
+        });
+        assert_eq!(
+            current_branch(&harness).as_deref(),
+            Some("feature-a"),
+            "the rebased branch ends up checked out"
+        );
+    }
+
+    /// Compare is read-only and names both sides, exactly as the panel's
+    /// button delivered it.
+    #[test]
+    fn compare_with_opens_the_compare_surface() {
+        let project = one_repo_project("dispatch-compare");
+        let mut harness = branches_harness(project);
+        open_branches(&mut harness);
+
+        right_click_row(&mut harness, "feature-a");
+        click_menu_item(&mut harness, "Compare with main");
+        let st = harness.state();
+        assert_eq!(
+            st.ui.dialog,
+            Some(turbogit_app::state::Dialog::CompareBranches)
+        );
+        assert_eq!(st.ui.dlg.compare_left, "feature-a");
+        assert_eq!(st.ui.dlg.compare_right, "main");
+    }
+
+    /// Deleting asks first, and the ask says what is lost in human terms.
+    #[test]
+    fn delete_asks_before_removing_the_branch() {
+        let project = one_repo_project("dispatch-delete");
+        let mut harness = branches_harness(project);
+        open_branches(&mut harness);
+
+        right_click_row(&mut harness, "feature-a");
+        click_menu_item(&mut harness, "Delete branch");
+        wait_for(&mut harness, |st| st.ui.confirm.is_some());
+        assert!(matches!(
+            harness.state().ui.confirm,
+            Some(turbogit_app::state::PendingConfirm::DeleteLocalBranch { ref name }) if name == "feature-a"
+        ));
+        assert_painted(
+            &harness,
+            "everything on this branch already exists on main — safe to delete",
+        );
+        assert_eq!(
+            current_branch(&harness).as_deref(),
+            Some("main"),
+            "nothing has been deleted yet"
+        );
+    }
+
+    /// A remote-tracking row is still deletable — the ask names the remote it
+    /// disappears from, which is a different operation from `branch -D`.
+    #[test]
+    fn deleting_a_remote_row_asks_to_delete_it_upstream() {
+        let project = one_repo_project("dispatch-delete-remote");
+        let mut harness = branches_harness(project);
+        open_branches(&mut harness);
+        row_node(&harness, "Remote").click();
+        settle_quiet(&mut harness);
+
+        right_click_row(&mut harness, "remote-only");
+        click_menu_item(&mut harness, "Delete branch");
+        let st = harness.state();
+        assert!(
+            matches!(
+                &st.ui.confirm,
+                Some(turbogit_app::state::PendingConfirm::DeleteRemoteBranch { remote, name })
+                    if remote == "origin" && name == "remote-only"
+            ),
+            "a remote row's Delete reaches the upstream delete ask"
+        );
+    }
+
+    /// A branch checked out in another worktree is refused up front, naming
+    /// the worktree — the same guard the checkout path raises.
+    #[test]
+    fn delete_refuses_a_branch_checked_out_in_another_worktree() {
+        let project = one_repo_project("dispatch-delete-worktree");
+        let mut harness = branches_harness(project);
+        let root_id = harness.state().multi.roots[0].id.clone();
+        harness.state_mut().caches.store_worktrees(
+            root_id.clone(),
+            vec![turbogit_domain::model::Worktree {
+                path: PathBuf::from("/wt/feature-a"),
+                branch: "feature-a".into(),
+                dirty: None,
+                root: root_id,
+            }],
+        );
+        open_branches(&mut harness);
+
+        right_click_row(&mut harness, "feature-a");
+        click_menu_item(&mut harness, "Delete branch");
+        let st = harness.state();
+        assert!(
+            matches!(
+                &st.ui.confirm,
+                Some(turbogit_app::state::PendingConfirm::CheckoutInWorktree { branch, .. })
+                    if branch == "feature-a"
+            ),
+            "the worktree guard is what answers the click"
+        );
+    }
+
+    /// The four items the detail panel used to hide are gated here with the
+    /// reason they were hidden for — on the current branch and on a
+    /// remote-tracking row.
+    #[test]
+    fn the_history_verbs_explain_why_the_row_blocks_them() {
+        let project = one_repo_project("gates-history");
+        let mut harness = branches_harness(project);
+        open_branches(&mut harness);
+
+        right_click_row(&mut harness, "main");
+        assert_menu_item_disabled(
+            &mut harness,
+            "Merge into main",
+            "this is the current branch",
+        );
+        assert_menu_item_disabled(
+            &mut harness,
+            "Rebase onto main",
+            "this is the current branch",
+        );
+        assert_menu_item_disabled(
+            &mut harness,
+            "Compare with main",
+            "this is the current branch",
+        );
+        assert_menu_item_disabled(
+            &mut harness,
+            "Delete branch",
+            "the current branch cannot be deleted",
+        );
     }
 }

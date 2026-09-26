@@ -896,10 +896,13 @@ mod tests {
         );
     }
 
-    // --- BranchTip still carried on the leaf (renderer uses it) --------------
+    // --- BranchTip still carried on the leaf ---------------------------------
+    // No surface paints it since the branch detail panel went; the view model
+    // still carries the tip because `Branch` is domain data, and a future
+    // commit column is the reason to keep filling it.
 
     #[test]
-    fn leaf_carries_tip_for_detail_panel() {
+    fn leaf_carries_its_tip_commit() {
         let mut b = local("main", false, 0, 0);
         b.tip = Some(BranchTip {
             short_hash: "deadbeef".to_string(),

@@ -364,7 +364,7 @@ impl Default for BranchesGroups {
 
 /// What the branch tree itself remembers between frames (branch-tree-view
 /// extraction, plan D2/D3): grouping, collapse, selection, the inline-rename
-/// draft, the overflow menu, and scroll. Plain data only — the application
+/// draft, the context menu, and scroll. Plain data only — the application
 /// crate cannot name egui types, so no widget ids, rectangles, colors or
 /// text-edit state live here. Each tree surface owns one instance (the
 /// Branches tool window, the Log window's branches pane), so opening one
@@ -399,12 +399,10 @@ pub struct TreeState {
     /// while rendering, so only commit/cancel are emitted as events.
     pub renaming: Option<String>,
     pub rename_draft: String,
-    /// Which branch's ⋯ overflow menu is open; carries the owning root so
-    /// hover-only opens still resolve (issue 14).
-    pub overflow: Option<(RootId, String)>,
-    /// Which branch row's right-click context menu is open — same shape and
-    /// ownership as `overflow`; the anchor lives in egui memory, not here,
-    /// because this crate has no egui dependency.
+    /// Which branch row's right-click context menu is open; carries the
+    /// owning root so one row's menu never resolves against another repo's
+    /// snapshot. The anchor lives in egui memory, not here, because this
+    /// crate has no egui dependency.
     pub context_menu: Option<(RootId, String)>,
     /// Current vertical scroll offset of the list (issue 06).
     pub scroll: f32,

@@ -1,20 +1,19 @@
-//! Branches tab (issues 03+): the three-zone screen — a one-row toolbar, the
-//! grouped branch list (Local / Remote / Tags with live counts), and the 280px
-//! right-hand detail panel. Behavior follows `docs/branches-screen-behavior.md`
-//! (§12–§16): branch data is warm from repo open, the current branch sits
-//! first (visible without scrolling), slow reads show a muted "reading
-//! branches…" line, a repo with no branches gets one sentence + one create
-//! action, names truncate in the middle, and the detail panel never blocks
-//! the list. All geometry maps onto the §12 constants in
-//! [`crate::ui::components`]; every git mutation crosses the
-//! Git engine only through [`AppState::dispatch`] and cached reads.
+//! Branches tab (issues 03+): a one-row toolbar over the grouped branch list
+//! (Local / Remote / Tags with live counts). Every branch action lives in the
+//! row's right-click context menu — the screen has no side panel and no
+//! per-row button. Behavior: branch data is warm from repo open, the current
+//! branch sits first (visible without scrolling), slow reads show a muted
+//! "reading branches…" line, a repo with no branches gets one sentence + one
+//! create action, and names truncate in the middle. The geometry comes from
+//! the §12 constants in [`crate::ui::components`]; every git mutation crosses
+//! the Git engine only through [`AppState::dispatch`] and cached reads.
 //!
 //! Since the branch-tree-view extraction the grouped list itself is the shared
 //! [`branch_tree_view::branch_tree`] component: this surface builds the props,
-//! applies the returned events, and keeps the toolbar, the detail panel, the
-//! keyboard path and the actions.
+//! applies the returned events, and keeps the toolbar, the keyboard path, and
+//! the one action dispatcher.
 
-use egui::{Align, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Ui, UiBuilder};
+use egui::{Align, Layout, Pos2, Rect, RichText, Ui, UiBuilder};
 
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
@@ -22,28 +21,14 @@ use turbogit_app::state::{AppState, Dialog, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
 use turbogit_services::sync_service::PushScope;
 
-use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, TYPE_DETAIL_TITLE, chrome_font, data_font};
+use crate::theme::{Palette, TYPE_CONTROL, chrome_font, data_font};
 use crate::ui::branch_menu::{BranchMenuAction, BranchMenuProps, branch_menu};
 use crate::ui::branch_tree_view::{self, LocalRow, TreeEvent, TreeGroup, TreeProps};
-use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches_tree::{self, BranchNode, BranchView};
 use crate::ui::components::{
-    DETAIL_W, KIT_BUTTON_H, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button,
-    kit_button_at,
+    KIT_BUTTON_H, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button,
 };
 use crate::ui::widgets;
-
-/// One branch action, shared by the detail panel and the ⋯ overflow menu
-/// (issue 05): the same items, same order, same wording.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BranchAction {
-    Checkout,
-    Merge,
-    Rebase,
-    Compare,
-    Rename,
-    Delete,
-}
 
 /// What the list area shows instead of a blank panel (issue 03, §2/§15).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -193,10 +178,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         branch_tree_view::remotes_revealed(branches_tree, root)
     });
 
-    // Esc clears the filter first, then closes the detail area (§9). Read at
-    // the very top of the frame, before any widget could consume it. The
-    // context menu slots above the overflow in the ladder: one press closes
-    // the menu and disturbs nothing else.
+    // Esc clears the filter first, then closes the context menu, then drops the
+    // selection (§9). Read at the very top of the frame, before any widget could
+    // consume it: one press closes the menu and disturbs nothing else.
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         if !state.ui.branches_filter.trim().is_empty() {
             state.ui.branches_filter.clear();
@@ -205,7 +189,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         } else {
             state.ui.branches_tree.selected = None;
             state.ui.branches_tree.selected_root = None;
-            state.ui.branches_tree.overflow = None;
         }
     }
 
@@ -227,25 +210,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
     let content_rect = Rect::from_min_max(Pos2::new(body.min.x, toolbar_rect.max.y), body.max)
         .intersect(ui.clip_rect());
-    let detail_width = DETAIL_W.min(content_rect.width().max(0.0));
-    let detail_rect = Rect::from_min_max(
-        Pos2::new(content_rect.max.x - detail_width, content_rect.min.y),
-        content_rect.max,
-    );
-    let list_rect = Rect::from_min_max(
-        content_rect.min,
-        Pos2::new(detail_rect.min.x, content_rect.max.y),
-    );
-
-    // Detail panel paints first so the list never overlaps its divider.
-    let mut detail_ui = ui.new_child(
-        UiBuilder::new()
-            .max_rect(detail_rect)
-            .layout(Layout::top_down(Align::Min)),
-    );
-    detail_panel(&mut detail_ui, state);
-    ui.advance_cursor_after_rect(detail_rect);
-
+    // The list owns everything below the toolbar: no side panel splits the
+    // width, so there is no divider to paint under the list.
+    let list_rect = content_rect;
     let mut list_ui = ui.new_child(
         UiBuilder::new()
             .max_rect(list_rect)
@@ -308,7 +275,6 @@ fn handle_keys(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     if state.ui.dialog.is_some()
         || state.ui.confirm.is_some()
         || state.ui.branches_tree.renaming.is_some()
-        || state.ui.branches_tree.overflow.is_some()
         || state.ui.branches_scope_picker_open
     {
         return;
@@ -364,7 +330,7 @@ fn handle_keys(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         // The current branch can never be deleted (issue 12); everything
         // else gets the same "what will be lost" ask as the click path.
         if current.as_deref() != Some(branch.name.as_str()) {
-            apply_action(state, rid, branch, BranchAction::Delete);
+            apply_branch_action(state, rid, branch, BranchMenuAction::Delete);
         }
     }
 }
@@ -485,7 +451,7 @@ fn scope_label(ui: &mut Ui, state: &mut AppState) {
 /// (branch-tree-view extraction, plan D5). The "working…" line and the
 /// delete-undo banner stay above the scroll area, on the surface; the
 /// component paints the list states and the rows; the surface applies the
-/// returned events and then paints the ⋯ overflow menu that depends on them.
+/// returned events and then paints the context menu that depends on them.
 fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     let has_any_data = state
         .multi
@@ -510,7 +476,6 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         now: chrono::Utc::now(),
         allows_rename: true,
         allows_context_menu: true,
-        shows_row_actions: true,
         id_salt: "branches_list",
         full_height: true,
         collapse_remotes_by_default: false,
@@ -548,37 +513,9 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         apply_tree_event(state, event);
     }
 
-    // The ⋯ overflow menu floats over the list with the same actions as the
-    // detail panel (issue 05). Events were applied before this paint, so the
-    // menu still opens in the frame it was clicked (plan D4). The target row
-    // is resolved from its owning repository's snapshot.
-    if let Some((root_id, name)) = state.ui.branches_tree.overflow.clone() {
-        let anchor = ui.ctx().memory(|m| {
-            m.data
-                .get_temp::<Rect>(egui::Id::new(("branches_overflow_anchor", &root_id, &name)))
-        });
-        if let Some(anchor) = anchor {
-            egui::Area::new(egui::Id::new(("branches_overflow", &name)))
-                .current_pos(anchor.left_bottom())
-                .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(160.0);
-                        if let Some(root) = state.multi.by_id(&root_id).cloned()
-                            && let Some(branch) =
-                                root.branches.iter().find(|b| b.name == name).cloned()
-                            && let Some(a) = detail_actions(ui, state, &root, &branch)
-                        {
-                            apply_action(state, &root.id, &branch, a);
-                        }
-                    });
-                });
-        }
-    }
-
     // The right-click context menu floats over the list, anchored at the
     // pointer position where the row was right-clicked. Events were applied
-    // before this paint, so it opens in the frame it was clicked — the same
-    // contract the ⋯ overflow holds.
+    // before this paint, so it opens in the frame it was clicked.
     if let Some((root_id, name)) = state.ui.branches_tree.context_menu.clone() {
         let anchor = ui.ctx().memory(|m| {
             m.data.get_temp::<Pos2>(egui::Id::new((
@@ -611,10 +548,10 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
                             let props = BranchMenuProps {
                                 repo_name: &repo_name,
                                 multi_repo: state.multi.roots.len() > 1,
-                                is_current: root.current_branch.as_deref() == Some(name.as_str()),
+                                current_branch: root.current_branch.as_deref(),
                             };
                             if let Some(action) = branch_menu(ui, &props, &branch) {
-                                apply_branch_menu_action(state, &root.id, &branch, action);
+                                apply_branch_action(state, &root.id, &branch, action);
                             }
                         }
                     });
@@ -656,7 +593,6 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
                 state.ui.branches_tree.selected = Some(branch);
                 state.ui.branches_tree.selected_root = Some(root);
             }
-            state.ui.branches_tree.overflow = None;
             state.ui.branches_tree.context_menu = None;
         }
         TreeEvent::RowActivated { root, branch } => {
@@ -671,18 +607,7 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
                 checkout_branch(state, &root, &b);
             }
         }
-        TreeEvent::OverflowToggled { root, branch } => {
-            let key = (root, branch);
-            // One menu per row at a time.
-            state.ui.branches_tree.context_menu = None;
-            if state.ui.branches_tree.overflow.as_ref() == Some(&key) {
-                state.ui.branches_tree.overflow = None;
-            } else {
-                state.ui.branches_tree.overflow = Some(key);
-            }
-        }
         TreeEvent::ContextMenuRequested { root, branch } => {
-            state.ui.branches_tree.overflow = None;
             state.ui.branches_tree.context_menu = Some((root, branch));
         }
         TreeEvent::GroupToggled(group) => match group {
@@ -715,7 +640,6 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
             fetch_root(state, &root);
         }
         TreeEvent::RenameStarted { root, branch } => {
-            state.ui.branches_tree.overflow = None;
             state.ui.branches_tree.renaming = Some(branch.clone());
             state.ui.branches_tree.rename_draft = branch;
             state.ui.branches_tree.selected_root = Some(root);
@@ -851,239 +775,23 @@ fn checkout_branch(state: &mut AppState, root: &RootId, branch: &Branch) {
 }
 
 /// Wrap prose within the visible panel, including both side insets.
-fn detail_label(ui: &mut Ui, text: RichText) {
-    let width = ui
-        .available_width()
-        .min(ui.clip_rect().right() - ui.cursor().left());
-    ui.allocate_ui_with_layout(
-        egui::Vec2::new(width.max(0.0), 0.0),
-        Layout::left_to_right(Align::Min),
-        |ui| {
-            let inset = PAD_LIST.min(width.max(0.0) / 4.0);
-            ui.add_space(inset);
-            ui.add_sized(
-                egui::Vec2::new((width - 2.0 * inset).max(0.0), 0.0),
-                egui::Label::new(text).wrap(),
-            );
-        },
-    );
-}
-
 /// Detail panel (280px): paints its background + left divider, then the
 /// selected branch's block (issue 05) or the quiet selection prompt. It never
 /// blocks the list — it is a side panel on the same frame.
-fn detail_panel(ui: &mut Ui, state: &mut AppState) {
-    let rect = ui.available_rect_before_wrap().intersect(ui.clip_rect());
-    ui.set_clip_rect(rect);
-    ui.set_max_width(rect.width().max(0.0));
-    ui.painter().rect_filled(
-        rect,
-        CornerRadius::same(crate::theme::CONTROL_RADIUS),
-        Palette::PANEL_BG,
-    );
-    ui.painter().rect_filled(
-        Rect::from_min_max(rect.min, Pos2::new(rect.min.x + 1.0, rect.max.y)),
-        CornerRadius::ZERO,
-        Palette::DIVIDER,
-    );
-
-    let Some(name) = state.ui.branches_tree.selected.clone() else {
-        // Quiet prompt about what selecting a branch will give you — never an
-        // error, never empty space (§2).
-        ui.add_space(24.0);
-        crate::ui::components::detail_panel_header(ui, "Branches");
-        ui.add_space(8.0);
-        detail_label(
-            ui,
-            RichText::new("Select a branch")
-                .font(data_font(TYPE_DETAIL_TITLE))
-                .color(Palette::T_PRIMARY),
-        );
-        ui.add_space(6.0);
-        detail_label(ui, RichText::new("See how it relates to the current branch, its latest commit, and what you can do with it.")
-            .font(chrome_font(TYPE_CONTROL))
-            .color(Palette::T_MUTED));
-        return;
-    };
-
-    // The selected row is looked up in its own repo (issue 14); a vanished
-    // selection closes the panel cleanly.
-    let Some(root) = state
-        .ui
-        .branches_tree
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .cloned()
-    else {
-        state.ui.branches_tree.selected = None;
-        state.ui.branches_tree.selected_root = None;
-        return;
-    };
-    let Some(branch) = root.branches.iter().find(|b| b.name == name).cloned() else {
-        state.ui.branches_tree.selected = None;
-        state.ui.branches_tree.selected_root = None;
-        return;
-    };
-    let now = chrono::Utc::now();
-    let meta = row_meta(&branch, now);
-
-    ScrollArea::vertical()
-        .id_salt("branches_detail")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            // Full branch name (13px data type) — the detail title.
-            crate::ui::components::detail_panel_header(ui, &branch.name);
-
-            // Relationship to the current branch + tracked remote (§5).
-            ui.add_space(6.0);
-            relationship_line(ui, &branch, &meta);
-            ui.add_space(8.0);
-
-            // Latest-commit block: short hash, message, author, when.
-            crate::ui::widgets::group_title(ui, "LATEST COMMIT");
-            if let Some(tip) = &branch.tip {
-                ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(PAD_LIST);
-                    ui.label(
-                        RichText::new(tip.short_hash.clone())
-                            .font(data_font(TYPE_BODY))
-                            .color(Palette::LINK),
-                    );
-                });
-                ui.add_space(2.0);
-                detail_label(
-                    ui,
-                    RichText::new(tip.message.clone())
-                        .font(data_font(TYPE_BODY))
-                        .color(Palette::T_PRIMARY),
-                );
-                ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    ui.add_space(PAD_LIST);
-                    let age = now
-                        .signed_duration_since(tip.time)
-                        .to_std()
-                        .unwrap_or_default();
-                    ui.label(
-                        RichText::new(format!("{} · {}", tip.author, stale_badge(age)))
-                            .font(data_font(TYPE_CONTROL))
-                            .color(Palette::T_MUTED),
-                    );
-                });
-            }
-            ui.add_space(8.0);
-
-            // Actions: Checkout strongest, merge/rebase next, compare, then a
-            // divider separating the quieter rename/delete (§5).
-            ui.separator();
-            ui.add_space(2.0);
-            if let Some(action) = detail_actions(ui, state, &root, &branch) {
-                apply_action(state, &root.id, &branch, action);
-            }
-        });
-}
-
 /// One quiet relationship line: the sync state vs its tracked remote
 /// ("2 ahead · 1 behind · tracks origin/main"). The status words come from
 /// [`sync_badge`], the same source the row's chips read, so the panel and the
 /// list cannot drift.
-fn relationship_line(ui: &mut Ui, _branch: &Branch, meta: &RowMeta) {
-    let mut parts: Vec<String> = meta.badge.iter().map(|(_, label)| label.clone()).collect();
-    if let Some(up) = &meta.upstream {
-        parts.push(format!("tracks {}", up.git_ref()));
-    }
-    detail_label(
-        ui,
-        RichText::new(parts.join(" · "))
-            .font(chrome_font(TYPE_CONTROL))
-            .color(Palette::T_SECONDARY),
-    );
-}
-
-/// The action list in the spec's order and wording (issue 05): Checkout
-/// strongest, Merge into / Rebase onto «current», Compare with «current», a
-/// divider, then the quieter Rename and Delete. Shared verbatim by the ⋯
-/// overflow menu. Returns the clicked action, or `None`.
-fn detail_actions(
-    ui: &mut Ui,
-    state: &mut AppState,
-    root: &Root,
-    branch: &Branch,
-) -> Option<BranchAction> {
-    let current = root
-        .current_branch
-        .as_deref()
-        .unwrap_or_default()
-        .to_string();
-    let is_current = root.current_branch.as_deref() == Some(branch.name.as_str());
-    let is_local = branch.kind == BranchKind::Local;
-    // The primary action names its repo's scope in multi-repo projects
-    // (issue 14) — the same rules as the row hover action.
-    let scope = if state.multi.roots.len() > 1 {
-        format!(" in {}", root.id.name())
-    } else {
-        String::new()
-    };
-    let mut action = None;
-    // One column: every action takes the caller's full content width, whether
-    // this is the detail panel or the ⋯ menu.
-    let width = ui.available_width();
-
-    if kit_button_at(ui, KitButton::Primary, &format!("Checkout{scope}"), width).clicked() {
-        action = Some(BranchAction::Checkout);
-    }
-    if !is_current {
-        if is_local {
-            if kit_button_at(
-                ui,
-                KitButton::Secondary,
-                &format!("Merge into {current}"),
-                width,
-            )
-            .clicked()
-            {
-                action = Some(BranchAction::Merge);
-            }
-            if kit_button_at(
-                ui,
-                KitButton::Secondary,
-                &format!("Rebase onto {current}"),
-                width,
-            )
-            .clicked()
-            {
-                action = Some(BranchAction::Rebase);
-            }
-        }
-        if kit_button_at(
-            ui,
-            KitButton::Secondary,
-            &format!("Compare with {current}"),
-            width,
-        )
-        .clicked()
-        {
-            action = Some(BranchAction::Compare);
-        }
-    }
-    ui.add_space(2.0);
-    ui.separator();
-    ui.add_space(2.0);
-    if is_local && kit_button_at(ui, KitButton::Quiet, "Rename", width).clicked() {
-        action = Some(BranchAction::Rename);
-    }
-    if !is_current && kit_button_at(ui, KitButton::Danger, "Delete", width).clicked() {
-        action = Some(BranchAction::Delete);
-    }
-    action
-}
-
-/// Turn one context-menu pick into what the app already knows how to do —
-/// no new named `Operation`, no git call from the UI. The menu closes first,
-/// exactly as [`apply_action`] closes the overflow.
-fn apply_branch_menu_action(
+/// The action list in the spec's order and wording (issue 05), now a shim
+/// over the context menu's union: the same six items, one width, one order,
+/// dispatched by [`apply_branch_action`] like every other affordance.
+/// Goes with the panel.
+/// Returns the picked action, or `None`.
+/// Turn one branch action into what the app already knows how to do — the
+/// single dispatcher behind the context menu and the detail panel. No new
+/// named `Operation`, no git call from the UI. The menu closes first, so
+/// acting never leaves a stale one behind.
+fn apply_branch_action(
     state: &mut AppState,
     root: &RootId,
     branch: &Branch,
@@ -1159,24 +867,13 @@ fn apply_branch_menu_action(
             // The tree's inline rename — one rename experience per surface.
             // The selection follows the row so the editor opens on the
             // branch that was right-clicked.
-            state.ui.branches_tree.overflow = None;
             state.ui.branches_tree.renaming = Some(branch.name.clone());
             state.ui.branches_tree.rename_draft = branch.name.clone();
             state.ui.branches_tree.selected = Some(branch.name.clone());
             state.ui.branches_tree.selected_root = Some(root.clone());
         }
-    }
-}
-
-/// Dispatch one branch action from the detail panel or the ⋯ overflow
-/// (issue 05). The owning root rides every action so its scope is stated in
-/// the wording (issue 14) — "Checkout in alpha".
-fn apply_action(state: &mut AppState, root: &RootId, branch: &Branch, action: BranchAction) {
-    state.ui.branches_tree.overflow = None;
-    match action {
-        BranchAction::Checkout => checkout_branch(state, root, branch),
-        BranchAction::Merge => state.open_merge_into(root, &branch.name),
-        BranchAction::Rebase => {
+        BranchMenuAction::Merge => state.open_merge_into(root, &branch.name),
+        BranchMenuAction::Rebase => {
             // Issue 09: rebase the selected branch onto the current one — the
             // label states the direction before anything runs.
             let current = state
@@ -1188,15 +885,8 @@ fn apply_action(state: &mut AppState, root: &RootId, branch: &Branch, action: Br
                 state.rebase_branch_onto_current(root, &branch.name, &current);
             }
         }
-        BranchAction::Compare => state.open_compare(root, &branch.name),
-        BranchAction::Rename => {
-            // Issue 11: renaming happens inline on the branch itself, never a
-            // separate form screen.
-            state.ui.branches_tree.renaming = Some(branch.name.clone());
-            state.ui.branches_tree.rename_draft = branch.name.clone();
-            state.ui.branches_tree.selected_root = Some(root.clone());
-        }
-        BranchAction::Delete => match branch.kind {
+        BranchMenuAction::Compare => state.open_compare(root, &branch.name),
+        BranchMenuAction::Delete => match branch.kind {
             BranchKind::Remote => {
                 let (remote, name) = branch
                     .name
@@ -1250,48 +940,5 @@ fn delete_consequence(state: &mut AppState, id: &RootId, branch: &Branch) -> Opt
             "this branch has {n} commit(s) not on {current} — they become unreachable after deleting"
         )),
         None => None,
-    }
-}
-
-#[cfg(test)]
-mod visual_tests {
-    use super::*;
-
-    #[test]
-    fn detail_prompt_wraps_to_allocated_and_clipped_width() {
-        let project = tempfile::tempdir().unwrap();
-        let config = tempfile::tempdir().unwrap();
-        let state = AppState::launch_in(Some(project.path().into()), Some(config.path().into()));
-        let mut harness = egui_kittest::Harness::new_ui_state(
-            |ui, state| {
-                crate::theme::configure_style(ui.ctx());
-                // Reproduce a nominal 280px allocation with only 208px visible.
-                let rect = Rect::from_min_size(ui.cursor().min, egui::vec2(DETAIL_W, 400.0));
-                let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
-                child.set_clip_rect(rect.intersect(ui.clip_rect()));
-                detail_panel(&mut child, state);
-            },
-            state,
-        );
-        crate::theme::install_fonts(&harness.ctx);
-        for width in [280.0, 208.0, 120.0] {
-            harness.set_size(egui::vec2(width, 500.0));
-            harness.run();
-            let shape = harness.output().shapes.iter().find(|shape| {
-                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().starts_with("See how"))
-            }).expect("detail prompt painted");
-            let egui::Shape::Text(text) = &shape.shape else {
-                unreachable!()
-            };
-            assert!(text.galley.rows.len() > 1, "prose must wrap");
-            let bounds = text.galley.rect.translate(text.pos.to_vec2());
-            assert!(
-                bounds.right() <= shape.clip_rect.right(),
-                "prose cut mid-word: {bounds:?} / {:?}",
-                shape.clip_rect
-            );
-            assert!(shape.clip_rect.right() <= width);
-            assert!(text.galley.text().ends_with("do with it."), "no lost prose");
-        }
     }
 }
