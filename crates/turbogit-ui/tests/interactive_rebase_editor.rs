@@ -14,6 +14,8 @@
 //! - the right rail: CAUTIONS, AFFECTED REPOS, RECOVERY naming the backup ref
 //! - the footer: time estimate, and Start rebase writing the backup ref at
 //!   the pre-rebase HEAD before the plan replays
+//! - the body-to-footer rule: the shared `RULE_FOOTER` tone plus the 1px
+//!   full-width geometry, which no acceptance capture covers
 
 #![allow(dead_code)]
 
@@ -22,13 +24,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::accesskit::Role;
+use egui::{Color32, Rect};
 use egui_kittest::kittest::Queryable as _;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
-use test_support::harness::{assert_not_painted, assert_painted};
+use test_support::harness::{assert_not_painted, assert_painted, galley_origin};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
+use turbogit_ui::theme::Palette;
 
 // ---------------------------------------------------------------- helpers --
 
@@ -472,4 +476,154 @@ fn the_footer_estimates_and_start_dispatches_the_backup_backed_plan() {
     // The editor closed itself after dispatching.
     assert_eq!(h.state().ui.dialog, None);
     assert_eq!(h.state().ui.dlg.rebase_plan, None);
+}
+
+// --- The body-to-footer rule wears the shared footer-rule tone (ticket 09) --
+//
+// The interactive rebase editor is NOT one of the acceptance-capture pages, so
+// nothing downstream would notice a spacing regression on its body-to-footer
+// rule. These two tests are the substitute evidence: one pins the tone, one pins
+// the geometry. Between them they say what `ui.separator()` used to produce and
+// what the shared footer rule produces, so the change can be reviewed as
+// tone-only rather than taken on trust.
+
+/// One full-width 1px horizontal band the editor painted, with the solid colour
+/// it carries — the fill of a filled band, or the stroke colour of a stroked
+/// one.
+///
+/// Deliberately primitive-agnostic. `ui.separator()` stroked a 1px line through
+/// the middle of a 6px band; the shared footer rule fills a 1px band. Reading
+/// both as "a 1px full-width band and its colour" is what lets the same helper
+/// measure the rule before and after the change, so the geometry assertion below
+/// compares like with like.
+fn full_width_hairlines(h: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
+    fn collect(shape: &egui::Shape, out: &mut Vec<(Rect, Color32)>) {
+        match shape {
+            egui::Shape::Rect(r)
+                if r.fill != Color32::TRANSPARENT
+                    && (r.rect.height() - 1.0).abs() < f32::EPSILON
+                    && r.rect.width() > 500.0 =>
+            {
+                out.push((r.rect, r.fill));
+            }
+            egui::Shape::LineSegment { points, stroke }
+                if (points[1].y - points[0].y).abs() < f32::EPSILON
+                    && (stroke.width - 1.0).abs() < f32::EPSILON
+                    && (points[1].x - points[0].x).abs() > 500.0 =>
+            {
+                // The painted extent of a 1px stroke: one pixel tall, centred on
+                // the segment — the same box a 1px fill covers.
+                let mid = egui::pos2(
+                    (points[0].x + points[1].x) / 2.0,
+                    (points[0].y + points[1].y) / 2.0,
+                );
+                out.push((
+                    Rect::from_center_size(mid, egui::vec2(points[1].x - points[0].x, 1.0)),
+                    stroke.color,
+                ));
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in h.output().shapes.iter() {
+        collect(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The editor's body-to-footer rule: the lowest full-width hairline that still
+/// sits above the footer row's own text. The tab-strip rule (the other
+/// `ui.separator()` in this editor, deliberately out of scope) is higher up, so
+/// "lowest above the footer text" picks the body-to-footer rule and not it.
+fn body_footer_rule(h: &Harness<'_, AppState>) -> (Rect, Color32) {
+    let footer_top = galley_origin(h, "Ready to rebase 3 commits")
+        .expect("the footer row paints its estimate")
+        .y;
+    *full_width_hairlines(h)
+        .iter()
+        .filter(|(rect, _)| rect.center().y < footer_top)
+        .max_by(|a, b| a.0.center().y.total_cmp(&b.0.center().y))
+        .expect("the editor must rule its body off from its footer")
+}
+
+/// The editor's other full-content-width hairline: the tab-strip rule, which
+/// `ui.separator()` lays out in the same content `Ui` as the footer rule and is
+/// therefore the editor's own answer to "how wide is the available width here".
+///
+/// Matched on x-range, which is what distinguishes the editor's own rules from
+/// the shell's topbar/status-bar edge lines (wider still) and from the two
+/// columns' internal rules (narrower) — both of which are painted in the same
+/// frame, overlapping the window.
+fn tab_strip_rule(h: &Harness<'_, AppState>, rule: Rect) -> Rect {
+    full_width_hairlines(h)
+        .into_iter()
+        .filter(|(rect, _)| {
+            (rect.left() - rule.left()).abs() < f32::EPSILON
+                && (rect.right() - rule.right()).abs() < f32::EPSILON
+                && rect.center().y < rule.center().y
+        })
+        .map(|(rect, _)| rect)
+        .min_by(|a, b| a.center().y.total_cmp(&b.center().y))
+        .expect("the editor also rules its tab strip off")
+}
+
+#[test]
+fn the_body_to_footer_rule_paints_the_shared_footer_rule_tone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = plan_repo(tmp.path(), "repo");
+    let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
+    let mut h = harness(state);
+    open_editor(&mut h, &repo);
+
+    let (_rect, color) = body_footer_rule(&h);
+    // Before the change this band was egui's default `ui.separator()` line: a
+    // 1px stroke in the *unowned* default-separator tone, which production
+    // re-points at the `INK_2` text token. (This harness drives `ui::render`
+    // without the production `configure_style`, so it shows egui's own raw
+    // default `noninteractive.bg_stroke` of `Color32::from_gray(60)`.) Either
+    // way it is a text token wearing a hairline's job, not the footer rule.
+    assert_eq!(
+        color,
+        Palette::RULE_FOOTER,
+        "the body-to-footer rule must wear the shared modal footer rule, \
+         which is what every other modal footer in the app wears"
+    );
+}
+
+#[test]
+fn the_body_to_footer_rule_keeps_the_separator_s_geometry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = plan_repo(tmp.path(), "repo");
+    let (state, _exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
+    let mut h = harness(state);
+    open_editor(&mut h, &repo);
+
+    let (rule, _) = body_footer_rule(&h);
+    let footer_top = galley_origin(&h, "Ready to rebase 3 commits")
+        .expect("the footer row paints its estimate")
+        .y;
+
+    // A 1px rule — not a 2px band, not a rounded card edge.
+    assert_eq!(rule.height(), 1.0, "the footer rule is a 1px hairline");
+    // Spans the editor's content width. The tab-strip rule above it is laid out
+    // by the same `Ui` at the same available width, so equalling it is a
+    // self-calibrating statement of "the full available width" that never
+    // hard-codes the window's size.
+    let tab_strip = tab_strip_rule(&h, rule);
+    assert_eq!(
+        rule.width(),
+        tab_strip.width(),
+        "the footer rule must span the editor's full available width"
+    );
+    assert!(
+        rule.left() >= tab_strip.left() && rule.right() <= tab_strip.right(),
+        "the footer rule must not overhang the editor's content box"
+    );
+    // Still a body-to-footer rule: below the tab strip, above the footer row.
+    assert!(
+        rule.center().y > tab_strip.center().y && rule.bottom() <= footer_top,
+        "the rule must separate the body from the footer row, not sit inside one"
+    );
 }

@@ -140,7 +140,15 @@ fn body(ui: &mut Ui, state: &mut AppState) {
 
     // Footer (screen 17): the estimate on the left, Cancel and Start on the
     // right. Start goes through the guarded, backup-backed dispatch.
-    ui.separator();
+    //
+    // The body-to-footer rule is the shared modal footer rule, so this editor's
+    // action slot wears the same tone every other modal footer does. The 5px of
+    // `add_space` restores exactly the band `ui.separator()` reserved around its
+    // 1px line (6px total, of which the shared rule paints 1px), so nothing
+    // above or below the rule moves: only the rule's tone, and which of the
+    // band's pixels it lands on, change.
+    ui.add_space(5.0);
+    widgets::footer_rule(ui);
     let mut dispatched = false;
     ui.horizontal(|ui| {
         ui.label(format!(

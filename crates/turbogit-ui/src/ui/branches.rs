@@ -390,10 +390,10 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
         state.ui.dlg.new_branch_checkout = true;
         state.ui.dialog = Some(Dialog::NewBranch);
     }
-    // Scope chip (issue 04): only when several repos are in scope.
+    // Scope label (issue 04): only when several repos are in scope.
     if state.multi.roots.len() > 1 {
         actions_ui.add_space(PAD_STRIP);
-        scope_chip(&mut actions_ui, state);
+        scope_label(&mut actions_ui, state);
     }
     let actions_left = actions_ui.min_rect().min.x;
 
@@ -417,10 +417,17 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The scope chip (issue 04): "all N repos" when nothing is narrowed, or
-/// "filtered to X" when a single repo is selected. The chip opens a picker that
+/// The scope label (issue 04): "all N repos" when nothing is narrowed, or
+/// "filtered to X" when a single repo is selected. The label opens a picker that
 /// narrows the list to one repo using today's filter semantics.
-fn scope_chip(ui: &mut Ui, state: &mut AppState) {
+///
+/// Not a chip, and deliberately not one: it paints **coloured text with no
+/// background at all**, so it shares no geometry, no radius and no fill with the
+/// shared chip vocabulary. Turning it into a real chip would introduce a
+/// background where none exists and would newly register an accessibility node
+/// for a piece of status text — a design change that needs its own ticket, not a
+/// consolidation. See `docs/design-system-roles.md`.
+fn scope_label(ui: &mut Ui, state: &mut AppState) {
     let filtered = state.ui.branches_repo_filter.is_some();
     let label = match &state.ui.branches_repo_filter {
         Some(id) => format!("filtered to {}", id.name()),

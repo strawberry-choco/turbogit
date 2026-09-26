@@ -435,6 +435,11 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
 
 // --- Cycle 2: refs collapse into one label pill; names show on hover -------
 
+// **Name collision, deliberately kept:** this test *name* contains the retired
+// `widgets::ref_label` as a substring, but it never called it. It asserts the
+// log surface's own hand-painted label pill — the one that collapses several
+// refs into a single pill and expands them on hover. A blind name search for
+// `ref_label` in the dead-widget sweep would have deleted live coverage.
 #[test]
 fn ref_labels_collapse_into_a_single_pill_revealed_on_hover() {
     let seed = seeded_project();
@@ -842,6 +847,12 @@ fn graph_search_filters_live_as_text_is_typed() {
 
 // --- Cycle 7: changed-files pane lists the selected commit's files -------------
 
+// **Name collision, deliberately kept:** this test *name* contains the retired
+// `widgets::status_badge` as a substring, but it never called it. What it
+// asserts is the log changed-files pane's own file-status letter chips, which
+// are the branch/log feature role, not the retired screens-gap status-badge
+// family. A blind name search for `status_badge` in the dead-widget sweep would
+// have deleted live coverage.
 #[test]
 fn changed_files_pane_lists_selected_commit_files_with_status_badges() {
     let seed = seeded_project();
@@ -865,6 +876,53 @@ fn changed_files_pane_lists_selected_commit_files_with_status_badges() {
         .find(|(r, c)| *c == expected && r.contains(pos))
         .expect("modified badge pill not painted with its token tint");
     assert!(badge.0.width() < 40.0, "badges are compact pills");
+
+    // The pill is the shared chip's height and text inset, painted through the
+    // shared painter-level chip (issue 07). Pinning both here is what fails if a
+    // change hands this row its own fill and centring back, or retargets it at a
+    // different chip geometry.
+    let galley = harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Text(shape) if shape.galley.text() == "M" => Some(shape.galley.clone()),
+            _ => None,
+        })
+        .expect("status badge galley");
+    assert_eq!(badge.0.height(), turbogit_ui::ui::widgets::CHIP_HEIGHT);
+    assert_eq!(
+        pos.x - badge.0.left(),
+        turbogit_ui::ui::widgets::CHIP_PAD_X,
+        "the shared chip's text inset on the left"
+    );
+    assert_eq!(
+        badge.0.right() - (pos.x + galley.size().x),
+        turbogit_ui::ui::widgets::CHIP_PAD_X,
+        "the shared chip's text inset on the right"
+    );
+    // Centred on both axes, exactly as the shared chip's text origin places it.
+    assert!((pos.x - (badge.0.center().x - galley.size().x / 2.0)).abs() < 0.01);
+    assert!((pos.y - (badge.0.center().y - galley.size().y / 2.0)).abs() < 0.01);
+    // It keeps this row's own compact radius: the shared *geometry* with
+    // CONTROL_RADIUS, not the full-height pill radius. Switching the badge to
+    // `CHIP_GEOMETRY` wholesale would be a visible design change, so the radius
+    // is pinned here to keep the consolidation honest.
+    let badge_shape = harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Rect(rect) if rect.fill == expected && rect.rect.contains(pos) => {
+                Some(rect.clone())
+            }
+            _ => None,
+        })
+        .expect("modified badge rect");
+    assert_eq!(
+        badge_shape.corner_radius,
+        egui::CornerRadius::same(turbogit_ui::theme::CONTROL_RADIUS)
+    );
 }
 
 // --- Redesign issue 04: the changed-files pane --------------------------------

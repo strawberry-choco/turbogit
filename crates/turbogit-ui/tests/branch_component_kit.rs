@@ -139,6 +139,78 @@ fn current_row_band_is_distinct_from_hover_and_selection() {
     );
 }
 
+/// Every hand-painted row in the crate tracks selection and hover as two
+/// booleans and calls [`RowState::from_flags`] to turn them into a state
+/// (`log_window`, `settings_modal`, `welcome`, `interactive_rebase`,
+/// `multi_selection`). So the mapping `from_flags` performs *is* what those five
+/// surfaces paint, and it is pinned here: `selected` resolves to
+/// [`RowState::BrandSelected`] — the solid brand band, not the §13
+/// [`RowState::Selected`] band `row_fill_states_are_distinct` covers — and it
+/// wins over `hovered`, because a selected row keeps its selection fill while
+/// the pointer is on it. The two unselected neighbours resolve to the hover and
+/// rest states that [`row_fill_states_are_distinct`] already names, so the
+/// whole function is covered by assertion here rather than by leaving it to the
+/// five call sites to get right implicitly.
+#[test]
+fn from_flags_maps_selection_onto_the_brand_band_and_keeps_hover_below_it() {
+    // Selected wins over hover, in both pointer positions.
+    assert_eq!(
+        RowState::from_flags(true, false),
+        RowState::BrandSelected,
+        "a selected row is the shared tree/list brand band"
+    );
+    assert_eq!(
+        RowState::from_flags(true, true),
+        RowState::BrandSelected,
+        "hovering a selected row must not demote it to the hover fill"
+    );
+    // The brand band is its own role, distinct from the §13 tool-window band.
+    assert_ne!(
+        RowState::from_flags(true, false),
+        RowState::Selected,
+        "from_flags paints the brand band, not the §13 selection band"
+    );
+    assert_ne!(
+        RowState::from_flags(true, false),
+        RowState::FocusSelected,
+        "from_flags paints the brand band, not the translucent focus band"
+    );
+    // The two unselected neighbours.
+    assert_eq!(
+        RowState::from_flags(false, true),
+        RowState::Hover,
+        "an unselected hovered row is the hover state"
+    );
+    assert_eq!(
+        RowState::from_flags(false, false),
+        RowState::Default,
+        "an untouched row is the default state"
+    );
+
+    // And the fills those states actually paint, so the mapping cannot be
+    // re-pointed at a different selection role without failing here.
+    assert_eq!(
+        row_fill(RowState::from_flags(true, false)),
+        Palette::BRAND,
+        "the brand band is the solid BRAND fill"
+    );
+    assert_eq!(
+        row_fill(RowState::from_flags(true, true)),
+        Palette::BRAND,
+        "selection wins over hover in the painted fill too"
+    );
+    assert_eq!(
+        row_fill(RowState::from_flags(false, true)),
+        Palette::SURFACE_2,
+        "the unselected hover neighbour paints the surface-2 hover fill"
+    );
+    assert_eq!(
+        row_fill(RowState::from_flags(false, false)),
+        egui::Color32::TRANSPARENT,
+        "the resting neighbour paints nothing"
+    );
+}
+
 /// Stale rows dim (never hide); current rows keep primary ink.
 #[test]
 fn stale_rows_dim_without_hiding() {

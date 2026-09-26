@@ -55,8 +55,8 @@ use turbogit_app::operation::Operation;
 use turbogit_app::state::{AppState, Dialog, PendingConfirm, ToastKind};
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     // Banner strip (issue #02): when set, paints a severity-tinted
-    // strip with deep-link actions above the shell. Each surface can
-    // also call `banner::show` locally when a banner is surface-scoped.
+    // strip with deep-link actions above the shell. This is the app-wide
+    // host; the accent strip itself is `widgets::accent_bar`.
     banner::maybe_show(ui, state);
 
     // Shell frame + central body (Welcome placeholder or tool window).
@@ -150,13 +150,9 @@ fn render_toast(ui: &mut Ui, state: &mut AppState) {
         .title_bar(false)
         .show(&ctx, |ui| {
             ui.horizontal(|ui| {
-                // Kind-colored accent bar along the message (spec §10).
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), egui::Sense::hover());
-                ui.painter().rect_filled(
-                    rect,
-                    egui::CornerRadius::same(crate::theme::MARK_RADIUS),
-                    color,
-                );
+                // Kind-colored accent bar along the message (spec §10) —
+                // the same shared strip the banner leads with.
+                widgets::accent_bar(ui, color);
                 icons::icon(ui, icon, 16.0, color);
                 ui.colored_label(color, &toast.message);
                 // `Dismiss` is the toast's only action (ADR-0020): no

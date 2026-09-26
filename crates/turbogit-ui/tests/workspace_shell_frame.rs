@@ -197,8 +197,10 @@ fn repo_header_paints_orange_dirty_badge_with_uncommitted_count() {
     settle(&mut h);
 
     // The orange dirty badge: the only COUNTER-tinted chip on the header row
-    // (its fill is the deterministic tint over the app background).
-    let badge_fill = widgets::tint_over_bg(Palette::COUNTER, 0.18);
+    // (its fill is the deterministic tint over the app background). The alpha
+    // is the shared named badge tint, not a restated literal that would keep
+    // passing by coincidence if the token ever moved.
+    let badge_fill = widgets::tint_over_bg(Palette::COUNTER, widgets::BADGE_TINT);
     let (badge, _) = filled_rects(&h)
         .into_iter()
         .find(|(_, c)| *c == badge_fill)

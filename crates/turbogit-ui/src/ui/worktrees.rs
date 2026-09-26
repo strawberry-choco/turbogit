@@ -43,6 +43,13 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// One worktree row: path, branch, dirty status, and the remove action.
+///
+/// **Name collision, deliberately kept:** `worktree_row` *contains* the retired
+/// `widgets::tree_row` as a substring but has nothing to do with it. This is a
+/// page-local hand-laid row for one worktree, not the retired general
+/// fixed-height tree/list wrapper. A blind name search for `tree_row` in the
+/// dead-widget sweep would have deleted live code; do not let a future sweep do
+/// that.
 fn worktree_row(ui: &mut Ui, state: &mut AppState, wt: &Worktree) {
     let name = wt
         .path

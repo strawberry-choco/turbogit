@@ -9,17 +9,31 @@
 //! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] over
 //! a real temp git repository so the banner participates in the same
 //! frame paint order as the rest of the shell. Assertions are on
-//! painted text and on public `AppState` transitions.
+//! painted shapes — the severity-tinted accent strip as well as text — and
+//! on public `AppState` transitions.
+//!
+//! The accent strip is a *shared widget* (`turbogit_ui::ui::widgets::accent_bar`),
+//! not a private drawing each host reinvents, so this file pins both halves of
+//! that contract: the primitive's own geometry, and the banner host's
+//! severity-to-colour resolution on top of it.
 
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use egui::{Color32, CornerRadius, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
 use test_support::harness::{assert_not_painted, assert_painted, painted_text};
 use turbogit_app::banner::{Banner, BannerAction, BannerSeverity};
 use turbogit_app::state::AppState;
+use turbogit_ui::theme::{MARK_RADIUS, Palette};
+
+/// The accent bar's spec geometry: a narrow, fixed-height, `MARK_RADIUS`-rounded
+/// strip. Every host paints it at this size, so a change here is a design
+/// change that must reach all of them at once.
+const BAR_WIDTH: f32 = 3.0;
+const BAR_HEIGHT: f32 = 18.0;
 
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
@@ -188,4 +202,130 @@ fn clicking_a_banner_action_invokes_it_against_appstate() {
          current toast: {:?}",
         harness.state().ui.toast
     );
+}
+
+// --- the shared accent-bar primitive ---------------------------------------
+
+/// Every accent-bar-sized filled rect the last frame painted in `color`, with
+/// its corner radius. `test_support::harness::filled_rects` reports size and
+/// fill but drops the rounding; the radius is half the primitive's contract
+/// (it is what `MARK_RADIUS` exists for), so this local helper keeps it.
+///
+/// Keyed on `color` on purpose: the headless harness's own panel background is
+/// a sharp-cornered fill that can land on the leftover geometry, and only the
+/// caller's resolved colour identifies the bar.
+fn accent_bars_in<S>(
+    harness: &Harness<'_, S>,
+    color: Color32,
+) -> Vec<(Rect, CornerRadius, Color32)> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Rect(rect_shape)
+                if rect_shape.fill == color
+                    && rect_shape.rect.size() == Vec2::new(BAR_WIDTH, BAR_HEIGHT) =>
+            {
+                Some((rect_shape.rect, rect_shape.corner_radius, rect_shape.fill))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A harness whose only content is the shared accent-bar primitive, so
+/// "exactly one bar" is a statement about the primitive and not about the
+/// shell's other chrome.
+fn accent_bar_harness(color: Color32) -> Harness<'static, ()> {
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _state| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            if !fonts_installed {
+                turbogit_ui::theme::install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            ui.horizontal(|ui| {
+                turbogit_ui::ui::widgets::accent_bar(ui, color);
+                // A second widget in the same row, so the strip is not alone
+                // on the line and the harness's panel background cannot land
+                // on the same geometry.
+                ui.label("after");
+            });
+        },
+        (),
+    );
+    harness.set_size(egui::vec2(240.0, 60.0));
+    harness
+}
+
+/// Contract: the accent bar is one shared primitive that paints exactly one
+/// narrow, fixed-height, `MARK_RADIUS`-rounded strip in the colour it was
+/// handed. It owns no severity vocabulary — a caller resolves severity to a
+/// colour, so one definition of the strip reaches the banner and the toast at
+/// once and the two can no longer drift apart.
+#[test]
+fn accent_bar_primitive_paints_one_mark_rounded_strip_in_the_given_color() {
+    let color = Palette::STATE_WARNING;
+    let mut harness = accent_bar_harness(color);
+    harness.step();
+
+    let bars = accent_bars_in(&harness, color);
+    assert_eq!(
+        bars.len(),
+        1,
+        "the accent bar paints exactly one filled rect; painted: {bars:?}"
+    );
+    let (rect, radius, fill) = bars[0];
+    assert_eq!(
+        fill, color,
+        "the strip paints the colour it was given, verbatim"
+    );
+    assert_eq!(
+        rect.size(),
+        Vec2::new(BAR_WIDTH, BAR_HEIGHT),
+        "the strip keeps its spec size on every host"
+    );
+    assert_eq!(
+        radius,
+        CornerRadius::same(MARK_RADIUS),
+        "a strip this small rounds at MARK_RADIUS, not CONTROL_RADIUS"
+    );
+}
+
+/// Contract: the banner host paints that shared strip in the colour the
+/// banner's severity resolves to. The four tests above only read painted
+/// text, so without this the severity-to-colour mapping was unpinned.
+#[test]
+fn banner_paints_its_accent_bar_in_the_severity_color() {
+    const CASES: [(BannerSeverity, Color32); 4] = [
+        (BannerSeverity::Info, Palette::STATE_INFO),
+        (BannerSeverity::Warning, Palette::STATE_WARNING),
+        (BannerSeverity::Error, Palette::STATE_ERROR),
+        (BannerSeverity::Success, Palette::STATE_SUCCESS),
+    ];
+
+    let (_tmp, project) = repo_project();
+    let mut harness = feedback_harness(project);
+
+    for (severity, color) in CASES {
+        harness.state_mut().ui.banner = Some(Banner::new(severity, "Stash restored"));
+        settle_quiet(&mut harness);
+
+        // Pin it by geometry and rounding, not by "somewhere in the frame":
+        // the strip is 3×18 at MARK_RADIUS in the severity's own token.
+        let bars = accent_bars_in(&harness, color);
+        assert_eq!(
+            bars.len(),
+            1,
+            "{severity:?} banner must paint exactly one accent bar in {color:?}; \
+             painted: {bars:?}"
+        );
+        assert_eq!(
+            bars[0].1,
+            CornerRadius::same(MARK_RADIUS),
+            "{severity:?} banner's strip rounds at MARK_RADIUS"
+        );
+    }
 }

@@ -14,12 +14,14 @@
 //! - hunk nav ‹ n/N › counts and steps correctly
 //! - Ignore whitespace toggle affects the diff
 //! - add/del rows paint token-exact backgrounds; gutters show muted numbers
+//! - the diff's ghost icon buttons (nav pair, gutter pair) are two scale
+//!   settings of one shared primitive and keep their labels and enabled flags
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use egui::{Color32, Pos2, Rect, Shape};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui::{Color32, Pos2, Rect, Shape, Vec2};
+use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
 use turbogit_app::events::AppEvent;
 use turbogit_app::keyed_read::{DiffTarget, Keyed};
 use turbogit_app::state::{AppState, DiffComparison};
@@ -125,6 +127,32 @@ fn repo_two_hunks() -> (tempfile::TempDir, PathBuf) {
     edited[1] = "X2".to_string();
     edited[11] = "X12".to_string();
     write_file(&repo, "nav.txt", &format!("{}\n", edited.join("\n")));
+    (tmp, repo)
+}
+
+/// Run `git <args>` in `dir` without asserting success — a merge that
+/// conflicts exits non-zero, which is exactly the state under test.
+fn git_unchecked(dir: &Path, args: &[&str]) {
+    let _ = Command::new("git").args(args).current_dir(dir).output();
+}
+
+/// Repo left mid-merge on `conf.txt`, so it reports
+/// `ChangeStatus::Conflicted` and its hunk-header gutter pair renders
+/// visible-but-disabled.
+fn repo_conflicted() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    write_file(&repo, "conf.txt", "one\ntwo\n");
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "c1"]);
+    run_git(&repo, &["checkout", "-q", "-b", "side"]);
+    write_file(&repo, "conf.txt", "one\nside\n");
+    run_git(&repo, &["add", "conf.txt"]);
+    run_git(&repo, &["commit", "-m", "side"]);
+    run_git(&repo, &["checkout", "-q", "main"]);
+    write_file(&repo, "conf.txt", "one\nmain line\n");
+    run_git(&repo, &["add", "conf.txt"]);
+    run_git(&repo, &["commit", "-m", "main line"]);
+    git_unchecked(&repo, &["merge", "--no-edit", "side"]);
     (tmp, repo)
 }
 
@@ -493,5 +521,122 @@ fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
             .iter()
             .any(|(r, c)| *c == Palette::SURFACE && r.contains(hunk_pos)),
         "hunk header must be backed by SURFACE"
+    );
+}
+
+// --- Cycle 6: one shared ghost icon button at two scales --------------------
+
+/// Drive the shared ghost icon-button primitive directly at both scales a
+/// host uses: the standard 24 px square (the diff nav control) and the dense
+/// 18 px rect a gutter supplies itself. One enabled, one not.
+fn ghost_primitive_harness() -> Harness<'static, ()> {
+    use turbogit_ui::ui::icons::{self, Icon};
+    use turbogit_ui::ui::widgets::{self, ButtonVariant};
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _state| {
+            configure_style(ui.ctx());
+            if !fonts_installed {
+                install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(24.0), egui::Sense::hover());
+                widgets::ghost_icon_button(
+                    ui,
+                    rect,
+                    ui.id().with("Nav ghost"),
+                    "Nav ghost",
+                    true,
+                    |ui, rect, state| {
+                        let ink = ButtonVariant::Ghost.text(state);
+                        icons::centered_icon(ui, Icon::CHECK, rect.center(), 14.0, ink);
+                    },
+                );
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::hover());
+                widgets::ghost_icon_button(
+                    ui,
+                    rect,
+                    ui.id().with("Gutter ghost"),
+                    "Gutter ghost",
+                    false,
+                    |ui, _rect, state| {
+                        let ink = ButtonVariant::Ghost.text(state);
+                        icons::icon(ui, Icon::CHECK, 12.0, ink);
+                    },
+                );
+            });
+        },
+        (),
+    );
+    harness.set_size(egui::vec2(240.0, 80.0));
+    harness
+}
+
+/// Contract: the diff's ghost icon controls — the hunk-nav pair and the
+/// hunk-header gutter pair — are two scale settings of one general primitive
+/// built over the shared button-state vocabulary. What must survive that
+/// collapse is everything *not* in the ladder: the control is still findable
+/// by its accessibility label, it still reports enabled/disabled honestly,
+/// and a conflicted hunk's gutter control still reports disabled rather than
+/// disappearing.
+#[test]
+fn ghost_icon_controls_keep_their_labels_and_enabled_flags() {
+    // --- the general primitive itself, at both scales ---------------------
+    let mut primitives = ghost_primitive_harness();
+    primitives.step();
+
+    assert!(
+        !primitives
+            .get_by_label("Nav ghost")
+            .accesskit_node()
+            .is_disabled(),
+        "an enabled ghost icon button must report itself enabled"
+    );
+    assert!(
+        primitives
+            .get_by_label("Gutter ghost")
+            .accesskit_node()
+            .is_disabled(),
+        "a disabled ghost icon button must report itself disabled"
+    );
+
+    // --- the migrated hosts, on a real diff ------------------------------
+    let (_tmp, repo) = repo_two_hunks();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo.join("nav.txt"));
+
+    for label in ["Previous hunk", "Next hunk"] {
+        assert!(
+            !h.get_by_label(label).accesskit_node().is_disabled(),
+            "the `{label}` nav control must stay findable by label and enabled \
+             while the preview carries hunks"
+        );
+    }
+    // The gutter pair on hunk 1 of a clean file is live.
+    for label in ["Stage hunk 1", "Unstage hunk 1"] {
+        assert!(
+            !h.get_by_label(label).accesskit_node().is_disabled(),
+            "the `{label}` gutter control must stay findable by label and \
+             enabled on a clean hunk"
+        );
+    }
+
+    // A conflicted hunk keeps the pair visible but inert.
+    let (_tmp, conflicted) = repo_conflicted();
+    let mut c = diff_harness(&conflicted);
+    settle(&mut c);
+    c.get_by_label("C conf.txt").click();
+    settle(&mut c);
+    assert!(
+        !c.query_by_label("Stage hunk 1").is_none(),
+        "conflicted files must still render their granular gutter controls"
+    );
+    assert!(
+        c.get_by_label("Stage hunk 1")
+            .accesskit_node()
+            .is_disabled(),
+        "a gutter control on a conflicted hunk must report disabled"
     );
 }

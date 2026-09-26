@@ -4,8 +4,9 @@
 //! layer boundary stays clean (app does not depend on ui).
 
 use crate::theme::Palette;
+use crate::ui::widgets;
 use egui::{Color32, Ui};
-use turbogit_app::banner::{Banner, BannerSeverity};
+use turbogit_app::banner::BannerSeverity;
 use turbogit_app::state::AppState;
 
 pub use turbogit_app::banner::{Banner as AppBanner, BannerAction, BannerSeverity as AppSeverity};
@@ -37,12 +38,7 @@ pub fn maybe_show(ui: &mut Ui, state: &mut AppState) {
         let banner = state.ui.banner.as_ref().expect("checked is_none above");
         let color = severity_color(banner.severity);
         ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), egui::Sense::hover());
-            ui.painter().rect_filled(
-                rect,
-                egui::CornerRadius::same(crate::theme::MARK_RADIUS),
-                color,
-            );
+            widgets::accent_bar(ui, color);
             ui.colored_label(color, &banner.message);
             let mut clicked: Option<String> = None;
             for action in &banner.actions {
@@ -55,38 +51,6 @@ pub fn maybe_show(ui: &mut Ui, state: &mut AppState) {
         .inner
     };
     // Phase 2: drop the read-borrow, take the matching action.
-    if let Some(label) = clicked
-        && let Some(b) = state.ui.banner.as_mut()
-        && let Some(pos) = b.actions.iter().position(|a| a.label == label)
-    {
-        let a = b.actions.remove(pos);
-        (a.on_click)(state);
-    }
-}
-
-/// Public entry point for callers that already hold `&Banner` (e.g. a
-/// surface that wants to render a local copy). Same click-dispatch
-/// contract via the state's banner.
-pub fn show(ui: &mut Ui, state: &mut AppState, banner: &Banner) {
-    let color = severity_color(banner.severity);
-    let clicked: Option<String> = ui
-        .horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 18.0), egui::Sense::hover());
-            ui.painter().rect_filled(
-                rect,
-                egui::CornerRadius::same(crate::theme::MARK_RADIUS),
-                color,
-            );
-            ui.colored_label(color, &banner.message);
-            let mut clicked: Option<String> = None;
-            for action in &banner.actions {
-                if ui.small_button(&action.label).clicked() {
-                    clicked = Some(action.label.clone());
-                }
-            }
-            clicked
-        })
-        .inner;
     if let Some(label) = clicked
         && let Some(b) = state.ui.banner.as_mut()
         && let Some(pos) = b.actions.iter().position(|a| a.label == label)

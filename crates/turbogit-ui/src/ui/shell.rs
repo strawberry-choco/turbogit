@@ -764,7 +764,7 @@ fn dirty_badge(ui: &mut Ui, dirty_count: usize) {
         return;
     }
     let fg = Palette::COUNTER;
-    let bg = widgets::tint_over_bg(fg, 0.18);
+    let bg = widgets::tint_over_bg(fg, widgets::BADGE_TINT);
     let galley = ui.painter().layout_no_wrap(
         dirty_count.to_string(),
         crate::theme::chrome_font(crate::theme::TYPE_CONTROL),

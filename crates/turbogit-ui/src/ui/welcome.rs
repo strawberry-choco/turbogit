@@ -16,8 +16,8 @@
 
 use crate::theme::Palette;
 use egui::{
-    Align, Align2, Color32, CornerRadius, Frame, Id, Layout, Margin, Order, Pos2, Rect, RichText,
-    Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Align2, Color32, CornerRadius, Id, Layout, Order, Pos2, Rect, RichText, Sense, Stroke,
+    StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::time::{Duration, Instant};
 use turbogit_app::state::{AppState, Toast};
@@ -392,69 +392,64 @@ pub fn pick_dir_public(state: &mut AppState, purpose: &str) -> Option<std::path:
 /// right-aligned; the body row is the URL input (filling) plus a primary Clone
 /// button. Input and checkbox keep their exact kittest labels ("Repository URL",
 /// "Shallow clone (--depth 1)"), so the clone flow's headless coverage is
-/// untouched.
+/// untouched. The card is the shared [`widgets::card`] at 16 px of padding
+/// (wider than the panel padding) and a full-width stretch.
 fn clone_box(ui: &mut Ui, state: &mut AppState) {
-    Frame::new()
-        .fill(Palette::CONTENT_BG)
-        .stroke(Stroke::new(1.0, Palette::LINE))
-        .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
-        .inner_margin(Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                icons::icon(ui, Icon::DOWNLOAD, 16.0, Palette::ACCENT_TEXT);
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new("Clone a repository")
-                        .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
-                        .color(Palette::INK),
+    widgets::card(ui, widgets::CardFrame::default().padded(16), |ui| {
+        ui.horizontal(|ui| {
+            icons::icon(ui, Icon::DOWNLOAD, 16.0, Palette::ACCENT_TEXT);
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new("Clone a repository")
+                    .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
+                    .color(Palette::INK),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.checkbox(
+                    &mut state.ui.welcome_shallow,
+                    RichText::new("Shallow clone (--depth 1)")
+                        .size(crate::theme::TYPE_CONTROL)
+                        .color(Palette::INK_2),
                 );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.checkbox(
-                        &mut state.ui.welcome_shallow,
-                        RichText::new("Shallow clone (--depth 1)")
-                            .size(crate::theme::TYPE_CONTROL)
-                            .color(Palette::INK_2),
-                    );
-                });
             });
-            ui.add_space(10.0);
-
-            // Body: URL input fills the row; the Clone button is pinned right.
-            // Reserve the button's width first so `text_input` doesn't swallow
-            // the whole line (spec §5.2: input + button on one row).
-            let label_w = ui
-                .painter()
-                .layout_no_wrap(
-                    "Clone".to_owned(),
-                    crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
-                    Color32::WHITE,
-                )
-                .size()
-                .x;
-            let btn_w = 2.0 * ui.spacing().button_padding.x + (16.0 + 6.0) + label_w;
-            let input_w = (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(120.0);
-            let mut input_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(Rect::from_min_size(
-                        ui.cursor().min,
-                        Vec2::new(input_w, 32.0),
-                    ))
-                    .layout(*ui.layout()),
-            );
-            let response = widgets::text_input(
-                &mut input_ui,
-                "Repository URL",
-                &mut state.ui.welcome_clone_url,
-            );
-            ui.advance_cursor_after_rect(input_ui.min_rect());
-            if std::mem::take(&mut state.ui.welcome_focus_clone) {
-                response.request_focus();
-            }
-            if widgets::primary_button(ui, Some(Icon::DOWNLOAD), "Clone").clicked() {
-                clone_from_url(state);
-            }
         });
+        ui.add_space(10.0);
+
+        // Body: URL input fills the row; the Clone button is pinned right.
+        // Reserve the button's width first so `text_input` doesn't swallow
+        // the whole line (spec §5.2: input + button on one row).
+        let label_w = ui
+            .painter()
+            .layout_no_wrap(
+                "Clone".to_owned(),
+                crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
+                Color32::WHITE,
+            )
+            .size()
+            .x;
+        let btn_w = 2.0 * ui.spacing().button_padding.x + (16.0 + 6.0) + label_w;
+        let input_w = (ui.available_width() - btn_w - ui.spacing().item_spacing.x).max(120.0);
+        let mut input_ui = ui.new_child(
+            UiBuilder::new()
+                .max_rect(Rect::from_min_size(
+                    ui.cursor().min,
+                    Vec2::new(input_w, 32.0),
+                ))
+                .layout(*ui.layout()),
+        );
+        let response = widgets::text_input(
+            &mut input_ui,
+            "Repository URL",
+            &mut state.ui.welcome_clone_url,
+        );
+        ui.advance_cursor_after_rect(input_ui.min_rect());
+        if std::mem::take(&mut state.ui.welcome_focus_clone) {
+            response.request_focus();
+        }
+        if widgets::primary_button(ui, Some(Icon::DOWNLOAD), "Clone").clicked() {
+            clone_from_url(state);
+        }
+    });
 }
 
 /// Clone the entered URL into a picked parent folder and enter the result.
@@ -500,52 +495,47 @@ fn clone_from_url(state: &mut AppState) {
 /// "RECENT PROJECTS" group title + a right-aligned count badge, one clickable
 /// row per entry, and a "Show all projects" footer. `recent_row`'s internals are
 /// unchanged apart from the branch chip fill. Clicking a row reopens that project.
+/// The card is the shared [`widgets::card`] at 16 px of padding and a
+/// full-width stretch.
 fn recents_column(ui: &mut Ui, state: &mut AppState) {
-    Frame::new()
-        .fill(Palette::CONTENT_BG)
-        .stroke(Stroke::new(1.0, Palette::LINE))
-        .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
-        .inner_margin(Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-
-            let count = state.ui.recent_projects.len();
-            ui.horizontal(|ui| {
-                widgets::group_title(ui, "Recent Projects");
-                if count > 0 {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        widgets::badge(ui, &count.to_string(), widgets::BadgeKind::Neutral);
-                    });
-                }
-            });
-            ui.add_space(4.0);
-
-            let recents = state.ui.recent_projects.clone();
-            if recents.is_empty() {
-                ui.label(
-                    RichText::new("No recent projects yet.")
-                        .size(crate::theme::TYPE_BODY)
-                        .color(Palette::INK_3),
-                );
-                return;
+    widgets::card(ui, widgets::CardFrame::default().padded(16), |ui| {
+        let count = state.ui.recent_projects.len();
+        ui.horizontal(|ui| {
+            widgets::group_title(ui, "Recent Projects");
+            if count > 0 {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    widgets::badge(ui, &count.to_string(), widgets::BadgeKind::Neutral);
+                });
             }
-            for r in &recents {
-                recent_row(ui, state, r);
-                ui.add_space(4.0);
-            }
-
-            // Footer: a visually-honest v1 no-op — there is no recents browser
-            // to route to yet (recorded as a follow-up in plan §4).
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("Show all projects")
-                        .size(crate::theme::TYPE_CONTROL)
-                        .color(Palette::ACCENT_TEXT),
-                );
-                icons::icon(ui, Icon::CHEVRON_RIGHT, 14.0, Palette::ACCENT_TEXT);
-            });
         });
+        ui.add_space(4.0);
+
+        let recents = state.ui.recent_projects.clone();
+        if recents.is_empty() {
+            ui.label(
+                RichText::new("No recent projects yet.")
+                    .size(crate::theme::TYPE_BODY)
+                    .color(Palette::INK_3),
+            );
+            return;
+        }
+        for r in &recents {
+            recent_row(ui, state, r);
+            ui.add_space(4.0);
+        }
+
+        // Footer: a visually-honest v1 no-op — there is no recents browser
+        // to route to yet (recorded as a follow-up in plan §4).
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Show all projects")
+                    .size(crate::theme::TYPE_CONTROL)
+                    .color(Palette::ACCENT_TEXT),
+            );
+            icons::icon(ui, Icon::CHEVRON_RIGHT, 14.0, Palette::ACCENT_TEXT);
+        });
+    });
 }
 
 fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents::RecentProject) {
@@ -676,14 +666,14 @@ const HINTS: [&str; 5] = [
 
 /// Numbered getting-started tips as a `SURFACE` card (spec §5.5): the group
 /// title plus five steps, each a `STEP_PILL` numeral pill before its body text.
+/// It sits beside the recents card, so it wears the shared
+/// [`widgets::CardFrame::raised`] tone at 16 px of padding — a `CONTENT_BG`
+/// fill there would be the same colour as the pane behind it.
 fn getting_started(ui: &mut Ui) {
-    Frame::new()
-        .fill(Palette::SURFACE)
-        .stroke(Stroke::new(1.0, Palette::LINE))
-        .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
-        .inner_margin(Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+    widgets::card(
+        ui,
+        widgets::CardFrame::default().raised().padded(16),
+        |ui| {
             widgets::group_title(ui, "Getting Started");
             ui.add_space(6.0);
             for (i, hint) in HINTS.iter().enumerate() {
@@ -697,7 +687,8 @@ fn getting_started(ui: &mut Ui) {
                 });
                 ui.add_space(4.0);
             }
-        });
+        },
+    );
 }
 
 /// A getting-started step numeral: a `STEP_PILL` `SURFACE_3` pill
@@ -709,17 +700,11 @@ fn step_pill(ui: &mut Ui, n: usize) {
         CornerRadius::same(crate::theme::PILL_RADIUS),
         Palette::SURFACE_3,
     );
-    let galley = ui.painter().layout_no_wrap(
-        n.to_string(),
+    widgets::paint_centered_text(
+        ui.painter(),
+        rect,
+        &n.to_string(),
         crate::theme::data_font(crate::theme::TYPE_CONTROL),
-        Palette::ACCENT_TEXT,
-    );
-    ui.painter().galley(
-        Pos2::new(
-            rect.center().x - galley.size().x / 2.0,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
         Palette::ACCENT_TEXT,
     );
 }
@@ -746,6 +731,10 @@ const CHANGELOG: &[(&str, &str)] = &[
 /// Center-anchored changelog overlay (issue #34): a framed panel listing
 /// [`CHANGELOG`] entries with a Close button. Painted above the Welcome page
 /// content while [`UiState::show_changelog`] is set.
+///
+/// It floats rather than filling a pane, so it is the shared [`widgets::card`]
+/// in its pinned form — [`widgets::CardFrame::raised`] tone, 20 px of padding,
+/// and a 420 px minimum width — inside the centering [`egui::Area`].
 fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.show_changelog {
         return;
@@ -754,13 +743,13 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
         .order(Order::Tooltip)
         .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
         .show(ui.ctx(), |ui| {
-            Frame::new()
-                .fill(Palette::SURFACE)
-                .stroke(Stroke::new(1.0, Palette::LINE))
-                .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
-                .inner_margin(Margin::same(20))
-                .show(ui, |ui| {
-                    ui.set_min_width(420.0);
+            widgets::card(
+                ui,
+                widgets::CardFrame::default()
+                    .raised()
+                    .padded(20)
+                    .min_width(420.0),
+                |ui| {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new("What's New")
@@ -795,7 +784,8 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
                                 ui.add_space(6.0);
                             }
                         });
-                });
+                },
+            );
         });
 }
 
