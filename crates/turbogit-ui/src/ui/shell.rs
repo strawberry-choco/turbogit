@@ -212,7 +212,12 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         state.ui.vcs_popup = !state.ui.vcs_popup;
     }
 
-    let popup_open = state.ui.vcs_popup || state.ui.command_palette || state.ui.branches_popup;
+    // The branch context menu joins the popup gate: while it is open the
+    // R7 keys pause (the frozen five keep their dispatch-first contract).
+    let popup_open = state.ui.vcs_popup
+        || state.ui.command_palette
+        || state.ui.branches_popup
+        || state.ui.branches_tree.context_menu.is_some();
     if dialog_open {
         return;
     }

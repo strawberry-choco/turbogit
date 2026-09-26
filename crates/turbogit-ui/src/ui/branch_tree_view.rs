@@ -77,6 +77,9 @@ pub enum TreeEvent {
     RowActivated { root: RootId, branch: String },
     /// The row's ⋯ overflow button toggled the menu for this branch.
     OverflowToggled { root: RootId, branch: String },
+    /// The row was right-clicked: the surface owns the context menu — its
+    /// open state, its anchor, and what its items do.
+    ContextMenuRequested { root: RootId, branch: String },
     /// A Local/Tags group header was clicked.
     GroupToggled(TreeGroup),
     /// A remote group header was clicked: collapse/expand that remote.
@@ -140,6 +143,10 @@ pub struct TreeProps<'a> {
     pub now: chrono::DateTime<chrono::Utc>,
     /// Capability: this instance allows inline rename.
     pub allows_rename: bool,
+    /// Capability: rows report right-clicks as
+    /// [`TreeEvent::ContextMenuRequested`]. The Branches surface sets it;
+    /// the Git Log pane's branches pane does not.
+    pub allows_context_menu: bool,
     /// Capability: rows reveal per-row action buttons on hover.
     pub shows_row_actions: bool,
     /// egui id salt for the scroll area — unique per surface.
@@ -1077,6 +1084,19 @@ fn branch_row(
         });
     } else if response.clicked() {
         events.push(TreeEvent::RowClicked {
+            root: section.root_id.clone(),
+            branch: branch.name.clone(),
+        });
+    } else if props.allows_context_menu && response.secondary_clicked() {
+        // The anchor is the pointer position at the right-click, stashed in
+        // egui memory exactly like the ⋯ overflow's anchor rect — the app
+        // crate has no egui types to carry it in `TreeState`.
+        let anchor_id = egui::Id::new(("branches_context_menu_anchor", id, &branch.name));
+        let pos = ui
+            .input(|i| i.pointer.interact_pos())
+            .unwrap_or_else(|| rect.left_bottom());
+        ui.ctx().memory_mut(|m| m.data.insert_temp(anchor_id, pos));
+        events.push(TreeEvent::ContextMenuRequested {
             root: section.root_id.clone(),
             branch: branch.name.clone(),
         });
