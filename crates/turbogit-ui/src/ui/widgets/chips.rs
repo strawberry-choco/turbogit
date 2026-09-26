@@ -6,11 +6,11 @@ use egui::{
 };
 
 use super::controls::{focus_ring, tint_over_bg};
-use crate::theme::{CASCADE_ACCENT, CONTROL_RADIUS, Palette, TYPE_CONTROL};
+use crate::theme::{CONTROL_RADIUS, Palette, TYPE_CONTROL};
 
 /// Alpha used when tinting an accent over [`Palette::BG`] for badge fills.
 pub const BADGE_TINT: f32 = 0.18;
-/// Badge / ref-label chip height (pill).
+/// Shared chip height (pill).
 pub const CHIP_HEIGHT: f32 = 18.0;
 /// Horizontal text inset on each side of the shared non-interactive chip.
 pub const CHIP_PAD_X: f32 = 6.0;
@@ -18,7 +18,7 @@ const MICRO_TEXT: f32 = TYPE_CONTROL;
 
 // --- Chip decisions ----------------------------------------------------------
 
-/// Background/foreground pair painted by badges and ref labels.
+/// Background/foreground pair painted by the badge family.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ChipColors {
     pub bg: Color32,
@@ -68,6 +68,12 @@ pub enum RefKind {
 impl RefKind {
     /// The token this ref kind is decided by: branch=brand, remote=success,
     /// tag=warning.
+    ///
+    /// This is the *colour vocabulary* half of the ref-chip role, and it
+    /// outlived the ref-label render function: `ui::log_window` maps its own
+    /// reference kind onto [`RefKind::accent`] for colouring and never renders
+    /// a ref label. The retired `RefKind::colors` — the solid-pill colour pair
+    /// only that render function needed — went with it. Keep `accent()`.
     pub fn accent(self) -> Color32 {
         match self {
             Self::Branch => Palette::BRAND,
@@ -75,89 +81,12 @@ impl RefKind {
             Self::Tag => Palette::STATE_WARNING,
         }
     }
-
-    /// Colors: solid pills. Ink picks the palette token with real contrast
-    /// against the fill — white brand ink on BRAND, dark background ink on
-    /// the lighter success/warning fills.
-    pub fn colors(self) -> ChipColors {
-        let fg = match self {
-            Self::Branch => Palette::BRAND_INK,
-            Self::Remote | Self::Tag => Palette::BG,
-        };
-        ChipColors {
-            bg: self.accent(),
-            fg,
-        }
-    }
 }
 
-/// Direction of a branch ahead/behind count chip (issue #01).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CountDirection {
-    /// Ahead of upstream — outgoing commits waiting to push.
-    Ahead,
-    /// Behind upstream — incoming commits waiting to pull/fetch.
-    Behind,
-}
-
-/// Status badges from the screens-gap vocabulary (issue #01): direction-tagged
-/// ahead/behind counts, protected-branch lock, stale-age, FOCUSED modal
-/// marker, and CASCADE operation indicator. Each variant picks a token from
-/// the central palette so a chip carrying any of them has a real color and
-/// never invents a hue.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum StatusBadge {
-    /// Ahead/behind count chip, direction decides the hue.
-    Count(CountDirection),
-    /// Lock indicator on a protected branch.
-    Lock,
-    /// Stale-age chip ("3d ago"); mirrors the `STATUS_STALE` token.
-    Stale,
-    /// FOCUSED marker — a modal-active accent.
-    Focused,
-    /// CASCADE operation indicator.
-    Cascade,
-}
-
-impl StatusBadge {
-    /// The palette token this kind is decided by.
-    ///
-    /// Ahead counts share the success accent; behind counts share the warning
-    /// accent; lock reads as a caution (mirroring the tag-ref decision);
-    /// stale mirrors STATUS_STALE/INFO; focused mirrors BRAND/selection;
-    /// cascade has its own accent so cascade chips never collide with focus
-    /// or selection color.
-    pub fn accent(self) -> Color32 {
-        match self {
-            Self::Count(CountDirection::Ahead) => Palette::STATE_SUCCESS,
-            Self::Count(CountDirection::Behind) => Palette::STATE_WARNING,
-            Self::Lock => Palette::STATE_WARNING,
-            Self::Stale => Palette::STATE_INFO,
-            Self::Focused => Palette::BRAND,
-            Self::Cascade => CASCADE_ACCENT,
-        }
-    }
-}
-
-/// Status badge from the screens-gap vocabulary (issue #01): count chips,
-/// lock, stale-age, FOCUSED, and CASCADE markers. Paints the same 18px pill
-/// shape as [`badge`] so any chip carrying these states matches the rest of
-/// the badge vocabulary at every callsite.
-pub fn status_badge(ui: &mut Ui, text: &str, kind: StatusBadge) -> Response {
-    let fg = kind.accent();
-    let bg = tint_over_bg(fg, BADGE_TINT);
-    chip(ui, text, ChipColors { bg, fg })
-}
 // --- Chips -------------------------------------------------------------------
 
 /// Status badge (`.tg-badge`): 18px pill, tinted background + accent ink.
 pub fn badge(ui: &mut Ui, text: &str, kind: BadgeKind) -> Response {
-    chip(ui, text, kind.colors())
-}
-
-/// Git ref chip (`.tg-label`): 18px solid pill (branch=brand, remote=success,
-/// tag=warning).
-pub fn ref_label(ui: &mut Ui, text: &str, kind: RefKind) -> Response {
     chip(ui, text, kind.colors())
 }
 

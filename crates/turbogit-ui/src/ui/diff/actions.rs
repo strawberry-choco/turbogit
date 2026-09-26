@@ -5,9 +5,7 @@ use super::model::{line_counts, mono_font};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
-use egui::{
-    Color32, CornerRadius, FontId, Pos2, Rect, Response, Sense, Ui, Vec2, WidgetInfo, WidgetType,
-};
+use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Ui, Vec2, WidgetInfo, WidgetType};
 use std::collections::BTreeSet;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::DiffTarget;
@@ -240,52 +238,26 @@ pub(super) fn hunk_nav(ui: &mut Ui, state: &mut AppState, total_hunks: usize) {
 }
 
 /// Square ghost icon button with an explicit accessibility label.
+///
+/// The nav scale: a standard 24 px square the host allocates itself, delegating
+/// the ghost ladder to [`widgets::ghost_icon_button`].
 fn nav_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
     const SIZE: f32 = 24.0;
     const ICON_SIZE: f32 = 14.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(SIZE), Sense::hover());
     let id = ui.id().with(("diff-nav", label));
-    let response = ui.interact(
-        rect,
-        id,
-        if enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        },
-    );
-
-    let fill = if !enabled {
-        Color32::TRANSPARENT
-    } else if response.is_pointer_button_down_on() {
-        Palette::SURFACE_3
-    } else if response.hovered() {
-        Palette::SURFACE_2
-    } else {
-        Color32::TRANSPARENT
-    };
-    if fill != Color32::TRANSPARENT {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(crate::theme::CONTROL_RADIUS), fill);
-    }
-    let ink = if !enabled {
-        Palette::INK_3
-    } else if response.hovered() || response.is_pointer_button_down_on() {
-        Palette::INK
-    } else {
-        Palette::INK_2
-    };
-    icons::centered_icon(ui, icon, rect.center(), ICON_SIZE, ink);
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
-    widgets::focus_ring(ui, &response);
-    response
+    widgets::ghost_icon_button(ui, rect, id, label, enabled, |ui, rect, state| {
+        let ink = widgets::ButtonVariant::Ghost.text(state);
+        icons::centered_icon(ui, icon, rect.center(), ICON_SIZE, ink);
+    })
 }
 
 /// Compact ghost action button painted inside an already-allocated row rect
 /// (gutter scale, 18px): transparent at rest, SURFACE_2 hover fill with
-/// INK_2→INK glyph ink, SURFACE_3 while pressed — the [`nav_button`] ladder
-/// shrunk onto the hunk band. A real interactable widget carrying labeled
-/// Button accessibility info, so kittest and screen readers can find it.
+/// INK_2→INK glyph ink, SURFACE_3 while pressed — the same ladder
+/// [`nav_button`] uses, shrunk onto the hunk band. A real interactable widget
+/// carrying labeled Button accessibility info, so kittest and screen readers
+/// can find it.
 fn gutter_button(
     ui: &mut Ui,
     rect: Rect,
@@ -295,39 +267,12 @@ fn gutter_button(
     tooltip: &str,
     enabled: bool,
 ) -> Response {
-    let response = ui.interact(
-        rect,
-        id,
-        if enabled {
-            Sense::click()
-        } else {
-            Sense::hover()
-        },
-    );
-
-    let fill = if !enabled {
-        Color32::TRANSPARENT
-    } else if response.is_pointer_button_down_on() {
-        Palette::SURFACE_3
-    } else if response.hovered() {
-        Palette::SURFACE_2
-    } else {
-        Color32::TRANSPARENT
-    };
-    if fill != Color32::TRANSPARENT {
-        ui.painter()
-            .rect_filled(rect, CornerRadius::same(crate::theme::CONTROL_RADIUS), fill);
-    }
-    let ink = if !enabled {
-        Palette::INK_3
-    } else if response.hovered() || response.is_pointer_button_down_on() {
-        Palette::INK
-    } else {
-        Palette::INK_2
-    };
-    paint_centered(ui.painter(), rect, glyph, mono_font(), ink);
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
-    widgets::focus_ring(ui, &response);
+    let response = widgets::ghost_icon_button(ui, rect, id, label, enabled, |ui, rect, state| {
+        let ink = widgets::ButtonVariant::Ghost.text(state);
+        widgets::paint_centered_text(ui.painter(), rect, glyph, mono_font(), ink);
+    });
+    // The tooltip (and the reason a disabled control is inert) is the host's
+    // wiring, not the ladder's: the vocabulary never decides wording.
     if enabled {
         response.on_hover_text(tooltip)
     } else {
@@ -497,6 +442,12 @@ pub(super) fn hunk_header_extras(
     );
 
     let base_id = ui.id().with(("diff-gutter", paint));
+    // NOT a `widgets::ghost_icon_button` host, deliberately. This toggle has no
+    // `enabled` axis (it is never inert) and its glyph is a constant INK_2 with
+    // no hover-ink step, so folding it in would need either a pixel change or a
+    // configuration flag on the ladder — the configurable-universal-widget shape
+    // the role contract forbids. Revisit only if a shared "constant-ink toggle"
+    // role earns its own vocabulary entry.
     let response = ui.interact(btn_rect, base_id.with(("collapse", hunk)), Sense::click());
     let fill = if response.is_pointer_button_down_on() {
         Palette::SURFACE_3
@@ -525,24 +476,6 @@ pub(super) fn hunk_header_extras(
     response.on_hover_text(tooltip);
 }
 
-/// Paint a string centered inside `rect`.
-pub(super) fn paint_centered(
-    painter: &egui::Painter,
-    rect: Rect,
-    text: &str,
-    font: FontId,
-    color: Color32,
-) {
-    let galley = painter.layout_no_wrap(text.to_owned(), font, color);
-    painter.galley(
-        Pos2::new(
-            rect.center().x - galley.size().x / 2.0,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        color,
-    );
-}
 /// Aim the current hunk (CONTEXT.md "Current hunk") at the row under the
 /// pointer — but only when the pointer genuinely rests on the rendered diff
 /// rows AND moved this frame. A stationary pointer must not fight keyboard

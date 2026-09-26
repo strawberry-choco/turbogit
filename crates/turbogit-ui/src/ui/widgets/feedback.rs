@@ -1,8 +1,33 @@
-//! Text-only feedback presenters shared by pages and keyed reads.
+//! Text-only feedback presenters shared by pages and keyed reads, plus the
+//! accent strip the feedback *containers* (banners, toasts) lead with.
 
-use egui::{Response, RichText, Ui};
+use egui::{Color32, CornerRadius, Response, RichText, Ui, vec2};
 
-use crate::theme::{Palette, TYPE_BODY, chrome_font};
+use crate::theme::{MARK_RADIUS, Palette, TYPE_BODY, chrome_font};
+
+/// The accent strip's spec geometry — a 3 px wide, 18 px tall bar. It is too
+/// small to be a control or a chip, which is why it rounds at
+/// [`crate::theme::MARK_RADIUS`].
+const ACCENT_BAR_WIDTH: f32 = 3.0;
+const ACCENT_BAR_HEIGHT: f32 = 18.0;
+
+/// The narrow tinted strip that leads a feedback container — a banner, a
+/// toast — down its leading edge.
+///
+/// This is the *general* form: it takes a colour the caller has already
+/// resolved and owns no severity vocabulary of its own. Deciding that
+/// "Error" or `ToastKind::Warning` means a particular token belongs to the
+/// host, which already has the severity in hand; the shape of the strip
+/// belongs here, so every host gets the same width, height, and rounding
+/// and a banner and a toast can no longer drift apart.
+pub fn accent_bar(ui: &mut Ui, color: Color32) {
+    let (rect, _) = ui.allocate_exact_size(
+        vec2(ACCENT_BAR_WIDTH, ACCENT_BAR_HEIGHT),
+        egui::Sense::hover(),
+    );
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(MARK_RADIUS), color);
+}
 
 /// Present one genuine one-line error in the shared error ink and body type.
 ///

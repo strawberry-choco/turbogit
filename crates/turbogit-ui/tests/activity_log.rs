@@ -359,6 +359,95 @@ fn toggle_hit_target_contains_the_painted_chevron() {
     );
 }
 
+/// The corner radius of the one painted `Shape::Rect` at `rect` that `pick`
+/// selects, with a pixel of geometry tolerance (the kittest rect round-trips
+/// through screen pixels before it comes back to logical coordinates).
+#[track_caller]
+fn corner_radius_at<S>(
+    harness: &Harness<'_, S>,
+    rect: egui::Rect,
+    what: &str,
+    pick: impl Fn(&egui::epaint::RectShape) -> bool,
+) -> egui::CornerRadius {
+    let radii: Vec<_> = harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(rs)
+                if pick(rs)
+                    && (rs.rect.min - rect.min).abs().max_elem() < 1.0
+                    && (rs.rect.max - rect.max).abs().max_elem() < 1.0 =>
+            {
+                Some(rs.corner_radius)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        radii.len(),
+        1,
+        "expected exactly one {what} painted at {rect:?}; {} matched (radii: {radii:?})",
+        radii.len()
+    );
+    radii[0]
+}
+
+/// Contract (issue 06): the title control paints ONE corner radius for both
+/// its hover fill and its focus ring, so a control that is focused *and*
+/// hovered shows a ring that follows the shape of the fill inside it.
+///
+/// The ring's radius is the app-wide `focus_ring` contract
+/// (`CONTROL_RADIUS`), so the fill is the side that gets reconciled — every
+/// vocabulary button paints fill and ring at
+/// `CornerRadius::same(CONTROL_RADIUS)`. The control's other preserved traits
+/// (hover-only affordance, the deliberately shaped hit rect, the toggle, its
+/// id and a11y label) are guarded by
+/// `toggle_hit_target_contains_the_painted_chevron` and the collapse/expand
+/// tests above.
+#[test]
+fn title_control_hover_fill_and_focus_ring_share_one_radius() {
+    let (_tmp, project, _alpha) = repo_project();
+    let mut harness = activity_harness(project);
+    settle_quiet(&mut harness);
+
+    // Focus, then hover, so the fill and the ring are both in one frame's
+    // painted output and can be read off the same `FullOutput`.
+    harness.get_by_label("Expand activity").focus();
+    settle_quiet(&mut harness);
+    let hit = harness.get_by_label("Expand activity").rect();
+    harness.event(egui::Event::PointerMoved(hit.center()));
+    settle_quiet(&mut harness);
+
+    let fill = corner_radius_at(&harness, hit, "title control hover fill", |rs| {
+        rs.fill == turbogit_ui::theme::Palette::SURFACE_2
+    });
+    // The ring is stroked 1px outside the control rect (StrokeKind::Outside
+    // on `response.rect.expand(1.0)`), so it lands one pixel out.
+    let ring = corner_radius_at(
+        &harness,
+        hit.expand(1.0),
+        "title control focus ring",
+        |rs| rs.stroke.width >= 1.0 && rs.stroke.color == turbogit_ui::theme::Palette::BRAND,
+    );
+    let expected = egui::CornerRadius::same(turbogit_ui::theme::CONTROL_RADIUS);
+
+    assert_eq!(
+        fill, expected,
+        "the title control's hover fill must round at CONTROL_RADIUS, the \
+         radius its focus ring strokes at"
+    );
+    assert_eq!(
+        ring, expected,
+        "the title control's focus ring must round at CONTROL_RADIUS"
+    );
+    assert_eq!(
+        fill, ring,
+        "the title control's hover fill ({fill:?}) and its focus ring \
+         ({ring:?}) must share one corner radius"
+    );
+}
+
 /// Contract (end to end): a real fetch dispatched from the topbar lands in
 /// the activity panel — the OpCompleted → entry → paint pipeline.
 #[test]

@@ -18,7 +18,7 @@ use egui::{
 };
 
 use super::icons::{self, Icon};
-use super::widgets::{WidgetState, mix, tint_over_bg};
+use super::widgets::{BADGE_TINT, WidgetState, mix, paint_centered_text, tint_over_bg};
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, TYPE_SECTION, chrome_font, data_font};
 
 // --- §12 geometry ------------------------------------------------------------
@@ -208,17 +208,9 @@ pub fn pill(ui: &mut Ui, label: &str, kind: PillKind) -> Response {
         CornerRadius::same(crate::theme::CHIP_RADIUS),
         kind.fill(),
     );
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), kind.font(), kind.ink());
-    ui.painter().galley(
-        egui::Pos2::new(
-            rect.center().x - galley.size().x / 2.0,
-            rect.center().y - galley.size().y / 2.0,
-        ),
-        galley,
-        kind.ink(),
-    );
+    // The kit keeps its own role (and its own radius); only the centring
+    // arithmetic is the vocabulary's, via the shared two-axis helper.
+    paint_centered_text(ui.painter(), rect, label, kind.font(), kind.ink());
     response
 }
 
@@ -343,7 +335,7 @@ pub fn sync_ink(kind: SyncKind) -> Color32 {
 
 /// §13 meaning token for a sync badge's tinted background.
 pub fn sync_bg(kind: SyncKind) -> Color32 {
-    tint_over_bg(sync_ink(kind), 0.18)
+    tint_over_bg(sync_ink(kind), BADGE_TINT)
 }
 
 /// Fit identifying ends to actual font metrics, including wide Unicode glyphs.
@@ -506,6 +498,15 @@ pub fn kit_button_at(ui: &mut Ui, kind: KitButton, label: &str, width: f32) -> R
         );
     }
     let ink = kind.ink(state);
+    // NOT `widgets::paint_centered_text`, deliberately — this is the same
+    // two-axis arithmetic, but the galley above is laid out in `WHITE` (so the
+    // width is measured once and reused for the natural-width measure) and the
+    // ink is applied at paint time by *overriding* the text color. The shared
+    // helper paints with `Painter::galley`, whose color argument is only a
+    // fallback for `PLACEHOLDER` spans: a galley laid out in white keeps
+    // painting white, so folding this call in would put every label on
+    // `WHITE` instead of the state's ink. The two paths are not
+    // interchangeable, so this site keeps the override call.
     painter.galley_with_override_text_color(
         egui::Pos2::new(
             rect.center().x - galley.size().x / 2.0,

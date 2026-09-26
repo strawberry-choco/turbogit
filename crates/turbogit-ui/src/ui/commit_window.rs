@@ -336,7 +336,7 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
     // Redesign Phase 1/2: they share one bordered card, which is what groups
     // them now that the heading and separators are gone, and the action row is
     // that card's footer.
-    widgets::card(ui, |ui| {
+    widgets::card(ui, widgets::CardFrame::default(), |ui| {
         commit_message_box(ui, state);
         recent_messages_row(ui, state);
         // The mockup rules the footer off from the message controls above it.
@@ -347,7 +347,7 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
     // Redesign Phase 3: the file list is its own card, headed by the toolbar,
     // so the toolbar icons read as acting on this list rather than as
     // commit-box chrome.
-    widgets::card(ui, |ui| {
+    widgets::card(ui, widgets::CardFrame::default(), |ui| {
         changes_card_header(ui, state);
 
         let Some(root_id) = state.selected_root.clone() else {
@@ -1225,7 +1225,7 @@ fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
     // header states what is previewed and in which mode, so the
     // selection→preview link reads off the frame instead of hiding in the
     // empty state.
-    widgets::card(ui, |ui| {
+    widgets::card(ui, widgets::CardFrame::default(), |ui| {
         let preview = state.ui.preview_change.clone();
         preview_header(ui, state, preview.as_deref());
         match preview {
@@ -1375,22 +1375,16 @@ fn status_chip_label(status: ChangeStatus) -> &'static str {
 }
 
 /// [`widgets::icon_button`] with an explicit `enabled` flag: disabled dims
-/// the button and turns clicks into no-ops, rendered in a child scope so the
-/// disabled state never leaks into the remaining header widgets (the
-/// [`widgets::compact_button_enabled`] pattern).
+/// the button and turns clicks into no-ops, painted through
+/// [`widgets::disabled_child_scope`] so the disabled state never leaks into the
+/// remaining header widgets. An enabled flag short-circuits straight to
+/// [`widgets::icon_button`], so only the disabled path is built in a child
+/// scope — the same shape [`widgets::compact_button_enabled`] keeps.
 fn icon_button_enabled(ui: &mut Ui, icon: Icon, enabled: bool) -> egui::Response {
     if enabled {
         return widgets::icon_button(ui, icon);
     }
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(ui.available_rect_before_wrap())
-            .layout(*ui.layout()),
-    );
-    child.disable();
-    let response = widgets::icon_button(&mut child, icon);
-    ui.advance_cursor_after_rect(child.min_rect());
-    response
+    widgets::disabled_child_scope(ui, enabled, |child| widgets::icon_button(child, icon))
 }
 
 /// Issue 07: the single commit message box + Amend option at the TOP of the
@@ -1511,21 +1505,17 @@ fn commit_split_menu(chevron: &egui::Response, state: &mut AppState) {
 
 /// [`widgets::primary_button`] with an explicit `enabled` flag (the disabled
 /// twin of the action row's split button): disabled dims the button and turns
-/// clicks into no-ops, rendered in a child scope so the disabled state never
-/// leaks into the remaining row widgets.
+/// clicks into no-ops, painted through [`widgets::disabled_child_scope`] so
+/// the disabled state never leaks into the remaining row widgets. An enabled
+/// flag short-circuits straight to [`widgets::primary_button`], so only the
+/// disabled path is built in a child scope.
 fn primary_button_enabled(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
     if enabled {
         return widgets::primary_button(ui, None, label);
     }
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(ui.available_rect_before_wrap())
-            .layout(*ui.layout()),
-    );
-    child.disable();
-    let response = widgets::primary_button(&mut child, None, label);
-    ui.advance_cursor_after_rect(child.min_rect());
-    response
+    widgets::disabled_child_scope(ui, enabled, |child| {
+        widgets::primary_button(child, None, label)
+    })
 }
 
 fn do_commit(state: &mut AppState, and_push: bool) {

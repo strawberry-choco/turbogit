@@ -167,11 +167,20 @@ fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
         state.ui.activity.expanded = !expanded;
     }
     if response.hovered() {
+        // One radius for the fill and the ring around it. The ring is painted
+        // by the shared `widgets::focus_ring` contract, which strokes at
+        // CONTROL_RADIUS app-wide, so the hover fill follows the *ring* up
+        // from CHIP_RADIUS — never the other way round: moving the shared
+        // helper's radius would re-round every other custom-drawn control in
+        // the shell. This lands the control on the same radius as every
+        // vocabulary button, which paints its fill and its ring at
+        // CONTROL_RADIUS too. The Noop slot stays as it is: the tint has to
+        // paint behind the icon and label already emitted above.
         ui.painter().set(
             hover_tint,
             Shape::rect_filled(
                 chip,
-                CornerRadius::same(crate::theme::CHIP_RADIUS),
+                CornerRadius::same(crate::theme::CONTROL_RADIUS),
                 Palette::SURFACE_2,
             ),
         );

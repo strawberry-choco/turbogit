@@ -38,36 +38,143 @@ pub(crate) fn bold_font_if_available(ui: &Ui) -> FontId {
     }
 }
 
-/// Dialog footer: top LINE border with right-aligned action buttons (§7.1).
-pub fn dialog_footer<R>(ui: &mut Ui, buttons: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
+/// The shared modal footer rule: the 1px line that separates a modal body from
+/// its action slot, painted in [`Palette::RULE_FOOTER`].
+///
+/// Deliberately a stronger tone than the content divider
+/// ([`Palette::RULE_CONTENT`]) — a modal's action slot is a *boundary*, not a
+/// division, and the strength difference is intent rather than drift.
+///
+/// The allocation is deliberately the one `dialog_footer` has always made: a
+/// full-available-width 1px band registered with [`Sense::hover`], painted as a
+/// fill rather than stroked. Two reasons, both load-bearing:
+///
+/// - a fill is what the rest of the container vocabulary paints, and it is the
+///   only primitive the painted-output harness can see, so a stroked rule
+///   cannot be asserted on at all;
+/// - egui's default `Ui::separator()` reserves a 6px band with the line at its
+///   *centre* and paints a stroke in a tone no design token owns. A caller
+///   migrating onto this rule that wants the old vertical rhythm back adds
+///   `ui.add_space(5.0)` first — see `ui::interactive_rebase` — because the
+///   reserved band, not just the painted row, is what preserves the layout.
+pub(crate) fn footer_rule(ui: &mut Ui) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 1.0), Sense::hover());
     ui.painter()
-        .rect_filled(rect, CornerRadius::ZERO, Palette::LINE);
+        .rect_filled(rect, CornerRadius::ZERO, Palette::RULE_FOOTER);
+}
+
+/// Dialog footer: top [`Palette::RULE_FOOTER`] rule with right-aligned action
+/// buttons (§7.1). The rule itself is [`footer_rule`]'s, shared with the other
+/// modal bodies that rule themselves off from an action slot without owning a
+/// footer; the gap below the rule and the action alignment stay this function's.
+pub fn dialog_footer<R>(ui: &mut Ui, buttons: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
+    footer_rule(ui);
     ui.add_space(6.0);
     ui.with_layout(Layout::right_to_left(Align::Center), buttons)
 }
 
 // --- Section chrome ----------------------------------------------------------
 
+/// The two tones a bordered card frame may wear.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CardSurface {
+    /// The content tone — a card sitting on a `BG` panel.
+    Content,
+    /// The raised tone — a card sitting on a `CONTENT_BG` surface, where a
+    /// `CONTENT_BG` fill would be invisible.
+    Raised,
+}
+
+/// How a card claims its width inside its parent. `Eq` is not derivable here
+/// because the pinned width is an `f32`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum CardSizing {
+    /// Span the parent's full available width, so a card reads as a region
+    /// rather than hugging its content.
+    Stretch,
+    /// Pin a minimum width and let the content grow past it — for a card that
+    /// floats above its parent (an overlay) rather than filling a pane.
+    MinWidth(f32),
+}
+
+/// Card geometry: the fill, corner radius, and hairline stroke that make a
+/// panel read as a card, plus the two things a call site genuinely varies —
+/// inner padding and how the card claims its width. One owner for the shape.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct CardFrame {
+    /// Which of the two card tones this frame wears.
+    pub surface: CardSurface,
+    /// Inner margin on every side, in points.
+    pub pad: i8,
+    /// How the card claims its width.
+    pub sizing: CardSizing,
+}
+
+impl Default for CardFrame {
+    fn default() -> Self {
+        Self {
+            surface: CardSurface::Content,
+            pad: crate::theme::PANEL_PADDING as i8,
+            sizing: CardSizing::Stretch,
+        }
+    }
+}
+
+impl CardFrame {
+    /// Wear the raised `SURFACE` tone instead of `CONTENT_BG`.
+    pub fn raised(self) -> Self {
+        Self {
+            surface: CardSurface::Raised,
+            ..self
+        }
+    }
+
+    /// Override the inner margin.
+    pub fn padded(self, pad: i8) -> Self {
+        Self { pad, ..self }
+    }
+
+    /// Pin a minimum width instead of stretching to the parent's full width.
+    pub fn min_width(self, width: f32) -> Self {
+        Self {
+            sizing: CardSizing::MinWidth(width),
+            ..self
+        }
+    }
+}
+
 /// Bordered card surface (Local Changes redesign): the containment the
 /// mockup gives every region, so neighbouring controls read as one group
 /// instead of as a flat stack of headings and separators.
 ///
-/// The fill is [`Palette::CONTENT_BG`], deliberately *not* `BG` — the panel
-/// behind a card is `BG`, so a `BG` card would be invisible (risk R2). The
-/// body lays out inside the frame's margin and is stretched to the caller's
-/// full available width, so a card spans its pane rather than hugging its
-/// content. The returned rect is the card's outer edge, which is what a
+/// The default fill is [`Palette::CONTENT_BG`], deliberately *not* `BG` — the
+/// panel behind a card is `BG`, so a `BG` card would be invisible (risk R2). A
+/// card that sits on a `CONTENT_BG` surface asks for
+/// [`CardFrame::raised`] instead. The body lays out inside the frame's margin
+/// and, under the default [`CardSizing::Stretch`], is stretched to the
+/// caller's full available width, so a card spans its pane rather than hugging
+/// its content. The returned rect is the card's outer edge, which is what a
 /// caller capping a scroll area against its own container needs (risk R1).
-pub fn card<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> InnerResponse<R> {
+pub fn card<R>(
+    ui: &mut Ui,
+    frame: CardFrame,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> InnerResponse<R> {
+    let fill = match frame.surface {
+        CardSurface::Content => Palette::CONTENT_BG,
+        CardSurface::Raised => Palette::SURFACE,
+    };
     Frame::new()
-        .fill(Palette::CONTENT_BG)
+        .fill(fill)
         .stroke(Stroke::new(1.0, Palette::LINE))
         .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
-        .inner_margin(Margin::same(crate::theme::PANEL_PADDING as i8))
+        .inner_margin(Margin::same(frame.pad))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            match frame.sizing {
+                CardSizing::Stretch => ui.set_width(ui.available_width()),
+                CardSizing::MinWidth(w) => ui.set_min_width(w),
+            }
             add_contents(ui)
         })
 }

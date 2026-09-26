@@ -2,8 +2,8 @@
 //! side-by-side row painters (spec §8.4, ADR-0014).
 use super::actions::{
     commit_current_hunk, comparison_chips, granularity_toggle, hunk_gutter_actions,
-    hunk_header_extras, hunk_nav, line_selected, paint_centered, paint_selection_bar,
-    preview_status, viewer_hunk_staged_state,
+    hunk_header_extras, hunk_nav, line_selected, paint_selection_bar, preview_status,
+    viewer_hunk_staged_state,
 };
 use super::model::{
     DiffModel, DisplayRow, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W, TEXT_X,
@@ -698,7 +698,7 @@ fn header_band(ui: &mut Ui, width: f32, label: &str) {
         CornerRadius::same(crate::theme::CONTROL_RADIUS),
         Palette::SURFACE,
     );
-    paint_centered(
+    widgets::paint_centered_text(
         ui.painter(),
         rect,
         label,

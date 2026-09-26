@@ -763,3 +763,67 @@ fn governance_consolidated_role_contract_is_internally_consistent() {
     assert_ne!(Palette::STATE_INFO, Palette::STATE_WARNING);
     assert_ne!(Palette::STATE_WARNING, Palette::STATE_ERROR);
 }
+
+// --- H1/H2/H3: the three hairline roles are named (ticket 09) ----------------
+
+/// Relative luminance (WCAG) — the measure that says which of two greys reads
+/// as the *stronger* line against a dark surface.
+fn luminance(color: Color32) -> f64 {
+    let linear = |v: u8| {
+        let s = f64::from(v) / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
+}
+
+#[test]
+fn the_three_hairline_roles_are_named_and_resolve_to_their_tones() {
+    // H1: a 1px line is picked by the ROLE it plays, not by whichever token
+    // happened to be nearest. Three roles, three names.
+    //
+    // H3: the content divider is the weakest of the three — it separates
+    // sibling content regions inside one surface without bounding them. It
+    // stays an alias of the raised surface, so the existing C5 contract
+    // (`DIVIDER == RAISED`, `DIVIDER != LINE`) keeps holding unchanged.
+    assert_eq!(Palette::RULE_CONTENT, Palette::DIVIDER);
+    assert_eq!(Palette::RULE_CONTENT, Palette::RAISED);
+    assert_ne!(Palette::RULE_CONTENT, Palette::LINE);
+
+    // H2: the footer rule separates a modal body from its action slot, and an
+    // action slot is a *boundary* rather than a division — so it is
+    // deliberately the stronger of the two. This is intent, not drift, and the
+    // only thing keeping it that way is that the two tones stay distinct.
+    assert_eq!(Palette::RULE_FOOTER, Palette::LINE);
+    assert_ne!(
+        Palette::RULE_FOOTER,
+        Palette::RULE_CONTENT,
+        "a modal's action slot is a boundary, not a division"
+    );
+    assert!(
+        luminance(Palette::RULE_FOOTER) > luminance(Palette::RULE_CONTENT),
+        "the footer rule must actually read stronger than the content divider: \
+         {} vs {}",
+        luminance(Palette::RULE_FOOTER),
+        luminance(Palette::RULE_CONTENT)
+    );
+
+    // The structural rule — table header underlines, tree indent guides, panel
+    // edge rules: the chrome that gives a surface its shape — is its own third
+    // tone. It is never a stand-in for the content divider, and it is the
+    // weakest-adjacent of the two chrome roles, not a fourth name for `LINE`.
+    assert_eq!(Palette::RULE_STRUCTURAL, Palette::LINE_SUBTLE);
+    assert_ne!(Palette::RULE_STRUCTURAL, Palette::RULE_CONTENT);
+    assert_ne!(Palette::RULE_STRUCTURAL, Palette::RULE_FOOTER);
+
+    // Purely additive naming: the three roles are aliases, so no existing token
+    // value moved and the pre-existing assertions above are unaffected.
+    assert_eq!(Palette::DIVIDER, Palette::RAISED);
+    assert_ne!(Palette::DIVIDER, Palette::LINE);
+    assert_eq!(Palette::LINE, Color32::from_rgb(0x4e, 0x51, 0x57));
+    assert_eq!(Palette::LINE_SUBTLE, Color32::from_rgb(0x36, 0x38, 0x3c));
+    assert_eq!(Palette::DIVIDER, Color32::from_rgb(0x2b, 0x2d, 0x30));
+}

@@ -114,6 +114,38 @@ impl Palette {
     /// relief against the raised tone, not as the stronger LINE border.
     pub const DIVIDER: Color32 = Self::RAISED;
 
+    // --- Hairline roles (ticket 09) ---------------------------------------
+    // A one-pixel line used to be picked by whichever of the three line tokens
+    // was nearest, and several genuinely different uses of it shared a look
+    // they had no reason to share. These name the three roles the app
+    // actually has, so a caller asks for the role it wants rather than for the
+    // tone that happened to render correctly. They are pure aliases: no token
+    // value moved, and the C5 contract above (`DIVIDER == RAISED`,
+    // `DIVIDER != LINE`) is untouched.
+    //
+    // A FOURTH tone is deliberately left unowned here: egui's default
+    // `ui.separator()` paints `visuals.noninteractive.bg_stroke`, and
+    // `configure_style` never assigns that field — it only sets
+    // `noninteractive.fg_stroke` to `INK_2`, which `Separator` does not read.
+    // So the separator keeps egui's stock dark `Widgets::default()` value
+    // (`from_gray(60)`, `#3C3C3C`). It is a real hairline role with no name,
+    // and sweeping its ~37 call sites onto these three is follow-up work — each
+    // site needs its own role judgement, and several are deliberately not
+    // hairlines at all. See `docs/design-system-roles.md`.
+
+    /// Hairline role — the content divider: a 1px rule between sibling content
+    /// regions inside one surface. The weakest of the three: it separates, it
+    /// does not bound.
+    pub const RULE_CONTENT: Color32 = Self::DIVIDER;
+    /// Hairline role — the footer rule: the 1px rule separating a modal body from
+    /// its action slot. Deliberately a stronger tone than [`Self::RULE_CONTENT`]
+    /// — a modal's action slot is a boundary, not a division.
+    pub const RULE_FOOTER: Color32 = Self::LINE;
+    /// Hairline role — the structural rule: table header underlines, tree indent
+    /// guides, and panel edge rules — the chrome that gives a surface its
+    /// structure, rather than dividing its content.
+    pub const RULE_STRUCTURAL: Color32 = Self::LINE_SUBTLE;
+
     /// Accent / primary action (`#3574F0`): New Branch, Checkout, branch chips.
     pub const ACCENT: Color32 = Self::BRAND;
     /// Ahead (`#5FA86C`): ahead counts, current-branch icon, "in sync".

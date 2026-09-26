@@ -52,7 +52,7 @@ fn submodule_row(ui: &mut Ui, state: &mut AppState, sub: &Submodule) {
                 .color(Palette::INK),
         );
         commit_summary(ui, sub);
-        status_chip(ui, sub.state);
+        status_label(ui, sub.state);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui.button(format!("Deinit {name}")).clicked() {
                 state.ui.confirm = Some(PendingConfirm::DeinitSubmodule {
@@ -92,8 +92,15 @@ fn commit_summary(ui: &mut Ui, sub: &Submodule) {
     }
 }
 
-/// Status chip color/label per submodule state (issue 14).
-fn status_chip(ui: &mut Ui, state: SubmoduleState) {
+/// Status label per submodule state (issue 14).
+///
+/// Not a chip, and deliberately not one: it paints **coloured text with no
+/// background at all**, so it shares no geometry, no radius and no fill with the
+/// shared chip vocabulary. Turning it into a real chip would introduce a
+/// background where none exists and would newly register an accessibility node
+/// for a piece of status text — a design change that needs its own ticket, not a
+/// consolidation. See `docs/design-system-roles.md`.
+fn status_label(ui: &mut Ui, state: SubmoduleState) {
     let (text, color) = match state {
         SubmoduleState::UpToDate => ("Up to date", Palette::STATE_SUCCESS),
         SubmoduleState::NeedsUpdate => ("Needs update", Palette::STATE_WARNING),

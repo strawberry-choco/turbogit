@@ -69,6 +69,19 @@ const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL;
 /// Mono cell font size — shared body role (T2).
 const MONO_TEXT: f32 = crate::theme::TYPE_BODY;
 
+/// The log file-row status pill: the shared chip's height and text inset, at
+/// the compact control radius rather than the full pill radius. This site has
+/// always rounded at CONTROL_RADIUS; changing that is a design change, not a
+/// refactor, so the consolidation must preserve it. Naming the geometry here
+/// (rather than switching to `CHIP_GEOMETRY`) is what lets the row drop its
+/// hand-rolled `rect_filled` + two-axis centring for
+/// [`widgets::ChipGeometry::paint`] without moving a pixel.
+const STATUS_PILL: widgets::ChipGeometry = widgets::ChipGeometry {
+    height: widgets::CHIP_HEIGHT,
+    pad_x: widgets::CHIP_PAD_X,
+    radius: crate::theme::CONTROL_RADIUS as f32,
+};
+
 /// Commit-table column x-offsets, measured from `content_left` (the row left
 /// edge, plus the root stripe in multi-root views). The micro column headers
 /// and the row cells share these offsets so they stay vertically aligned.
@@ -1054,6 +1067,14 @@ fn commit_row(
 /// Paint one `.tg-label` pill (18px, neutral token colors) holding a label
 /// (tag) icon, and return its rect. The ref names live in the hover tooltip
 /// (see `commit_row`). Painter-only: registers no widget.
+///
+/// Deliberately *not* on [`widgets::ChipGeometry::paint`], unlike the file-row
+/// status pill: this pill carries no galley at all — it is a layout-level
+/// `ui.label` drawn straight to the painter — so there is no laid-out text for
+/// `paint` to place. It already sits on the shared chip tokens (height,
+/// padding, [`widgets::chip_radius`], [`BadgeKind::Neutral`] colors), and its
+/// centring is the icon rectangle arithmetic, which is a different calculation
+/// from the two-axis text centring in [`widgets::paint_centered_text`].
 fn paint_label_pill(painter: &egui::Painter, x: f32, cy: f32) -> Rect {
     const ICON_SIZE: f32 = 12.0;
     let colors = BadgeKind::Neutral.colors();
@@ -1257,25 +1278,10 @@ fn file_row(
         colors.fg,
     );
     let badge_rect = Rect::from_min_size(
-        Pos2::new(mx, cy - widgets::CHIP_HEIGHT / 2.0),
-        Vec2::new(
-            badge_galley.size().x + widgets::CHIP_PAD_X * 2.0,
-            widgets::CHIP_HEIGHT,
-        ),
+        Pos2::new(mx, cy - STATUS_PILL.height / 2.0),
+        STATUS_PILL.size(&badge_galley),
     );
-    painter.rect_filled(
-        badge_rect,
-        CornerRadius::same(crate::theme::CONTROL_RADIUS),
-        colors.bg,
-    );
-    painter.galley(
-        Pos2::new(
-            badge_rect.center().x - badge_galley.size().x / 2.0,
-            cy - badge_galley.size().y / 2.0,
-        ),
-        badge_galley,
-        colors.fg,
-    );
+    STATUS_PILL.paint(&painter, badge_rect, badge_galley, colors.bg, colors.fg);
     mx = badge_rect.right() + 6.0;
 
     // Right-aligned churn (redesign issue 04): each number paints only when

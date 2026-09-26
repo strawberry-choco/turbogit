@@ -5,9 +5,9 @@
 //! fetch is admitted are the read's business ([`turbogit_app::keyed_read`]);
 //! this module asks for a [`PaneTarget`] and paints the verdict it is given.
 
-use super::actions::paint_centered;
 use super::model::{FileMeta, ROW_H};
 use crate::theme::Palette;
+use crate::ui::widgets;
 use egui::{Align, Layout, Sense, TextureOptions, Ui, Vec2};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -226,7 +226,7 @@ fn centered_note(ui: &mut Ui, text: &str) {
     let width = ui.available_width();
     let height = ui.available_height().max(ROW_H * 3.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
-    paint_centered(
+    widgets::paint_centered_text(
         ui.painter(),
         rect,
         text,

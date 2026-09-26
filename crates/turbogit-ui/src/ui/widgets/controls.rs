@@ -102,6 +102,40 @@ pub fn focus_ring(ui: &Ui, response: &Response) {
     }
 }
 
+// --- Disabled control scope -------------------------------------------------
+
+/// Run `contents` in a child scope, disabling that child when `enabled` is
+/// false, then advance the caller's cursor past whatever the child consumed.
+///
+/// The point of the child scope is containment: a disabled control dims itself
+/// and turns its clicks into no-ops without leaking `disabled` styling into the
+/// widgets beside it. Layout, styling, and the caller's cursor are otherwise
+/// untouched, and the closure runs identically whether the control is enabled
+/// or disabled.
+///
+/// Whether a given control *delegates at all* is the caller's decision, and the
+/// enabled-gated buttons make different ones: [`action_button`] always builds
+/// and paints the control, while [`compact_button_enabled`] and the commit
+/// window's enabled-gated buttons short-circuit on the enabled path and
+/// delegate only the disabled one. Both shapes share this scope.
+pub fn disabled_child_scope<R>(
+    ui: &mut Ui,
+    enabled: bool,
+    contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(ui.available_rect_before_wrap())
+            .layout(*ui.layout()),
+    );
+    if !enabled {
+        child.disable();
+    }
+    let out = contents(&mut child);
+    ui.advance_cursor_after_rect(child.min_rect());
+    out
+}
+
 // --- Buttons -----------------------------------------------------------------
 
 /// Ghost button (`.tg-toolbar-btn` / `.tg-btn`): transparent at rest,
@@ -122,23 +156,19 @@ pub fn compact_button(ui: &mut Ui, label: &str) -> Response {
 }
 
 /// [`compact_button`] with an explicit `enabled` flag (issue 32 popup row
-/// actions): disabled dims the button and turns clicks into no-ops, rendered
-/// in a child scope so the disabled state never leaks into the caller's
-/// remaining widgets. Pair it with `on_disabled_hover_text` so the gating
-/// reason stays discoverable.
+/// actions): disabled dims the button and turns clicks into no-ops, painted
+/// through [`disabled_child_scope`] so the disabled state never leaks into the
+/// caller's remaining widgets. An enabled flag short-circuits straight to
+/// [`compact_button`], so only the disabled path is built in a child scope.
+/// Pair it with `on_disabled_hover_text` so the gating reason stays
+/// discoverable.
 pub fn compact_button_enabled(ui: &mut Ui, label: &str, enabled: bool) -> Response {
     if enabled {
         return compact_button(ui, label);
     }
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(ui.available_rect_before_wrap())
-            .layout(*ui.layout()),
-    );
-    child.disable();
-    let response = button_response(&mut child, ButtonVariant::Compact, None, Some(label));
-    ui.advance_cursor_after_rect(child.min_rect());
-    response
+    disabled_child_scope(ui, enabled, |child| {
+        button_response(child, ButtonVariant::Compact, None, Some(label))
+    })
 }
 
 /// Square ghost button holding only an icon (e.g. dialog close X).
@@ -146,37 +176,93 @@ pub fn icon_button(ui: &mut Ui, icon: Icon) -> Response {
     button_response(ui, ButtonVariant::Icon, Some(icon), None)
 }
 
+/// The ghost icon-button state ladder — one definition of how a borderless
+/// icon button fills and inks as it is hovered, held, and disabled, built over
+/// [`ButtonVariant::Ghost`] and [`WidgetState`] so every ghost icon button in
+/// the app fills, inks, and rounds identically.
+///
+/// The rect is the size parameter: a host either allocates a standard square
+/// and passes it in, or allocates a dense, deliberately-shaped hit rect of its
+/// own (a diff gutter cell) and passes that. The vocabulary owns the fill, the
+/// ink, the corner radius, the accessibility node, and the single brand focus
+/// ring; the host owns its id, its tooltip, and its glyph — `paint_content`
+/// receives the resolved [`WidgetState`] so it can take its own ink from
+/// `ButtonVariant::Ghost.text(state)` rather than re-deriving a second ladder.
+///
+/// This is deliberately not a configurable universal button: a host that
+/// needs a different fill, ink, or radius has a different role and keeps its
+/// own paint rather than growing a flag here.
+pub fn ghost_icon_button(
+    ui: &mut Ui,
+    rect: Rect,
+    id: egui::Id,
+    label: &str,
+    enabled: bool,
+    paint_content: impl FnOnce(&mut Ui, Rect, WidgetState),
+) -> Response {
+    let response = ui.interact(
+        rect,
+        id,
+        if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
+
+    let state = if !enabled {
+        WidgetState::Disabled
+    } else if response.is_pointer_button_down_on() {
+        WidgetState::Active
+    } else if response.hovered() {
+        WidgetState::Hovered
+    } else {
+        WidgetState::Idle
+    };
+
+    let painter = ui.painter().clone();
+    let fill = ButtonVariant::Ghost.fill(state);
+    if fill != Color32::TRANSPARENT {
+        painter.rect_filled(rect, CornerRadius::same(CONTROL_RADIUS), fill);
+    }
+    paint_content(ui, rect, state);
+
+    // Accessibility: a labeled Button, so kittest and screen readers find it.
+    // The info is materialized only when actually requested, never eagerly.
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, label));
+    focus_ring(ui, &response);
+    response
+}
+
 /// Full-width stacked action button (issue 15 details-pane Actions section):
 /// ghost at rest, or the solid-brand primary when `primary`; `enabled =
-/// false` dims it and turns clicks into no-ops. Rendered in a child scope so
-/// the disabled state never leaks into the caller's remaining widgets.
+/// false` dims it and turns clicks into no-ops, painted through
+/// [`disabled_child_scope`] so the disabled state never leaks into the
+/// caller's remaining widgets.
+///
+/// Unlike [`compact_button_enabled`], this button always builds and paints the
+/// control — the full-width measure and the widget itself are the same either
+/// way, so only the `disable()` call is conditional. The two shapes are kept
+/// deliberately distinct rather than flattened into one.
 pub fn action_button(ui: &mut Ui, label: &str, primary: bool, enabled: bool) -> Response {
     let variant = if primary {
         ButtonVariant::Primary
     } else {
         ButtonVariant::Ghost
     };
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(ui.available_rect_before_wrap())
-            .layout(*ui.layout()),
-    );
-    if !enabled {
-        child.disable();
-    }
-    let width = child.available_width();
-    let response = button_response_sized(
-        &mut child,
-        variant,
-        None,
-        Some(label),
-        None,
-        None,
-        None,
-        Some(width),
-    );
-    ui.advance_cursor_after_rect(child.min_rect());
-    response
+    disabled_child_scope(ui, enabled, |child| {
+        let width = child.available_width();
+        button_response_sized(
+            child,
+            variant,
+            None,
+            Some(label),
+            None,
+            None,
+            None,
+            Some(width),
+        )
+    })
 }
 
 fn button_response(
@@ -369,17 +455,8 @@ pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Opti
         } else {
             Palette::INK_2
         };
-        let galley = ui
-            .painter()
-            .layout_no_wrap((*option).to_owned(), font_id.clone(), ink);
-        ui.painter().galley(
-            Pos2::new(
-                seg.center().x - galley.size().x / 2.0,
-                seg.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            ink,
-        );
+        // The shared two-axis centring, measured and painted in one call.
+        super::paint_centered_text(ui.painter(), seg, option, font_id.clone(), ink);
         resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, *option));
         focus_ring(ui, &resp);
         if resp.clicked() {
