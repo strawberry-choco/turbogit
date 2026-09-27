@@ -295,3 +295,25 @@ shown above the renamed file's content diff, paired with an arrow annotation
 on its changed-file list entry. Metadata only — never staged text. Detection
 follows git's own defaults, unpinned by TurboGit.
 _Avoid_: move marker, path change
+
+**Drop commit**:
+Removing one commit from the current branch's history by replaying its
+descendants without it — the same meaning a dropped line carries in a rebase
+plan. Only commits reachable from the current branch can be dropped; a merge
+commit and a root commit never can. It does not remove the descendants, and it
+is not a ref deletion.
+_Avoid_: delete commit, remove commit, discard commit
+
+**Reword commit**:
+Replacing one commit's message by rewriting that commit. Bounded exactly as a
+drop is: current-branch commits only, never a merge commit, never a root commit.
+Distinct from amending, which rewrites the tip commit from the Commit tool
+window.
+_Avoid_: rename commit, edit commit message, amend
+
+**Detached HEAD**:
+A repository root checked out at a commit rather than a branch. It has no
+current branch, so branch-scoped actions state why they are blocked and history
+edits are unavailable. Reached by checking out a commit or a tag.
+_Avoid_: detached (as an action name — checking out a commit is the verb), no
+branch

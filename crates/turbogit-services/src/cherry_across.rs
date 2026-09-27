@@ -265,7 +265,7 @@ pub fn apply_to_root(
 ) -> TgResult<()> {
     if matches!(exec.status(root), Ok(s) if is_dirty(&s)) {
         return Err(TgError::Other(
-            "working tree is dirty — commit or shelve your changes first".into(),
+            "Working tree is dirty — commit or shelve your changes first".into(),
         ));
     }
     exec.fetch(root, Some(&source.to_string_lossy()))?;

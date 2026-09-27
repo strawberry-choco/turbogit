@@ -2,16 +2,16 @@
 //! New Branch (E3), Tag (O1–O4), Shelve (J1–J4), Stash (J5–J8). The Push
 //! dialog lives in [`super::push_dialog`] (issue #20).
 
-use egui::{Align, Layout, Ui};
+use egui::{Align, FontFamily, FontId, Layout, RichText, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, TagType};
+use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType};
 use turbogit_domain::model::{BranchKind, MergeStrategy};
 use turbogit_services::{
     branch_service, integrate_service, shelve_stash, sync_service, tag_service,
 };
 
-use crate::theme::Palette;
+use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, data_font};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::widgets::{self, group_title};
 
@@ -81,8 +81,8 @@ fn close(state: &mut AppState) {
 }
 
 /// Cherry-pick target-branch picker (issue 15): one row per local branch of
-/// the focused root. Protected branches are disabled with an explanation;
-/// picking a branch dispatches the guarded cherry-pick through
+/// the focused root. A row the work may not land on is disabled and explains
+/// itself; picking a branch dispatches the guarded cherry-pick through
 /// [`AppState::cherry_pick_to`] and closes the dialog.
 fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
     ui.label("Apply the selected commit onto which branch?");
@@ -109,16 +109,30 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
     if local.is_empty() {
         ui.label("No local branches.");
     }
+    let current = current_branch_name(state);
     for name in local {
-        let protected = sync_service::is_protected(&state.settings, &name);
-        let label = if protected {
-            format!("{name} (protected)")
+        // One row, one reason. The branch the work is standing on is refused
+        // ahead of a protected one: it is not a destination at all — the commit
+        // is already on it — and no setting change makes it one, so a refusal
+        // the developer cannot act on would be a dead end. Protection speaks
+        // only for a branch the picker would otherwise have offered. The words
+        // are the branch menu's, so the two menus refuse a branch the same way.
+        let (label, reason) = if current.as_deref() == Some(name.as_str()) {
+            (
+                format!("{name} (current)"),
+                "this is the current branch".to_owned(),
+            )
+        } else if sync_service::is_protected(&state.settings, &name) {
+            (
+                format!("{name} (protected)"),
+                format!("'{name}' is a protected branch"),
+            )
         } else {
-            name.clone()
+            (name.clone(), String::new())
         };
         let row = ui
-            .add_enabled(!protected, egui::Button::new(label))
-            .on_disabled_hover_text(format!("'{name}' is a protected branch"));
+            .add_enabled(reason.is_empty(), egui::Button::new(label))
+            .on_disabled_hover_text(reason);
         if row.clicked() {
             if let Some(commit) = state.ui.dlg.cherry_pick_commit.take() {
                 state.cherry_pick_to(commit, name.clone());
@@ -133,20 +147,25 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
 
 fn new_branch(ui: &mut Ui, state: &mut AppState) {
     // The base defaults to the branch the person is on — creating from an
-    // unexpected base is a classic silent mistake (issue 08, design §6.2).
-    if state.ui.dlg.new_branch_base.is_empty()
+    // unexpected base is a classic silent mistake (issue 08, design §6.2). An
+    // open site that means a specific base (the log's New branch item, the
+    // branch menu's New branch from) has already said so and is not overwritten.
+    if state.ui.dlg.new_branch_base == NewBranchBase::Unset
         && let Some(cur) = current_branch_name(state)
     {
-        state.ui.dlg.new_branch_base = cur;
+        state.ui.dlg.new_branch_base = NewBranchBase::Branch(cur);
     }
     ui.label("Name:");
     ui.text_edit_singleline(&mut state.ui.dlg.new_branch_name);
     ui.label("Start from:");
     ui.horizontal(|ui| {
-        ui.label(&state.ui.dlg.new_branch_base);
-        if widgets::compact_button(ui, "Change…").clicked() {
-            state.ui.dlg.new_branch_base_picker_open = !state.ui.dlg.new_branch_base_picker_open;
-        }
+        new_branch_base_value(ui, state);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if widgets::compact_button(ui, "Change…").clicked() {
+                state.ui.dlg.new_branch_base_picker_open =
+                    !state.ui.dlg.new_branch_base_picker_open;
+            }
+        });
     });
     if state.ui.dlg.new_branch_base_picker_open {
         let branches: Vec<String> = state
@@ -162,11 +181,17 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
             })
             .unwrap_or_default();
         for b in branches {
+            // Only a branch base can be selected here: a commit is not one of
+            // these rows, so nothing is marked while it is the base — which is
+            // true rather than broken, and the row above states what it is.
             if ui
-                .selectable_label(state.ui.dlg.new_branch_base == b, &b)
+                .selectable_label(
+                    state.ui.dlg.new_branch_base == NewBranchBase::Branch(b.clone()),
+                    &b,
+                )
                 .clicked()
             {
-                state.ui.dlg.new_branch_base = b;
+                state.ui.dlg.new_branch_base = NewBranchBase::Branch(b);
                 state.ui.dlg.new_branch_base_picker_open = false;
             }
         }
@@ -186,12 +211,15 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
         if widgets::compact_button(ui, "Create").clicked() {
             let root = state.selected_root.clone();
             let name = state.ui.dlg.new_branch_name.clone();
-            let base = state.ui.dlg.new_branch_base.clone();
-            let start = if base.trim().is_empty() {
-                None
-            } else {
-                Some(base)
-            };
+            // Whatever the base is — a branch or the commit the log named — git
+            // takes it as the start point, which is why there is nothing to
+            // translate here.
+            let start = state
+                .ui
+                .dlg
+                .new_branch_base
+                .start_point()
+                .map(str::to_owned);
             let co = state.ui.dlg.new_branch_checkout;
             // The Branches tab scrolls the fresh branch into view (issue 08):
             // creating something and then hunting for it feels broken.
@@ -206,6 +234,77 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
             close(state);
         }
     });
+}
+
+/// The "Start from:" value, in the one place that knows a base is either a
+/// branch or a commit.
+///
+/// A branch reads as a branch name, exactly as it always has. A commit reads as
+/// what it is: the commit glyph, the short reference in the data face — the same
+/// face the log paints hashes in, so a reference always looks like a reference
+/// — and its subject as a quiet annotation. A 40-character hash would be neither
+/// legible nor a value anyone recognises, and the subject is what tells two
+/// commits apart at a glance.
+///
+/// The subject is dropped rather than squeezed when the row is narrow, and the
+/// reference never is: a base that cannot be read is worse than a base without a
+/// caption.
+fn new_branch_base_value(ui: &mut Ui, state: &AppState) {
+    let base = &state.ui.dlg.new_branch_base;
+    let NewBranchBase::Commit(id) = base else {
+        if let NewBranchBase::Branch(name) = base {
+            ui.label(name);
+        }
+        return;
+    };
+    // The same commit glyph the tag dialog's TARGET row uses, so a row that
+    // names a commit says so in one kit's grammar wherever it appears.
+    icon(ui, Icon::GIT_COMMIT, 14.0, Palette::BRAND);
+    ui.label(
+        RichText::new(widgets::short_commit_ref(id))
+            .font(data_font(TYPE_BODY))
+            .color(Palette::INK),
+    );
+    if let Some(subject) = commit_subject(state, id) {
+        ui.add(
+            egui::Label::new(
+                RichText::new(subject)
+                    .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
+                    .color(Palette::INK_3),
+            )
+            .truncate(),
+        );
+    }
+}
+
+/// The subject of `cid`, read from the log caches the log pane has already
+/// filled — a presentation detail, so it costs no git call, and it is absent
+/// (the reference still shows) if the commit is not in the listing on screen.
+fn commit_subject(state: &AppState, cid: &str) -> Option<String> {
+    let root = state.selected_root.as_ref()?;
+    // All three listings, because the log can be scoped to a ref or a path and
+    // the right-clicked row came from whichever one is on screen.
+    let commits = state
+        .caches
+        .log(root)
+        .or_else(|| {
+            state
+                .ui
+                .log_ref_scope
+                .as_ref()
+                .and_then(|(r, name)| state.caches.ref_log(r, name))
+        })
+        .or_else(|| {
+            state
+                .ui
+                .log_path_scope
+                .as_ref()
+                .and_then(|path| state.caches.path_log(root, path))
+        })?;
+    commits
+        .iter()
+        .find(|c| c.id == cid)
+        .map(|c| c.message.lines().next().unwrap_or_default().to_owned())
 }
 
 /// The focused root's current branch name, for the dialog title.

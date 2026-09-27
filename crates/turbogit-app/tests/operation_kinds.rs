@@ -20,8 +20,12 @@ fn plan_one() -> Vec<RebasePlanEntry> {
         action: turbogit_domain::model::RebaseAction::Pick,
         commit: "0123456789abcdef0123456789abcdef01234567".into(),
         subject: "a commit".into(),
+        message: None,
     }]
 }
+
+/// A full commit id, as the log carries it.
+const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn settings() -> VcsSettings {
     VcsSettings::default()
@@ -175,6 +179,55 @@ fn only_the_worktree_operations_mutate_the_worktree_set() {
             op.label()
         );
     }
+}
+
+// --- the two targeted history rewrites ------------------------------------------
+
+/// A history rewrite of one named commit is its own kind of work, not anonymous
+/// custom work: the activity view, the settlement path and the completion report
+/// all read its identity. Its label names the short reference the developer
+/// right-clicked, and it owns the root whose history moves.
+#[test]
+fn a_targeted_rewrite_is_its_own_kind_and_names_its_commit() {
+    let r = root("alpha");
+    let dropped = Operation::drop_commit(&r, "feature", SHA, &settings());
+    let reworded = Operation::reword_commit(&r, "feature", SHA, "a better message", &settings());
+
+    for op in [&dropped, &reworded] {
+        assert_eq!(op.affected(), Affected::Root(r.clone()));
+        assert!(
+            !op.mutates_worktrees(),
+            "rewriting history moves no linked worktree"
+        );
+    }
+    assert_eq!(dropped.label(), "Drop commit 0123456");
+    assert_eq!(reworded.label(), "Reword commit 0123456");
+    assert_eq!(dropped.kind(), OpKind::DropCommit);
+    assert_eq!(reworded.kind(), OpKind::RewordCommit);
+    assert_ne!(
+        dropped.kind(),
+        OpKind::Other,
+        "a rewrite is not anonymous custom work"
+    );
+    assert_ne!(
+        dropped.kind(),
+        OpKind::Rebase,
+        "and it is not the dialog's rebase either: it settles on its own arm"
+    );
+}
+
+/// A reword's new message is content the label must not leak into the activity
+/// feed — the feed records the work, not the text.
+#[test]
+fn a_reword_label_names_the_commit_and_not_its_new_message() {
+    let op = Operation::reword_commit(
+        &root("alpha"),
+        "feature",
+        SHA,
+        "a message nobody should see in the feed",
+        &settings(),
+    );
+    assert_eq!(op.label(), "Reword commit 0123456");
 }
 
 // --- Custom is the untyped tail ------------------------------------------------

@@ -24,6 +24,7 @@ mod controls;
 mod feedback;
 mod inputs;
 mod menu;
+pub mod menu_host;
 mod rows;
 mod text;
 
@@ -38,7 +39,7 @@ pub use chips::{
 };
 pub use containers::{
     AVATAR_SIZE, CardFrame, CardSizing, CardSurface, alert_box, avatar_initials, card, card_header,
-    churn_bar, dialog_footer, group_title, note, toolwindow_header,
+    cautions_rail, churn_bar, dialog_footer, group_title, note, recovery_note, toolwindow_header,
 };
 pub use controls::{
     ButtonVariant, WidgetState, action_button, compact_button, compact_button_enabled,
@@ -47,7 +48,11 @@ pub use controls::{
 };
 pub use feedback::{KeyedReadPresentation, accent_bar, inline_error, keyed_read_presentation};
 pub use inputs::{search_input, text_input};
-pub use menu::{MenuItemKind, MenuItemProps, menu_item, menu_rule, menu_surface};
+pub use menu::{MenuItemKind, MenuItemProps, MenuItemState, menu_item, menu_rule, menu_surface};
+// The host's two lifecycle entry points stay module-qualified
+// (`menu_host::note_anchor`, `menu_host::host_menu`) — on this façade a bare
+// `show` or `host_menu` would name no widget.
+pub use menu_host::{MenuId, target_of};
 pub use rows::paint_row;
 pub use text::{SHORT_COMMIT_REF_CHARS, paint_centered_text, short_commit_ref};
 

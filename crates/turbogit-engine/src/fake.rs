@@ -551,7 +551,7 @@ impl GitExecutor for FakeExecutor {
         Ok(Vec::new())
     }
 
-    fn tag_checkout(&self, _root: &Path, _name: &str) -> TgResult<()> {
+    fn checkout_detached(&self, _root: &Path, _name: &str) -> TgResult<()> {
         Ok(())
     }
 

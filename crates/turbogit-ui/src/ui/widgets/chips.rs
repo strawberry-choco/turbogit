@@ -5,7 +5,7 @@ use egui::{
     WidgetType,
 };
 
-use super::controls::{focus_ring, tint_over_bg};
+use super::controls::tint_over_bg;
 use crate::theme::{CONTROL_RADIUS, Palette, TYPE_CONTROL};
 
 /// Alpha used when tinting an accent over [`Palette::BG`] for badge fills.
@@ -190,16 +190,28 @@ fn chip(ui: &mut Ui, text: &str, colors: ChipColors) -> Response {
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, text));
     response
 }
-/// Commit hash as a clickable chip: mono hash on `SURFACE_3` (redesign
-/// issue 03). The click is *reported*, not acted on — the caller defers the
-/// copy like every other pane interaction (plan §1.3).
+/// Commit hash as a chip: mono hash on `SURFACE_3` (redesign issue 03).
+///
+/// The chip is a LABEL, not a control. Copying the hash lives in the commit's
+/// context menu, whose Copy hash item states this same short reference, so the
+/// pane two inches away must not hold a second, dead copy of the verb (ADR-0024).
+/// That is why the sense is hover-only: a clickable chip keeps the click plane —
+/// swallowing presses over the commit metadata — and, being focusable, gets an
+/// accessibility node that answers Click, so a screen reader announces an
+/// unnamed button where there is no button. It cannot take focus either, so no
+/// focus ring is painted and none is offered: there is no keyboard affordance to
+/// a hash nobody can act on here.
+///
+/// `hint` is the optional hover caption, and an empty one paints no tooltip:
+/// this chip carries no caption, because there is nothing to say about a press
+/// that no longer exists.
 pub fn hash_chip(ui: &mut Ui, hash: &str, hint: &str) -> Response {
     let font = FontId::new(crate::theme::TYPE_BODY, FontFamily::Monospace);
     let galley = ui
         .painter()
         .layout_no_wrap(hash.to_owned(), font, Palette::BRAND);
     let size = Vec2::new(galley.size().x + CHIP_PAD_X * 2.0, CHIP_HEIGHT + 6.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(CONTROL_RADIUS), Palette::SURFACE_3);
@@ -212,6 +224,9 @@ pub fn hash_chip(ui: &mut Ui, hash: &str, hint: &str) -> Response {
             Palette::BRAND,
         );
     }
-    focus_ring(ui, &response);
-    response.on_hover_text(hint)
+    if hint.is_empty() {
+        response
+    } else {
+        response.on_hover_text(hint)
+    }
 }

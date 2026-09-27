@@ -429,6 +429,36 @@ fn a_lightweight_tag_skips_message_and_signing_in_the_spec() {
 }
 
 #[test]
+fn cancelling_creates_no_tag_and_answers_nothing() {
+    let (tmp, repo, _shas) = repo_two_commits();
+    let head_before = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let (state, exec) = app_state_recording(tmp.path(), std::slice::from_ref(&repo));
+    let mut h = harness(state);
+    open_tag(&mut h, &repo);
+
+    // A name good enough to create from, so cancelling is a decision rather
+    // than a blank form nobody wanted anyway.
+    type_into_field(&mut h, "Tag name", "v9.9.9");
+    click_dialog_button(&mut h, "Cancel");
+
+    assert!(h.state().ui.dialog.is_none(), "the dialog went");
+    assert_eq!(git(&repo, &["tag", "-l"]).trim(), "", "no tag was created");
+    assert_eq!(
+        git(&repo, &["rev-parse", "HEAD"]).trim(),
+        head_before,
+        "and the repository did not move",
+    );
+    assert!(
+        !exec
+            .recorded()
+            .iter()
+            .any(|c| matches!(c, test_support::RecordedCall::TagCreate { .. })),
+        "nothing was dispatched at all: {:?}",
+        exec.recorded()
+    );
+}
+
+#[test]
 fn push_immediately_pushes_to_origin_and_reports_it() {
     let (tmp, repo, _shas) = repo_two_commits();
     // A bare remote named origin already holding main.

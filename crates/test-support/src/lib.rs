@@ -14,6 +14,8 @@
 #[cfg(feature = "harness")]
 pub mod harness;
 
+pub mod git_seed;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -693,8 +695,8 @@ impl GitExecutor for RecordingExecutor {
         self.inner.tag_list(root)
     }
 
-    fn tag_checkout(&self, root: &Path, name: &str) -> TgResult<()> {
-        self.inner.tag_checkout(root, name)
+    fn checkout_detached(&self, root: &Path, name: &str) -> TgResult<()> {
+        self.inner.checkout_detached(root, name)
     }
 
     fn tag_push(&self, root: &Path, remote: &str, name: Option<&str>, all: bool) -> TgResult<()> {

@@ -26,6 +26,14 @@ impl TurbogitApp {
     pub fn launch(project_dir: Option<std::path::PathBuf>) -> Self {
         let mut state = AppState::launch(project_dir);
         state.dir_picker = Some(Box::new(|| rfd::FileDialog::new().pick_folder()));
+        // The patch-path seam, installed beside it: the log's Create patch asks
+        // this for a destination and writes the commit's own diff there.
+        state.patch_writer = Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .set_title("Create patch")
+                .set_file_name("patch.diff")
+                .save_file()
+        }));
         Self { state }
     }
 }

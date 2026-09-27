@@ -233,8 +233,12 @@ pub fn cherry_pick(vcs: &dyn GitExecutor, root: &Path, commit: &str) -> TgResult
 
 /// Apply `commit` onto the branch `target` (issue 15 log commit action):
 /// check out the target, cherry-pick, then return to the branch that was
-/// checked out before. Guarded: a protected target branch and a dirty
-/// working tree are refused before git is touched.
+/// checked out before. Guarded, in this order, before git is touched: the
+/// branch the work is standing on is not a destination at all (the commit is
+/// already on it), a protected target may not be written to, and a dirty
+/// working tree entangles the pick. The first guard is the one the branch
+/// picker states on the row it disables, so a bypass of that dialog is refused
+/// for the reason the developer was shown.
 pub fn cherry_pick_to(
     vcs: &dyn GitExecutor,
     root: &Path,
@@ -242,9 +246,15 @@ pub fn cherry_pick_to(
     target: &str,
     settings: &VcsSettings,
 ) -> TgResult<()> {
+    let original = vcs.current_branch(root)?;
+    if original.as_deref() == Some(target) {
+        return Err(TgError::Other(format!(
+            "Refusing to cherry-pick onto the current branch '{target}'"
+        )));
+    }
     if is_protected(settings, target) {
         return Err(TgError::Other(format!(
-            "Refusing to cherry-pick onto protected branch '{target}'"
+            "Refusing to cherry-pick onto the protected branch '{target}'"
         )));
     }
     if !vcs.status(root)?.changes.is_empty() {
@@ -252,7 +262,6 @@ pub fn cherry_pick_to(
             "Working tree is dirty — commit or shelve your changes before cherry-picking".into(),
         ));
     }
-    let original = vcs.current_branch(root)?;
     vcs.branch_checkout(root, target)?;
     match vcs.cherry_pick(root, commit) {
         Ok(()) => {

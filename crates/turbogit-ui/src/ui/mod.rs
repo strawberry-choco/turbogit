@@ -23,6 +23,7 @@ pub mod branches_tree;
 pub mod bulk_monitor;
 pub mod bulk_preflight;
 pub mod cherry_across;
+pub mod commit_menu;
 pub mod commit_window;
 pub mod components;
 pub mod conflict_resolver;
@@ -39,6 +40,8 @@ pub mod popups;
 pub mod project_tree;
 pub mod push_dialog;
 pub mod remotes_dialog;
+pub mod reword_editor;
+pub mod rewrite_preflight;
 pub mod settings_modal;
 pub mod shell;
 pub mod sidebar;
@@ -84,6 +87,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             // Issue 30: the interactive rebase editor lives in its own
             // module — Plan / Preview / Log tabs over one plan.
             interactive_rebase::show(ui, state);
+        } else if d == Dialog::RewritePreflight {
+            // Ticket 10: the preflight a targeted history verb shows before it
+            // runs, for both verbs — its own module, next to the plan editor it
+            // shares a rail and a backup ref with.
+            rewrite_preflight::show(ui, state);
+        } else if d == Dialog::Reword {
+            // Ticket 11: the commit-message editor Reword commit opens first,
+            // next to the preflight its confirm opens.
+            reword_editor::show(ui, state);
         } else if d == Dialog::ManageRemotes {
             // Issue 33: the remotes manager lives in its own module.
             remotes_dialog::show(ui, state);
@@ -296,6 +308,7 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 root,
                 target,
                 kind,
+                detach,
             } => {
                 // Issue 07: plain-language care, never a bare "cannot
                 // checkout". The conflict implication is stated before acting.
@@ -321,11 +334,19 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 match chosen {
                     Some(0) => {
                         state.ui.confirm = None;
-                        state.checkout_branch_op(root, *kind, target);
+                        if *detach {
+                            state.checkout_detached_op(root, target);
+                        } else {
+                            state.checkout_branch_op(root, *kind, target);
+                        }
                     }
                     Some(1) => {
                         state.ui.confirm = None;
-                        state.checkout_branch_set_aside(root, *kind, target);
+                        if *detach {
+                            state.checkout_detached_set_aside(root, target);
+                        } else {
+                            state.checkout_branch_set_aside(root, *kind, target);
+                        }
                     }
                     _ => {}
                 }

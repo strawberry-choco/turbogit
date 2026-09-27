@@ -51,6 +51,7 @@ use crate::ui::components::{
     row_fill, row_ink, section_header, sync_badge, sync_bg, sync_ink,
 };
 use crate::ui::icons::{self, Icon};
+use crate::ui::widgets::menu_host::{self, MenuId};
 
 /// Height of one repo section header (status dot + repo name + current chip).
 const REPO_HEADER_H: f32 = 30.0;
@@ -1031,12 +1032,13 @@ fn branch_row(
     } else if props.allows_context_menu && response.secondary_clicked() {
         // The anchor is the pointer position at the right-click, stashed in
         // egui memory — the app crate has no egui types to carry it in
-        // `TreeState`.
-        let anchor_id = egui::Id::new(("branches_context_menu_anchor", id, &branch.name));
+        // `TreeState`. The surface that paints the menu reads it back under
+        // the same target key.
+        let target = menu_host::target_of(id, &branch.name);
         let pos = ui
             .input(|i| i.pointer.interact_pos())
             .unwrap_or_else(|| rect.left_bottom());
-        ui.ctx().memory_mut(|m| m.data.insert_temp(anchor_id, pos));
+        menu_host::note_anchor(ui, MenuId::new("branches", &target), pos);
         events.push(TreeEvent::ContextMenuRequested {
             root: section.root_id.clone(),
             branch: branch.name.clone(),

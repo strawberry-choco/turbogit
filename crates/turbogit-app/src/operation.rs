@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
-    Change, CleanTreeMethod, MergeOpts, RebaseOpts, RebasePlanEntry, RootId, VcsSettings,
+    Change, CleanTreeMethod, CommitId, MergeOpts, RebaseOpts, RebasePlanEntry, RootId, VcsSettings,
 };
 use turbogit_engine_api::GitExecutor;
 
@@ -32,6 +32,11 @@ pub enum OpKind {
     Shelve,
     WorktreeAdd,
     WorktreeRemove,
+    /// [`Operation::DropCommit`] — one commit removed from the current branch's
+    /// history, its descendants replayed.
+    DropCommit,
+    /// [`Operation::RewordCommit`] — one commit's message rewritten.
+    RewordCommit,
     /// The [`Operation::Custom`] tail: dispatched, but nothing settles on it.
     Other,
 }
@@ -116,6 +121,24 @@ pub enum Operation {
     },
     /// `git worktree remove` — mutates the root's linked-worktree set.
     WorktreeRemove { root: RootId, path: PathBuf },
+    /// Remove ONE commit from `branch`'s history and replay everything built on
+    /// top of it. A rewrite, so it carries the settings the protected-branch
+    /// guard reads and the branch that guard names when HEAD is detached.
+    DropCommit {
+        root: RootId,
+        branch: String,
+        commit: CommitId,
+        settings: VcsSettings,
+    },
+    /// Rewrite ONE commit's message, leaving its content alone. The same guarded
+    /// rewrite as [`Operation::DropCommit`], one plan row apart (ADR-0025).
+    RewordCommit {
+        root: RootId,
+        branch: String,
+        commit: CommitId,
+        message: String,
+        settings: VcsSettings,
+    },
     /// Work whose label nothing inspects. Greppable, so the long tail stays
     /// visible instead of silently growing into free-text dispatch again.
     Custom {
@@ -146,6 +169,33 @@ impl Operation {
             root,
             changes,
             message: message.into(),
+        }
+    }
+
+    /// Drop one commit out of `branch`, replaying its descendants.
+    pub fn drop_commit(root: &RootId, branch: &str, commit: &str, settings: &VcsSettings) -> Self {
+        Self::DropCommit {
+            root: root.clone(),
+            branch: branch.to_string(),
+            commit: commit.to_string(),
+            settings: settings.clone(),
+        }
+    }
+
+    /// Reword one commit in `branch`, its content untouched.
+    pub fn reword_commit(
+        root: &RootId,
+        branch: &str,
+        commit: &str,
+        message: &str,
+        settings: &VcsSettings,
+    ) -> Self {
+        Self::RewordCommit {
+            root: root.clone(),
+            branch: branch.to_string(),
+            commit: commit.to_string(),
+            message: message.to_string(),
+            settings: settings.clone(),
         }
     }
 
@@ -265,6 +315,15 @@ impl Operation {
             Self::Shelve { .. } => "Shelve".to_string(),
             Self::WorktreeAdd { branch, .. } => format!("Add worktree {branch}"),
             Self::WorktreeRemove { .. } => "Remove worktree".to_string(),
+            // The short reference, because that is what the developer read in
+            // the menu item they clicked. The reword's new message is content
+            // and stays out of the feed.
+            Self::DropCommit { commit, .. } => {
+                format!("Drop commit {}", crate::state::short_sha(commit))
+            }
+            Self::RewordCommit { commit, .. } => {
+                format!("Reword commit {}", crate::state::short_sha(commit))
+            }
             Self::Custom { label, .. } => label.clone(),
         }
     }
@@ -284,7 +343,9 @@ impl Operation {
             | Self::DeleteBranch { root, .. }
             | Self::Shelve { root, .. }
             | Self::WorktreeAdd { root, .. }
-            | Self::WorktreeRemove { root, .. } => Affected::Root(root.clone()),
+            | Self::WorktreeRemove { root, .. }
+            | Self::DropCommit { root, .. }
+            | Self::RewordCommit { root, .. } => Affected::Root(root.clone()),
         }
     }
 
@@ -305,6 +366,8 @@ impl Operation {
             Self::Shelve { .. } => OpKind::Shelve,
             Self::WorktreeAdd { .. } => OpKind::WorktreeAdd,
             Self::WorktreeRemove { .. } => OpKind::WorktreeRemove,
+            Self::DropCommit { .. } => OpKind::DropCommit,
+            Self::RewordCommit { .. } => OpKind::RewordCommit,
             Self::Custom { .. } => OpKind::Other,
         }
     }
@@ -383,6 +446,32 @@ impl Operation {
             Self::WorktreeRemove { root, path } => {
                 vcs.worktree_remove(root.as_path(), &path, false)
             }
+            Self::DropCommit {
+                root,
+                branch,
+                commit,
+                settings,
+            } => turbogit_services::history_editor::drop_commit(
+                vcs,
+                root.as_path(),
+                &commit,
+                &settings,
+                &branch,
+            ),
+            Self::RewordCommit {
+                root,
+                branch,
+                commit,
+                message,
+                settings,
+            } => turbogit_services::history_editor::reword_commit(
+                vcs,
+                root.as_path(),
+                &commit,
+                &message,
+                &settings,
+                &branch,
+            ),
             Self::Custom { work, .. } => work(vcs),
         }
     }

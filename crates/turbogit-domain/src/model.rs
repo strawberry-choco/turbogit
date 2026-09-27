@@ -1223,11 +1223,20 @@ pub enum RebaseAction {
 }
 
 /// A row of the interactive rebase plan.
+///
+/// `message` is the replacement commit message a [`RebaseAction::Reword`] row
+/// carries, and it is the reason a reword is not a no-op: git's own rebase todo
+/// has nowhere to put a message, so it rides on the plan row instead and the
+/// engine hands it to git's editor at execution (ADR-0025). `None` on every
+/// other row, and `parse_todo` can never produce one — rendering a plan to todo
+/// text drops the message deliberately, so the editor's buffer stays a list of
+/// verbs rather than becoming a message store.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RebasePlanEntry {
     pub action: RebaseAction,
     pub commit: CommitId,
     pub subject: String,
+    pub message: Option<String>,
 }
 
 /// A parsed diff line for the viewer (color-coded by prefix).

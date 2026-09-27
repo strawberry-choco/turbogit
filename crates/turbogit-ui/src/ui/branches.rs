@@ -17,7 +17,7 @@ use egui::{Align, Layout, Pos2, Rect, RichText, Ui, UiBuilder};
 
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, PendingConfirm};
+use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
 use turbogit_services::sync_service::PushScope;
 
@@ -355,12 +355,7 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
     actions_ui.add_space(PAD_STRIP);
     // Primary action: New Branch (issue 04 — blue).
     if kit_button(&mut actions_ui, KitButton::Primary, "New Branch").clicked() {
-        state.ui.dlg.new_branch_name.clear();
-        state.ui.dlg.new_branch_start.clear();
-        state.ui.dlg.new_branch_base.clear();
-        state.ui.dlg.new_branch_base_picker_open = false;
-        state.ui.dlg.new_branch_checkout = true;
-        state.ui.dialog = Some(Dialog::NewBranch);
+        state.open_new_branch(NewBranchBase::Unset, true, None);
     }
     // Scope label (issue 04): only when several repos are in scope.
     if state.multi.roots.len() > 1 {
@@ -515,63 +510,45 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
 
     // The right-click context menu floats over the list, anchored at the
     // pointer position where the row was right-clicked. Events were applied
-    // before this paint, so it opens in the frame it was clicked.
+    // before this paint, so it opens in the frame it was clicked. The host
+    // owns that lifecycle; this surface owns only which row's menu is open.
     if let Some((root_id, name)) = state.ui.branches_tree.context_menu.clone() {
-        let anchor = ui.ctx().memory(|m| {
-            m.data.get_temp::<Pos2>(egui::Id::new((
-                "branches_context_menu_anchor",
-                &root_id,
-                &name,
-            )))
-        });
-        // A click outside only dismisses once the menu was visible on the
-        // PREVIOUS frame, so the right-click that opened it cannot also
-        // close it (egui's own dropdown idiom, `popups.rs`).
-        let was_open_id = egui::Id::new(("branches_context_menu_was_open", &root_id, &name));
-        let was_open = ui
-            .ctx()
-            .memory(|m| m.data.get_temp::<bool>(was_open_id) == Some(true));
-        ui.ctx()
-            .memory_mut(|m| m.data.insert_temp(was_open_id, true));
-        if let Some(pos) = anchor {
-            let ctx = ui.ctx().clone();
-            let mut area_rect = Rect::NOTHING;
-            egui::Area::new(egui::Id::new(("branches_context_menu", &root_id, &name)))
-                .fixed_pos(pos)
-                .show(&ctx, |ui| {
-                    widgets::menu_surface(ui).show(ui, |ui| {
-                        let repo_name = root_id.name();
-                        if let Some(root) = state.multi.by_id(&root_id).cloned()
-                            && let Some(branch) =
-                                root.branches.iter().find(|b| b.name == name).cloned()
-                        {
-                            let props = BranchMenuProps {
-                                repo_name: &repo_name,
-                                multi_repo: state.multi.roots.len() > 1,
-                                current_branch: root.current_branch.as_deref(),
-                            };
-                            if let Some(action) = branch_menu(ui, &props, &branch) {
-                                apply_branch_action(state, &root.id, &branch, action);
-                            }
-                        }
-                    });
-                    area_rect = ui.min_rect();
-                });
-            if was_open {
-                let clicked_outside = ui.input(|i| {
-                    i.pointer.any_click()
-                        && i.pointer
-                            .interact_pos()
-                            .is_some_and(|p| !area_rect.contains(p))
-                });
-                if clicked_outside {
-                    state.ui.branches_tree.context_menu = None;
+        let target = widgets::menu_host::target_of(&root_id, &name);
+        let root_name = root_id.name();
+        let mut dismiss = false;
+        let picked = widgets::menu_host::host_menu(
+            ui,
+            widgets::menu_host::MenuId::new("branches", &target),
+            true,
+            &mut dismiss,
+            |ui| {
+                let mut picked = None;
+                if let Some(root) = state.multi.by_id(&root_id).cloned()
+                    && let Some(branch) = root.branches.iter().find(|b| b.name == name).cloned()
+                {
+                    let props = BranchMenuProps {
+                        repo_name: &root_name,
+                        multi_repo: state.multi.roots.len() > 1,
+                        current_branch: root.current_branch.as_deref(),
+                    };
+                    picked = branch_menu(ui, &props, &branch);
                 }
-            }
-        } else {
-            // The anchor is gone (memory cleared): close rather than park a
-            // menu with no home.
+                picked
+            },
+        );
+        if dismiss {
             state.ui.branches_tree.context_menu = None;
+        }
+        // The dispatcher closes the menu before its action runs, so an item
+        // click and a dismissal never race over the same field.
+        if let Some(action) = picked.flatten() {
+            let branch = state
+                .multi
+                .by_id(&root_id)
+                .and_then(|r| r.branches.iter().find(|b| b.name == name).cloned());
+            if let Some(branch) = branch {
+                apply_branch_action(state, &root_id, &branch, action);
+            }
         }
     }
 }
@@ -662,16 +639,10 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
         TreeEvent::CreateBranchRequested { name } => {
             // The no-match state carries the typed query; the empty state
             // starts from a blank name.
-            if name.is_empty() {
-                state.ui.dlg.new_branch_name.clear();
-            } else {
-                state.ui.dlg.new_branch_name = name;
-            }
-            state.ui.dlg.new_branch_start.clear();
-            state.ui.dlg.new_branch_base.clear();
-            state.ui.dlg.new_branch_base_picker_open = false;
-            state.ui.dlg.new_branch_checkout = true;
-            state.ui.dialog = Some(Dialog::NewBranch);
+            // The no-match state carries the typed query; the empty state
+            // starts from a blank name.
+            let name = if name.is_empty() { None } else { Some(name) };
+            state.open_new_branch(NewBranchBase::Unset, true, name);
         }
         TreeEvent::ClearFilterRequested => {
             state.ui.branches_filter.clear();
@@ -766,6 +737,7 @@ fn checkout_branch(state: &mut AppState, root: &RootId, branch: &Branch) {
             root: root.clone(),
             target: branch.name.clone(),
             kind: branch.kind,
+            detach: false,
         });
         return;
     }
@@ -803,12 +775,7 @@ fn apply_branch_action(
         BranchMenuAction::NewBranchFrom => {
             // The same prefill `CreateBranchRequested` performs, with the
             // clicked row as the base.
-            state.ui.dlg.new_branch_name.clear();
-            state.ui.dlg.new_branch_start.clear();
-            state.ui.dlg.new_branch_base = branch.name.clone();
-            state.ui.dlg.new_branch_base_picker_open = false;
-            state.ui.dlg.new_branch_checkout = true;
-            state.ui.dialog = Some(Dialog::NewBranch);
+            state.open_new_branch(NewBranchBase::Branch(branch.name.clone()), true, None);
         }
         BranchMenuAction::CheckoutAndPull => {
             // One composite operation, modelled on the branches popup's

@@ -18,6 +18,7 @@ use egui_kittest::{
 };
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
+use test_support::harness::{click_menu_item, right_click_row};
 use turbogit_app::state::{AppState, LOG_PAGE_SIZE};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
@@ -462,13 +463,12 @@ fn small_project() -> SmallSeed {
 }
 
 /// Drive the full user path: select `row_label`, right-click its changed-file
-/// entry `file`, and activate "Show history for file..." in the context menu.
+/// entry, and activate "Show history for file…" on the shared menu host.
 fn scope_log_to_file(harness: &mut Harness<'_, AppState>, row_label: &str, file: &str) {
     harness.get_by_label(row_label).click();
     settle(harness);
-    harness.get_by_label(file).click_secondary();
-    settle(harness);
-    harness.get_by_label("Show history for file...").click();
+    right_click_row(harness, file);
+    click_menu_item(harness, "Show blame", "Show history for file…");
     settle(harness);
 }
 
@@ -546,9 +546,11 @@ fn details_show_committer_copy_hash_and_clickable_parents() {
     assert_painted(&harness, "Committer");
     assert_not_painted(&harness, "signed ✓");
 
-    // Copy hash affordance with painted feedback (the toast).
-    assert_painted(&harness, "Copy hash");
-    harness.get_by_label("Copy hash").click();
+    // Copy hash is the commit menu's, not the pane's (ADR-0024): the hash is
+    // still shown, and clicking it is what moved.
+    assert_not_painted(&harness, "Copy hash");
+    right_click_row(&mut harness, &format!("{} alpha: second", short(&seed.c2)));
+    click_menu_item(&mut harness, "Copy hash", "Copy hash");
     settle(&mut harness);
     assert_painted(&harness, "Copied");
 

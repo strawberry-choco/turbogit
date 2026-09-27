@@ -15,8 +15,8 @@
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{
-    Commit, CommitId, ConflictVersions, LogOpts, MergeStrategy, RebasePlanEntry, RefState, Root,
-    RootId,
+    Commit, CommitId, ConflictVersions, LogOpts, MergeStrategy, RebaseAction, RebasePlanEntry,
+    RefState, Root, RootId,
 };
 use turbogit_services::history_editor::RebaseCaution;
 use turbogit_services::integrate_service::MergePreview;
@@ -156,6 +156,39 @@ impl AppState {
     pub fn rebase_plan(&self, root: &RootId, base: &str) -> Option<Vec<RebasePlanEntry>> {
         turbogit_services::history_editor::build_plan(self.executor.as_ref(), root.as_path(), base)
             .ok()
+    }
+
+    /// The plan one targeted history verb would run for `commit` (ticket 10):
+    /// from its first parent to the tip, with that commit's own row set to
+    /// `action`. The verb is the preflight's subject and the operation's, so
+    /// both read the plan from here and neither guesses it.
+    ///
+    /// An `Err` is the SERVICE'S OWN MESSAGE, not a paraphrase of it, and the
+    /// caller shows it as-is. That is the difference from the `Option` reads
+    /// above: those answer "is there one?" and absence is a normal answer, but a
+    /// refusal here is a sentence the service already wrote for a developer —
+    /// "has no first parent to rewrite from", "is not on the current branch" —
+    /// and throwing it away leaves a caller able to say only that something is
+    /// wrong. Keyed the same way as `outgoing_per_root`.
+    /// `message` is the replacement a reword writes and a drop has none, so it
+    /// rides the plan row for the verb rather than being a second read: git's
+    /// rebase todo has no slot for it (ADR-0025), and the row is what the
+    /// operation hands the engine.
+    pub fn history_verb_plan(
+        &self,
+        root: &RootId,
+        commit: &str,
+        action: RebaseAction,
+        message: Option<String>,
+    ) -> Result<Vec<RebasePlanEntry>, String> {
+        turbogit_services::history_editor::targeted_plan(
+            self.executor.as_ref(),
+            root.as_path(),
+            commit,
+            action,
+            message,
+        )
+        .map_err(|e| e.to_string())
     }
 
     /// The safety warnings on a plan — protected or shared branches it

@@ -35,6 +35,7 @@ pub fn build_plan(
             action: RebaseAction::Pick,
             commit: c.id,
             subject: c.message.lines().next().unwrap_or("").to_string(),
+            message: None,
         })
         .collect();
 
@@ -88,6 +89,81 @@ pub fn execute_with_backup(
     }
     vcs.save_rewrite_backup(root)?;
     vcs.rebase_interactive(root, plan)
+}
+
+/// The plan one targeted history verb runs: from the target commit's first
+/// parent through the current tip, with exactly one row set to `action`.
+///
+/// Built over the FIRST PARENT rather than the target so the target itself is
+/// in the replayed set — which is what lets one row carry the verb while every
+/// descendant is replayed on top of it unchanged. A commit that is not an
+/// ancestor of the tip has no row here, so it gets an error rather than a todo
+/// git rejects; the menu states that bound on the item before it is reached.
+pub fn targeted_plan(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    commit: &str,
+    action: RebaseAction,
+    message: Option<String>,
+) -> TgResult<Vec<RebasePlanEntry>> {
+    let base = base_of(vcs, root, commit).ok_or_else(|| {
+        TgError::Other(format!(
+            "{commit} has no first parent to rewrite from — it is a root commit or is unknown"
+        ))
+    })?;
+    let mut plan = build_plan(vcs, root, &base)?;
+    let target = plan
+        .iter_mut()
+        .find(|e| e.commit == commit)
+        .ok_or_else(|| {
+            TgError::Other(format!(
+                "{commit} is not on the current branch, so it cannot be edited"
+            ))
+        })?;
+    target.action = action;
+    target.message = message;
+    Ok(plan)
+}
+
+/// Drop ONE named commit: rewrite the current branch as if it had never been
+/// made, replaying everything built on top of it.
+///
+/// Goes through [`execute_with_backup`], so a protected branch refuses before
+/// git is touched, the rewrite backup ref is written first, and the recovery
+/// path can come back to this state. `branch` is the branch being rewritten and
+/// is what the protected-branch guard reads when HEAD is detached.
+pub fn drop_commit(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    commit: &str,
+    settings: &VcsSettings,
+    branch: &str,
+) -> TgResult<()> {
+    let plan = targeted_plan(vcs, root, commit, RebaseAction::Drop, None)?;
+    execute_with_backup(vcs, root, &plan, settings, branch)
+}
+
+/// Reword ONE named commit, leaving its content, author and date alone.
+///
+/// The same single path as [`drop_commit`], one call apart: the new message
+/// rides on the plan row rather than opening a second rewrite machinery, and the
+/// engine substitutes it for git's editor (ADR-0025).
+pub fn reword_commit(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    commit: &str,
+    message: &str,
+    settings: &VcsSettings,
+    branch: &str,
+) -> TgResult<()> {
+    let plan = targeted_plan(
+        vcs,
+        root,
+        commit,
+        RebaseAction::Reword,
+        Some(message.to_string()),
+    )?;
+    execute_with_backup(vcs, root, &plan, settings, branch)
 }
 
 /// Abort the running rebase and restore the pre-rebase state from the engine's
@@ -155,10 +231,13 @@ pub fn parse_todo(text: &str) -> TgResult<Vec<RebasePlanEntry>> {
                 "malformed rebase-todo line: {line}"
             )));
         };
+        // A rendered todo has no slot for a replacement message, so parsing one
+        // back loses it deliberately rather than erroring (ADR-0025).
         plan.push(RebasePlanEntry {
             action,
             commit: commit.to_string(),
             subject: subject.to_string(),
+            message: None,
         });
     }
     Ok(plan)

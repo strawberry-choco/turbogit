@@ -12,7 +12,7 @@ use turbogit_app::granular;
 use turbogit_app::operation::Operation;
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, Tab, TagType, Toast};
+use turbogit_app::state::{AppState, Dialog, Tab, Toast};
 
 /// Every globally-invokable action, reused by both the VCS popup and the
 /// command palette — and by the shell's Git menu (issue #9).
@@ -153,17 +153,11 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::Rebase => state.ui.dialog = Some(Dialog::Rebase),
         Action::Stash => state.ui.dialog = Some(Dialog::Stash),
         Action::Shelve => state.ui.dialog = Some(Dialog::Shelve),
-        // Screen 16: the tag dialog re-opens with Annotated selected and
-        // fresh caches; the typed name/message survive the round trip.
-        Action::Tag => {
-            state.ui.dlg.tag_type = TagType::Annotated;
-            state.ui.dlg.tag_target_picker_open = false;
-            state.ui.dlg.tag_candidates = None;
-            state.ui.dlg.tag_existing = None;
-            state.ui.dlg.tag_signing_key = None;
-            state.ui.dlg.tag_signing_key_fetched = false;
-            state.ui.dialog = Some(Dialog::Tag);
-        }
+        // Screen 16: the tag dialog re-opens with Annotated selected and fresh
+        // reads; the typed name/message survive the round trip. The reset is
+        // `AppState::open_tag_dialog`, shared with the log's New tag item so the
+        // two entry points cannot drift into opening different dialogs.
+        Action::Tag => state.open_tag_dialog(None),
         Action::CommitTab => state.ui.tab = Tab::Commit,
         Action::Settings => state.ui.settings_open = true,
         Action::Clone => {
