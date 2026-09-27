@@ -223,15 +223,16 @@ fn open_push_dialog(h: &mut Harness<'_, AppState>) {
     h.run();
 }
 
-/// The dialog's primary Push button. The shell toolbar also paints a "Push"
-/// item, so disambiguate geometrically: the dialog footer sits below it.
+/// The dialog's primary Push button. The dialog's own `egui::Window` carries
+/// the title "Push" as its accessibility label, so disambiguate geometrically:
+/// the footer sits below the window's title bar.
 /// Issue #25: the dialog label varies — "Push" for the ThisRepo scope,
 /// "Push N commits to M repos" for the multi-repo scopes. We collect every
 /// button whose label starts with "Push" (case sensitive) and pick the
-/// bottom-most one (the dialog footer sits below the toolbar).
+/// bottom-most one (the dialog footer).
 fn dialog_push_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
-    // The dialog's primary Push button. The shell toolbar also paints a
-    // "Push" item, so disambiguate geometrically: the dialog footer sits
+    // The dialog's primary Push button. The dialog window itself also carries
+    // "Push" (its title), so disambiguate geometrically: the footer sits
     // below it. Issue #25: the dialog label varies — "Push" for the
     // ThisRepo scope, "Push N commits to M repo(s)" for the multi-repo
     // scopes. We use `query_all_by_label` (no panic on zero matches) and
@@ -252,7 +253,7 @@ fn dialog_push_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
     }
     assert!(
         nodes.len() >= 2,
-        "expected the toolbar Push plus the dialog Push button, found {} nodes",
+        "expected the dialog window plus the dialog's Push button, found {} nodes",
         nodes.len()
     );
     nodes.sort_by(|a, b| a.rect().center().y.total_cmp(&b.rect().center().y));
@@ -262,7 +263,7 @@ fn dialog_push_button<'h>(h: &'h Harness<'_, AppState>) -> Node<'h> {
 /// The painted toast galley carrying the last op result, if visible.
 /// Op toasts render as `Push` (success) or `Push: <error>` (issue #22 typed
 /// toasts replaced the ✓/✗ glyph prefixes); the colon disambiguates the
-/// failure toast from the bare toolbar Push button.
+/// failure toast from the bare dialog Push button.
 fn toast_galley(h: &Harness<'_, AppState>) -> Option<String> {
     painted_text(h).into_iter().find(|t| t.starts_with("Push:"))
 }

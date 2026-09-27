@@ -953,12 +953,14 @@ pub struct UiState {
     pub blame_cache: Option<(String, std::sync::Arc<[BlameLine]>)>,
     pub dialog: Option<Dialog>,
     pub vcs_popup: bool,
-    // Topbar workspace picker (issue #34). Session-only; never persisted.
+    // Workspace picker (issue #34). Session-only; never persisted.
     /// Whether the floating workspace picker is showing.
     pub workspace_picker_open: bool,
-    /// The selector's bottom-left, in screen points, captured when the picker
-    /// was opened so the dropdown anchors under the chevron. `None` when
-    /// opened from the palette. Plain `f32` pairs — this crate is egui-free.
+    /// Where the dropdown hangs from, in screen points: the trigger's
+    /// bottom-left. `None` — the only production value left since the
+    /// topbar's selector was deleted — means the picker's own fallback
+    /// position, which the palette's `Switch Workspace` action leaves it
+    /// at. Plain `f32` pairs — this crate is egui-free.
     pub workspace_picker_anchor: Option<(f32, f32)>,
     pub settings_open: bool,
     /// The Settings modal category currently shown (issue #26, screen 11).
@@ -1229,9 +1231,9 @@ pub struct AppState {
     /// the highest point at which the developer's choice can be substituted.
     /// `None` means "declined": nothing is written and nothing is confirmed.
     pub patch_writer: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
-    /// Resolved git version (e.g. `2.47.1`) for the topbar header line,
-    /// computed once at launch (issue #34) so the header never spawns `git`
-    /// per frame. `"unknown"` when the binary cannot be resolved.
+    /// Resolved git version (e.g. `2.47.1`) for the status bar's version
+    /// line, computed once at launch (issue #34) so the bar never spawns
+    /// `git` per frame. `"unknown"` when the binary cannot be resolved.
     pub git_version: String,
     /// Where git work runs. Private by design: the mode is chosen by which
     /// constructor built the state, never by a caller.
@@ -2750,7 +2752,7 @@ impl AppState {
         }
     }
 
-    /// Open a recents row (Welcome row click, topbar workspace picker): a
+    /// Open a recents row (Welcome row click, workspace picker): a
     /// [`crate::recents::RecentKind::Workspace`] row deep-scans and
     /// re-indexes, a [`crate::recents::RecentKind::Project`] row takes the
     /// bounded [`Self::rescan`] path. Shared by both call sites so there is

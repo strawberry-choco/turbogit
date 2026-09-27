@@ -4,7 +4,8 @@
 //! [`turbogit_ui::ui::render`] over a real temp git repository. Entries are
 //! planted through the public [`turbogit_app::activity::ActivityLog`] API
 //! (the same surface `AppState` appends through); the end-to-end test drives
-//! a real fetch from the topbar button. Assertions are on painted text and
+//! a real fetch from the command palette's `Fetch` action (the topbar button
+//! that once triggered it is gone). Assertions are on painted text and
 //! public state transitions — never on internals.
 
 use std::path::{Path, PathBuf};
@@ -43,7 +44,7 @@ fn commit_readme(repo: &Path) {
 }
 
 /// One bare local remote (`origin`) plus one local repo `alpha` on `main`
-/// with `origin` configured, so a topbar Fetch is a real, valid operation.
+/// with `origin` configured, so a palette Fetch is a real, valid operation.
 fn repo_project() -> (TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
@@ -448,8 +449,8 @@ fn title_control_hover_fill_and_focus_ring_share_one_radius() {
     );
 }
 
-/// Contract (end to end): a real fetch dispatched from the topbar lands in
-/// the activity panel — the OpCompleted → entry → paint pipeline.
+/// Contract (end to end): a real fetch dispatched from the command palette
+/// lands in the activity panel — the OpCompleted → entry → paint pipeline.
 #[test]
 fn real_fetch_lands_in_the_panel() {
     let (_tmp, project, _alpha) = repo_project();
@@ -458,9 +459,16 @@ fn real_fetch_lands_in_the_panel() {
 
     harness.state_mut().ui.activity.expanded = true;
     settle_quiet(&mut harness);
+    // The topbar's Fetch button is gone, so the palette's `Fetch` action is
+    // the sync entry point (same `Action` the frozen shortcuts and the VCS
+    // popup share).
+    harness.state_mut().ui.command_palette = true;
+    harness.state_mut().ui.command_query = "fetch".to_string();
+    settle_quiet(&mut harness);
     harness.get_by_label("Fetch").click();
+    settle_quiet(&mut harness);
 
-    // The topbar dispatches the op labeled "Fetch"; the entry honestly names
+    // The palette dispatches the op labeled "Fetch"; the entry honestly names
     // what the fetch changed (issue 13) — never a bare "Fetch" success.
     let mut landed = false;
     for _ in 0..300 {
@@ -484,7 +492,8 @@ fn real_fetch_lands_in_the_panel() {
         harness.state().ui.activity.entries
     );
     // The new entry is visible in the painted feed: its repo label (alpha)
-    // appears more than once on screen — topbar breadcrumb + feed row.
+    // appears more than once on screen — the workspace sidebar's repo row
+    // and the feed row.
     let alpha_rows = painted_text(&harness)
         .iter()
         .filter(|t| t.trim() == "alpha")

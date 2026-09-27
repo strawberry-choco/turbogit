@@ -499,7 +499,8 @@ fn new_rule_editor_creates_a_rule_that_collects_and_filters_repos() {
 
     // …and evaluates like a built-in: clicking it narrows the tree to the
     // matching repos (lib only; the memberless frontend group drops out —
-    // the breadcrumb still names the focused repo, so assert on the group).
+    // the repo header's breadcrumb still names the focused repo, so assert
+    // on the group).
     h.get_by_label("release branches").click();
     settle(&mut h);
     assert_eq!(
@@ -640,9 +641,9 @@ fn clicking_repo_row_focuses_it_in_header_and_breadcrumb() {
         h.state().selected_root,
         Some(turbogit_domain::model::RootId(lib.clone().into()))
     );
-    // The shell follows everywhere: breadcrumb/header repaint the focused
-    // repo's path/name (the metadata rail that once carried the path was
-    // removed in the redesign; the topbar breadcrumb keeps it reachable).
+    // The shell follows everywhere: the repo header's breadcrumb repaints the
+    // focused repo's path/name (the metadata rail that once carried the path
+    // was removed in the redesign; the header breadcrumb keeps it reachable).
     assert_painted(&h, "oss/lib");
 }
 

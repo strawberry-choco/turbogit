@@ -1,13 +1,15 @@
-//! Issue #34 follow-up — the topbar workspace picker.
+//! Issue #34 follow-up — the workspace picker.
 //!
-//! The topbar's workspace selector used to be a stub that discarded every
-//! click; this suite pins the real picker end-to-end (headless egui_kittest
-//! harness driving [`turbogit_ui::ui::render`], same pattern as `welcome.rs`
-//! with locally-defined helpers so the file is self-contained).
+//! The picker's rows used to be reachable only through the topbar's
+//! workspace selector, which discarded every click; this suite pins the
+//! real picker end-to-end (headless egui_kittest harness driving
+//! [`turbogit_ui::ui::render`], same pattern as `welcome.rs` with
+//! locally-defined helpers so the file is self-contained).
 //!
 //! Covered here:
-//! - clicking the selector opens the picker (`Open Project…` /
-//!   `Attach Workspace Root…` become reachable)
+//! - the command palette's `Switch Workspace…` action opens the picker,
+//!   which is its only entry point since the selector was deleted
+//!   (`Open Project…` / `Attach Workspace Root…` become reachable)
 //! - a `Workspace` recent row deep-scans back into the shell (both repos,
 //!   including one beyond the bounded scanner's depth)
 //! - a `Project` recent row takes the bounded path
@@ -19,7 +21,6 @@
 //! - the picker's folder-picker entries go through the same seam as the
 //!   Welcome cards
 //! - Esc / click-outside dismiss the dropdown
-//! - the palette's `Switch Workspace…` entry opens the same picker
 //!
 //! The global recents store (ADR-0005) and the directory-picker seam are
 //! injected per test: a temp config dir stands in for the OS config dir and
@@ -206,21 +207,20 @@ fn button_labels(harness: &Harness<'_, AppState>) -> Vec<String> {
         .collect()
 }
 
-/// A Button whose accessible label is exactly `label`.
+/// The node whose accessible label is exactly `label`.
 ///
-/// Scoped to `Role::Button` on purpose: the workspace selector's text also
-/// paints as the breadcrumb's first crumb (a plain Label), so a bare
-/// `get_by_label` would match whichever node the tree hands back first.
+/// No role scoping: the topbar selector that used to make the project name
+/// ambiguous is gone, so every label below identifies exactly one node.
+/// `query_by_label` still panics when a label is ambiguous, which is the
+/// signal that two surfaces have started sharing a name.
 #[track_caller]
 fn button<'t>(harness: &'t Harness<'_, AppState>, label: &'t str) -> Node<'t> {
-    harness
-        .query_by_role_and_label(Role::Button, label)
-        .unwrap_or_else(|| {
-            panic!(
-                "no button labelled {label:?}; buttons: {:?}",
-                button_labels(harness)
-            )
-        })
+    harness.query_by_label(label).unwrap_or_else(|| {
+        panic!(
+            "no node labelled {label:?}; buttons: {:?}",
+            button_labels(harness)
+        )
+    })
 }
 
 /// The first Button whose accessible label contains `needle`. Used for the
@@ -239,44 +239,22 @@ fn button_containing<'t>(harness: &'t Harness<'_, AppState>, needle: &'t str) ->
         })
 }
 
-/// Open the picker by clicking the real topbar selector — the click path the
-/// original stub silently dropped.
+/// Open the picker through the command palette — the only entry point since
+/// the topbar's workspace selector was deleted (`Action::SwitchWorkspace`).
 #[track_caller]
 fn open_picker(fx: &mut Fixture) {
-    let name = fx
-        .harness
-        .state()
-        .project_dir
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<workspace>".to_string());
-    button(&fx.harness, &name).click();
+    fx.harness.state_mut().ui.command_palette = true;
+    fx.harness.state_mut().ui.command_query = "switch workspace".to_string();
     settle(&mut fx.harness);
-}
-
-// --- Cycle 1: the selector opens the picker ------------------------------------
-
-#[test]
-fn selector_click_opens_the_picker() {
-    let scratch = tempfile::tempdir().unwrap();
-    let repo = seed_repo(scratch.path(), "alpha");
-    let mut fx = fixture_at(repo);
+    button(&fx.harness, "Switch Workspace…").click();
     settle(&mut fx.harness);
-
-    // The Welcome page owns these strings too, but the shell is up.
-    assert_not_painted(&fx.harness, "Open Project…");
-    assert_not_painted(&fx.harness, "Attach Workspace Root…");
-    assert!(!fx.harness.state().ui.workspace_picker_open);
-
-    open_picker(&mut fx);
-
-    assert_painted(&fx.harness, "Open Project…");
-    assert_painted(&fx.harness, "Attach Workspace Root…");
     assert!(
         fx.harness.state().ui.workspace_picker_open,
-        "the selector click must open the picker"
+        "the palette entry must open the picker"
     );
 }
+
+// --- Cycle 1: the palette route opens the picker -----------------------------
 
 #[test]
 fn escape_closes_the_picker() {
@@ -305,14 +283,15 @@ fn clicking_outside_the_picker_closes_it() {
     open_picker(&mut fx);
     assert_painted(&fx.harness, "Open Project…");
 
-    // The picker anchors under the selector (top-left); the topbar's Push
-    // button sits at the opposite corner of that band.
-    let push = fx
+    // The picker anchors at the window's top-left (the fallback position —
+    // the selector that once recorded an anchor is gone); the repo header's
+    // right-aligned Refresh sits at the opposite corner of the same band.
+    let refresh = fx
         .harness
         .get_all_by_role(Role::Button)
-        .find(|n| n.accesskit_node().label().as_deref() == Some("Push") && n.rect().top() < 38.0)
-        .expect("the topbar Push button");
-    push.click();
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Refresh"))
+        .expect("the repo header's Refresh button");
+    refresh.click();
     settle(&mut fx.harness);
 
     assert_not_painted(&fx.harness, "Open Project…");
@@ -417,7 +396,7 @@ fn current_workspace_row_is_marked_and_inert() {
         .caches
         .store_ahead_behind(root_id.clone(), (7, 9));
 
-    // Reopen the picker (this test is about the row, not the selector click).
+    // Reopen the picker (this test is about the row, not the entry route).
     fx.harness.state_mut().ui.workspace_picker_open = true;
     settle(&mut fx.harness);
 
@@ -558,7 +537,7 @@ fn missing_recent_path_toasts_instead_of_dispatching() {
     assert_painted(&fx.harness, "no longer exists");
 }
 
-// --- Cycle 6: the palette opens the same picker ---------------------------------
+// --- Cycle 6: the palette is the picker's only entry point --------------------
 
 #[test]
 fn palette_entry_opens_the_same_picker() {
@@ -566,6 +545,10 @@ fn palette_entry_opens_the_same_picker() {
     let repo = seed_repo(scratch.path(), "alpha");
     let mut fx = fixture_at(repo);
     settle(&mut fx.harness);
+
+    // Nothing opens the picker behind the palette's back.
+    assert_not_painted(&fx.harness, "Open Project…");
+    assert!(!fx.harness.state().ui.workspace_picker_open);
 
     fx.harness.state_mut().ui.command_palette = true;
     fx.harness.state_mut().ui.command_query = "switch workspace".to_string();
@@ -577,7 +560,7 @@ fn palette_entry_opens_the_same_picker() {
     let s = fx.harness.state();
     assert!(
         s.ui.workspace_picker_open,
-        "the palette entry opens the topbar picker"
+        "the palette entry opens the picker"
     );
     assert!(
         s.ui.workspace_picker_anchor.is_none(),

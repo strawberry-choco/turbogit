@@ -14,7 +14,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use chrono::Datelike;
-use egui_kittest::{Harness, kittest::NodeT as _, kittest::Queryable as _};
+use egui_kittest::{Harness, Node, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
 use test_support::harness::{
     PaintedGalley, assert_not_painted, assert_painted, filled_circles, filled_rects, galley_origin,
@@ -500,9 +500,25 @@ fn click_selects_the_row_visibly_and_never_checks_out() {
     assert_eq!(cur.as_deref(), Some("main"));
 }
 
-/// The list spans the whole content width, so the only bound separating a
-/// list control from a topbar one is the window's own right edge.
+/// The list spans the whole content width, so the only horizontal bound
+/// separating a list control from a shell-chrome one is the window's own
+/// right edge. Vertically the list is bounded by the tab strip instead —
+/// see [`tool_window_top`], which derives that edge from painted geometry.
 const LIST_RIGHT: f32 = 1024.0;
+
+/// The tool window's top edge, derived from the shell's own tab strip rather
+/// than restated as a literal.
+///
+/// The active tab item's rect ends exactly where the Branches list begins, so
+/// it is the one painted rect that separates a list control (its repo-header
+/// `Fetch`) from the chrome above it. Deriving it here keeps this bound honest
+/// when the header / tab-strip metrics move: nothing in this file hardcodes a
+/// chrome offset, so the topbar's deletion (and any future band change) cannot
+/// silently leave the filter one pixel too tight.
+#[track_caller]
+fn tool_window_top(harness: &Harness<'_, AppState>) -> f32 {
+    harness.get_by_label("Changes").rect().max.y
+}
 
 /// Step frames until `pred` holds on public state (async op completion).
 fn pump_until(harness: &mut Harness<'_, AppState>, what: &str, pred: impl Fn(&AppState) -> bool) {
@@ -1437,16 +1453,18 @@ fn remote_rows_group_under_their_remote_and_are_quiet() {
     );
 }
 
-/// Click the repo-level Fetch inside the Branches list (issue 03). The app
-/// topbar carries its own "Fetch" button, so the search is bounded to the list
-/// area: below the toolbar strip and left of the §12 detail panel.
+/// Click the repo-level Fetch inside the Branches list (issue 03). The shell
+/// chrome has no `Fetch` button of its own any more (the topbar's went with
+/// the topbar), so the search is bounded to the list area: below the tab strip
+/// and left of the §12 detail panel.
 fn click_fetch(harness: &mut Harness<'_, AppState>) {
     let list_x = LIST_RIGHT;
+    let list_top = tool_window_top(harness);
     let nodes: Vec<_> = harness.get_all_by_label("Fetch").collect();
     let node = nodes
         .iter()
-        .find(|n| n.rect().top() > 80.0 && n.rect().min.x < list_x)
-        .unwrap_or_else(|| panic!("repo-level Fetch not found"));
+        .find(|n| n.rect().top() >= list_top && n.rect().min.x < list_x)
+        .unwrap_or_else(|| panic!("repo-level Fetch not found below y={list_top}"));
     node.click();
 }
 
@@ -1455,25 +1473,28 @@ fn click_fetch(harness: &mut Harness<'_, AppState>) {
 /// synthetic clicks in the same frame collapse into one.
 fn click_repo_fetches(harness: &mut Harness<'_, AppState>) {
     let list_x = LIST_RIGHT;
-    let nth_fetch = |harness: &Harness<'_, AppState>, n: usize| {
+    let in_list =
+        |n: &Node<'_>, list_top: f32| n.rect().top() >= list_top && n.rect().min.x < list_x;
+    let nth_fetch = |harness: &Harness<'_, AppState>, n: usize, list_top: f32| {
         let mut rects: Vec<egui::Rect> = harness
             .get_all_by_label("Fetch")
-            .filter(|node| node.rect().top() > 80.0 && node.rect().min.x < list_x)
+            .filter(|node| in_list(node, list_top))
             .map(|node| node.rect())
             .collect();
         rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
         rects[n]
     };
+    let list_top = tool_window_top(harness);
     assert_eq!(
         harness
             .get_all_by_label("Fetch")
-            .filter(|n| n.rect().top() > 80.0 && n.rect().min.x < list_x)
+            .filter(|n| in_list(n, list_top))
             .count(),
         2,
         "one Fetch per repo header"
     );
     for n in 0..2 {
-        let rect = nth_fetch(harness, n);
+        let rect = nth_fetch(harness, n, list_top);
         harness
             .get_all_by_label("Fetch")
             .find(|node| node.rect() == rect)
@@ -1756,15 +1777,16 @@ fn two_repo_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
 }
 
 /// All row buttons carrying this branch name inside the list area (below the
-/// toolbar, left of the detail panel — a same-named topbar breadcrumb or
-/// metadata button never leaks in), ordered top-to-bottom.
+/// tab strip, left of the detail panel — a same-named repo-header breadcrumb
+/// or metadata row never leaks in), ordered top-to-bottom.
 fn row_nodes<'h>(harness: &'h Harness<'_, AppState>, name: &str) -> Vec<egui_kittest::Node<'h>> {
     let list_x = LIST_RIGHT;
+    let list_top = tool_window_top(harness);
     let mut nodes: Vec<_> = harness
         .get_all_by_role(egui::accesskit::Role::Button)
         .filter(|n| {
             n.accesskit_node().label() == Some(name.to_string())
-                && n.rect().top() > 80.0
+                && n.rect().top() >= list_top
                 && n.rect().min.x < list_x
         })
         .collect();
@@ -2110,9 +2132,9 @@ fn mid_operation_marker_shows_in_place_and_survives_tab_switches() {
 /// Every galley painted inside `rect`.
 ///
 /// The same string usually paints more than once — the current branch names
-/// both a topbar button and the list row — so matching on text alone would
-/// happily return the wrong occurrence. Scoping to a widget's own rectangle
-/// ties the answer to the widget under test.
+/// both the repo header's branch pill and the list row — so matching on text
+/// alone would happily return the wrong occurrence. Scoping to a widget's own
+/// rectangle ties the answer to the widget under test.
 fn galleys_in(harness: &Harness<'_, AppState>, rect: egui::Rect) -> Vec<PaintedGalley> {
     painted_galleys(harness)
         .into_iter()
@@ -2296,8 +2318,8 @@ fn names_are_monospace_and_labels_and_counts_are_sans() {
     };
 
     // Data — branch names — is monospace, so `feature/` paths line up (spec §19).
-    // Read each name out of its own row: the same string also labels a topbar
-    // button and the header chip, and those are chrome.
+    // Read each name out of its own row: the same string also labels the repo
+    // header's branch pill, and that is chrome.
     for name in ["main", "feature-a", "zebra"] {
         let row = row_nodes(&harness, name)
             .into_iter()
@@ -2414,13 +2436,32 @@ fn pull_and_push_stay_one_click_away_on_the_branches_tab() {
 
     // The redesign is a view-level change: the app-level sync actions are
     // unchanged and still one click away while Branches is the active tab.
-    for action in ["Pull", "Push"] {
-        let rect = harness.get_by_label(action).rect();
+    // The topbar's action cluster is gone, so that surface is the command
+    // palette (`Ctrl+Shift+A`) — it must offer the same verbs whatever the
+    // active tool window is. (The Branches list has its own repo-level
+    // `Fetch`, so the rows are matched inside the palette window.)
+    harness.state_mut().ui.command_palette = true;
+    harness.state_mut().ui.command_query.clear();
+    settle_quiet(&mut harness);
+
+    let palette = harness
+        .get_by_role_and_label(egui::accesskit::Role::Window, "Find Action")
+        .rect();
+    for action in ["Fetch", "Pull", "Push…"] {
         assert!(
-            rect.top() < 80.0,
-            "{action} rides the app topbar, outside the 88px toolbar strip: {rect:?}"
+            harness
+                .get_all_by_label(action)
+                .map(|n| n.rect())
+                .any(|r| palette.contains(r.center())),
+            "{action} must be listed inside the command palette; palette={palette:?}"
         );
     }
+    // …and it really is the palette, not a band of buttons left behind.
+    assert_eq!(
+        harness.state().ui.tab,
+        Tab::Branches,
+        "opening the palette must not switch the active tool window"
+    );
 }
 
 #[test]

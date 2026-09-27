@@ -1,21 +1,28 @@
 //! Issue #03 — Workspace shell frame.
 //!
 //! Replaces the old IDE chrome (topbar menu / toolbar / sidebar rail /
-//! tab strip) with the new screen-01 layout:
+//! tab strip) with the screen-01 layout. Nothing claims the top window
+//! edge — the central panel starts at y=0 and the shell is four regions:
 //!
-//! - Topbar: TurboGit brand + workspace selector + breadcrumb (project /
-//!   group / focused repo) on the left; Fetch / Pull / Push / Branch / More
-//!   on the right.
-//! - Repo header: focused root folder + branch pill + combined
-//!   ahead/behind/conflict badge + Refresh.
-//! - Center tabs: Changes (count), Log, Branches, Worktrees (count),
-//!   Submodules. Branches/Worktrees/Submodules are empty-state
+//! - Repo header (48px): the workspace breadcrumb (project / focused
+//!   root's path relative to it) relocated here from the deleted topbar,
+//!   then the focused root folder icon + name + chevron, branch pill,
+//!   orange dirty badge, and a right-aligned Refresh.
+//! - Center tabs (32px): Changes (count), Log, Branches, Worktrees
+//!   (count), Submodules. Branches/Worktrees/Submodules are empty-state
 //!   placeholders in v1.
-//! - Status bar: aggregated workspace state (diverged · conflicts ·
-//!   unpulled · archived · dirty · total) plus granularity and repo
-//!   scope. The far-right metadata column was removed (redesign 03);
-//!   its Path/Branch/Upstream info lives in the topbar breadcrumb, the
-//!   repo header branch pill, and the status-bar aggregates.
+//! - Status bar (24px): the version / git / indexed-repo line that came
+//!   here with the topbar's deletion (so it paints on Welcome too), then
+//!   aggregated workspace state (diverged · conflicts · unpulled ·
+//!   archived · dirty · total) plus granularity and repo scope. The
+//!   far-right metadata column was removed (redesign 03); its
+//!   Path/Branch/Upstream info lives in the repo header's breadcrumb and
+//!   branch pill, and in the status-bar aggregates.
+//!
+//! The brand wordmark, the workspace selector and the
+//! Fetch/Pull/Push/Branch/More cluster are gone from the shell; their
+//! entry points are the command palette (`Ctrl+Shift+A`) and the frozen
+//! shortcuts.
 //!
 //! Existing Commit and Log content renders inside the new Changes / Log
 //! tabs unchanged.
@@ -91,62 +98,7 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     )
 }
 
-// -- Cycle A — topbar: brand, workspace selector, breadcrumb, right actions --
-
-#[test]
-fn topbar_paints_new_shape_with_brand_selector_breadcrumb_and_actions() {
-    // The temp parent has a deterministic basename so the breadcrumb
-    // assertion is stable across CI machines.
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-topbar");
-    let _ = std::fs::remove_dir_all(&parent);
-    let parent = parent.parent().unwrap().join("wsf-topbar");
-    let _ = std::fs::remove_dir_all(&parent);
-    std::fs::create_dir_all(&parent).unwrap();
-    // A single-root project where the project dir is the workspace root
-    // and the focused repo lives one level under it: project name
-    // "wsf-topbar", focused repo name "alpha". The breadcrumb shows
-    // "wsf-topbar / alpha".
-    let project_dir = parent.clone();
-    let repo = temp_repo(&parent, "alpha");
-    let state = app_state(&project_dir, &[repo]);
-    let mut h = harness(state);
-    settle(&mut h);
-
-    // Brand.
-    assert_painted(&h, "TurboGit");
-    // Workspace selector: project_dir basename.
-    assert_painted(&h, "wsf-topbar");
-    // Breadcrumb: project / focused root.
-    assert_painted(&h, "alpha");
-    // Right-side actions.
-    for label in ["Fetch", "Pull", "Push", "Branch", "More"] {
-        assert_painted(&h, label);
-    }
-    // Old IDE chrome is gone: the old menubar labels must NOT paint.
-    // Use exact-galley substrings so accidental matches like "Filter
-    // files" (commit sub-tab input) don't false-fire `assert_not_painted`.
-    for old in [
-        "File\0",
-        "Edit\0",
-        "View\0",
-        "Navigate\0",
-        "Code\0",
-        "Window\0",
-        "Help\0",
-    ] {
-        assert_not_painted(&h, old);
-    }
-    // Old toolbar inert chrome is gone too.
-    for old in ["Run\0", "Debug\0", "Update Project\0"] {
-        assert_not_painted(&h, old);
-    }
-}
-
-// -- Cycle B — repo header: branch pill + combined ahead/behind/conflict badge + Refresh
+// -- Cycle A — repo header: breadcrumb, branch pill, dirty badge, Refresh ------
 
 #[test]
 fn repo_header_shows_branch_pill_and_refresh() {
@@ -165,6 +117,12 @@ fn repo_header_shows_branch_pill_and_refresh() {
     let mut h = harness(state);
     settle(&mut h);
 
+    // The temp parent has a deterministic basename so the breadcrumb
+    // assertion is stable across CI machines. The breadcrumb came here
+    // with the topbar's deletion: the header paints the project, then
+    // the focused root's path relative to it.
+    assert_painted(&h, "wsf-repoheader");
+    assert_painted(&h, "alpha");
     // Branch pill: the focused root's current branch is "main".
     assert_painted(&h, "main");
     // Refresh affordance is exposed in the header.
@@ -205,10 +163,14 @@ fn repo_header_paints_orange_dirty_badge_with_uncommitted_count() {
         .into_iter()
         .find(|(_, c)| *c == badge_fill)
         .unwrap_or_else(|| panic!("repo header must paint an orange dirty badge"));
-    // The badge sits on the header row, below the 38px topbar…
+    // The badge sits on the 48px repo-header row, i.e. inside the first
+    // REPO_HEADER_HEIGHT of the window and above the tab strip. The band
+    // constant replaces the retired 38px-topbar offset as the suite's one
+    // literal geometry guard; the headless harness lays the shell out
+    // inside a content inset, so the 22px chip lands well under it.
     assert!(
-        badge.top() > 38.0,
-        "the dirty badge must live inside the repo header row"
+        badge.top() < shell::REPO_HEADER_HEIGHT,
+        "the dirty badge must live inside the repo header row, not below it: {badge:?}"
     );
     // …and carries the uncommitted count as an exact galley inside it.
     let count_origins: Vec<Pos2> = h
@@ -358,6 +320,30 @@ fn shell_is_two_zones_without_metadata_rail() {
     // must not paint anywhere on the frame.
     assert_not_painted(&h, "METADATA");
     assert_not_painted(&h, "Upstream");
+    // The rest of the retired IDE chrome stays retired too — the old
+    // menubar, the inert toolbar buttons, and the topbar's own band. Use
+    // exact-galley substrings so accidental matches like "Filter files"
+    // (commit sub-tab input) don't false-fire `assert_not_painted`.
+    for old in [
+        "File\0",
+        "Edit\0",
+        "View\0",
+        "Navigate\0",
+        "Code\0",
+        "Window\0",
+        "Help\0",
+        "Run\0",
+        "Debug\0",
+        "Update Project\0",
+    ] {
+        assert_not_painted(&h, old);
+    }
+    // The shell's own actions live in the command palette now, not in a
+    // button band of their own. ("Branch" is deliberately not in this
+    // list: the tab strip's "Branches" contains it.)
+    for old in ["Fetch", "Pull", "Push", "More"] {
+        assert_not_painted(&h, old);
+    }
 
     // No regression: the metadata information stays reachable. The branch
     // pill still paints the focused root's branch, and the status bar still

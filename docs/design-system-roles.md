@@ -382,7 +382,7 @@ follow-up sweep below: the commit window's tree indent guide
 (`multi_selection`), the sidebar's selection-bar top edge (`sidebar`), and the
 shell repository-header chip's border (`shell::branch_pill`) all wear
 `LINE_SUBTLE` and are all chrome; but the shell's own panel edge rules
-(`shell::paint_edge_line_at` — the topbar, toolbar, tab-strip and status-bar
+(`shell::paint_edge_line_at` — the repo-header, tab-strip and status-bar
 edges) wear `LINE`, the *footer-rule* value, even though their role is
 structural. Their role is identified here; their value is not re-pointed,
 because this ticket is about naming roles and not re-sweeping call sites.

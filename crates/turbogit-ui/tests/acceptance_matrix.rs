@@ -127,7 +127,14 @@ fn acceptance_matrix_screenshots() {
     // Real regression protection lives in each page's own assertion suite.
     // Safe: single-threaded test process; no other thread reads the env
     // concurrently while this runs.
-    unsafe { std::env::set_var("UPDATE_SNAPSHOTS", "1") };
+    //
+    // "force", not "1": egui_kittest maps `UPDATE_SNAPSHOTS=1` to
+    // `UpdateFailing`, which only rewrites a golden that already exceeds
+    // `kittest.toml`'s pixel budget. A small visual change stays under that
+    // budget, so the run reports green and the committed render goes quietly
+    // stale — which is exactly what happened after the 0.35 → 0.36 upgrade
+    // changed the meaning of "1". `force` is `UpdateAll`.
+    unsafe { std::env::set_var("UPDATE_SNAPSHOTS", "force") };
     // Headless CI runners (ubuntu-latest) expose no GPU adapter, so
     // egui_kittest's wgpu renderer cannot initialize there ("No adapter
     // found"). Upstream egui also only runs snapshot tests on GPU-backed

@@ -1,7 +1,8 @@
 //! Issue #16 — Settings modal: a category-list dialog opened ONLY from the
-//! command palette's `Settings…` action (the topbar's More button), not
-//! from any tab strip or toolbar surface (spec §8.8, §9.1 correction; the
-//! toolbar gear itself retired with the IDE chrome in issue #03).
+//! command palette's `Settings…` action (`Ctrl+Shift+A`), not from any tab
+//! strip or shell-chrome surface (spec §8.8, §9.1 correction; the toolbar gear
+//! retired with the IDE chrome in issue #03 and the topbar's `More` button
+//! with the topbar itself, so the palette is now the one entry point).
 //!
 //! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] end-to-end.
 //! Asserts only on public surfaces:
@@ -69,11 +70,12 @@ fn repo_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
     (harness, tmp)
 }
 
-/// The modal opens from the command palette (issue #03 retired the toolbar
-/// gear): the topbar's More button raises the palette whose `Settings…`
-/// action turns the flag on.
+/// The modal opens from the command palette: the palette's `Settings…`
+/// action turns the flag on. The palette is the only entry point — the
+/// toolbar gear retired with the IDE chrome (issue #03) and the topbar's
+/// `More` button with the topbar.
 fn open_settings(harness: &mut Harness<'_, AppState>) {
-    harness.get_by_label("More").click();
+    harness.state_mut().ui.command_palette = true;
     settle(harness);
     harness.get_by_label("Settings…").click();
     settle(harness);
@@ -98,8 +100,10 @@ fn settings_is_a_modal_opened_only_from_the_command_palette() {
     settle(&mut harness);
 
     // No Settings surface exists before the palette action runs: the tab
-    // strip offers no Settings page (issue #16) and the chrome carries no
-    // gear anymore (issue #03).
+    // strip offers no Settings page (issue #16), the chrome carries no
+    // gear (issue #03), and the topbar's More menu is gone with the
+    // topbar — so `query_by_label` finds exactly one route to the modal,
+    // the palette action.
     assert_not_painted(&harness, "Settings");
     assert!(
         harness.query_by_label("Settings").is_none(),

@@ -1,10 +1,11 @@
 //! UI layout (egui 0.35 API).
 //!
 //! Issue #9 replaced the old panel layout outright with the IntelliJ-style
-//! IDE shell (spec §6): a 38px topbar, 34px toolbar, 48px sidebar rail,
-//! 32px tab strip and ~24px status bar — all composed in [`shell`]. The
-//! central body routes between the Welcome placeholder ([`welcome`], shown
-//! when no project is open) and the active tool window (Commit / Log).
+//! IDE shell (spec §6): the workspace sidebar, a 48px repo header, a 32px
+//! tab strip and a 24px status bar — all composed in [`shell`], with no
+//! topbar above them. The central body routes between the Welcome
+//! placeholder ([`welcome`], shown when no project is open) and the active
+//! tool window (Commit / Log).
 //!
 //! This module owns what wraps the shell: global shortcut dispatch lives in
 //! `shell::render`, and the floating surfaces below are rendered on top of
@@ -72,8 +73,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     popups::vcs_operations(ui, state);
     popups::command_palette(ui, state);
     // Workspace picker (issue #34): painted after the shell and after the
-    // palette so a same-frame open works from either the selector click or
-    // the palette's Switch Workspace action.
+    // palette so a same-frame open works from the palette's Switch
+    // Workspace action — its only entry point since the topbar's selector
+    // was deleted.
     popups::workspace_picker(ui, state);
     if let Some(d) = state.ui.dialog {
         if d == Dialog::Push {
