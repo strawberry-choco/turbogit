@@ -1,11 +1,12 @@
-//! Issue #34 follow-up — the shared recents dispatcher behind the topbar
-//! workspace picker and the Welcome screen.
+//! Issue #34 follow-up — the shared recents dispatcher behind the workspace
+//! picker and the Welcome screen.
 //!
 //! `AppState::open_recent` is the single place that decides what a recents row
 //! *means*: a [`RecentKind::Workspace`] row deep-scans and re-indexes, a
 //! [`RecentKind::Project`] row takes the bounded `rescan` path. Both the
-//! Welcome screen's recent rows and the new topbar picker route through it, so
-//! there is exactly one copy of the kind dispatch to keep honest.
+//! Welcome screen's recent rows and the workspace picker (palette-only since
+//! the topbar's selector was deleted) route through it, so there is exactly one
+//! copy of the kind dispatch to keep honest.
 //!
 //! It also owns the missing-path guard: `open_project` on a deleted directory
 //! rescans to zero roots, and `show_welcome()` then returns true — the user is

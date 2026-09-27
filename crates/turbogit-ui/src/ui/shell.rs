@@ -1,4 +1,4 @@
-//! IDE shell frame (issue #9, spec §6): topbar, toolbar, sidebar rail,
+//! IDE shell frame (issue #9, spec §6): workspace sidebar, repo header,
 //! tab strip, status bar.
 //!
 //! The shell is the always-present frame of the main window (CONTEXT.md:
@@ -20,14 +20,11 @@ use egui::{
 };
 
 use super::icons::{self, Icon};
-use super::popups::{self, Action};
 use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, Granularity, Tab};
 // --- Spec metrics (§4.2 fixed heights) --------------------------------------
-/// Top menubar height (`.tg-topbar`).
-pub const TOPBAR_HEIGHT: f32 = 38.0;
 /// Repo header bar height (issue #03, screen 01).
 pub const REPO_HEADER_HEIGHT: f32 = 48.0;
 /// Tab strip height (`.tg-tabs`).
@@ -43,12 +40,12 @@ pub const MIN_SIDEBAR_WINDOW_WIDTH: f32 = 1000.0;
 const TAB_ICON_SIZE: f32 = 14.0; // §6.2 tab icons
 const TAB_TEXT: f32 = crate::theme::TYPE_CONTROL;
 
-/// Compose the whole shell: frozen shortcuts, the new shell frame
-/// regions (topbar / repo header / center tabs / status bar), then the
-/// central body (Welcome placeholder or active tool window). The tool
-/// window spans the full content width — the third metadata column was
-/// removed in the local-changes redesign (its information moved to the
-/// status bar and the repo header).
+/// Compose the whole shell: frozen shortcuts, the shell frame regions
+/// (repo header / center tabs / status bar) around the workspace
+/// sidebar, then the central body (Welcome placeholder or active tool
+/// window). The tool window spans the full content width — the third
+/// metadata column was removed in the local-changes redesign (its
+/// information moved to the status bar and the repo header).
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     handle_shortcuts(ui, state);
 
@@ -65,11 +62,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         }
     }
 
-    // Panel order fixes the geometry: top strips claim full width first,
-    // the status bar claims the bottom, and the central body takes
-    // what remains — the tool window spans the whole content width
-    // (the metadata rail that once split it was removed, issue 03).
-    render_topbar(ui, state);
+    // Panel order fixes the geometry: the status bar claims the bottom
+    // and the central body takes the rest, with the repo header and tab
+    // strip laid out inside it — the tool window spans the whole content
+    // width (the metadata rail that once split it was removed, issue 03).
+    // Nothing claims the top window edge: the CentralPanel starts there.
     if state.ui.show_status_bar {
         render_status_bar(ui, state);
     }
@@ -413,8 +410,8 @@ enum Edge {
 }
 
 /// 1px LINE border along one edge of a rect, without affecting layout
-/// (spec §6.2: bottom strokes on topbar/toolbar/tab strip, top stroke on
-/// the status bar, right stroke on the rail).
+/// (spec §6.2: bottom strokes on the repo header and tab strip, top
+/// stroke on the status bar, right stroke on the rail).
 fn paint_edge_line_at(ui: &Ui, rect: Rect, edge: Edge) {
     let stroke = Stroke::new(1.0, Palette::LINE);
     let painter = ui.painter();
@@ -440,164 +437,7 @@ fn paint_edge_line(ui: &Ui, edge: Edge) {
     paint_edge_line_at(ui, ui.max_rect(), edge);
 }
 
-// --- Topbar ------------------------------------------------------------------
-
-const TOPBAR_BRANDSIZE: f32 = 16.0; // brand-icon size (spec §4.2)
-const TOPBAR_ICON_SIZE: f32 = 14.0; // topbar action icons (spec §4.2)
-const TOPBAR_TEXT: f32 = crate::theme::TYPE_BODY;
-const TOPBAR_ACTIONS_TEXT: f32 = crate::theme::TYPE_CONTROL;
-
-/// Topbar (issue #03, screen 01): TurboGit brand on the left, then a
-/// workspace selector that opens the picker (issue #34) and a breadcrumb
-/// (project / focused repo); the right-aligned action cluster
-/// ([`render_topbar_actions`]) is rendered as a sibling top panel so it
-/// shares the same horizontal row.
-///
-/// Replaces the IDE menubar from the previous design — every shortcut
-/// previously reachable through the File / Git / View menus is now
-/// reachable through this topbar or the palette (Ctrl+Shift+A).
-fn render_topbar(ui: &mut Ui, state: &mut AppState) {
-    Panel::top("topbar")
-        .exact_size(TOPBAR_HEIGHT)
-        .frame(
-            Frame::new()
-                .fill(Palette::SURFACE)
-                .inner_margin(Margin::symmetric(12, 0)),
-        )
-        .show(ui, |ui| {
-            ui.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-            ui.style_mut().spacing.button_padding = crate::theme::DENSITY_COMPACT_BUTTON;
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                // Brand: icon + wordmark.
-                icons::icon(ui, Icon::FOLDER_GIT, TOPBAR_BRANDSIZE, Palette::BRAND);
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new("TurboGit")
-                        .strong()
-                        .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
-                        .color(Palette::INK),
-                );
-                ui.add_space(16.0);
-
-                // Workspace selector: project_dir basename + chevron. The
-                // click opens the workspace picker (issue #34) — a
-                // state-driven window painted by the floating-surface block
-                // in `ui::render` later this same frame, which is also how
-                // the palette's Switch Workspace action reaches it.
-                if let Some(workspace) = workspace_label(state) {
-                    let selector = ui
-                        .button(
-                            RichText::new(workspace)
-                                .font(FontId::new(TOPBAR_TEXT, FontFamily::Proportional))
-                                .color(Palette::INK_2),
-                        )
-                        .on_hover_text("Switch workspace");
-                    widgets::focus_ring(ui, &selector);
-                    if selector.clicked() {
-                        state.ui.workspace_picker_open = true;
-                        // Bottom-left of the button: the dropdown hangs
-                        // under the chevron.
-                        state.ui.workspace_picker_anchor =
-                            Some((selector.rect.left(), selector.rect.bottom()));
-                    }
-                    icons::icon(ui, Icon::CHEVRON_DOWN, TOPBAR_ICON_SIZE, Palette::INK_3);
-                    ui.add_space(16.0);
-                }
-
-                // Breadcrumb: project / focused repo.
-                if let Some(crumbs) = breadcrumb_labels(state) {
-                    for (i, crumb) in crumbs.iter().enumerate() {
-                        if i > 0 {
-                            ui.label(
-                                RichText::new("/")
-                                    .font(FontId::new(TOPBAR_TEXT, FontFamily::Proportional))
-                                    .color(Palette::INK_3),
-                            );
-                        }
-                        ui.label(
-                            RichText::new(crumb.as_str())
-                                .font(FontId::new(TOPBAR_TEXT, FontFamily::Proportional))
-                                .color(Palette::INK_2),
-                        );
-                    }
-                }
-
-                // Version/git-status line (issue #34): app version, resolved
-                // git version, and the total indexed repo count. Appears in
-                // the header on the Welcome screen and the shell alike.
-                let version_line = format!(
-                    "v{} · git {} · {} repos indexed",
-                    env!("CARGO_PKG_VERSION"),
-                    state.git_version,
-                    state.multi.roots.len(),
-                );
-                ui.label(
-                    RichText::new(version_line)
-                        .font(FontId::new(TOPBAR_ACTIONS_TEXT, FontFamily::Proportional))
-                        .color(Palette::INK_3),
-                );
-
-                // Right-aligned action cluster: Fetch / Pull / Push /
-                // Branch / More (screen 01). Sharing the topbar row keeps
-                // the chrome to its spec height — a sibling top panel
-                // would stack a second full-height row instead.
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let more = ui.button(topbar_action_text("More"));
-                    widgets::focus_ring(ui, &more);
-                    if more.clicked() {
-                        state.ui.command_palette = true;
-                        state.ui.command_query.clear();
-                    }
-                    let branch = ui.button(topbar_action_text("Branch"));
-                    widgets::focus_ring(ui, &branch);
-                    if branch.clicked() {
-                        state.ui.branches_popup = true;
-                        state.ui.branch_filter.clear();
-                    }
-                    let push = ui.button(topbar_action_text("Push"));
-                    widgets::focus_ring(ui, &push);
-                    if push.clicked() {
-                        state.ui.dialog = Some(Dialog::Push);
-                    }
-                    let pull = ui.button(topbar_action_text("Pull"));
-                    widgets::focus_ring(ui, &pull);
-                    if pull.clicked() {
-                        popups::run_action(state, Action::Pull);
-                    }
-                    let fetch = ui.button(topbar_action_text("Fetch"));
-                    widgets::focus_ring(ui, &fetch);
-                    if fetch.clicked() {
-                        popups::run_action(state, Action::Fetch);
-                    }
-                });
-            });
-            paint_edge_line(ui, Edge::Bottom);
-        });
-}
-
-/// Topbar action button text (right cluster).
-fn topbar_action_text(label: &str) -> RichText {
-    RichText::new(label)
-        .font(FontId::new(TOPBAR_ACTIONS_TEXT, FontFamily::Proportional))
-        .color(Palette::INK_2)
-}
-
-/// Workspace selector label: project_dir basename, `None` on the
-/// Welcome page.
-fn workspace_label(state: &AppState) -> Option<String> {
-    if state.show_welcome() {
-        None
-    } else {
-        Some(
-            state
-                .project_dir
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("<workspace>")
-                .to_string(),
-        )
-    }
-}
+// --- Repo header -------------------------------------------------------------
 
 /// Breadcrumb crumbs: project_dir basename, then the focused root's
 /// path relative to project_dir (joined with `/`). When the focused
@@ -651,14 +491,15 @@ fn breadcrumb_root_name(state: &AppState, root: &turbogit_domain::model::Root) -
             .to_string(),
     }
 }
-// --- Repo header -------------------------------------------------------------
 
-/// Repo header bar (issue #03, screen 01): focused root folder + name +
-/// chevron, branch pill, and the orange dirty badge (issue 02, design doc
-/// §6) carrying the focused root's uncommitted count — all on one row.
-/// Plus a Refresh button. Sits on BG with a LINE bottom stroke; renders
-/// into the shell's reserved header strip to the right of the workspace
-/// sidebar (issue #05).
+/// Repo header bar (issue #03, screen 01): the workspace breadcrumb
+/// (project / focused root's path relative to it) in place of the
+/// topbar's, then the branch pill and the orange dirty badge (issue 02,
+/// design doc §6) carrying the focused root's uncommitted count — all on
+/// one row, with Refresh right-aligned. The row's folder icon leads the
+/// path and nothing in it is clickable except Refresh. Sits on BG with a
+/// LINE bottom stroke; renders into the shell's reserved header strip to
+/// the right of the workspace sidebar (issue #05).
 fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
     let Some(root) = state
         .selected_root
@@ -669,6 +510,7 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
     };
     // Snapshot the data the header paints so the closure borrows `state`
     // mutably only via `state.refresh` (Refresh button click).
+    let crumbs = breadcrumb_labels(state);
     let root_name = root
         .path
         .file_name()
@@ -693,18 +535,56 @@ fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
         .show(&mut child, |ui| {
             ui.style_mut().spacing.button_padding = crate::theme::DENSITY_COMPACT_BUTTON;
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                // Focused root folder icon + name + chevron.
+                // Focused root folder icon, then the path that names it.
                 icons::icon(ui, Icon::FOLDER_GIT, 16.0, Palette::INK_2);
                 ui.add_space(8.0);
-                ui.label(
-                    RichText::new(&root_name)
-                        .strong()
-                        .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
-                        .color(Palette::INK),
-                );
-                icons::icon(ui, Icon::CHEVRON_DOWN, 12.0, Palette::INK_3);
+                // Workspace breadcrumb, relocated here from the deleted
+                // topbar: the project, then the focused root's path
+                // relative to it. Only the label changed — the leaf keeps
+                // the strong ink and title size the bare root name had,
+                // so the header's hierarchy is untouched and the row only
+                // grows by the parent crumb. `None` cannot happen while a
+                // project is open, but the name keeps the row honest if it
+                // ever does.
+                match crumbs.as_deref() {
+                    Some(crumbs) => {
+                        for (i, crumb) in crumbs.iter().enumerate() {
+                            if i > 0 {
+                                ui.label(
+                                    RichText::new("/")
+                                        .font(crate::theme::chrome_font(crate::theme::TYPE_BODY))
+                                        .color(Palette::INK_3),
+                                );
+                            }
+                            let leaf = i + 1 == crumbs.len();
+                            let crumb = RichText::new(crumb.as_str())
+                                .font(crate::theme::chrome_font(if leaf {
+                                    crate::theme::TYPE_DETAIL_TITLE
+                                } else {
+                                    crate::theme::TYPE_BODY
+                                }))
+                                .color(if leaf { Palette::INK } else { Palette::INK_2 });
+                            ui.label(if leaf { crumb.strong() } else { crumb });
+                        }
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new(&root_name)
+                                .strong()
+                                .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
+                                .color(Palette::INK),
+                        );
+                    }
+                }
 
-                ui.add_space(16.0);
+                // Air between the path and the branch pill. A chevron used
+                // to sit in this gap, and it was what kept the two apart;
+                // without it the path and the pill read as one cluster, so
+                // the gap takes two 12px panel-padding steps — the same
+                // ~32px of air the icon and its own item spacing carried,
+                // and twice the 12px that follows the pill, so the row
+                // still reads in two groups rather than one.
+                ui.add_space(crate::theme::PANEL_PADDING * 2.0);
 
                 // Branch pill (issue #03).
                 branch_pill(ui, &branch);
@@ -886,10 +766,12 @@ fn tab_item(
 
 // --- Status bar -----------------------------------------------------------------------
 
-/// Status bar (issue #03, screen 01): aggregated workspace state across
-/// every registered root — diverged, conflicts, unpulled, archived,
-/// dirty totals on the left; total root count on the right; busy
-/// spinner at the far right.
+/// Status bar (issue #03, screen 01): the version / git-status line, then
+/// aggregated workspace state across every registered root — diverged,
+/// conflicts, unpulled, archived, dirty totals on the left; total root
+/// count on the right; busy spinner at the far right. The version line
+/// came here with the topbar's deletion so it paints on Welcome and in
+/// the shell alike.
 fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
     let agg = AggregatedStatus::compute(&state.multi.roots, &|id| state.caches.ahead_behind(id));
 
@@ -903,6 +785,7 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
         .show(ui, |ui| {
             ui.style_mut().spacing.button_padding = crate::theme::DENSITY_DENSE_BUTTON;
             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                version_line(ui, state);
                 aggregated_status_chips(ui, &agg);
                 granular_status_chips(ui, state);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -914,6 +797,24 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
             });
             paint_edge_line(ui, Edge::Top);
         });
+}
+
+/// Version / git-status line (issue #34): app version, resolved git
+/// version, and the total indexed repo count — leftmost in the cluster,
+/// ahead of the aggregated counters, at the same quiet `INK_3` it wore in
+/// the deleted topbar. It paints on every screen: the status bar is the
+/// one chrome band Welcome keeps.
+fn version_line(ui: &mut Ui, state: &AppState) {
+    ui.label(
+        RichText::new(format!(
+            "v{} · git {} · {} repos indexed",
+            env!("CARGO_PKG_VERSION"),
+            state.git_version,
+            state.multi.roots.len(),
+        ))
+        .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
+        .color(Palette::INK_3),
+    );
 }
 
 /// Staging-granularity readout (issue 19, screen 06): the armed line

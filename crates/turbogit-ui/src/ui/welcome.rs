@@ -81,10 +81,12 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 /// The screen's one dominant region (spec §5.1): a soft `BRAND` gradient band
 /// carrying the 64px brand tile + white `FOLDER_GIT`, the wordmark and tagline
 /// beside it, and the "What's new" ghost trigger on the right (SPACE_BETWEEN).
-/// It replaces the old centered `brand_header` + `what_new_link`. No top bar is
-/// painted here — the shell already renders one over this panel (plan decision
-/// Q1). The gradient is one subtle overlay rect; if it ever reads as a blob at
-/// some width, drop it — the hero stands without it.
+/// It replaces the old centered `brand_header` + `what_new_link`. No top bar
+/// is painted here, and the shell no longer renders one over this panel
+/// either — the topbar was deleted, so the hero is the only wordmark and the
+/// status bar is the only chrome this page keeps. The gradient is one subtle
+/// overlay rect; if it ever reads as a blob at some width, drop it — the hero
+/// stands without it.
 fn hero(ui: &mut Ui, state: &mut AppState) {
     let pad = 16.0;
     let gap = 10.0;
@@ -630,7 +632,7 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, project.name.as_str()));
     widgets::focus_ring(ui, &response);
     if response.clicked() {
-        // Shared dispatch (issue #34): the topbar workspace picker routes
+        // Shared dispatch (issue #34): the workspace picker routes
         // through the same helper, so the kind semantics — a Workspace row
         // deep-scans, a Project row bounded-scans — live in one place.
         state.open_recent(project);

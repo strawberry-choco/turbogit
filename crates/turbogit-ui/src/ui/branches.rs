@@ -651,8 +651,9 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
 }
 
 /// The view-wide Fetch (issue 03): the narrowed repo's scope, or all in-scope
-/// repos when nothing is narrowed. Reachable from the topbar and the Git Log
-/// pane; a repo header uses [`fetch_root`] for just its own repository.
+/// repos when nothing is narrowed. Reachable from the command palette and
+/// the Git Log pane; a repo header uses [`fetch_root`] for just its own
+/// repository.
 pub fn fetch_scope(state: &mut AppState) {
     let targets: Vec<RootId> = match &state.ui.branches_repo_filter {
         Some(id) => vec![id.clone()],

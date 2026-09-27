@@ -554,7 +554,7 @@ fn body_footer_rule(h: &Harness<'_, AppState>) -> (Rect, Color32) {
 /// therefore the editor's own answer to "how wide is the available width here".
 ///
 /// Matched on x-range, which is what distinguishes the editor's own rules from
-/// the shell's topbar/status-bar edge lines (wider still) and from the two
+/// the shell's status-bar edge line (wider still) and from the two
 /// columns' internal rules (narrower) — both of which are painted in the same
 /// frame, overlapping the window.
 fn tab_strip_rule(h: &Harness<'_, AppState>, rule: Rect) -> Rect {

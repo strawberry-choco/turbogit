@@ -542,9 +542,9 @@ mod surface {
 
     /// Click one item of the open menu. The pointer first leaves the row so
     /// its hover Checkout cannot be confused with the menu's own item, and
-    /// the search is scoped to the menu's own column: "Pull" and "Push"
-    /// also label topbar buttons, and the menu is the only surface whose
-    /// rows all share the "New branch from" item's left edge.
+    /// the search is scoped to the menu's own column: "Pull" and "Push…"
+    /// also label the command palette's action rows, and the menu is the only
+    /// surface whose rows all share the "New branch from" item's left edge.
     fn click_menu_item(harness: &mut Harness<'_, AppState>, label: &str) {
         harness.remove_cursor();
         harness.step();
@@ -806,7 +806,7 @@ mod surface {
     }
 
     /// Pull honours the settings' update method and lands in the activity
-    /// log — the same named operation the topbar's Pull dispatches.
+    /// log — the same named operation the palette's `Pull` action dispatches.
     #[test]
     fn pull_dispatches_the_pull_operation() {
         let project = one_repo_project("dispatch-pull");

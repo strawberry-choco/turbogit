@@ -979,9 +979,10 @@ fn file_menu_welcome_closes_projects_and_returns_to_welcome() {
     );
 
     // The old File → Welcome Screen menu retired with the IDE chrome
-    // (issue #03); the command palette's Open Welcome action (topbar's
-    // More button) is the way back now.
-    harness.get_by_label("More").click();
+    // (issue #03) and the topbar's More button with the topbar; the
+    // command palette's Open Welcome action is the way back now.
+    harness.state_mut().ui.command_palette = true;
+    harness.state_mut().ui.command_query = "open welcome".to_string();
     settle(&mut harness);
     harness.get_by_label("Open Welcome").click();
     settle(&mut harness);
@@ -1347,11 +1348,13 @@ fn workspace_recent_renders_repo_count_and_clicking_restores_it() {
 }
 
 #[test]
-fn header_paints_version_line_with_app_version_git_version_and_repo_count() {
+fn status_bar_paints_version_line_with_app_version_git_version_and_repo_count() {
     let mut fx = bare_fixture();
     settle(&mut fx.harness);
 
-    // App version + resolved git version + indexed count line.
+    // App version + resolved git version + indexed count line. It rides the
+    // status bar's left cluster — the one chrome band Welcome keeps — since
+    // the topbar it used to sit in was deleted.
     assert_painted(&fx.harness, &format!("v{}", env!("CARGO_PKG_VERSION")));
     assert_painted(&fx.harness, "git ");
     assert_painted(&fx.harness, "repos indexed");
@@ -1382,8 +1385,9 @@ fn hero_whats_new_opens_and_closes_the_changelog_overlay() {
 // --- Ticket 06: the redesigned structure, asserted not assumed -----------------
 
 /// Freeze the new layout end-to-end through the painted seam (spec §9). Uses
-/// only strings the Welcome panel itself paints (never the shell's shared
-/// "TurboGit" brand) so counts prove single-instance-ness of each region.
+/// only strings the Welcome panel itself paints — the brand wordmark moved
+/// here with the topbar's deletion, so it is no longer a shared shell string
+/// to exclude — so counts prove single-instance-ness of each region.
 #[test]
 fn welcome_locks_the_redesigned_structure() {
     let project = tempfile::tempdir().expect("temp project dir");

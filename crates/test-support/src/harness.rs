@@ -128,13 +128,14 @@ pub struct PaintedGalley {
 /// Every text galley painted by the last frame.
 ///
 /// The single primitive behind the label queries above. A string usually paints
-/// in more than one place — the current branch names both a topbar button and a
-/// row; a repo name appears in the sidebar and in a section header — so ask for
-/// the color or face of *this* occurrence by matching on `pos`, rather than
-/// trusting the order shapes happen to arrive in. Color and font both land in
-/// the galley's layout job, so a token-colored, face-correct label (the active
-/// branch's soft blue monospace, a diverged branch's red) is assertable from
-/// painted output alone — no reach into widget internals.
+/// in more than one place — the current branch names both the repo header's
+/// branch pill and a list row; a repo name appears in the sidebar, in the
+/// header breadcrumb and in a section header — so ask for the color or face of
+/// *this* occurrence by matching on `pos`, rather than trusting the order
+/// shapes happen to arrive in. Color and font both land in the galley's layout
+/// job, so a token-colored, face-correct label (the active branch's soft blue
+/// monospace, a diverged branch's red) is assertable from painted output alone —
+/// no reach into widget internals.
 pub fn painted_galleys<S>(harness: &Harness<'_, S>) -> Vec<PaintedGalley> {
     harness
         .output()
@@ -272,9 +273,10 @@ pub fn right_click_row<S>(harness: &mut Harness<'_, S>, needle: &str) {
 /// Click one item of the context menu that is open.
 ///
 /// `sentinel` is a label unique to THAT menu, used to find its left edge: the
-/// shell has its own "Pull", "Push" and "Checkout" buttons elsewhere, and only
-/// the menu's rows all share one left edge. A disabled item is still found —
-/// the menu's convention is that a blocked action stays visible.
+/// command palette lists its own "Pull", "Push…" and "Checkout" actions
+/// elsewhere, and only the menu's rows all share one left edge. A disabled item
+/// is still found — the menu's convention is that a blocked action stays
+/// visible.
 pub fn click_menu_item<S>(harness: &mut Harness<'_, S>, sentinel: &str, label: &str) {
     use egui_kittest::kittest::{NodeT as _, Queryable as _};
     harness.remove_cursor();

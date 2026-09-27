@@ -170,8 +170,9 @@ pub fn run_action(state: &mut AppState, action: Action) {
             state.ui.tab = Tab::Log;
         }
         Action::OpenWelcome => state.ui.welcome_visible = true,
-        // Topbar workspace picker (issue #34): the same surface the selector
-        // opens. No anchor on this route — the fallback position is used.
+        // Workspace picker (issue #34). No anchor on this route — the
+        // palette is the only entry point since the topbar's selector was
+        // deleted, so the fallback position is the only one left.
         Action::SwitchWorkspace => {
             state.ui.workspace_picker_open = true;
             state.ui.workspace_picker_anchor = None;
@@ -359,9 +360,10 @@ fn workspace_rows(state: &AppState) -> Vec<WorkspaceRow> {
     rows
 }
 
-/// Topbar workspace picker (issue #34): the recents list, plus the two
-/// folder-picker flows the Welcome screen offers. Reachable from the topbar
-/// workspace selector and from the palette's [`Action::SwitchWorkspace`].
+/// Workspace picker (issue #34): the recents list, plus the two
+/// folder-picker flows the Welcome screen offers. Palette-only since the
+/// topbar's workspace selector was deleted — [`Action::SwitchWorkspace`]
+/// is the one entry point.
 ///
 /// A state-driven [`egui::Window`] rather than a response-bound
 /// `Popup::menu` (ADR-0017): `Popup::menu` derives its open state from a
@@ -386,11 +388,15 @@ pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
+    // Position: the topbar's selector recorded an anchor (ADR-0017), but
+    // that region is gone — the palette is the only route, so the
+    // fallback below is the only one left. It hangs the dropdown from the
+    // top window edge, where the selector used to sit.
     let pos = state
         .ui
         .workspace_picker_anchor
         .map(|(x, y)| Pos2::new(x, y))
-        .unwrap_or_else(|| Pos2::new(160.0, super::shell::TOPBAR_HEIGHT + 4.0));
+        .unwrap_or_else(|| Pos2::new(160.0, 4.0));
     let rows = workspace_rows(state);
 
     let mut open = true;
