@@ -1412,15 +1412,38 @@ impl GitExecutor for CliExecutor {
             std::process::id(),
         ));
         std::fs::write(&tmp, todo)?;
+        // A reword's replacement message cannot ride in the todo — git's format
+        // has no slot for one — so it rides on the plan row (ADR-0025) and is
+        // substituted here instead. git opens its editor on the commit file for
+        // exactly the reworded row, so pointing the editor at a copy of this
+        // file IS the reword: the same substitution `GIT_SEQUENCE_EDITOR` gets
+        // below. One message per execution, which is all one reworded row keys.
+        let mut message_tmp = None;
+        if let Some(message) = plan.iter().find_map(|e| e.message.as_ref()) {
+            let path = std::env::temp_dir().join(format!(
+                "turbogit-reword-{}-{}-{sequence}.txt",
+                plan[0].commit,
+                std::process::id(),
+            ));
+            std::fs::write(&path, message)?;
+            message_tmp = Some(path);
+        }
+        let editor = match &message_tmp {
+            Some(path) => format!("cp {}", path.to_string_lossy().replace('\\', "/")),
+            None => "true".to_owned(),
+        };
         let bin = turbogit_domain::model::git_binary(&self.settings);
         let todo_str = tmp.to_string_lossy().replace('\\', "/");
         let status = Command::new(&bin)
             .args(["rebase", "-i", &base_rev])
             .current_dir(root)
             .env("GIT_SEQUENCE_EDITOR", format!("cp {}", todo_str))
-            .env("GIT_EDITOR", "true")
+            .env("GIT_EDITOR", &editor)
             .status()?;
         let _ = std::fs::remove_file(&tmp);
+        if let Some(path) = &message_tmp {
+            let _ = std::fs::remove_file(path);
+        }
         if !status.success() {
             return Err(TgError::Cli {
                 code: status.code().unwrap_or(-1),
@@ -1731,7 +1754,7 @@ impl GitExecutor for CliExecutor {
             .collect())
     }
 
-    fn tag_checkout(&self, root: &Path, name: &str) -> TgResult<()> {
+    fn checkout_detached(&self, root: &Path, name: &str) -> TgResult<()> {
         // `git switch <tag>` on modern git requires `--detach` (tags are not
         // branch names). The libgit2 impl always does a detached checkout of
         // the peeled commit, so pass `--detach` here for parity.

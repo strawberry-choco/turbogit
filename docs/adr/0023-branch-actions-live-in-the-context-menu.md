@@ -65,6 +65,14 @@ the six tickets and their per-ticket evidence.
   editor now measures the buttons first. The flaw was documented as accepted
   behavior in `branch_tree_view`'s tests before this change.
 
+## The rule covers commits too
+
+The single-menu rule is a property of the app, not of the Branches surface.
+`ADR-0024` applies it to commit rows in the Git Log and deletes that pane's
+action grid on the same reasoning. Two ADRs making one ruling is deliberate:
+the second is worth its own record because what gets deleted differs, but a
+reader meeting both should not have to work out which one binds.
+
 ## Why not the alternatives
 
 - **A curated short `⋯` list next to the menu.** Rejected: two lists stay free

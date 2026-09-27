@@ -31,9 +31,9 @@ pub fn short_commit_ref(reference: &str) -> String {
 /// * [`super::chips::chip_text_origin`] and `ChipGeometry::text_origin` — the
 ///   geometry-level origin accessor. This helper paints text; those are the
 ///   destination for a caller that already holds a galley and a chip rect.
-/// * [`super::chips::hash_chip`] — interactive and monospace, and it owns its
-///   own `CHIP_HEIGHT + 6.0` height rather than the shared geometry, so folding
-///   its paint in here would change the chip it draws.
+/// * [`super::chips::hash_chip`] — monospace, and it owns its own
+///   `CHIP_HEIGHT + 6.0` height rather than the shared geometry, so folding its
+///   paint in here would change the chip it draws.
 /// * `crate::ui::log_window`'s `paint_label_pill` — an icon-only pill that
 ///   carries no galley at all (see that function's note).
 ///

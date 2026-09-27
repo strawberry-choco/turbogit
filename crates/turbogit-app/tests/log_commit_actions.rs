@@ -121,3 +121,78 @@ fn cherry_pick_to_applies_the_commit_onto_the_target_branch() {
         "cherry-picking must return the repo to the branch it was on"
     );
 }
+
+/// A gate is the first line, not the only one: the history can move between
+/// painting the menu and taking the item, and a stale surface can still reach
+/// the verb. So the refusal names the service's OWN reason — the one piece of
+/// information `Option` used to throw away — rather than a paraphrase that is
+/// true of every refusal and helpful for none of them.
+#[test]
+fn a_refused_drop_preflight_repeats_the_reason_the_service_gave() {
+    let (_tmp, project, _c2, _fc) = seeded_project();
+    let repo = project.join("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&repo));
+    let root = state.multi.roots[0].id.clone();
+    let first = git(&repo, &["rev-list", "--max-parents=0", "HEAD"]);
+    let first = first.trim().to_string();
+
+    // Reached the way a stale surface reaches it, or a history that moved under
+    // the menu: straight at the app seam, with the commit the service refuses.
+    state.open_rewrite_preflight(&root, &first, turbogit_app::state::HistoryVerb::Drop);
+
+    assert_eq!(
+        state.ui.dialog, None,
+        "no briefing is opened for a plan that does not exist"
+    );
+    assert_eq!(
+        state.ui.dlg.rewrite_preflight, None,
+        "and nothing is staged behind it"
+    );
+    let toast = state.ui.toast.as_ref().expect("the refusal is stated");
+    assert_eq!(toast.kind, turbogit_app::state::ToastKind::Error);
+    assert!(
+        toast
+            .message
+            .contains("has no first parent to rewrite from"),
+        "the toast carries the reason the service gave, not a paraphrase: {:?}",
+        toast.message
+    );
+    assert!(
+        toast.message.contains(&first),
+        "and it names the commit the service named, in full: {:?}",
+        toast.message
+    );
+    assert!(
+        !toast.message.contains("can no longer be dropped"),
+        "the old wording said nothing about why: {:?}",
+        toast.message
+    );
+}
+
+/// An editor seeded with nothing would hand the developer an empty field and
+/// invite them to type a message for a commit they may no longer have — so a
+/// commit the cache does not hold is refused, by name, and no dialog opens.
+///
+/// The same stale surface that can outrun the plan can outrun the log: this is
+/// the app seam's version of the refusal the menu's own gates normally prevent.
+#[test]
+fn a_reword_editor_that_cannot_be_seeded_is_refused_and_states_why() {
+    let (_tmp, project, _c2, _fc) = seeded_project();
+    let repo = project.join("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&repo));
+    let root = state.multi.roots[0].id.clone();
+
+    // Never logged: the cache holds nothing for this root, so there is no
+    // message to seed an editor from.
+    state.open_reword_editor(&root, "0123456789abcdef0123456789abcdef01234567");
+
+    assert_eq!(state.ui.dialog, None, "no editor opens with nothing in it");
+    assert_eq!(state.ui.dlg.reword, None, "and nothing is staged behind it");
+    let toast = state.ui.toast.as_ref().expect("the refusal is stated");
+    assert_eq!(toast.kind, turbogit_app::state::ToastKind::Error);
+    assert_eq!(
+        toast.message, "0123456 is no longer in this log",
+        "and it names the commit it cannot find: {:?}",
+        toast.message
+    );
+}

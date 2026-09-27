@@ -1,7 +1,7 @@
 //! Git Log four-pane workspace (issue #12, spec §8.3): branches pane,
 //! graph pane, changed-files pane and commit-details pane. Since issue #19
 //! the legacy History tab is gone: file history lives here as a path-scoped
-//! view ("Show history for file..." on a changed-file entry).
+//! view ("Show history for file…" on a changed-file entry).
 //!
 //! Layout (spec §8.3):
 //! 1. **Branches** (left, 210px): live search; LOCAL / REMOTE / TAGS groups
@@ -13,17 +13,20 @@
 //!    translucent `SELECTION_BG` row highlight that keeps lane colors readable.
 //! 3. **Changed files** (right-top, 320px): the selected commit's files with
 //!    status badges; clicking loads the diff.
-//! 4. **Commit details** (right-bottom, ~300px SURFACE): key-value hash /
-//!    author / date / parents, the Actions section (issue 15), and the full
-//!    message below.
+//! 4. **Commit details** (right-bottom, 440px SURFACE): the subject, the hash
+//!    chip, the author card, the committer / date / parents grid, the churn
+//!    summary, and the full message below. The pane says things about a commit
+//!    and does nothing to one (ADR-0024): every action lives in the row's
+//!    context menu, and the parent hashes stay the one link it owns.
 
 use crate::theme::Palette;
 use crate::ui::branch_tree_view::{self, TreeEvent, TreeGroup, TreeProps};
 use crate::ui::branches::fetch_scope;
 use crate::ui::branches_tree::build_branch_view;
+use crate::ui::commit_menu::{CommitFacts, CommitMenuAction, commit_menu};
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
-use crate::ui::widgets::{self, BadgeKind, RefKind};
+use crate::ui::widgets::{self, BadgeKind, MenuItemKind, MenuItemProps, RefKind, menu_item};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Frame, Galley, Grid, Layout, Margin, Panel,
@@ -32,7 +35,9 @@ use egui::{
 };
 use std::path::PathBuf;
 use turbogit_app::root_caches::{LogScope, file_stat};
-use turbogit_app::state::{AppState, BlameTarget, Dialog, DiffTarget, PendingConfirm, Toast};
+use turbogit_app::state::{
+    AppState, BlameTarget, Dialog, DiffTarget, NewBranchBase, PendingConfirm, Toast,
+};
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
     SignatureState,
@@ -48,11 +53,16 @@ const BRANCHES_WIDTH: f32 = 210.0;
 /// the `+N −M` column need the room.
 const FILES_WIDTH: f32 = 344.0;
 /// Commit details pane height. Grew from the §8.3 200px in issue 15 for the
-/// Actions section, to 340px in issue 17 for the committer row and Copy-hash
-/// header, and to 440px for the redesigned blocks (decision D4, raised from its
-/// 400px once the capture showed the guardrail alert clipping): subject, hash
-/// chip, author card, meta grid, churn summary, the primary verb plus the
-/// two-row ghost grid, and a two-line alert. The short-window yield below still
+/// Actions section, to 340px in issue 17 for the committer row and the
+/// Copy-hash header, and to 440px for the redesigned blocks (decision D4):
+/// subject, hash chip, author card, the committer / date / parents grid, the
+/// churn summary, and the message body.
+///
+/// The actions, the header's copy button and the guardrail alert that D4 was
+/// sized around are gone (ADR-0024), so the pane now has slack at its foot. The
+/// height is left where it is rather than re-fitted: it is a design value with
+/// pixel snapshots standing behind it, not a consequence of the removal, and
+/// re-fitting it is a decision of its own. The short-window yield below still
 /// applies.
 const DETAILS_HEIGHT: f32 = 440.0;
 /// Changed-file row height (redesign issue 04): a name line with its directory
@@ -733,16 +743,30 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
 
     // Row clicks are deferred (plan §1.3): the displayed union borrows the
     // cache slices, so rows render against a shared AppState and the
-    // selection lands after the scroll pass ends.
-    let mut clicked: Option<String> = None;
+    // selection lands after the scroll pass ends. A press carries its own
+    // root, because the listing is a union across every visible root and a
+    // commit id alone does not say which repository it belongs to.
+    let mut clicked: Option<(RootId, String)> = None;
+    let mut opened: Option<(RootId, String)> = None;
     // The height the list is given, captured before it takes it: egui 0.36
     // reports only the content's own rect back out, and an overflowing list
     // fills exactly this.
     let viewport_height = ui.available_rect_before_wrap().height();
     let scrolled = ScrollArea::vertical().show(ui, |ui| {
         for c in &commits {
-            if commit_row(ui, state, c, &colors, date_mode, multi_root) {
-                clicked = Some(c.id.clone());
+            match commit_row(ui, state, c, &colors, date_mode, multi_root) {
+                RowIntent::None => {}
+                RowIntent::Select => {
+                    if clicked.is_none() {
+                        clicked = Some((c.root.clone(), c.id.clone()));
+                    }
+                }
+                RowIntent::SelectAndOpenMenu => {
+                    if clicked.is_none() {
+                        clicked = Some((c.root.clone(), c.id.clone()));
+                        opened = Some((c.root.clone(), c.id.clone()));
+                    }
+                }
             }
         }
         if commits.is_empty() {
@@ -787,9 +811,212 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     if load_more {
         state.load_more_log();
     }
-    if let Some(id) = clicked {
-        state.ui.selected_commit = Some(id);
-        state.ui.log_selected_file = None;
+    if let Some((root, id)) = clicked {
+        // A press means this row's repository as well as this row's commit.
+        select_commit_row(state, root, id);
+        // A left click selects and closes any open menu: the press always does
+        // what it looks like it does.
+        state.ui.log_commit_menu = None;
+    }
+    if let Some(target) = opened {
+        state.ui.log_commit_menu = Some(target);
+    }
+
+    commit_context_menu(ui, state);
+}
+
+/// What a press on a commit row means for the app: this row's repository, this
+/// row's commit, and no changed file carried over from the commit before it.
+///
+/// The same shape as [`apply_log_tree_event`]'s row activation — set the
+/// repository, clear the changed file — with one deliberate difference, and the
+/// difference is the whole point of a commit row: a *branch* row is a scope
+/// control, so it sets `log_ref_scope` and clears `selected_commit` because no
+/// commit is what the developer asked to look at. A commit row names a commit,
+/// so it sets `selected_commit` and leaves the scope alone — the developer asked
+/// to see this commit, not to browse a different history. Both end with the pane
+/// describing what was pressed.
+///
+/// `selected_root` is what every dialog the menu opens reads, and the listing is
+/// a union across roots, so this is also what makes a dialog act on the
+/// repository the row came from rather than on whichever one happened to be
+/// selected when the row was painted.
+fn select_commit_row(state: &mut AppState, root: RootId, id: String) {
+    state.selected_root = Some(root);
+    state.ui.selected_commit = Some(id);
+    state.ui.log_selected_file = None;
+}
+
+/// What a press on a commit row asks for. Right-click selects **and** opens the
+/// menu, so the menu and the details pane cannot describe different commits
+/// (ADR-0024); there is deliberately no "menu without selection" intent. Both
+/// intents are applied by [`select_commit_row`], so neither can end up naming a
+/// different repository from the other.
+enum RowIntent {
+    None,
+    Select,
+    SelectAndOpenMenu,
+}
+
+/// The gates are evaluated per repository root, so a dirty root does not
+/// disable an action on a clean one. Everything here is state the log already
+/// holds; none of it costs a git call.
+fn commit_facts<'a>(state: &'a AppState, root: &'a RootId, cid: &str) -> CommitFacts<'a> {
+    let snapshot = state.multi.by_id(root);
+    CommitFacts {
+        dirty: snapshot.is_some_and(|r| !r.status.changes.is_empty()),
+        protected_branch: snapshot
+            .and_then(|r| r.current_branch.clone())
+            .is_some_and(|b| sync_service::is_protected(&state.settings, &b)),
+        // A plan is built from the commit to the current branch's tip, so a
+        // commit outside this root's listing cannot be rewritten from it. A root
+        // with no named branch checked out has no such history either, and the
+        // item states that rather than looking broken.
+        on_current_branch: snapshot.is_some_and(|r| r.current_branch.is_some())
+            && state
+                .caches
+                .log(root)
+                .is_some_and(|cs| cs.iter().any(|c| c.id == cid)),
+        multi_root: state.multi.roots.len() > 1,
+        repo_name: root_display_name(root),
+    }
+}
+
+/// The repository's own name — its directory's, which is what the branches
+/// pane's ROOTS filter and the shell already call it. Borrowed off the root id
+/// so the menu can name the repository a commit belongs to without copying a
+/// `String` per frame per row.
+fn root_display_name(root: &RootId) -> &str {
+    let path = root.as_path();
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .or_else(|| path.to_str())
+        .unwrap_or_default()
+}
+
+/// The Git Log's commit context menu: the one place a commit action lives. The
+/// host owns the lifecycle; this surface owns which row's menu is open and what
+/// each pick means.
+fn commit_context_menu(ui: &mut Ui, state: &mut AppState) {
+    let Some((root_id, cid)) = state.ui.log_commit_menu.clone() else {
+        return;
+    };
+    let target = widgets::menu_host::target_of(&root_id, &cid);
+    let ctx = ui.ctx().clone();
+    let mut dismiss = false;
+    let picked = widgets::menu_host::host_menu(
+        ui,
+        widgets::menu_host::MenuId::new("log_commit", &target),
+        true,
+        &mut dismiss,
+        |ui| {
+            find_commit(state, &root_id, &cid)
+                .cloned()
+                .and_then(|commit| commit_menu(ui, &commit, &commit_facts(state, &root_id, &cid)))
+        },
+    );
+    if dismiss {
+        state.ui.log_commit_menu = None;
+    }
+    if let Some(action) = picked.flatten() {
+        apply_commit_action(state, &ctx, &root_id, &cid, action);
+    }
+}
+
+/// One dispatcher for all eleven items — the ruling ADR-0023 made for branches
+/// applied to commits. It closes the menu first, so no action can be taken
+/// against a menu the developer can no longer see.
+fn apply_commit_action(
+    state: &mut AppState,
+    ctx: &egui::Context,
+    root: &RootId,
+    cid: &str,
+    action: CommitMenuAction,
+) {
+    state.ui.log_commit_menu = None;
+    match action {
+        // Clipboard writes are not git work and never were an `Operation`; this
+        // is the app's single clipboard call site and its toast convention, with
+        // the text naming WHICH thing was copied so the two are distinguishable.
+        CommitMenuAction::CopyHash => {
+            ctx.copy_text(cid.to_owned());
+            state.ui.toast_shown_at = None;
+            state.ui.toast = Some(Toast::success(format!(
+                "Copied {}",
+                widgets::short_commit_ref(cid)
+            )));
+        }
+        CommitMenuAction::CopyMessage => {
+            let message = find_commit(state, root, cid)
+                .map(|c| c.message.clone())
+                .unwrap_or_default();
+            ctx.copy_text(message);
+            state.ui.toast_shown_at = None;
+            state.ui.toast = Some(Toast::success("Copied commit message"));
+        }
+        CommitMenuAction::CherryPickTo => {
+            state.ui.dlg.cherry_pick_commit = Some(cid.to_owned());
+            state.ui.dialog = Some(Dialog::CherryPickTarget);
+        }
+        CommitMenuAction::CherryPickAcross => {
+            state.open_cherry_across();
+            state.ui.dialog = Some(Dialog::CherryPickAcross);
+        }
+        CommitMenuAction::RevertCommit => {
+            state.ui.confirm = Some(PendingConfirm::RevertCommit {
+                commit: cid.to_owned(),
+            });
+        }
+        CommitMenuAction::NewBranch => {
+            // The base is the commit that was right-clicked, not the tip — the
+            // whole point of right-clicking a row in the middle of history — and
+            // creating the branch does not move the checkout, which is why this
+            // arm passes `false` where every other open path passes `true`.
+            state.open_new_branch(NewBranchBase::Commit(cid.to_owned()), false, None);
+        }
+        CommitMenuAction::Checkout => {
+            // The menu's gate reads the cached worktree; this is the last look
+            // before git is touched. A tree that turned dirty in between goes to
+            // the SAME bring-along / set-aside / cancel confirmation a branch
+            // checkout raises, so the two checkouts behave identically.
+            let dirty = state
+                .multi
+                .by_id(root)
+                .is_some_and(|r| !r.status.changes.is_empty());
+            if dirty {
+                state.ui.confirm = Some(PendingConfirm::CheckoutDirty {
+                    root: root.clone(),
+                    target: cid.to_owned(),
+                    kind: turbogit_domain::model::BranchKind::Local,
+                    detach: true,
+                });
+            } else {
+                state.checkout_detached_op(root, cid);
+            }
+        }
+        CommitMenuAction::NewTag => {
+            // One open path, shared with the VCS palette's Tag: the dialog is
+            // seeded with the commit that was right-clicked, and everything the
+            // last visit worked out for itself is cleared.
+            state.open_tag_dialog(Some(cid));
+        }
+        CommitMenuAction::DropCommit => {
+            // A rewrite is never one click: the preflight is built from the same
+            // repository the menu's own root names, and carries the plan the
+            // confirm dispatches.
+            state.open_rewrite_preflight(root, cid, turbogit_app::state::HistoryVerb::Drop);
+        }
+        CommitMenuAction::CreatePatch => {
+            // A file write, not git work: no Operation, no activity entry.
+            state.create_patch(root, cid);
+        }
+        CommitMenuAction::RewordCommit => {
+            // Two steps, deliberately: the message is written here, and the cost
+            // of writing it is shown by the preflight this editor's confirm
+            // opens. The editor is seeded from the commit's own message, so a
+            // correction starts from what the commit actually says.
+            state.open_reword_editor(root, cid);
+        }
     }
 }
 
@@ -903,7 +1130,7 @@ fn header_cells(ui: &mut Ui, multi_root: bool) {
 
 /// One commit-table row: stripe | node | hash | author | message(+chips) | date.
 /// Renders against a shared [`AppState`] (the displayed union borrows the
-/// caches) and reports whether the row was clicked; the caller applies the
+/// caches) and reports what a press on it asked for; the caller applies the
 /// selection after rendering (plan §1.3 defer pattern).
 fn commit_row(
     ui: &mut Ui,
@@ -912,7 +1139,7 @@ fn commit_row(
     colors: &std::collections::HashMap<String, usize>,
     date_mode: DateFormat,
     multi_root: bool,
-) -> bool {
+) -> RowIntent {
     let selected = state.ui.selected_commit.as_deref() == Some(c.id.as_str());
     let (rect, response) = allocate_row(ui);
 
@@ -1061,7 +1288,26 @@ fn commit_row(
         )
     });
     widgets::focus_ring(ui, &response);
-    response.clicked()
+    if response.clicked() {
+        RowIntent::Select
+    } else if response.secondary_clicked() {
+        // The anchor is the pointer position at the right-click, stashed in egui
+        // memory for the host to read back at the end of this pane.
+        let pos = ui
+            .input(|i| i.pointer.interact_pos())
+            .unwrap_or_else(|| rect.left_bottom());
+        widgets::menu_host::note_anchor(
+            ui,
+            widgets::menu_host::MenuId::new(
+                "log_commit",
+                &widgets::menu_host::target_of(&c.root, &c.id),
+            ),
+            pos,
+        );
+        RowIntent::SelectAndOpenMenu
+    } else {
+        RowIntent::None
+    }
 }
 
 /// Paint one `.tg-label` pill (18px, neutral token colors) holding a label
@@ -1105,10 +1351,12 @@ enum FileAction {
     None,
     /// Row clicked: open its diff; the caller resolves root / commit / parent.
     OpenDiff(PathBuf),
-    /// Footer link / context menu: blame the file at the selected commit.
+    /// Footer link / menu item: blame the file at the selected commit.
     OpenBlame(PathBuf),
-    /// Context menu: scope the whole workspace to this file's history.
+    /// Menu item: scope the whole workspace to this file's history.
     ScopeHistory(PathBuf),
+    /// Row right-clicked: open the shared menu on this row.
+    OpenMenu(PathBuf),
 }
 
 fn files_pane(ui: &mut Ui, state: &mut AppState) {
@@ -1168,7 +1416,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
             if !row_shown(ch) {
                 continue;
             }
-            let row_action = file_row(ui, state, ch, file_stat(stats, &ch.path));
+            let row_action = file_row(ui, state, root_id, ch, file_stat(stats, &ch.path));
             // The first row that reports an intent owns the frame: a later
             // non-clicked row must not clear it (only one row can be clicked
             // per frame, but the loop keeps painting after it).
@@ -1215,6 +1463,9 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
 
     match action {
         FileAction::None => {}
+        FileAction::OpenMenu(path) => {
+            state.ui.log_file_menu = Some((root_id.clone(), cid.to_owned(), path));
+        }
         FileAction::OpenDiff(path) => {
             state.ui.log_selected_file = Some(path.clone());
             state.ui.diff = Some(DiffTarget {
@@ -1237,6 +1488,96 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
             state.ui.log_selected_file = None;
         }
     }
+
+    file_row_context_menu(ui, state);
+}
+
+/// The changed-file row's context menu, on the same host the commit menu and the
+/// branches list use. It used to be the window's third menu dialect — stock egui
+/// with raw buttons, no shared surface, and no way to show a blocked item with a
+/// reason. Both verbs do exactly what they did before; the surface is shared now,
+/// so the whole window answers "why can't I do this" the same way.
+fn file_row_context_menu(ui: &mut Ui, state: &mut AppState) {
+    let Some((root_id, cid, path)) = state.ui.log_file_menu.clone() else {
+        return;
+    };
+    let target = widgets::menu_host::target_of(&root_id, &path.to_string_lossy());
+    let mut dismiss = false;
+    let picked = widgets::menu_host::host_menu(
+        ui,
+        widgets::menu_host::MenuId::new("log_file_row", &target),
+        true,
+        &mut dismiss,
+        |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.set_min_width(240.0);
+            // Scoping to a file whose history is already on screen is a no-op, so
+            // the item stays rendered and says why rather than vanishing.
+            let already_scoped = state.ui.log_path_scope.as_deref() == Some(path.as_path());
+            let mut picked = None;
+            if menu_item(
+                ui,
+                MenuItemProps {
+                    icon: Icon::FILE_CODE,
+                    label: "Show blame",
+                    data: None,
+                    shortcut: None,
+                    enabled: true,
+                    disabled_reason: None,
+                    kind: MenuItemKind::Default,
+                },
+            )
+            .clicked()
+            {
+                picked = Some(FileAction::OpenBlame(path.clone()));
+            }
+            let history = menu_item(
+                ui,
+                MenuItemProps {
+                    icon: Icon::CLOCK,
+                    label: "Show history for file…",
+                    data: None,
+                    shortcut: None,
+                    enabled: !already_scoped,
+                    disabled_reason: already_scoped
+                        .then_some("already showing this file's history"),
+                    kind: MenuItemKind::Default,
+                },
+            );
+            if history.clicked() {
+                picked = Some(FileAction::ScopeHistory(path.clone()));
+            }
+            picked
+        },
+    );
+    if dismiss {
+        state.ui.log_file_menu = None;
+    }
+    if let Some(action) = picked.flatten() {
+        // The menu closes before its verb runs, exactly as the commit menu's does.
+        state.ui.log_file_menu = None;
+        apply_file_action(state, &root_id, &cid, action);
+    }
+}
+
+/// Run one changed-file row's verb against the root and commit the menu was
+/// opened on — not whatever is selected now.
+fn apply_file_action(state: &mut AppState, root: &RootId, cid: &CommitId, action: FileAction) {
+    match action {
+        FileAction::OpenBlame(path) => {
+            state.ui.blame = Some(BlameTarget {
+                root: root.clone(),
+                path,
+                rev: cid.to_owned(),
+            });
+        }
+        FileAction::ScopeHistory(path) => {
+            state.ui.log_path_scope = Some(path);
+            state.ui.selected_commit = None;
+            state.ui.log_selected_file = None;
+        }
+        _ => {}
+    }
 }
 
 fn badge_kind(status: ChangeStatus) -> BadgeKind {
@@ -1257,6 +1598,7 @@ fn badge_kind(status: ChangeStatus) -> BadgeKind {
 fn file_row(
     ui: &mut Ui,
     state: &AppState,
+    root: &RootId,
     change: &turbogit_domain::model::Change,
     stat: Option<(usize, usize)>,
 ) -> FileAction {
@@ -1349,40 +1691,35 @@ fn file_row(
     if response.clicked() {
         return FileAction::OpenDiff(change.path.clone());
     }
-    // Path-scoped file history (issue #19): right-click a changed file to
-    // narrow the whole Git Log workspace to the commits touching it.
-    // Blame (issue 18): annotate the same file at the selected commit.
-    let mut action = FileAction::None;
-    response.context_menu(|ui| {
-        if ui.button("Show blame").clicked() {
-            action = FileAction::OpenBlame(change.path.clone());
-            ui.close();
-        }
-        if ui.button("Show history for file...").clicked() {
-            action = FileAction::ScopeHistory(change.path.clone());
-            ui.close();
-        }
-    });
-    action
+    // Right-click opens the shared menu (ticket 09): path-scoped file history
+    // (issue #19) and blame (issue 18) are its two items.
+    if response.secondary_clicked() {
+        let pos = ui
+            .input(|i| i.pointer.interact_pos())
+            .unwrap_or_else(|| rect.left_bottom());
+        let target = widgets::menu_host::target_of(root, &change.path.to_string_lossy());
+        widgets::menu_host::note_anchor(
+            ui,
+            widgets::menu_host::MenuId::new("log_file_row", &target),
+            pos,
+        );
+        return FileAction::OpenMenu(change.path.clone());
+    }
+    FileAction::None
 }
 
 // --- Pane 4: commit details -----------------------------------------------------------
 
-/// Deferred interaction from one details-pane action button (plan §1.3):
-/// the pane renders against the borrowed cached commit, and the mutation
-/// lands after rendering (mirrors [`FileAction`]).
+/// The one interaction left in the details pane (plan §1.3: it renders against
+/// the borrowed cached commit, so the mutation lands after rendering).
+///
+/// It used to carry `CherryPick`, `CherryPickAcross`, `Revert`, `NewBranchHere`
+/// and `CopyHash`. Those are the actions, and ADR-0024 moved every one of them
+/// into the commit's context menu, leaving the pane to say things about a commit
+/// and do nothing to one. `SelectParent` stays: a parent hash link is navigation
+/// inside the metadata, and no menu item replaces it.
 enum DetailAction {
     None,
-    /// Open the cherry-pick target-branch picker for the selected commit.
-    CherryPick,
-    /// Open the cross-repo cherry-pick dialog (issue 16) for the source repo.
-    CherryPickAcross,
-    /// Ask to confirm reverting the selected commit.
-    Revert,
-    /// Open the new-branch dialog prefilled at the selected commit.
-    NewBranchHere,
-    /// Copy the selected commit's full hash to the clipboard (issue 17).
-    CopyHash,
     /// Jump to a parent commit via its hash link (issue 17).
     SelectParent(CommitId),
 }
@@ -1391,19 +1728,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     // Every interaction defers (plan §1.3): the pane borrows the cached
     // commit below, so clicks set `action` and mutations land at the end.
     let mut action = DetailAction::None;
-    // Header row: the group title left, Copy hash (issue 17) right — the
-    // one detail-pane affordance the mockup pins to the header.
-    ui.horizontal(|ui| {
-        widgets::group_title(ui, "Commit details");
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .small_button(RichText::new("Copy hash").size(MICRO_TEXT))
-                .clicked()
-            {
-                action = DetailAction::CopyHash;
-            }
-        });
-    });
+    widgets::group_title(ui, "Commit details");
     // Compact vertical rhythm so the full message fits the pane.
     ui.style_mut().spacing.item_spacing.y = 3.0;
 
@@ -1434,19 +1759,10 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
             .color(Palette::INK),
     );
 
-    // Hash: a chip whose click defers the copy; the mockup's caption states
-    // what the click does, since there is no copy glyph in the icon set.
+    // Hash: still shown, no longer clickable. Copying it lives in the commit's
+    // context menu, which states the same short reference on the item itself.
     ui.horizontal(|ui| {
-        if widgets::hash_chip(
-            ui,
-            &widgets::short_commit_ref(&commit.id),
-            "Click to copy the full hash",
-        )
-        .clicked()
-        {
-            action = DetailAction::CopyHash;
-        }
-        ui.label(micro_text("click to copy full hash"));
+        widgets::hash_chip(ui, &widgets::short_commit_ref(&commit.id), "");
     });
 
     // Author card: initials, name, email, and the day on the trailing edge.
@@ -1566,65 +1882,6 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         });
     });
 
-    // Actions section (redesign decision D2): one primary verb on its own row,
-    // then the three secondary verbs as a ghost grid — every verb the pane had
-    // before stays reachable, none is silently dropped. Guarded by the
-    // protected-branch and dirty-worktree rules: a blocked action is disabled
-    // and its reason is painted, so the explanation is always discoverable.
-    widgets::group_title(ui, "Actions");
-    let snapshot = state.multi.by_id(root_id);
-    let dirty = snapshot.is_some_and(|r| !r.status.changes.is_empty());
-    let current_protected = snapshot
-        .and_then(|r| r.current_branch.clone())
-        .is_some_and(|b| sync_service::is_protected(&state.settings, &b));
-    let mut reasons: Vec<String> = Vec::new();
-    if let Some(r) = snapshot
-        && let Some(branch) = &r.current_branch
-        && sync_service::is_protected(&state.settings, branch)
-    {
-        reasons.push(format!("'{branch}' is a protected branch — revert blocked"));
-    }
-    if dirty {
-        reasons.push("working tree is dirty — cherry-pick and revert blocked".into());
-    }
-    // Snapshot the id up front (plan §1.3): `commit` borrows the cache
-    // slice, and the click handlers below mutate `state.ui` — so clicks are
-    // reported and applied after the pane finishes rendering.
-    let commit_id = commit.id.clone();
-    let pick = widgets::action_button(ui, "Cherry-pick to…", true, !dirty)
-        .on_disabled_hover_text("Resolve the uncommitted changes first");
-    ui.add_space(2.0);
-    let (across, revert, branch) = ui.columns(2, |columns| {
-        let across = widgets::action_button(&mut columns[0], "Cherry-pick across…", false, !dirty);
-        let revert = widgets::action_button(
-            &mut columns[1],
-            "Revert commit",
-            false,
-            !dirty && !current_protected,
-        );
-        // The grid's second row: the left cell carries the last verb, the
-        // right one stays empty.
-        let branch = widgets::action_button(&mut columns[0], "Create branch here", false, true);
-        (across, revert, branch)
-    });
-    let revert = revert.on_disabled_hover_text("Resolve the guardrail below first");
-    if pick.clicked() {
-        action = DetailAction::CherryPick;
-    }
-    if across.clicked() {
-        action = DetailAction::CherryPickAcross;
-    }
-    if revert.clicked() {
-        action = DetailAction::Revert;
-    }
-    if branch.clicked() {
-        action = DetailAction::NewBranchHere;
-    }
-    if !reasons.is_empty() {
-        ui.add_space(2.0);
-        widgets::alert_box(ui, &reasons.join(" · "));
-    }
-
     // The message body: everything under the subject, which now leads the
     // pane (issue 05) — repeating it here would spend the pane's last inches
     // on a line the user has already read. This stays the pane's only
@@ -1649,38 +1906,9 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
 
     // Deferred action application (plan §1.3): the borrow of the cached
     // commit ended above, so `state.ui` is free to mutate here.
-    match action {
-        DetailAction::None => {}
-        DetailAction::CherryPick => {
-            state.ui.dlg.cherry_pick_commit = Some(commit_id);
-            state.ui.dialog = Some(Dialog::CherryPickTarget);
-        }
-        DetailAction::CherryPickAcross => {
-            state.open_cherry_across();
-            state.ui.dialog = Some(Dialog::CherryPickAcross);
-        }
-        DetailAction::Revert => {
-            state.ui.confirm = Some(PendingConfirm::RevertCommit { commit: commit_id });
-        }
-        DetailAction::NewBranchHere => {
-            state.ui.dlg.new_branch_name.clear();
-            state.ui.dlg.new_branch_start = commit_id;
-            state.ui.dlg.new_branch_checkout = false;
-            state.ui.dialog = Some(Dialog::NewBranch);
-        }
-        DetailAction::CopyHash => {
-            let id = state.ui.selected_commit.clone().unwrap_or_default();
-            ui.ctx().copy_text(id.clone());
-            state.ui.toast_shown_at = None;
-            state.ui.toast = Some(Toast::success(format!(
-                "Copied {}",
-                widgets::short_commit_ref(&id)
-            )));
-        }
-        DetailAction::SelectParent(parent) => {
-            state.ui.selected_commit = Some(parent);
-            state.ui.log_selected_file = None;
-        }
+    if let DetailAction::SelectParent(parent) = action {
+        state.ui.selected_commit = Some(parent);
+        state.ui.log_selected_file = None;
     }
 }
 

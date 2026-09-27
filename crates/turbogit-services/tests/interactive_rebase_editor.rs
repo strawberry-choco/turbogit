@@ -11,10 +11,13 @@ use std::path::Path;
 use std::process::Command;
 
 use turbogit_domain::error::TgError;
-use turbogit_domain::model::{RebaseAction, RebasePlanEntry, VcsSettings};
+use turbogit_domain::model::{
+    Commit, RebaseAction, RebasePlanEntry, RootId, Signature, SignatureState, VcsSettings,
+};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::history_editor;
+use turbogit_services::reselection::{self, RewrittenAnchor};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -73,6 +76,7 @@ fn entry(action: RebaseAction, commit: &str, subject: &str) -> RebasePlanEntry {
         action,
         commit: commit.to_string(),
         subject: subject.to_string(),
+        message: None,
     }
 }
 
@@ -91,6 +95,30 @@ fn a_plan_round_trips_through_the_todo_text() {
     let parsed =
         history_editor::parse_todo(&text).expect("the rendered todo must parse back cleanly");
     assert_eq!(parsed, plan, "parse(render(plan)) == plan");
+}
+
+/// Git's rebase-todo format has no slot for a replacement message, so a plan
+/// that carries one does NOT round-trip through the editor's buffer: the verb
+/// survives, the message is dropped rather than erroring. This is the contract
+/// ADR-0025 accepts to keep history editing on one path — the editor's buffer
+/// stays a list of verbs, never a message store.
+#[test]
+fn a_reword_message_survives_as_a_verb_and_not_as_text() {
+    let plan = vec![reword("aaaa1111", "new subject\n\nand a body")];
+
+    let text = history_editor::render_todo(&plan);
+    assert_eq!(
+        text.trim(),
+        "reword aaaa1111 new subject",
+        "the rendered todo carries the verb, the sha and the subject — nothing else"
+    );
+
+    let parsed = history_editor::parse_todo(&text).expect("a rendered plan always parses back");
+    assert_eq!(parsed[0].action, RebaseAction::Reword);
+    assert_eq!(
+        parsed[0].message, None,
+        "the replacement message is deliberately lost, not an error"
+    );
 }
 
 #[test]
@@ -411,4 +439,310 @@ fn the_estimate_counts_the_replayed_commits_at_three_seconds_each() {
     ];
     // Two commits actually replay (the drop never runs) — ~6s.
     assert_eq!(history_editor::estimate(&plan), "~6s estimated");
+}
+
+// ------------------------------------------------------- reword messages --
+
+/// One revision's subject, as git records it.
+fn subject_of(dir: &Path, rev: &str) -> String {
+    run_git(dir, &["log", "-1", "--format=%s", rev])
+        .trim()
+        .to_string()
+}
+
+/// One revision's whole message, subject and body.
+fn message_of(dir: &Path, rev: &str) -> String {
+    run_git(dir, &["log", "-1", "--format=%B", rev])
+}
+
+/// One revision's author identity and author date — the two things a reword
+/// must survive untouched.
+fn author_of(dir: &Path, rev: &str) -> String {
+    run_git(dir, &["log", "-1", "--format=%an <%ae> %aI", rev])
+        .trim()
+        .to_string()
+}
+
+fn rev_parse(dir: &Path, rev: &str) -> String {
+    run_git(dir, &["rev-parse", rev]).trim().to_string()
+}
+
+/// A plan row that rewords, carrying the message it will rewrite with.
+fn reword(commit: &str, message: &str) -> RebasePlanEntry {
+    RebasePlanEntry {
+        action: RebaseAction::Reword,
+        commit: commit.to_string(),
+        subject: message.lines().next().unwrap_or("").to_string(),
+        message: Some(message.to_string()),
+    }
+}
+
+/// The outcome this ticket exists to make impossible is the silent no-op: git
+/// parses the `reword` verb, the engine has always run the rebase with its
+/// editor stubbed out, and the commit comes back unchanged. So the assertion is
+/// read back from a real repository — the message is the plan's, and nothing
+/// else about the commit moved.
+#[test]
+fn a_reword_in_the_plan_rewrites_the_message_and_nothing_else() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = plan_repo(tmp.path(), "reword-message");
+    let target = rev_parse(&repo, "HEAD~1");
+    let descendant = rev_parse(&repo, "HEAD");
+    let tree = rev_parse(&repo, "HEAD~1^{tree}");
+    let author = author_of(&repo, "HEAD~1");
+
+    let plan = vec![
+        reword(
+            &target,
+            "feature-2: corrected\n\nAnd a body while we are here.",
+        ),
+        entry(RebaseAction::Pick, &descendant, "feature-3"),
+    ];
+    history_editor::execute(&engine(), &repo, &plan).expect("the replay runs");
+
+    assert_eq!(
+        subject_of(&repo, "HEAD~1"),
+        "feature-2: corrected",
+        "the subject the plan carried is the subject git records"
+    );
+    assert!(
+        message_of(&repo, "HEAD~1").contains("And a body while we are here."),
+        "the body travels with the subject: {:?}",
+        message_of(&repo, "HEAD~1")
+    );
+    let reworded = rev_parse(&repo, "HEAD~1");
+    assert_ne!(reworded, target, "a reworded commit has a new hash");
+    assert_eq!(
+        rev_parse(&repo, "HEAD~1^{tree}"),
+        tree,
+        "correcting a message changes what the commit SAYS, not what it did"
+    );
+    assert_eq!(
+        author_of(&repo, "HEAD~1"),
+        author,
+        "the author and the author date are not the reword's to change"
+    );
+    assert_eq!(
+        subject_of(&repo, "HEAD"),
+        "feature-3",
+        "and the descendant is replayed on top of it"
+    );
+}
+
+// ------------------------------------------- after a rewrite, the selection --
+
+/// A commit as the log hands one over. The rule reads subjects, and the log
+/// carries the whole message, so a commit's subject is its first line — the same
+/// reading every other surface makes.
+fn logged(id: &str, subject: &str) -> Commit {
+    let who = Signature {
+        name: "Author".into(),
+        email: "author@example.com".into(),
+        time: 1_700_000_000,
+    };
+    Commit {
+        id: id.into(),
+        parents: Vec::new(),
+        author: who.clone(),
+        committer: who,
+        message: format!("{subject}\n\nThe body the pane still shows."),
+        time: 1_700_000_000,
+        root: RootId(std::sync::Arc::from(std::path::Path::new("/repo/alpha"))),
+        signature: SignatureState::Unsigned,
+    }
+}
+
+/// A drop, named by the plan row it removes.
+fn dropping(commit: &str, subject: &str) -> RebasePlanEntry {
+    entry(RebaseAction::Drop, commit, subject)
+}
+
+/// A rewrite changes every descendant's hash, so the commit the developer was
+/// looking at cannot be found by hash afterwards. The rule is the same for both
+/// rewrites: take the first surviving plan row at or after the acted-on one, and
+/// find that row in the refreshed log by the subject it will carry.
+///
+/// The table below is that rule's answers, one row per shape the history can
+/// take. `plan` is oldest-first (a plan's own order); `after` is newest-first
+/// (the log's own order).
+#[test]
+fn a_rewrite_moves_the_selection_to_the_commit_that_took_the_anchors_place() {
+    struct Case {
+        what: &'static str,
+        plan: Vec<RebasePlanEntry>,
+        after: Vec<Commit>,
+        anchor: &'static str,
+        fate: RewrittenAnchor,
+        want: Option<&'static str>,
+    }
+    let cases = [
+        // The ordinary case: a commit in the middle goes, and the commit that
+        // was built on it — replayed onto a new hash — is where the developer is.
+        Case {
+            what: "a drop in the middle lands on its first descendant",
+            plan: vec![
+                entry(RebaseAction::Pick, "base0", "the base commit"),
+                dropping("drop1", "the dropped commit"),
+                entry(RebaseAction::Pick, "keep1", "the work on top"),
+                entry(RebaseAction::Pick, "keep2", "more work"),
+            ],
+            after: vec![
+                logged("new2", "more work"),
+                logged("new1", "the work on top"),
+                logged("base0", "the base commit"),
+            ],
+            anchor: "drop1",
+            fate: RewrittenAnchor::Dropped,
+            want: Some("new1"),
+        },
+        // The tip has nothing built on it, so nothing took its place; the commit
+        // now at the tip is the honest answer, and it is the anchor's own parent.
+        Case {
+            what: "a drop of the tip lands on the commit that became the tip",
+            plan: vec![
+                entry(RebaseAction::Pick, "base0", "the base commit"),
+                entry(RebaseAction::Pick, "keep1", "the work on top"),
+                dropping("drop1", "the dropped tip"),
+            ],
+            after: vec![
+                logged("new1", "the work on top"),
+                logged("base0", "the base commit"),
+            ],
+            anchor: "drop1",
+            fate: RewrittenAnchor::Dropped,
+            want: Some("new1"),
+        },
+        // A reword keeps the commit and changes what it says, so the anchor is
+        // its own successor — found by the NEW subject, because the old one is
+        // the thing that no longer exists.
+        Case {
+            what: "a reword stays on the commit it rewrote",
+            plan: vec![
+                entry(RebaseAction::Pick, "base0", "the base commit"),
+                reword("word1", "the corrected subject"),
+                entry(RebaseAction::Pick, "keep1", "the work on top"),
+            ],
+            after: vec![
+                logged("new1", "the work on top"),
+                logged("new0", "the corrected subject"),
+                logged("base0", "the base commit"),
+            ],
+            anchor: "word1",
+            fate: RewrittenAnchor::Reworded {
+                subject: "the corrected subject".into(),
+            },
+            want: Some("new0"),
+        },
+    ];
+    for case in cases {
+        assert_eq!(
+            reselection::reselect_after_rewrite(&case.plan, &case.after, case.anchor, &case.fate),
+            case.want.map(str::to_string),
+            "{}",
+            case.what
+        );
+    }
+}
+
+/// Subjects repeat. When the row the rule wants is not the only commit carrying
+/// its subject, the nearest position wins — and here the nearer twin is the
+/// SECOND of the two in the log, so an implementation that simply took the first
+/// match would answer differently.
+#[test]
+fn a_repeated_subject_resolves_by_nearest_position_not_by_the_first_match() {
+    let plan = vec![
+        entry(RebaseAction::Pick, "base0", "the base commit"),
+        dropping("drop1", "the dropped commit"),
+        entry(RebaseAction::Pick, "twin1", "fix the flaky test"),
+        entry(RebaseAction::Pick, "twin2", "fix the flaky test"),
+        entry(RebaseAction::Pick, "tip0", "the tip commit"),
+    ];
+    // Newest-first, as the log hands it over: the twin that took the dropped
+    // commit's place is second among the two identical subjects, because the
+    // commit above it is still above it.
+    let after = vec![
+        logged("new0", "the tip commit"),
+        logged("new1", "fix the flaky test"),
+        logged("new2", "fix the flaky test"),
+        logged("base0", "the base commit"),
+    ];
+    assert_eq!(
+        reselection::reselect_after_rewrite(&plan, &after, "drop1", &RewrittenAnchor::Dropped),
+        Some("new2".to_string()),
+        "the twin nearest the anchor's own row took its place, not the first match"
+    );
+}
+
+/// The one case that makes this a shared rule rather than a shared idea: a
+/// reword, where the anchor's OLD subject is held by an unrelated commit.
+/// Matching the old subject would move the selection to a commit the developer
+/// never touched, so the rule is told the subject the reworded row will carry.
+#[test]
+fn a_reword_finds_its_own_commit_and_not_an_impostor_holding_the_old_subject() {
+    let plan = vec![
+        entry(RebaseAction::Pick, "base0", "the base commit"),
+        entry(
+            RebaseAction::Pick,
+            "other0",
+            "the subject the reword replaces",
+        ),
+        reword("word1", "the corrected subject"),
+    ];
+    let after = vec![
+        logged("new0", "the corrected subject"),
+        logged("other0", "the subject the reword replaces"),
+        logged("base0", "the base commit"),
+    ];
+    assert_eq!(
+        reselection::reselect_after_rewrite(
+            &plan,
+            &after,
+            "word1",
+            &RewrittenAnchor::Reworded {
+                subject: "the corrected subject".into(),
+            }
+        ),
+        Some("new0".to_string()),
+        "the reworded commit itself, not the impostor holding its old subject"
+    );
+}
+
+/// Nothing to point at is an answer, not a guess: the caller clears the
+/// selection rather than leaving the pane on a commit that may not exist.
+#[test]
+fn a_rule_with_nothing_to_point_at_says_so() {
+    let plan = vec![
+        entry(RebaseAction::Pick, "base0", "the base commit"),
+        dropping("drop1", "the dropped commit"),
+    ];
+    let after = vec![logged("base0", "the base commit")];
+
+    // An anchor this plan never carried.
+    assert_eq!(
+        reselection::reselect_after_rewrite(
+            &plan,
+            &after,
+            "some-other-commit",
+            &RewrittenAnchor::Dropped
+        ),
+        None,
+        "an unknown anchor has no place in this plan, so the rule declines"
+    );
+    // The row the rule wants is outside the refreshed window entirely, so even
+    // the position fallback has nowhere to land.
+    let wide = vec![
+        entry(RebaseAction::Pick, "base0", "the base commit"),
+        dropping("drop1", "the dropped commit"),
+        entry(RebaseAction::Pick, "keep1", "the work on top"),
+    ];
+    assert_eq!(
+        reselection::reselect_after_rewrite(
+            &wide,
+            &[logged("unrelated", "some other repository\'s tip")],
+            "drop1",
+            &RewrittenAnchor::Dropped
+        ),
+        None,
+        "a log that does not contain the row has no answer to give"
+    );
 }

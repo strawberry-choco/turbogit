@@ -349,8 +349,10 @@ pub trait GitExecutor: Send + Sync {
     /// List tags (`git tag -l`).
     fn tag_list(&self, root: &Path) -> TgResult<Vec<String>>;
 
-    /// Check out a tag (detached HEAD).
-    fn tag_checkout(&self, root: &Path, name: &str) -> TgResult<()>;
+    /// Move HEAD to an arbitrary rev with **Detached HEAD** — a tag today, or a
+    /// commit the log's menu was opened on. Not `branch_checkout`: a rev that is
+    /// not a branch name is exactly what this is for.
+    fn checkout_detached(&self, root: &Path, name: &str) -> TgResult<()>;
 
     /// Push tags (`git push [--tags | <name>]`).
     fn tag_push(&self, root: &Path, remote: &str, name: Option<&str>, all: bool) -> TgResult<()>;

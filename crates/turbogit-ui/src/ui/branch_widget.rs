@@ -20,7 +20,7 @@ use crate::ui::widgets;
 use egui::{Align, Color32, Key, Layout, RichText, ScrollArea, Ui, vec2};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, PendingConfirm};
+use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, RootId};
 use turbogit_services::{branch_service, sync_service};
 
@@ -431,12 +431,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             // Wired top action (ADR-0012): opens the New Branch flow preset to
             // create + check out, closing this popup so focus follows cleanly.
             if widgets::compact_button(ui, "New Branch…").clicked() {
-                state.ui.dlg.new_branch_name.clear();
-                state.ui.dlg.new_branch_start.clear();
-                state.ui.dlg.new_branch_base.clear();
-                state.ui.dlg.new_branch_base_picker_open = false;
-                state.ui.dlg.new_branch_checkout = true;
-                state.ui.dialog = Some(Dialog::NewBranch);
+                state.open_new_branch(NewBranchBase::Unset, true, None);
                 state.ui.branches_popup = false;
             }
 
@@ -695,12 +690,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             ui.separator();
             ui.horizontal(|ui| {
                 if widgets::compact_button(ui, "+ New branch").clicked() {
-                    state.ui.dlg.new_branch_name.clear();
-                    state.ui.dlg.new_branch_start.clear();
-                    state.ui.dlg.new_branch_base.clear();
-                    state.ui.dlg.new_branch_base_picker_open = false;
-                    state.ui.dlg.new_branch_checkout = true;
-                    state.ui.dialog = Some(Dialog::NewBranch);
+                    state.open_new_branch(NewBranchBase::Unset, true, None);
                     state.ui.branches_popup = false;
                 }
                 ui.scope(|ui| {
@@ -762,7 +752,7 @@ fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
             state.dispatch(Operation::custom(
                 format!("Checkout {nm}"),
                 affected,
-                move |v| v.tag_checkout(root.as_path(), &nm),
+                move |v| v.checkout_detached(root.as_path(), &nm),
             ));
         }
     }

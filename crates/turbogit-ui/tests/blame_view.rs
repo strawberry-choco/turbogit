@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use egui::{Color32, Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
+use test_support::harness::{click_menu_item, right_click_row};
 use turbogit_app::events::{AppEvent, LogPageMode};
 use turbogit_app::keyed_read::Keyed;
 use turbogit_app::state::{AppState, Tab};
@@ -407,13 +408,12 @@ fn context_menu_opens_blame_and_the_path_scope_survives_it() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
 
-    // Scope the log to file.txt via its changed-file context menu.
+    // Scope the log to file.txt via its changed-file menu, on the shared host.
     let c2_label = format!("{} alpha: second commit", short(&seed.c2));
     harness.get_by_label(&c2_label).click();
     settle(&mut harness);
-    harness.get_by_label("file.txt").click_secondary();
-    settle(&mut harness);
-    harness.get_by_label("Show history for file...").click();
+    right_click_row(&mut harness, "file.txt");
+    click_menu_item(&mut harness, "Show blame", "Show history for file…");
     settle(&mut harness);
     assert!(harness.state().ui.log_path_scope.is_some());
     assert_not_painted(&harness, "alpha: docs commit");

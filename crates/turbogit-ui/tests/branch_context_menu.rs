@@ -796,7 +796,10 @@ mod surface {
         click_menu_item(&mut harness, "New branch from");
         let st = harness.state();
         assert_eq!(st.ui.dialog, Some(turbogit_app::state::Dialog::NewBranch));
-        assert_eq!(st.ui.dlg.new_branch_base, "feature-a");
+        assert_eq!(
+            st.ui.dlg.new_branch_base,
+            turbogit_app::state::NewBranchBase::Branch("feature-a".into())
+        );
         assert_eq!(st.ui.dlg.new_branch_name, "");
         assert!(st.ui.dlg.new_branch_checkout);
         assert_eq!(context_menu_target(&harness), None);

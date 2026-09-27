@@ -248,6 +248,16 @@ impl GitExecutor for Git2Executor {
         if opts.pickaxe.is_some() {
             return self.cli.log(root, opts);
         }
+        // Neither does a revision RANGE: `revparse_single` reads `main..HEAD` as
+        // one pattern and refuses it. Delegated on the same terms as the pickaxe,
+        // because the rebase-plan builder asks for `base..HEAD` on every backend.
+        if opts
+            .branch
+            .as_deref()
+            .is_some_and(|spec| spec.contains(".."))
+        {
+            return self.cli.log(root, opts);
+        }
         // libgit2 parity for `git log --pretty=format:%H\x00%P\x00%an\x00
         // %ae\x00%cn\x00%ce\x00%at\x00%B`. Differences worth knowing:
         // - `%B` ends in a trailing newline; the CLI parser trims trailing
@@ -1288,7 +1298,7 @@ impl GitExecutor for Git2Executor {
             .collect())
     }
 
-    fn tag_checkout(&self, root: &Path, name: &str) -> TgResult<()> {
+    fn checkout_detached(&self, root: &Path, name: &str) -> TgResult<()> {
         let repo = self.open(root)?;
         // Resolve the tag (annotated or lightweight), then peel to the
         // commit. `git switch <tag>` checks out a detached HEAD pointing at

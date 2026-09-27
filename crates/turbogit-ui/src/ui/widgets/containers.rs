@@ -10,6 +10,7 @@ use super::controls::tint_over_bg;
 use super::inputs::INPUT_ICON_SIZE;
 use crate::theme::{CONTROL_RADIUS, Palette, TYPE_CONTROL};
 use crate::ui::icons::{self, Icon};
+use turbogit_services::history_editor::RebaseCaution;
 
 const TOOLWINDOW_HEADER_HEIGHT: f32 = 28.0;
 const CHURN_BAR_HEIGHT: f32 = 4.0;
@@ -214,6 +215,50 @@ pub fn note<R>(
         frame = frame.stroke(Stroke::new(1.0, ink));
     }
     frame.show(ui, add_contents)
+}
+
+/// The CAUTIONS rail a history rewrite shows before it runs: a titled count and
+/// one warning line per caution, in warning ink, and nothing at all when the
+/// plan is clean.
+///
+/// SHARED by every surface that rewrites history — the interactive rebase
+/// editor's right rail and the drop preflight — because "what is likely to go
+/// wrong" is one set of facts with one wording, and two copies of this paint
+/// path would drift the moment a caution is added. A clean plan paints nothing:
+/// an empty titled section is a section the developer has to read past.
+pub fn cautions_rail(ui: &mut Ui, cautions: &[RebaseCaution]) {
+    if cautions.is_empty() {
+        return;
+    }
+    group_title(ui, &format!("CAUTIONS · {}", cautions.len()));
+    for caution in cautions {
+        let text = match caution {
+            RebaseCaution::ConflictRisk { files } => format!(
+                "Conflicts likely on {files} {}",
+                if *files == 1 { "file" } else { "files" }
+            ),
+            RebaseCaution::MixedIdentities { authors } => format!(
+                "Mixed committer identities ({authors} {}) — verify signatures",
+                if *authors == 1 { "author" } else { "authors" }
+            ),
+        };
+        ui.colored_label(Palette::STATE_WARNING, format!("⚠ {text}"));
+    }
+    ui.add_space(6.0);
+}
+
+/// The RECOVERY note a history rewrite shows beside its cautions: what the
+/// backup ref is for, and which ref carries it.
+///
+/// SHARED with [`cautions_rail`] for the same reason — the promise that a
+/// rewrite can be undone, and the name of the thing that undoes it, are one
+/// wording. The restore ACTION is not here: only the editor runs a replay
+/// long enough for "Abort & restore" to mean anything, so that button stays in
+/// the editor.
+pub fn recovery_note(ui: &mut Ui, backup_ref: &str) {
+    group_title(ui, "RECOVERY");
+    ui.label("A backup ref is written before the first commit is replayed, and the recovery path restores the pre-rewrite state from it.");
+    ui.monospace(backup_ref.to_owned());
 }
 
 /// Tool-window header (28px): 11px uppercase muted title left, right-aligned

@@ -203,26 +203,10 @@ fn current_branch(state: &AppState) -> Option<String> {
 /// AFFECTED REPOS list, the SHORTCUTS legend, and RECOVERY naming the
 /// backup ref that restores the pre-rebase state.
 fn rail(ui: &mut Ui, state: &mut AppState) {
-    if !state.ui.dlg.rebase_cautions.is_empty() {
-        widgets::group_title(
-            ui,
-            &format!("CAUTIONS · {}", state.ui.dlg.rebase_cautions.len()),
-        );
-        for caution in &state.ui.dlg.rebase_cautions {
-            let text = match caution {
-                history_editor::RebaseCaution::ConflictRisk { files } => format!(
-                    "Conflicts likely on {files} {}",
-                    if *files == 1 { "file" } else { "files" }
-                ),
-                history_editor::RebaseCaution::MixedIdentities { authors } => format!(
-                    "Mixed committer identities ({authors} {}) — verify signatures",
-                    if *authors == 1 { "author" } else { "authors" }
-                ),
-            };
-            ui.colored_label(Palette::STATE_WARNING, format!("⚠ {text}"));
-        }
-        ui.add_space(6.0);
-    }
+    // The cautions and the recovery promise are the SHARED rewrite rail (see
+    // `widgets::cautions_rail` / `widgets::recovery_note`), painted here and by
+    // the drop preflight from one function, so the wording is one wording.
+    widgets::cautions_rail(ui, &state.ui.dlg.rebase_cautions);
 
     let siblings = state.rebase_affected_siblings();
     widgets::group_title(ui, &format!("AFFECTED REPOS · {}", siblings.len() + 1));
@@ -261,11 +245,9 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
     }
     ui.add_space(6.0);
 
-    widgets::group_title(ui, "RECOVERY");
-    ui.label(
-        "Abort any time to restore the pre-rebase state. A backup ref is          written before the first commit is replayed.",
-    );
-    ui.monospace(state.rewrite_backup_ref());
+    widgets::recovery_note(ui, &state.rewrite_backup_ref());
+    ui.add_space(6.0);
+    ui.label("Abort at any time to restore the pre-rewrite state.");
     if turbogit_services::integrate_service::in_progress(
         state.selected_path().as_deref().unwrap_or(Path::new(".")),
     ) && ui.button("Abort & restore").clicked()

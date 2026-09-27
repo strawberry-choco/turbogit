@@ -80,6 +80,41 @@ pub const MAX_RECENT_CUSTOM_COMMANDS: usize = 8;
 /// a page comes back short (log paging, P1/P4).
 pub const LOG_PAGE_SIZE: usize = 50;
 
+/// Where a new branch starts.
+///
+/// Two answers, not one string. A branch name reads as a name and is chosen
+/// from the dialog's branch picker; a commit is named by the log's New branch
+/// item (ADR-0024) and is shown as a short reference with its subject. Which one
+/// it is has to be decidable at paint time — a hash and a branch look nothing
+/// alike, and a union string would be rendered by guessing, so a stale snapshot
+/// would paint a branch name as a reference.
+///
+/// [`Self::Unset`] is the third state, and the one most open sites use: the
+/// dialog resolves it to the current branch when it opens, which is the default
+/// issue 08 asks for (creating from an unexpected base is a silent mistake).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum NewBranchBase {
+    /// Nothing chosen yet — the dialog fills in the current branch.
+    #[default]
+    Unset,
+    /// A named branch of the focused root, which the branch picker can select.
+    Branch(String),
+    /// One commit of the focused root, named by the log row that was
+    /// right-clicked. No branch picker row can match it.
+    Commit(CommitId),
+}
+
+impl NewBranchBase {
+    /// The base as git's start-point argument, or `None` to let git choose HEAD.
+    pub fn start_point(&self) -> Option<&str> {
+        match self {
+            Self::Unset => None,
+            Self::Branch(name) => Some(name.as_str()),
+            Self::Commit(id) => Some(id.as_str()),
+        }
+    }
+}
+
 /// Persistent input fields for the modal dialogs (kept across redraws).
 #[derive(Default)]
 pub struct DialogState {
@@ -162,12 +197,12 @@ pub struct DialogState {
     /// The onto branch the cached preview was computed for.
     pub rebase_preview_key: Option<String>,
     pub new_branch_name: String,
-    pub new_branch_start: String,
     pub new_branch_checkout: bool,
-    /// Create-branch base picker (issue 08): the branch the new one starts
-    /// from, defaulted to the current branch on dialog open. Cleared at the
-    /// open sites so the default re-applies each time.
-    pub new_branch_base: String,
+    /// Where the new branch starts (issue 08): a branch, or one commit when the
+    /// log's menu hands one over (ADR-0024). [`NewBranchBase::Unset`] is what
+    /// the open sites leave behind, and the dialog resolves it to the current
+    /// branch when it opens.
+    pub new_branch_base: NewBranchBase,
     pub new_branch_base_picker_open: bool,
     // Rename branch (issue 32, branches popup row action).
     pub rename_branch_root: Option<RootId>,
@@ -180,6 +215,14 @@ pub struct DialogState {
     pub compare_left: String,
     pub compare_right: String,
     pub compare_commits: Vec<CommitId>,
+    /// The rewrite preflight's payload, present exactly while its dialog is.
+    /// One payload for both targeted verbs (ticket 10 drop, ticket 11 reword).
+    pub rewrite_preflight: Option<RewritePreflight>,
+    // Reword commit's editor (ticket 11): which commit is being reworded, and
+    // the message being edited. The message is live text, so it is a field
+    // rather than part of the draft — the same split the plan editor's todo has.
+    pub reword: Option<RewordDraft>,
+    pub reword_message: String,
     // Cherry-pick target picker (issue 15): the selected log commit awaiting
     // the target-branch choice.
     pub cherry_pick_commit: Option<String>,
@@ -441,6 +484,133 @@ pub enum Dialog {
     /// edit URLs, rename, remove, and set branch upstreams — plus the
     /// multi-root apply across a selection.
     ManageRemotes,
+    /// The preflight a targeted history verb shows before it runs: the commit
+    /// it acts on, the set replayed on top of it, the cautions, the estimate and
+    /// the way back (ticket 10). One dialog for both verbs, parameterised by
+    /// [`HistoryVerb`]; its payload is [`DialogState::rewrite_preflight`].
+    RewritePreflight,
+    /// The commit-message editor Reword commit opens first (ticket 11): the
+    /// commit's own message, editable as one string. Its draft is
+    /// [`DialogState::reword`] and the live text [`DialogState::reword_message`].
+    Reword,
+}
+
+/// The one sentence the empty-message bound is stated in.
+///
+/// Both surfaces that show it read it from here — the editor's field, where the
+/// eye is, and this layer's refusal, where the rule is enforced — so a bound
+/// cannot end up worded two ways and drift. It states the RULE and not the
+/// mechanism: the mechanism (git quietly keeps the old message, so the rewrite
+/// would change nothing) is worth knowing once, and it is not what a developer
+/// needs at the moment a confirm does nothing.
+pub const EMPTY_COMMIT_MESSAGE: &str = "A commit cannot have an empty message";
+
+/// Which targeted history verb the log's commit menu is running.
+///
+/// The two verbs share one rewrite path, one preflight and one reselection
+/// rule, so the verb is a PARAMETER of those rather than a fork of them — the
+/// same shape `menu_host` takes a `MenuId` and `commit_menu` takes
+/// `CommitFacts`. It is an enum rather than an action plus an optional message
+/// so the state that cannot exist is unrepresentable: a drop has no message to
+/// carry, and a reword always has one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HistoryVerb {
+    /// Remove the commit from the current branch, replaying what is above it.
+    Drop,
+    /// Rewrite the commit's message, its content untouched. Carries the whole
+    /// message, subject and body, exactly as the editor holds it.
+    Reword { message: String },
+}
+
+impl HistoryVerb {
+    /// The plan row this verb sets.
+    pub fn action(&self) -> turbogit_domain::model::RebaseAction {
+        match self {
+            Self::Drop => turbogit_domain::model::RebaseAction::Drop,
+            Self::Reword { .. } => turbogit_domain::model::RebaseAction::Reword,
+        }
+    }
+
+    /// The replacement message, for the verbs that have one. It rides the plan
+    /// row — git's rebase todo has no slot for it (ADR-0025) — and never the
+    /// activity feed, which names the commit and leaves the message to git.
+    pub fn message(&self) -> Option<&str> {
+        match self {
+            Self::Drop => None,
+            Self::Reword { message } => Some(message),
+        }
+    }
+
+    /// The subject the acted-on row will carry once this verb has run: the new
+    /// one for a reword, and nothing for a drop, which is the fact
+    /// [`RewrittenAnchor`](turbogit_services::reselection::RewrittenAnchor)
+    /// needs to follow the selection to the commit's new hash.
+    pub fn reworded_subject(&self) -> Option<String> {
+        match self {
+            Self::Drop => None,
+            Self::Reword { message } => {
+                Some(turbogit_services::reselection::subject_of_message(message).to_owned())
+            }
+        }
+    }
+}
+
+/// A rewrite that has been dispatched and whose result the log has not caught up
+/// with yet.
+///
+/// Armed when the operation is dispatched — the plan it will run is the plan the
+/// developer was shown — and applied when the post-rewrite log arrives, because
+/// that is the first moment the commit that took the acted-on commit's place
+/// exists. Cleared when the operation reports failure: a rewrite that failed
+/// moved nothing, so there is no new history to follow and the commit the
+/// developer was looking at is still there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingReselect {
+    /// The repository being rewritten.
+    pub root: RootId,
+    /// The plan that was run, which is what names the commit that takes the
+    /// acted-on commit's place.
+    pub plan: Vec<turbogit_domain::model::RebasePlanEntry>,
+    /// The commit the rewrite acted on.
+    pub anchor: CommitId,
+    /// Which rewrite it was — the one thing a drop and a reword disagree about.
+    pub fate: turbogit_services::reselection::RewrittenAnchor,
+}
+
+/// One targeted history verb's preflight, built when the menu item is picked so
+/// nothing the developer is shown is a guess: the repository the commit belongs
+/// to, the commit, the plan the verb will run, and the cautions computed from
+/// that plan. Plain data — the dialog paints it and the confirm dispatches from
+/// it, and neither touches git.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RewritePreflight {
+    /// The repository the commit belongs to, carried from the menu's own target
+    /// rather than re-read from the selection.
+    pub root: RootId,
+    /// The commit the verb acts on.
+    pub commit: CommitId,
+    /// Which verb this preflight is briefing, and — for a reword — the message it
+    /// will write. Carried rather than re-derived so the dialog, the reselect and
+    /// the dispatch all read the same one.
+    pub verb: HistoryVerb,
+    /// The plan, in the shape the operation will rebuild, with the verb's own
+    /// action and message already on the acted-on row.
+    pub plan: Vec<turbogit_domain::model::RebasePlanEntry>,
+    /// What is likely to go wrong replaying it.
+    pub cautions: Vec<turbogit_services::history_editor::RebaseCaution>,
+}
+
+/// The commit Reword commit's editor is open on, and the message it started from.
+///
+/// The message itself is NOT here: it is live text the developer edits every
+/// keystroke, so it lives in [`DialogState::reword_message`] the way the plan
+/// editor's todo lives in `rebase_todo`, and this is the target it edits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RewordDraft {
+    /// The repository the commit belongs to.
+    pub root: RootId,
+    /// The commit being reworded.
+    pub commit: CommitId,
 }
 
 /// A destructive action awaiting explicit confirmation (Epic C8 / Epic H3).
@@ -477,6 +647,10 @@ pub enum PendingConfirm {
         root: RootId,
         target: String,
         kind: turbogit_domain::model::BranchKind,
+        /// `target` is a rev to stand ON rather than a branch to move to, so the
+        /// two accept paths detach HEAD. Set by the log's commit menu; a branch
+        /// row leaves it `false` and behaves exactly as it did.
+        detach: bool,
     },
     /// The target branch is already checked out in another worktree (issue
     /// 07): refused up front, naming the worktree.
@@ -748,7 +922,7 @@ pub struct UiState {
     pub log_file_filter: String,
     /// Active path scope in Git Log (issue #19): `Some(path)` narrows the
     /// graph to only the commits touching that path (set from the
-    /// changed-files pane's "Show history for file..." context menu).
+    /// changed-files pane's "Show history for file…" menu item).
     pub log_path_scope: Option<PathBuf>,
     /// Active ref scope in Git Log (branch-tree extraction, plan D9):
     /// `Some((root, ref))` narrows the graph to only that ref's history
@@ -756,6 +930,18 @@ pub struct UiState {
     /// selected repository changes, so the graph never goes silently empty.
     pub log_ref_scope: Option<(RootId, String)>,
     pub selected_commit: Option<CommitId>,
+    /// A dispatched rewrite waiting for the log to prove it landed, so the
+    /// selection can follow the history instead of dangling (ticket 10).
+    pub pending_reselect: Option<PendingReselect>,
+    /// Which commit row's context menu is open: `(root, commit)`. The menu's own
+    /// target, not the selection — so a rewrite or a selection change underneath
+    /// an open menu cannot make the pane and the menu describe different
+    /// commits (ADR-0024). Right-clicking a row sets this AND selects the row.
+    pub log_commit_menu: Option<(RootId, CommitId)>,
+    /// Which changed-file row's context menu is open: `(root, commit, path)`.
+    /// Carries its own target for the same reason the commit menu does — the row
+    /// it opened on, not whatever is selected now.
+    pub log_file_menu: Option<(RootId, CommitId, std::path::PathBuf)>,
     pub diff: Option<DiffTarget>,
     /// Open blame view (issue 18): `Some` renders the blame surface for the
     /// target file at the target revision; `None` shows the commit graph.
@@ -1037,6 +1223,12 @@ pub struct AppState {
     /// Native folder-picker seam for the Welcome Open/Initialize flows.
     /// Production wires `rfd`; tests inject closures returning fixed paths.
     pub dir_picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
+    /// The patch-path seam: choose where a commit's patch file is written.
+    /// Installed by the composition root beside [`AppState::dir_picker`] for the
+    /// same reason — a native save dialog has no headless equivalent, and this is
+    /// the highest point at which the developer's choice can be substituted.
+    /// `None` means "declined": nothing is written and nothing is confirmed.
+    pub patch_writer: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
     /// Resolved git version (e.g. `2.47.1`) for the topbar header line,
     /// computed once at launch (issue #34) so the header never spawns `git`
     /// per frame. `"unknown"` when the binary cannot be resolved.
@@ -1127,6 +1319,7 @@ impl AppState {
             caches: RootCaches::default(),
             recents_config_dir,
             dir_picker: None,
+            patch_writer: None,
             pump: Pump::Spawned,
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             reads: Default::default(),
@@ -1213,6 +1406,7 @@ impl AppState {
             caches: RootCaches::default(),
             recents_config_dir: None,
             dir_picker: None,
+            patch_writer: None,
             pump: Pump::Inline,
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             reads: Default::default(),
@@ -1886,8 +2080,17 @@ impl AppState {
             // Issue 07: the dirty-checkout dialog dispatches its own choices;
             // this arm covers the generic confirm path (bring the changes
             // along) for completeness.
-            PendingConfirm::CheckoutDirty { root, target, kind } => {
-                self.checkout_branch_op(&root, kind, &target);
+            PendingConfirm::CheckoutDirty {
+                root,
+                target,
+                kind,
+                detach,
+            } => {
+                if detach {
+                    self.checkout_detached_op(&root, &target);
+                } else {
+                    self.checkout_branch_op(&root, kind, &target);
+                }
             }
             PendingConfirm::CheckoutInWorktree { .. } => {}
             PendingConfirm::InitHere => self.init_repo(),
@@ -1998,6 +2201,216 @@ impl AppState {
         self.cherry_reforecast();
     }
 
+    /// Open the new-branch dialog (issue 08) with what the entry point knows.
+    ///
+    /// ONE place, because six surfaces open this dialog and they mean different
+    /// things by it: five of them open it blank and let it default to the
+    /// current branch, the branch menu's New branch from opens it at a chosen
+    /// branch, and the log's New branch opens it at a commit (ADR-0024). The
+    /// fields each of them owns — the name, the base, the checkout decision — are
+    /// set here, so an open path cannot forget one (the log's arm did exactly
+    /// that once, leaving a stale base behind) and a second copy of this reset
+    /// cannot drift.
+    pub fn open_new_branch(&mut self, base: NewBranchBase, checkout: bool, name: Option<String>) {
+        let dlg = &mut self.ui.dlg;
+        dlg.new_branch_name = name.unwrap_or_default();
+        dlg.new_branch_base = base;
+        dlg.new_branch_base_picker_open = false;
+        dlg.new_branch_checkout = checkout;
+        self.ui.dialog = Some(Dialog::NewBranch);
+    }
+
+    /// Record that a rewrite is in flight, so the selection can follow the
+    /// history when the post-rewrite log arrives.
+    ///
+    /// Armed BEFORE the dispatch, never after: the operation runs on a worker,
+    /// and one that finished inside a frame would settle before anything was
+    /// waiting for it. The plan handed over is the one the developer was shown,
+    /// which is what names the commit that takes the acted-on commit's place.
+    pub fn arm_reselect_after_rewrite(
+        &mut self,
+        root: RootId,
+        plan: Vec<RebasePlanEntry>,
+        anchor: CommitId,
+        fate: turbogit_services::reselection::RewrittenAnchor,
+    ) {
+        self.ui.pending_reselect = Some(PendingReselect {
+            root,
+            plan,
+            anchor,
+            fate,
+        });
+    }
+
+    /// Move the selection onto the commit that took the rewritten commit's
+    /// place, once the log says the rewrite has landed. See
+    /// [`Self::arm_reselect_after_rewrite`].
+    ///
+    /// Two conditions, and both are load-bearing:
+    ///
+    /// * the log must be the one the rewrite produced. A listing that still
+    ///   contains the acted-on commit predates the rewrite — a read already in
+    ///   flight when the operation finished can deliver exactly that first — so
+    ///   the pending reselect waits for the next one instead of selecting a
+    ///   commit that is about to change hash again.
+    /// * the answer is the SHARED rule ([`turbogit_services::reselection`]), and
+    ///   a rule that declines clears the selection rather than guessing: an
+    ///   empty pane is honest, a pane pointing at a commit that no longer exists
+    ///   is a lie.
+    fn apply_pending_reselect(&mut self, root: &RootId) {
+        let Some(pending) = self.ui.pending_reselect.clone() else {
+            return;
+        };
+        if &pending.root != root {
+            return;
+        }
+        let Some(page) = self.caches.log(root).map(<[Commit]>::to_vec) else {
+            return;
+        };
+        if page.iter().any(|c| c.id == pending.anchor) {
+            return;
+        }
+        self.ui.pending_reselect = None;
+        self.ui.selected_commit = turbogit_services::reselection::reselect_after_rewrite(
+            &pending.plan,
+            &page,
+            &pending.anchor,
+            &pending.fate,
+        );
+        // The selected commit changed, so anything hanging off the old one is
+        // stale: a changed file that no longer exists, and a menu aimed at it.
+        self.ui.log_selected_file = None;
+        self.ui.log_commit_menu = None;
+    }
+
+    /// Forget a pending reselect for the roots an operation touched. A rewrite
+    /// that failed moved nothing, so nothing should follow it.
+    fn clear_pending_reselect(&mut self, affected: &Affected) {
+        if self
+            .ui
+            .pending_reselect
+            .as_ref()
+            .is_some_and(|p| match affected {
+                Affected::All => true,
+                Affected::Root(root) => &p.root == root,
+            })
+        {
+            self.ui.pending_reselect = None;
+        }
+    }
+
+    /// Open the rewrite preflight (ticket 10) for `commit` in `root` running
+    /// `verb`: the plan the verb will run, the cautions computed from that plan,
+    /// and the dialog. One function for both verbs, because one preflight shows
+    /// them and one plan builds them.
+    ///
+    /// Built here rather than at the call site so the preflight can never show a
+    /// plan that is not the one the confirm dispatches, and so the things that
+    /// can refuse it — a commit with no first parent, one no longer on the
+    /// current branch, and a reword with nothing to say — are answered in one
+    /// place.
+    ///
+    /// The menu states the first two bounds on the item, so reaching either
+    /// refusal means the history moved between painting the menu and taking the
+    /// item, or a stale surface reached it. The toast therefore repeats what the
+    /// service said, verbatim and in full, rather than paraphrasing a refusal the
+    /// developer cannot otherwise see. One place formats that message: the
+    /// service.
+    pub fn open_rewrite_preflight(&mut self, root: &RootId, commit: &str, verb: HistoryVerb) {
+        if let HistoryVerb::Reword { message } = &verb
+            && message.trim().is_empty()
+        {
+            // Refused HERE, before a plan is built, because an empty message is
+            // not a failure the engine reports: git's reword keeps the ORIGINAL
+            // message when the editor leaves it empty, so the rewrite would run
+            // in full — every commit above re-created — and change nothing. A
+            // silent no-op is the one outcome this verb must not ship, and a
+            // disabled button in the editor cannot be the only thing standing
+            // between the two. The wording is [`EMPTY_COMMIT_MESSAGE`], the same
+            // sentence the field states, so the bound reads identically wherever
+            // it is met.
+            self.ui.toast = Some(Toast::error(EMPTY_COMMIT_MESSAGE.to_owned()));
+            return;
+        }
+        let plan = match self.history_verb_plan(
+            root,
+            commit,
+            verb.action(),
+            verb.message().map(str::to_owned),
+        ) {
+            Ok(plan) => plan,
+            Err(reason) => {
+                self.ui.toast = Some(Toast::error(reason));
+                return;
+            }
+        };
+        let cautions = self.rebase_cautions(root, &plan);
+        self.ui.dlg.rewrite_preflight = Some(RewritePreflight {
+            root: root.clone(),
+            commit: commit.to_owned(),
+            verb,
+            plan,
+            cautions,
+        });
+        self.ui.dialog = Some(Dialog::RewritePreflight);
+    }
+
+    /// Open Reword commit's editor (ticket 11) for `commit` in `root`, seeded
+    /// with the commit's own message.
+    ///
+    /// The message is read from the cached log — the same value the details pane
+    /// shows and the same value Copy message would put on the clipboard — so the
+    /// developer starts from what the commit actually says, body included, and
+    /// corrects it rather than composing something beside it. A commit the cache
+    /// does not hold cannot be seeded from anything true, so it is refused
+    /// rather than opened empty.
+    pub fn open_reword_editor(&mut self, root: &RootId, commit: &str) {
+        let Some(found) = self
+            .caches
+            .log(root)
+            .and_then(|commits| commits.iter().find(|c| c.id == commit))
+        else {
+            self.ui.toast = Some(Toast::error(format!(
+                "{} is no longer in this log",
+                short_sha(commit)
+            )));
+            return;
+        };
+        let dlg = &mut self.ui.dlg;
+        dlg.reword = Some(RewordDraft {
+            root: root.clone(),
+            commit: commit.to_owned(),
+        });
+        dlg.reword_message = found.message.clone();
+        self.ui.dialog = Some(Dialog::Reword);
+    }
+
+    /// Open the tag dialog (issue 31, screen 16) on `target` — a commit the
+    /// caller names, or `None` to tag the branch tip.
+    ///
+    /// ONE place decides what a tag dialog looks like when it opens, because
+    /// there are two callers that mean the same thing: the VCS palette's Tag
+    /// (screen 16) and the log's New tag menu item (ADR-0024). Everything the
+    /// dialog worked out for itself belongs to the visit that closed it and is
+    /// cleared here — the type, the two reads it caches (the existing tags it
+    /// validates a name against, the commit list its target picker lists), the
+    /// signing key it fetched, and whether its picker was left open. The typed
+    /// name, message, tagger and push option deliberately survive: those are
+    /// what the developer came back for.
+    pub fn open_tag_dialog(&mut self, target: Option<&str>) {
+        let dlg = &mut self.ui.dlg;
+        dlg.tag_type = TagType::Annotated;
+        dlg.tag_target_picker_open = false;
+        dlg.tag_candidates = None;
+        dlg.tag_existing = None;
+        dlg.tag_signing_key = None;
+        dlg.tag_signing_key_fetched = false;
+        if let Some(target) = target {
+            dlg.tag_target = target.to_owned();
+        }
+        self.ui.dialog = Some(Dialog::Tag);
+    }
+
     /// Toggle one candidate commit in the dialog's checkbox list (issue 16);
     /// the selection stays in application order and the forecast recomputes.
     pub fn cherry_toggle_commit(&mut self, id: String) {
@@ -2031,6 +2444,48 @@ impl AppState {
         dlg.cherry_targets
             .sort_by_key(|t| order.iter().position(|o| o == t).unwrap_or(usize::MAX));
         self.cherry_reforecast();
+    }
+
+    /// Write ONE commit's own change — first parent to the commit, never its
+    /// ancestors — to a file the developer chooses, as text `git apply` reads.
+    ///
+    /// The bytes come from the diff path the engine already answers with a
+    /// `Patch` through, rendered by that value's own `git apply` rendering. A
+    /// declined dialog writes nothing and reports nothing. And a file write is
+    /// not git work: this is deliberately not an [`Operation`], so it never
+    /// enters the activity or settlement paths.
+    pub fn create_patch(&mut self, root: &RootId, commit: &str) {
+        let Some(writer) = self.patch_writer.take() else {
+            return;
+        };
+        let chosen = writer();
+        self.patch_writer = Some(writer);
+        let Some(path) = chosen else {
+            return;
+        };
+        let written = path.clone();
+        let outcome = self
+            .executor
+            .diff_patch(
+                root.as_path(),
+                &DiffOpts {
+                    commit: Some(commit.to_string()),
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| e.to_string())
+            .and_then(|patch| std::fs::write(&path, patch.to_string()).map_err(|e| e.to_string()));
+        self.ui.toast_shown_at = None;
+        self.ui.toast = Some(match outcome {
+            Ok(()) => Toast::success(format!(
+                "Wrote {}",
+                written
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| written.to_string_lossy().into_owned())
+            )),
+            Err(e) => Toast::error(format!("Create patch: {e}")),
+        });
     }
 
     /// Focus a commit in the dialog's patch preview rail (issue 16) and load
@@ -2423,7 +2878,13 @@ impl AppState {
                     // worker always posts the event (log-open perf, D2).
                     self.log_fetch_inflight.remove(&root);
                     match commits {
-                        Ok(page) => self.settle_log_page(&root, mode, page),
+                        Ok(page) => {
+                            self.settle_log_page(&root, mode, page);
+                            // A rewrite's selection follows the history here and
+                            // nowhere else: this is the first moment the commit
+                            // that took the acted-on one's place exists.
+                            self.apply_pending_reselect(&root);
+                        }
                         Err(e) => self.last_error = Some(e.to_string()),
                     }
                 }
@@ -2518,6 +2979,10 @@ impl AppState {
                         Err(e) => {
                             let msg = e.to_string();
                             self.ui.branches_delete_pending = None;
+                            // A rewrite that failed moved nothing: the commit the
+                            // developer was looking at is still in the history and
+                            // still selected, so nothing follows it.
+                            self.clear_pending_reselect(&affected);
                             // Issue 09: a merge/rebase that hits conflicts is
                             // not a failure — it is a handoff to the conflict
                             // experience, with an explicit mid-operation state
@@ -3083,6 +3548,35 @@ impl AppState {
     /// under the default `Auto` backend `branch_create` is libgit2's, which
     /// never does. [`Self::checkout_branch_set_aside`] tracks for the same
     /// reason, and `tests/branch_checkout.rs` pins the result for both.
+    /// Stand the root ON a rev with Detached HEAD — the log's commit menu's
+    /// Checkout. The dirty worktree routes through the SAME
+    /// [`PendingConfirm::CheckoutDirty`] dialog a branch checkout raises, so the
+    /// two checkouts behave identically; only the git call differs.
+    pub fn checkout_detached_op(&mut self, root: &RootId, rev: &str) {
+        let path = root.clone();
+        let rev = rev.to_string();
+        self.dispatch(Operation::custom(
+            format!("Checkout at {}", short_sha(&rev)),
+            Affected::Root(root.clone()),
+            move |v| v.checkout_detached(path.as_path(), &rev),
+        ));
+    }
+
+    /// The dialog's SET ASIDE choice for a detached checkout: stash first, then
+    /// stand on the rev.
+    pub fn checkout_detached_set_aside(&mut self, root: &RootId, rev: &str) {
+        let path = root.clone();
+        let rev = rev.to_string();
+        self.dispatch(Operation::custom(
+            format!("Set aside changes · Checkout at {}", short_sha(&rev)),
+            Affected::Root(root.clone()),
+            move |v| {
+                v.stash_push(path.as_path(), "set aside before checkout", false)?;
+                v.checkout_detached(path.as_path(), &rev)
+            },
+        ));
+    }
+
     pub fn checkout_branch_op(&mut self, root: &RootId, kind: BranchKind, name: &str) {
         let affected = Affected::Root(root.clone());
         let nm = name.to_string();
@@ -3566,10 +4060,15 @@ fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &s
     match kind {
         OpKind::Fetch => state.fetch_report(affected),
         OpKind::Merge | OpKind::Rebase => push_report(state, affected, label),
+        // A rewrite reports the work it did and nothing more: there is no
+        // ahead/behind story to tell, and a reword's new message never reaches
+        // the feed.
         OpKind::DeleteBranch
         | OpKind::Shelve
         | OpKind::WorktreeAdd
         | OpKind::WorktreeRemove
+        | OpKind::DropCommit
+        | OpKind::RewordCommit
         | OpKind::Other => label.to_string(),
     }
 }
@@ -3636,7 +4135,7 @@ fn advance_run_rows(rows: &mut [bulk_run::RunRow], event: bulk_run::RunEvent) ->
     }
 }
 
-fn short_sha(id: &str) -> String {
+pub(crate) fn short_sha(id: &str) -> String {
     id.chars().take(7).collect()
 }
 

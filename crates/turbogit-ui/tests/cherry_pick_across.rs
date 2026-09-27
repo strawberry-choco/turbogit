@@ -12,7 +12,7 @@ use egui::accesskit::Role;
 use egui_kittest::kittest::NodeT as _;
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
-use test_support::harness::{assert_painted, painted_text};
+use test_support::harness::{assert_painted, click_menu_item, painted_text, right_click_row};
 use turbogit_app::events::{AppEvent, LogPageMode};
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{LogOpts, VcsSettings};
@@ -156,13 +156,6 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// Select a commit row in the graph and wait for the details pane.
-fn select_commit(harness: &mut Harness<'_, AppState>, id: &str, subject: &str) {
-    let label = format!("{} {subject}", short(id));
-    harness.get_by_label(&label).click();
-    settle(harness);
-}
-
 /// Wait until `pred` holds on the harness state.
 fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {
     for _ in 0..300 {
@@ -175,10 +168,11 @@ fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> boo
     panic!("condition not met within 300 frames");
 }
 
-/// Open the cross-repo cherry-pick dialog from the details pane of `c2`.
+/// Open the cross-repo cherry-pick dialog from `c2`'s commit menu. The dialog is
+/// unchanged; only the way in moved, with the action (ADR-0024).
 fn open_dialog(harness: &mut Harness<'_, AppState>, c2: &str) {
-    select_commit(harness, c2, "alpha: second commit");
-    harness.get_by_label("Cherry-pick across…").click();
+    right_click_row(harness, &format!("{} alpha: second commit", short(c2)));
+    click_menu_item(harness, "Copy hash", "Cherry-pick across…");
     settle(harness);
 }
 

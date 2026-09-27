@@ -14,8 +14,14 @@
 use std::path::{Path, PathBuf};
 
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use tempfile::TempDir;
+use test_support::harness::{
+    assert_menu_item_gated, click_menu_item, right_click_row, stroked_rects,
+};
 use turbogit_app::events::{AppEvent, LogPageMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
 use turbogit_domain::model::{LogOpts, RootId, VcsSettings};
@@ -421,8 +427,9 @@ fn four_panes_render_in_mockup_layout_with_token_styling() {
 
     // Details pane: ~440px tall SURFACE band at the bottom of the right
     // column (grew from the §8.3 200px in issue 15 for the Actions section, to
-    // 340px in issue 17, and to decision D4's 440px for the redesigned subject
-    // / author card / meta grid / churn / actions / alert stack).
+    // 340px in issue 17, and to decision D4's 440px for the redesigned
+    // subject / author card / meta grid / churn / message stack; the actions and
+    // the alert that D4 also covered are gone with ADR-0024).
     let details = filled_rects(&harness)
         .into_iter()
         .find(|(r, c)| *c == Palette::SURFACE && r.height() >= 430.0 && r.height() <= 450.0)
@@ -664,10 +671,12 @@ fn details_pane_shows_hash_author_date_parents_message_for_selection() {
         "clicking a log row must select the commit"
     );
 
-    // The redesigned blocks: a copyable hash chip, an author card, and the
-    // meta grid's aligned labels.
+    // The redesigned blocks: the hash still on show, an author card, and the
+    // meta grid's aligned labels. Its click-to-copy caption went with the click
+    // (ADR-0024) — the hash is information the pane keeps, copying is an action
+    // the menu owns.
     assert_painted(&harness, &short(&seed.c2));
-    assert_painted(&harness, "click to copy full hash");
+    assert_not_painted(&harness, "click to copy full hash");
     assert_painted(&harness, "Test");
     assert_painted(&harness, "test@example.com");
     assert_painted(&harness, "Date");
@@ -1120,35 +1129,142 @@ fn the_churn_summary_replaces_the_status_count_string() {
     );
 }
 
+// --- ticket 09: the changed-file rows share the one menu host -------------------
+
+/// Every `.rs` path under a directory.
+fn walk_rs(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            out.extend(walk_rs(&path));
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// Right-clicking a changed-file row opens the SAME shared surface every other
+/// menu in the window uses — the shared frame, the shared row primitive, and the
+/// shared rule that a blocked item states its reason — rather than a third menu
+/// dialect of raw buttons in a stock frame.
 #[test]
-fn all_four_detail_verbs_stay_reachable_and_the_guardrail_still_gates_them() {
+fn a_changed_file_row_opens_the_shared_menu_and_its_verbs_still_work() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
     select_second_commit(&mut harness, &seed);
 
-    let painted = painted_in_region(&harness, details_region(&harness));
+    right_click_row(&mut harness, "file.txt");
+
+    // The shared surface's own signature: the popup frame the menu primitives
+    // paint, which a stock egui menu does not.
+    assert!(
+        stroked_rects(&harness)
+            .iter()
+            .any(|(_, stroke, _)| *stroke == Palette::LINE),
+        "the row's menu paints inside the shared surface frame"
+    );
+    assert_painted(&harness, "Show blame");
+    assert_painted(&harness, "Show history for file…");
+
+    // Show blame still blames the file at the selected commit.
+    click_menu_item(&mut harness, "Show blame", "Show blame");
+    settle_pumped(&mut harness);
+    let blame = harness.state().ui.blame.clone().expect("blame opened");
+    assert_eq!(blame.path, PathBuf::from("file.txt"));
+    assert_eq!(blame.rev, seed.c2, "blamed at the commit that was selected");
+
+    // Show history for file… still scopes the whole workspace to the file.
+    right_click_row(&mut harness, "file.txt");
+    click_menu_item(&mut harness, "Show blame", "Show history for file…");
+    settle_pumped(&mut harness);
+    assert_eq!(
+        harness.state().ui.log_path_scope,
+        Some(PathBuf::from("file.txt")),
+        "the row's other verb still does what it did"
+    );
+}
+
+/// A blocked item on a changed-file row stays rendered and explains itself: the
+/// whole window follows one rule for why something cannot be done. Scoping a
+/// file's history while the workspace is already scoped to that file is the case
+/// the row can actually be in.
+#[test]
+fn a_blocked_file_row_item_stays_visible_and_states_its_reason() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_second_commit(&mut harness, &seed);
+    harness.state_mut().ui.log_path_scope = Some(PathBuf::from("file.txt"));
+    settle_pumped(&mut harness);
+
+    right_click_row(&mut harness, "file.txt");
+    assert_menu_item_gated(&mut harness, "Show blame", "Show history for file…");
+    assert_stated_on_hover(
+        &mut harness,
+        "Show history for file…",
+        "already showing this file's history",
+    );
+}
+
+/// The stock-egui menu dialect is gone from the codebase: no surface builds a
+/// context menu out of raw buttons in a stock frame any more, so a third dialect
+/// cannot creep back one file over from the second.
+#[test]
+fn no_surface_builds_a_context_menu_out_of_stock_egui_anymore() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let offenders: Vec<String> = walk_rs(&src)
+        .into_iter()
+        .filter(|path| {
+            std::fs::read_to_string(path)
+                .unwrap()
+                .contains("response.context_menu(")
+        })
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "a stock egui context menu is still built in {offenders:?}"
+    );
+}
+
+/// The four verbs the details pane used to perform are reachable from the
+/// commit's menu instead, and the guardrail gates the same one there. Nothing
+/// was dropped on the floor: the pane lost its actions, the menu gained them.
+#[test]
+fn every_verb_the_pane_performed_is_reachable_from_the_commit_menu() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    let row_label = format!("{} alpha: second commit", short(&seed.c2));
+    right_click_row(&mut harness, &row_label);
+
     for verb in [
         "Cherry-pick to…",
         "Cherry-pick across…",
         "Revert commit",
-        "Create branch here",
+        // The pane called it "Create branch here"; the menu item is "New branch".
+        "New branch",
     ] {
-        assert!(
-            painted.iter().any(|t| t == verb),
-            "`{verb}` must stay reachable (decision D2): {painted:?}"
-        );
+        assert_painted(&harness, verb);
     }
 
-    // The guardrail still gates the disabled verb…
-    harness.get_by_label("Revert commit").click();
+    // The guardrail gates the disabled verb the same way the button did: `main`
+    // is protected by the default settings, so a blocked revert never reaches
+    // its confirmation.
+    assert_menu_item_gated(&mut harness, "Copy hash", "Revert commit");
+    click_menu_item(&mut harness, "Copy hash", "Revert commit");
     settle_pumped(&mut harness);
     assert!(
         harness.state().ui.confirm.is_none(),
         "revert stays gated while the current branch is protected"
     );
 
-    // …and the ghost grid's other verbs still land as deferred dialogs.
-    harness.get_by_label("Create branch here").click();
+    // …and the verbs that are not gated still land as their dialogs.
+    right_click_row(&mut harness, &row_label);
+    click_menu_item(&mut harness, "Copy hash", "New branch");
     settle_pumped(&mut harness);
     assert!(
         matches!(harness.state().ui.dialog, Some(Dialog::NewBranch)),
@@ -1156,21 +1272,46 @@ fn all_four_detail_verbs_stay_reachable_and_the_guardrail_still_gates_them() {
     );
 }
 
+/// The guardrail reasons left the alert box with the box itself and now sit on
+/// the items they block — the pane no longer warns about actions it does not
+/// offer, and one rule answers "why can't I do this" across the window.
 #[test]
-fn the_guardrail_reason_renders_inside_an_alert_box() {
+fn the_guardrail_reason_now_sits_on_the_item_it_blocks() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
+    let row_label = format!("{} alpha: second commit", short(&seed.c2));
     select_second_commit(&mut harness, &seed);
+    assert_not_painted(&harness, "'main' is a protected branch — revert blocked");
 
-    // `main` is protected by the default settings, so a reason is always on.
-    let pos = galley_origin(&harness, "'main' is a protected branch — revert blocked")
-        .expect("the guardrail text is still stated");
-    assert!(
-        filled_rects(&harness)
-            .iter()
-            .any(|(rect, fill)| *fill == Palette::SURFACE_WARNING && rect.contains(pos)),
-        "the reason must sit on the warning surface, not float as a bare label"
+    right_click_row(&mut harness, &row_label);
+    assert_stated_on_hover(
+        &mut harness,
+        "Revert commit",
+        "the current branch is protected",
     );
+}
+
+/// Travel a real pointer into the open menu's disabled row until its reason
+/// paints. A single teleport onto a disabled row never registers as hover.
+#[track_caller]
+fn assert_stated_on_hover(harness: &mut Harness<'_, AppState>, label: &str, reason: &str) {
+    harness.remove_cursor();
+    harness.step();
+    let rect = harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| n.accesskit_node().label() == Some(label.to_string()))
+        .unwrap_or_else(|| panic!("menu item {label}"))
+        .rect();
+    harness.hover_at(rect.center() - egui::vec2(0.0, 3.0));
+    harness.step();
+    harness.hover_at(rect.center());
+    for _ in 0..80 {
+        harness.step();
+        if painted_text(harness).iter().any(|t| t.contains(reason)) {
+            return;
+        }
+    }
+    panic!("the blocked {label} item never stated {reason:?}");
 }
 
 #[test]
@@ -1249,13 +1390,14 @@ fn changed_files_count_is_its_own_pill_not_part_of_the_title() {
 // --- Issue #19: path-scoped file history from the log context menu ------------
 
 /// Drive the full user path: select `row_label`, right-click its changed-file
-/// entry `file`, and activate "Show history for file..." in the context menu.
+/// entry, and activate "Show history for file…" on the shared menu. The label's
+/// ellipsis is one character now that the row shares every other menu's wording;
+/// the stock three-dot form died with the dialect it came from (ticket 09).
 fn scope_log_to_file(harness: &mut Harness<'_, AppState>, row_label: &str, file: &str) {
     harness.get_by_label(row_label).click();
     settle(harness);
-    harness.get_by_label(file).click_secondary();
-    settle(harness);
-    harness.get_by_label("Show history for file...").click();
+    right_click_row(harness, file);
+    click_menu_item(harness, "Show blame", "Show history for file…");
     settle(harness);
 }
 
@@ -1310,7 +1452,6 @@ fn scoped_history_keeps_graph_and_details_functional() {
         "rows inside the scope must stay selectable"
     );
     assert_painted(&harness, &short(&seed.c1));
-    assert_painted(&harness, "click to copy full hash");
     assert_painted(&harness, "Test");
     assert_painted(&harness, "Parents");
 

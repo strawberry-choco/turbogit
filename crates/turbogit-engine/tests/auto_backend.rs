@@ -98,3 +98,54 @@ fn the_index_side_of_a_path_answers_its_staged_bytes_not_the_worktree() {
         );
     }
 }
+
+/// A revision RANGE is a read `git2` has no in-process equivalent for, so the
+/// composed adapter runs the git executable for it — the same escape hatch the
+/// pickaxe uses a few lines into `Git2Executor::log`. Both backends must answer
+/// identically, because the rebase-plan builder asks for `base..HEAD` whatever
+/// the settings say, and a refusal there is a dead history editor.
+#[test]
+fn both_backends_answer_a_range_scoped_log_identically() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "t@t"]);
+    git(&repo, &["config", "user.name", "t"]);
+    for n in ["base", "c1", "c2"] {
+        std::fs::write(repo.join(format!("{n}.txt")), format!("{n}\n")).unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", n]);
+    }
+    git(&repo, &["branch", "mark", "HEAD~2"]);
+
+    let mut answers = Vec::new();
+    for backend in [GitBackend::Cli, GitBackend::InProcessReads] {
+        let exec = build_executor(&VcsSettings {
+            backend,
+            ..VcsSettings::default()
+        });
+        let opts = turbogit_domain::model::LogOpts {
+            branch: Some("mark..HEAD".into()),
+            ..Default::default()
+        };
+        let commits = exec
+            .log(&repo, &opts)
+            .expect("a range-scoped log answers on every backend");
+        answers.push(
+            commits
+                .iter()
+                .map(|c| c.message.clone())
+                .collect::<Vec<String>>(),
+        );
+    }
+    assert_eq!(
+        answers[0],
+        vec!["c2".to_string(), "c1".to_string()],
+        "the CLI adapter's answer is the one to match"
+    );
+    assert_eq!(
+        answers[1], answers[0],
+        "the in-process backend delegates the range rather than refusing it"
+    );
+}

@@ -249,6 +249,78 @@ pub fn painted_paths<S>(harness: &Harness<'_, S>) -> Vec<(Rect, Color32)> {
         .collect()
 }
 
+/// Right-click the Button node whose accessibility label contains `needle`.
+///
+/// A row's label usually carries more than the text a test names it by — a
+/// commit row is `"abc1234 subject"`, a branch row is the bare name — so this
+/// matches on containment and lets the caller keep saying what it means.
+pub fn right_click_row<S>(harness: &mut Harness<'_, S>, needle: &str) {
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+    harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|label| label.contains(needle))
+        })
+        .unwrap_or_else(|| panic!("no row whose label contains {needle}"))
+        .click_secondary();
+    harness.step();
+    harness.step();
+}
+
+/// Click one item of the context menu that is open.
+///
+/// `sentinel` is a label unique to THAT menu, used to find its left edge: the
+/// shell has its own "Pull", "Push" and "Checkout" buttons elsewhere, and only
+/// the menu's rows all share one left edge. A disabled item is still found —
+/// the menu's convention is that a blocked action stays visible.
+pub fn click_menu_item<S>(harness: &mut Harness<'_, S>, sentinel: &str, label: &str) {
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+    harness.remove_cursor();
+    harness.step();
+    let column = harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| n.accesskit_node().label() == Some(sentinel.to_string()))
+        .unwrap_or_else(|| panic!("the menu is open (no {sentinel:?} item)"))
+        .rect();
+    harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| {
+            n.accesskit_node().label() == Some(label.to_string())
+                && (n.rect().min.x - column.min.x).abs() < 2.0
+        })
+        .unwrap_or_else(|| panic!("menu item {label} inside the open menu"))
+        .click();
+    harness.step();
+}
+
+/// Assert the open menu's item `label` is rendered AND disabled — the whole
+/// "a blocked action explains itself" rule, from the accessibility tree rather
+/// than from a widget's internals.
+#[track_caller]
+pub fn assert_menu_item_gated<S>(harness: &mut Harness<'_, S>, sentinel: &str, label: &str) {
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+    harness.remove_cursor();
+    harness.step();
+    let column = harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| n.accesskit_node().label() == Some(sentinel.to_string()))
+        .unwrap_or_else(|| panic!("the menu is open (no {sentinel:?} item)"))
+        .rect();
+    let item = harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| {
+            n.accesskit_node().label() == Some(label.to_string())
+                && (n.rect().min.x - column.min.x).abs() < 2.0
+        })
+        .unwrap_or_else(|| panic!("menu item {label} inside the open menu"));
+    assert!(
+        item.accesskit_node().is_disabled(),
+        "{label} must be gated, not hidden"
+    );
+}
+
 /// Step frames until the painted output stabilizes.
 ///
 /// The first frames after startup relayout (embedded fonts take effect at

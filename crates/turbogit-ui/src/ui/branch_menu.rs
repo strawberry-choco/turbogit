@@ -61,27 +61,11 @@ impl BranchMenuAction {
 }
 
 /// One item's gate: whether it acts, and what it says when it cannot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MenuItemState {
-    pub enabled: bool,
-    pub reason: Option<&'static str>,
-}
-
-impl MenuItemState {
-    pub const fn enabled() -> Self {
-        Self {
-            enabled: true,
-            reason: None,
-        }
-    }
-
-    pub const fn disabled(reason: &'static str) -> Self {
-        Self {
-            enabled: false,
-            reason: Some(reason),
-        }
-    }
-}
+///
+/// The type moved to the widget layer with the second menu that needed it
+/// ([`crate::ui::widgets::MenuItemState`]); this is its established import path
+/// and stays.
+pub use crate::ui::widgets::MenuItemState;
 
 /// The ten gates, in [`BranchMenuAction::ORDER`] — one function, one set of
 /// strings. Every rule is a field read off the branch the listing already

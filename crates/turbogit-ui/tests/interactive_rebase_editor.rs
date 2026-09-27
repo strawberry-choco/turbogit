@@ -314,6 +314,7 @@ fn plan_entry(
         action,
         commit: commit.to_string(),
         subject: subject.to_string(),
+        message: None,
     }
 }
 

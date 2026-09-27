@@ -27,6 +27,33 @@ pub enum MenuItemKind {
     Danger,
 }
 
+/// One menu item's gate: whether it acts, and what it says when it cannot.
+///
+/// A widget-layer concept, not a branch one: every menu in the app answers one
+/// of these per item, and [`menu_item`] paints it — the row stays rendered,
+/// swallows its own click, and hands `reason` to the disabled hover text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuItemState {
+    pub enabled: bool,
+    pub reason: Option<&'static str>,
+}
+
+impl MenuItemState {
+    pub const fn enabled() -> Self {
+        Self {
+            enabled: true,
+            reason: None,
+        }
+    }
+
+    pub const fn disabled(reason: &'static str) -> Self {
+        Self {
+            enabled: false,
+            reason: Some(reason),
+        }
+    }
+}
+
 /// Plain data for one [`menu_item`] row — no application state.
 pub struct MenuItemProps<'a> {
     /// The leading glyph, painted in the 14 px slot after the 8 px gutter.

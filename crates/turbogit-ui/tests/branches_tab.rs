@@ -980,7 +980,7 @@ fn new_branch_is_prominent_and_defaults_base_to_current_with_switch_on() {
     // Base defaults to the current branch; "Switch now" defaults on.
     assert_eq!(
         harness.state().ui.dlg.new_branch_base,
-        "main",
+        turbogit_app::state::NewBranchBase::Branch("main".into()),
         "base defaults to the current branch"
     );
     assert!(

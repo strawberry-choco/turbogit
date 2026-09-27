@@ -89,6 +89,7 @@ fn interactive_plan_conflicting(repo: &Path) -> Vec<RebasePlanEntry> {
             action: RebaseAction::Pick,
             commit,
             subject: String::new(),
+            message: None,
         })
         .collect()
 }
@@ -108,30 +109,20 @@ fn assert_repo_is_conflicted(repo: &Path) {
 }
 
 /// A repository with a same-content `origin`, so a fetch is a real operation
-/// that changes nothing and ahead/behind is a known zero.
+/// that changes nothing and ahead/behind is a known zero. The recipe is
+/// `test_support::git_seed`'s, promoted there so the UI suites rewrite the same
+/// history this one does rather than a lookalike; this wrapper keeps the
+/// suite's own tempdir.
 fn project_with_origin(name: &str) -> (TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    let work = repo_with_origin(&project, name);
+    let work = test_support::git_seed::repo_with_origin(&project, name);
     (tmp, project, work)
 }
 
 /// One bare `origin` plus one local repo `name` on `main`, pushed to it.
 fn repo_with_origin(project: &Path, name: &str) -> PathBuf {
-    let bare = project.join(format!("{name}.git"));
-    git(
-        project,
-        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
-    );
-    let work = project.join(name);
-    git(
-        project,
-        &["init", "-q", "-b", "main", work.to_str().unwrap()],
-    );
-    commit_readme(&work, "x", "init");
-    git(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
-    git(&work, &["push", "-q", "-u", "origin", "main"]);
-    work
+    test_support::git_seed::repo_with_origin(project, name)
 }
 
 /// A branch that exists only on `origin`, so the next fetch discovers it.
@@ -601,6 +592,194 @@ fn an_unrelated_operation_does_not_arm_the_undo() {
     assert!(
         state.ui.branches_undo.is_none(),
         "a fetch cannot arm a branch-deletion undo"
+    );
+}
+
+// --- the two targeted history rewrites ----------------------------------------------
+
+/// `alpha` plus a `feature` branch three commits deep and checked out — history
+/// a targeted rewrite may act on without tripping the protected-branch guard.
+/// Each commit touches its OWN path: replaying a descendant over a dropped
+/// neighbour must not conflict, or the test measures git's merge machinery
+/// rather than the operation's settlement.
+fn project_with_history(name: &str) -> (TempDir, PathBuf, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().to_path_buf();
+    let work = test_support::git_seed::repo_with_history(&project, name);
+    (tmp, project, work)
+}
+
+fn short(sha: &str) -> String {
+    sha.chars().take(7).collect()
+}
+
+/// The subjects a repository's log holds, newest first.
+fn subjects(dir: &Path) -> Vec<String> {
+    let out = Command::new("git")
+        .args(["log", "--format=%s"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// A dropped commit settles as its own kind of work: one feed entry naming the
+/// short reference and the root it moved, and the completion — not the log
+/// surface — dropping the cached history so the next read answers from git.
+#[test]
+fn a_dropped_commit_settles_as_a_history_rewrite_and_refreshes_the_log() {
+    let (_tmp, project, alpha) = project_with_history("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+    let settings = state.settings.clone();
+    let target = rev(&alpha, "HEAD~1");
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::drop_commit(&root, "feature", &target, &settings),
+    );
+
+    let entries = &state.ui.activity.entries;
+    assert_eq!(entries.len(), 1, "the feed read {:?}", feed(&state));
+    assert_eq!(
+        entries[0].kind,
+        ActivityKind::Success,
+        "the feed read {:?}",
+        feed(&state)
+    );
+    assert_eq!(
+        entries[0].message,
+        format!("Drop commit {}", short(&target)),
+        "the activity entry names the short reference the item showed"
+    );
+    assert_eq!(entries[0].repo.as_deref(), Some("alpha"));
+    // The cached history the Git Log reads is the refreshed one. Nothing in this
+    // test asks the log surface for anything: completion invalidated the root
+    // and the ordinary rescan refilled it.
+    let cached = state
+        .caches
+        .log(&root)
+        .expect("the completion left the root's log cached afresh");
+    let held: Vec<&str> = cached
+        .iter()
+        .map(|c| c.message.lines().next().unwrap_or_default())
+        .collect();
+    assert!(
+        !held.contains(&"feature-2") && held.contains(&"feature-3"),
+        "the log the shell is reading matches the repository: {held:?}"
+    );
+    assert_eq!(
+        subjects(&alpha),
+        held.iter().map(|s| s.to_string()).collect::<Vec<String>>(),
+        "and that cached history is the repository's own history"
+    );
+}
+
+/// A reworded commit settles the same way, and the feed never carries the new
+/// message — it records the work, not the text.
+#[test]
+fn a_reworded_commit_settles_without_leaking_its_new_message() {
+    let (_tmp, project, alpha) = project_with_history("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+    let settings = state.settings.clone();
+    let target = rev(&alpha, "HEAD");
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::reword_commit(&root, "feature", &target, "a corrected subject", &settings),
+    );
+
+    let entries = &state.ui.activity.entries;
+    assert_eq!(entries[0].kind, ActivityKind::Success);
+    assert_eq!(
+        entries[0].message,
+        format!("Reword commit {}", short(&target))
+    );
+    assert!(
+        !entries[0].message.contains("corrected"),
+        "the message is content, not part of the record: {:?}",
+        entries[0].message
+    );
+    let text = String::from_utf8_lossy(
+        &Command::new("git")
+            .args(["log", "--format=%s", "-1"])
+            .current_dir(&alpha)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .to_string();
+    assert_eq!(text.trim(), "a corrected subject");
+}
+
+/// A rewrite the settings refuse is reported as a failure, so the log is never
+/// left believing a commit is gone. It is still its own kind failing, and the
+/// error entry names it.
+#[test]
+fn a_refused_rewrite_is_reported_as_a_failure_of_its_own_kind() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    // A second commit, so the target has a first parent and a plan can be built
+    // for it at all: a root commit is refused before any plan exists.
+    commit_readme(&alpha, "y", "second");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+    // `main` is protected by the default settings, and HEAD is on it.
+    let target = rev(&alpha, "HEAD");
+    let settings = state.settings.clone();
+    let history_before = subjects(&alpha);
+
+    dispatch_and_settle(
+        &mut state,
+        Operation::drop_commit(&root, "main", &target, &settings),
+    );
+
+    let entries = &state.ui.activity.entries;
+    assert_eq!(entries.len(), 1, "the feed read {:?}", feed(&state));
+    assert_eq!(entries[0].kind, ActivityKind::Error);
+    assert!(
+        entries[0]
+            .message
+            .starts_with(&format!("Drop commit {}:", short(&target))),
+        "the failure names the rewrite it belongs to: {:?}",
+        entries[0].message
+    );
+    assert_eq!(
+        subjects(&alpha),
+        history_before,
+        "and the log the developer is reading still describes the repository"
+    );
+    // Armed the way the preflight arms it, so the refusal has something to clear:
+    // a rewrite that did not happen must leave nothing waiting to move a
+    // selection, and the commit the developer was looking at still selected.
+    let plan = state
+        .history_verb_plan(&root, &target, RebaseAction::Drop, None)
+        .expect("a plan for the target");
+    state.arm_reselect_after_rewrite(
+        root.clone(),
+        plan,
+        target.clone(),
+        turbogit_services::reselection::RewrittenAnchor::Dropped,
+    );
+    assert!(
+        state.ui.pending_reselect.is_some(),
+        "the reselect is armed before the dispatch, never after"
+    );
+    dispatch_and_settle(
+        &mut state,
+        Operation::drop_commit(&root, "main", &target, &settings),
+    );
+    assert!(
+        state.ui.pending_reselect.is_none(),
+        "a refused rewrite moved nothing, so nothing follows it"
+    );
+    assert_eq!(
+        state.ui.selected_commit.as_deref(),
+        None,
+        "and the selection is whatever the developer chose, not a rewrite's aftermath"
     );
 }
 

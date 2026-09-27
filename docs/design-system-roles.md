@@ -70,8 +70,13 @@ diff module is still a feature component.
   styled for reusable shell, dialog, toolbar, and action contexts. A general
   button chooses its own label and may optionally carry an icon.
 - `widgets::compact_button_enabled` is a specialized branch-popup action gate;
-  `widgets::action_button` is the specialized full-width treatment used by the
-  log commit-detail Actions section. Neither replaces the general vocabulary.
+  `widgets::action_button` is the specialized full-width stacked
+  primary/secondary treatment. Neither replaces the general vocabulary.
+  `action_button` has no production caller today: the log commit-details
+  Actions section it was built for is gone (ADR-0024), and commit actions now
+  live in the commit row's context menu. It is retained as a kit role for a
+  surface that needs a stacked action block, and its own suite
+  (`widget_library.rs`) keeps the treatment from drifting while it waits.
 - `components::KitButton` and `components::kit_button` /
   `kit_button_at` are the **branch-kit button role**. They use the branch
   screen's compact 28px kit height, minimum target rules, four branch action
@@ -121,6 +126,8 @@ them solely because their text is a warning, error, or status.
 | Role | Meaning and current implementation seam | Must not become |
 | --- | --- | --- |
 | Inline error | A short, one-line error associated with a field, control, or immediate operation. It is adjacent feedback, not a container; its error ink and wrapping policy are independent of multi-line failures. | A dialog error list, alert well, banner, or toast. |
+| Cautions rail | `widgets::cautions_rail` is the titled count plus one warning-ink line per `RebaseCaution` a history rewrite computed. SHARED by every surface that rewrites history — the plan editor's right rail and the drop preflight — because "what is likely to go wrong here" is one set of facts with one wording. A clean plan paints nothing at all: an empty titled section is a section to read past. | A general `note`, an `alert_box` well, a banner, or a toast: it is a titled list of counts, not a contained message. |
+| Recovery note | `widgets::recovery_note` states that a rewrite writes a backup ref before it moves anything, and names that ref. Shared with the cautions rail for the same reason — the promise that a rewrite can be undone, and the name of what undoes it, are one wording. The restore ACTION is not part of it: only a surface running a replay long enough for "abort" to mean anything owns that button. | A persistent warning that stays on screen, or a per-surface restatement of the same sentence. |
 | Note | `widgets::note` is an inset `SURFACE_2` well for a preview, summary, or explanatory note. It has optional severity emphasis through the caller's stroke, but the default note is not an error surface. | An always-warning alert or a global banner. |
 | Alert | `widgets::alert_box` is a contained warning/guardrail surface with `SURFACE_WARNING`, a warning icon, and warning ink. It is for a warning that needs a visible boundary. | A bare inline error, a general note, or a transient toast. |
 | Banner | `ui::banner` renders a severity-tinted horizontal strip with a state-owned message and optional deep-link actions. `banner::maybe_show` is the app-wide host: the single entry point, called once from `ui::render`, and it owns whether a banner is showing at all. | A contained alert or a toast. It is anchored to a surface/application feedback state and may carry actions. |
@@ -137,7 +144,8 @@ blame, branch, or dialog content.
 The ticket-09 audit of note and alert consumers found that the existing
 production consumers of `widgets::note` and `widgets::alert_box` already use
 the shared contracts — rebase preview/results and dialog summaries use `note`,
-and the commit-details guardrail warning uses `alert_box` — and that no
+and the commit-details guardrail warning used `alert_box` until ADR-0024 removed
+that surface along with the actions it warned about — and that no
 remaining raw or ad-hoc frame was semantically equivalent to either role enough
 to migrate: the candidates were toast, banner, result-list, and conflict
 feedback, all of which carry placement, lifetime, action, selection, or
@@ -161,9 +169,11 @@ not.
 - `widgets::RefKind` is the surviving **colour vocabulary** half of a retired
   role — see *The `RefKind` asymmetry* below. `RefKind::accent` is live: it maps
   `Branch`→`BRAND`, `Remote`→`STATE_SUCCESS`, `Tag`→`STATE_WARNING`.
-- `widgets::hash_chip` is a clickable commit reference with monospace content
-  and copy/hover behavior. It is a specialized interactive reference, not a
-  generic label.
+- `widgets::hash_chip` is a commit reference with monospace content. It is a
+  **label, not a control**: it senses hover only and carries no click, because
+  copying a hash is the commit menu's Copy hash item, which states the same short
+  reference (ADR-0024). It is a specialized reference chip, not an interactive
+  reference and not a generic label.
 - `components::pill` with `PillKind::Current` and `PillKind::Count` is the
   branch-kit fact vocabulary. `Current` identifies the current branch; `Count`
   identifies the number of items in a group and has its own smaller dimensions.
@@ -537,14 +547,14 @@ removal, deprecation, or a breaking import change.
 | --- | --- | --- |
 | `ghost_button`, `primary_button`, `compact_button`, `icon_button` | **supported general** | Actively used across dialogs, settings, navigation, feature actions, and shell-adjacent surfaces. They remain the reusable shell/action vocabulary and remain distinct from branch-kit buttons. |
 | `compact_button_enabled` | **specialized** | Retained for the branch popup's gated row actions. Its disabled child scope and no-op click behavior serve that feature's action-gating contract; it does not replace `components::KitButton` or become the branch button API. |
-| `action_button` | **specialized** | Retained for the log commit-detail Actions section, where the full-width stacked primary/secondary treatment is meaningful. It is not required to absorb branch, dialog, or other feature action policy. |
+| `action_button` | **specialized** | The full-width stacked primary/secondary treatment. Its log commit-details consumer went with ADR-0024, which moved every commit action into the commit menu, so it has no production caller today and is retained as a kit role for a surface that needs a stacked action block. It is not required to absorb branch, dialog, or other feature action policy. |
 | `dialog_footer` | **supported general** | Used by push, new-branch, tag, settings, smart-rule, and remote-management dialogs. It owns only the separator and right-aligned action slot, never dialog policy. The separator itself is now `footer_rule`'s, shared with modal bodies that rule themselves off from an action slot without owning a footer. |
 | `toolwindow_header` | **supported general** | Used by Log branches, Blame, Worktrees, and Submodules tool-window headers. It owns only the title/action strip. |
 | `card`, `card_header` | **supported general** | Used by the Commit tool window's local, staged, and changes regions. These are general containment roles, not aliases for branch detail panels or feature rows. |
 | `note` | **supported general** | Used by rebase previews/results and multiple dialog summaries and warnings. Optional severity emphasis does not turn it into `alert_box`. |
-| `alert_box` | **specialized** | Retained for the contained guardrail warning in commit details. It is not the general `note`, inline-error, banner, or toast role. |
+| `alert_box` | **specialized** | The contained warning surface it defines. Its commit-details guardrail consumer went with ADR-0024 along with the buttons it explained, and it has no production caller today; a future surface that needs a warning with a visible boundary is what it is for. It is not the general `note`, inline-error, banner, or toast role. |
 | `segmented_control` | **supported general** | Used for settings choices, diff side-by-side/unified mode, and file/hunk/line granularity. Each caller still owns its option list and state transition. |
-| `hash_chip`, `avatar_initials`, `churn_bar` | **specialized** | Retained as named commit-detail primitives used by the Log commit-details surface. They are not promoted to generic reference, identity, or statistics widgets. |
+| `hash_chip`, `avatar_initials`, `churn_bar` | **specialized** | Retained as named commit-detail primitives used by the Log commit-details surface. `hash_chip` is a non-interactive reference chip (see *Chip roles*); the other two are the identity and statistics roles they have always been. They are not promoted to generic reference, identity, or statistics widgets. |
 
 The only final dispositions are **supported general** and **specialized**.
 Branch and

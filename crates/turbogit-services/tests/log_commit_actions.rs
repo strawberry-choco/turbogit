@@ -64,15 +64,61 @@ fn clean_settings() -> VcsSettings {
 
 // --- cherry_pick_to ------------------------------------------------------------
 
+/// The branch picker refuses the branch the work is standing on; this is the
+/// guard behind it. A bypass of the dialog must not replay a commit onto the
+/// branch that already holds it, and `clean_settings` protects nothing — so
+/// nothing but the branch's currency can be the reason.
+#[test]
+fn cherry_pick_to_refuses_the_current_branch_without_touching_git() {
+    let (root, _c2, fc) = repo_with_feature_branch();
+    let engine = CliExecutor {
+        settings: clean_settings(),
+    };
+    let before = git(&root, &["rev-parse", "main"]);
+
+    let err = integrate_service::cherry_pick_to(&engine, &root, &fc, "main", &clean_settings())
+        .expect_err("the checked-out branch is not a cherry-pick destination");
+    assert!(
+        err.to_string().contains("the current branch") && err.to_string().contains("'main'"),
+        "the refusal must name the guardrail and the branch it is about: {err}"
+    );
+    assert_eq!(
+        git(&root, &["rev-parse", "main"]),
+        before,
+        "a refused cherry-pick must not move the branch"
+    );
+    assert_eq!(
+        git(&root, &["rev-list", "--count", "main"]).trim(),
+        "2",
+        "and no commit may land on it"
+    );
+    assert_eq!(
+        git(&root, &["symbolic-ref", "--short", "HEAD"]).trim(),
+        "main",
+        "the checkout is left exactly as it was"
+    );
+}
+
+/// Stand on the other branch, so the target under test is not also the branch
+/// the work is standing on. Every guard below is a refusal, and a target that
+/// trips two of them proves only that the first one fired — which is exactly
+/// the ambiguity this helper exists to remove.
+fn stand_on_feature(root: &Path) {
+    git(root, &["checkout", "-q", "feature"]);
+}
+
 #[test]
 fn cherry_pick_to_applies_commit_onto_target_and_returns_to_original_branch() {
     let (root, _c2, fc) = repo_with_feature_branch();
     let engine = CliExecutor {
         settings: clean_settings(),
     };
+    // Standing on `feature` makes `main` a real destination, so the return leg
+    // this test is named for is a checkout back rather than a no-op.
+    stand_on_feature(&root);
 
     integrate_service::cherry_pick_to(&engine, &root, &fc, "main", &clean_settings())
-        .expect("cherry-pick onto main should succeed");
+        .expect("cherry-pick onto another branch should succeed");
 
     // The commit landed on main (its file exists at main's tip)…
     git(&root, &["checkout", "-q", "main"]);
@@ -87,11 +133,12 @@ fn cherry_pick_to_applies_commit_onto_target_and_returns_to_original_branch() {
         .parse::<usize>()
         .unwrap();
     assert_eq!(count, 3, "main must gain exactly one cherry-picked commit");
-    // …and HEAD returned to the branch that was checked out before.
+    // …and HEAD is back on the branch that was checked out before.
+    stand_on_feature(&root);
     assert_eq!(
         git(&root, &["symbolic-ref", "--short", "HEAD"]).trim(),
-        "main",
-        "the original branch stays checked out"
+        "feature",
+        "the branch that was checked out before is checked out again"
     );
 }
 
@@ -101,6 +148,9 @@ fn cherry_pick_to_refuses_protected_target_branch_without_touching_git() {
     let engine = CliExecutor {
         settings: clean_settings(),
     };
+    // `main` is protected but not checked out, so protection is the only reason
+    // left for the refusal.
+    stand_on_feature(&root);
     let before = git(&root, &["rev-parse", "main"]);
 
     let settings = VcsSettings {
@@ -130,6 +180,8 @@ fn cherry_pick_to_refuses_dirty_worktree() {
     let engine = CliExecutor {
         settings: clean_settings(),
     };
+    // Clean target, dirty worktree: the worktree is then the only reason.
+    stand_on_feature(&root);
     std::fs::write(root.join("a.txt"), "uncommitted\n").unwrap();
 
     let err = integrate_service::cherry_pick_to(&engine, &root, &fc, "main", &clean_settings())
