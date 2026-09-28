@@ -293,6 +293,9 @@ sequenceDiagram
 | ADR-0021 | The keyed read is the diff surface's only way to reach cached git data |
 | ADR-0022 | The Git engine answers with domain values, over one honest adapter |
 | ADR-0023 | Branch actions live in the context menu, and nowhere else |
+| ADR-0024 | Commit actions live in the log context menu, and nowhere else |
+| ADR-0025 | A reworded commit carries its message through the rebase plan |
+| ADR-0026 | The commit list virtualizes over `ScrollArea::show_rows`, and its listings grow by batches |
 
 The crate-per-layer split, the sanctioned edge, and the deferred options are
 specified in `docs/ddd-subcrate-proposal.md`.

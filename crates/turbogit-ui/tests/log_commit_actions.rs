@@ -21,7 +21,7 @@ use test_support::harness::{
     assert_menu_item_gated, assert_not_painted, assert_painted, click_menu_item, painted_galleys,
     painted_text, right_click_row,
 };
-use turbogit_app::events::{AppEvent, LogPageMode};
+use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, Tab};
 use turbogit_domain::model::{LogOpts, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -117,7 +117,7 @@ fn warm_logs(harness: &mut Harness<'_, AppState>) {
             .send(AppEvent::LogLoaded {
                 root: root.id.clone(),
                 commits: Ok(commits),
-                mode: LogPageMode::Replace,
+                mode: LogBatchMode::Replace,
             })
             .expect("send LogLoaded");
     }
@@ -141,7 +141,7 @@ fn log_harness_over(project: PathBuf) -> Harness<'static, AppState> {
             .send(AppEvent::LogLoaded {
                 root: root.id.clone(),
                 commits: Ok(commits),
-                mode: LogPageMode::Replace,
+                mode: LogBatchMode::Replace,
             })
             .expect("send LogLoaded");
     }

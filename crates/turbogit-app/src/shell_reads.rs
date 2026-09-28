@@ -202,7 +202,7 @@ impl AppState {
         turbogit_services::tag_service::signing_key(self.executor.as_ref(), root.as_path())
     }
 
-    /// The newest `max` commits of `root`, uncapped by the log window's paging:
+    /// The newest `max` commits of `root`, uncapped by the log window's batches:
     /// the tag dialog's target picker lists commits the cached window may not
     /// have reached yet.
     pub fn recent_commits(&self, root: &RootId, max: usize) -> Option<Vec<Commit>> {
@@ -217,7 +217,7 @@ impl AppState {
             .ok()
     }
 
-    /// The whole uncapped log of `root`, for hydrating ids that a page window
+    /// The whole uncapped log of `root`, for hydrating ids that a batch window
     /// cannot be relied on to contain.
     pub fn full_log(&self, root: &RootId) -> Vec<Commit> {
         self.executor

@@ -154,9 +154,12 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     if let Some(commit) = clicked {
         // Navigate to the line's commit in the log (issue 18): select it,
         // close the blame view, and keep the path filter untouched.
-        state.ui.selected_commit = Some(commit);
+        state.ui.selected_commit = Some(commit.clone());
         state.ui.log_selected_file = None;
         state.ui.blame = None;
+        // The log is what the user sees next, and the commit they picked can be
+        // anywhere in its history — so the list is asked to show it (issue 08).
+        state.ui.log_scroll_to = Some(commit);
     }
     if close {
         state.ui.blame = None;

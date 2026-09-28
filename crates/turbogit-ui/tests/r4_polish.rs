@@ -25,7 +25,7 @@ use test_support::harness::{
     assert_painted, filled_rects, galley_origin, painted_galleys, painted_text, settle,
     shell_harness,
 };
-use turbogit_app::events::{AppEvent, LogPageMode};
+use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
 use turbogit_domain::model::{LogOpts, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -222,7 +222,7 @@ fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, A
             .send(AppEvent::LogLoaded {
                 root: root.id.clone(),
                 commits: Ok(commits),
-                mode: LogPageMode::Replace,
+                mode: LogBatchMode::Replace,
             })
             .expect("send LogLoaded");
     }

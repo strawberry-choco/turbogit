@@ -153,7 +153,10 @@ Record results per tool in `research/results/<tool>.md`.
 
 Translate findings into the `egui` + Rust reality of the project:
 - **Virtualized rendering** — diff view must page/virtualize large files (mirror the
-  `egui_extras::Table` approach already used elsewhere in TurboGit).
+  `egui_extras::Table` approach already used elsewhere in TurboGit). **Superseded
+  2026-09-28:** `egui_extras` is used nowhere in TurboGit, so there was no existing approach
+  to mirror. The requirement stands and was met differently: the diff viewer virtualizes over
+  `egui::ScrollArea::show_rows` (ADR-0014), and the commit list now does the same (ADR-0026).
 - **Keyboard-driven staging** — map the best partial-staging shortcuts onto egui accelerators.
 - **Conflict-resolution modal flow** — design a 3-way split using egui `ScrollArea` +
   the trailing-spacer guard already documented for wrapped scroll areas.

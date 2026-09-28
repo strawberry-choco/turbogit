@@ -11,7 +11,7 @@ use turbogit_domain::model::{
     Submodule, Worktree,
 };
 
-use crate::root_caches::Affected;
+use crate::root_caches::{Affected, LogScope};
 
 /// A decoded image ready for GPU upload on the UI thread (spec R8):
 /// dimensions plus straight (unmultiplied-alpha) RGBA8 pixels, row-major.
@@ -32,15 +32,15 @@ pub struct FetchedBlob {
     pub decoded: Option<DecodedImage>,
 }
 
-/// How a fetched commit-log page folds into its root's cached window
+/// How a fetched commit-log batch folds into its root's cached window
 /// (log paging).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LogPageMode {
-    /// The window restarts here: this page is the whole listing held so far.
+pub enum LogBatchMode {
+    /// The window restarts here: this batch is the whole listing held so far.
     Replace,
-    /// The page continues a window whose oldest row is `anchor`, so it must
+    /// The batch continues a window whose oldest row is `anchor`, so it must
     /// lead with that row. If it leads with anything else the listing moved
-    /// under the request — a commit, a checkout, a fetch — and the page is
+    /// under the request — a commit, a checkout, a fetch — and the batch is
     /// torn (plan P3).
     Append { anchor: CommitId },
 }
@@ -62,15 +62,35 @@ pub enum AppEvent {
         root: RootId,
         branches: TgResult<Vec<Branch>>,
     },
-    /// Log for a root was loaded — one page of it, plus how it folds into the
+    /// Log for a root was loaded — one batch of it, plus how it folds into the
     /// root's cached window (log paging).
     LogLoaded {
         root: RootId,
         commits: TgResult<Vec<Commit>>,
-        /// The mode the page was fetched in, with the anchor it was measured
+        /// The mode the batch was fetched in, with the anchor it was measured
         /// against echoed back: the handler needs both to tell a continuation
-        /// from a torn page.
-        mode: LogPageMode,
+        /// from a torn batch.
+        mode: LogBatchMode,
+    },
+    /// One batch of a SCOPED listing — a file's history, a ref's, a pickaxe
+    /// search's — was read off the render thread (log-view-scaling 02).
+    ///
+    /// A variant of its own rather than a `scope` field on [`Self::LogLoaded`]
+    /// for two reasons: the unscoped listing has no scope, and every existing
+    /// producer and test that posts an unscoped batch names exactly three
+    /// fields. The scope rides on the event because the batch is admitted into
+    /// that scope's window and nowhere else — a slow ref read must not land in
+    /// a path window.
+    LogBatchLoaded {
+        root: RootId,
+        /// Which listing this batch belongs to, and the half of the in-flight
+        /// guard's key it was read under.
+        scope: LogScope,
+        commits: TgResult<Vec<Commit>>,
+        /// The mode the batch was fetched in, with the anchor it was measured
+        /// against echoed back: the handler needs both to tell a continuation
+        /// from a torn batch.
+        mode: LogBatchMode,
     },
     /// Ref decorations for a root were loaded off the UI thread (log-open
     /// perf, D1): a success is stored into the ref cache; an error lands in

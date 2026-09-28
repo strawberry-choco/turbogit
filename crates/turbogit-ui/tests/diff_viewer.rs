@@ -12,6 +12,7 @@
 //! - Repo/Staged/Local chips select HEAD↔worktree / HEAD↔index / index↔worktree
 //! - segmented control toggles side-by-side/unified rendering
 //! - hunk nav ‹ n/N › counts and steps correctly
+//! - hunk nav aims the hunk it names, from any scroll position, in both modes
 //! - Ignore whitespace toggle affects the diff
 //! - add/del rows paint token-exact backgrounds; gutters show muted numbers
 //! - the diff's ghost icon buttons (nav pair, gutter pair) are two scale
@@ -639,4 +640,171 @@ fn ghost_icon_controls_keep_their_labels_and_enabled_flags() {
             .is_disabled(),
         "a gutter control on a conflicted hunk must report disabled"
     );
+}
+
+// --- Cycle 7: hunk navigation aims the hunk it names -------------------------
+
+/// A repo whose unstaged edit is `hunks` hunks of `changed` lines each, with
+/// `gap` unchanged lines between them — a diff far taller than the preview pane,
+/// and the shape hunk navigation needs: consecutive hunks are tens of rows
+/// apart, so the list can be scrolled deep enough that the built row window
+/// starts hundreds of rows down while a jump aims a hunk a few rows away.
+fn repo_deep_diff(hunks: usize, changed: usize, gap: usize) -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    let span = changed + gap;
+    let mut base: Vec<String> = Vec::new();
+    for i in 0..(hunks * span + gap) {
+        base.push(format!("l{i:04}"));
+    }
+    write_file(&repo, "deep.txt", &format!("{}\n", base.join("\n")));
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "c1"]);
+    let mut edited = base.clone();
+    for k in 0..hunks {
+        for j in 0..changed {
+            edited[k * span + j] = format!("X{k:02}{j:02}");
+        }
+    }
+    write_file(&repo, "deep.txt", &format!("{}\n", edited.join("\n")));
+    (tmp, repo)
+}
+
+/// The hunk header bands `git` itself reports for `deep.txt`, newest first, so
+/// a test can name ONE hunk's header exactly as the pane paints it.
+fn diff_hunk_headers(repo: &Path) -> Vec<String> {
+    run_git(repo, &["diff", "-U3", "--", "deep.txt"])
+        .lines()
+        .filter(|l| l.starts_with("@@"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Every hunk header the last frame painted.
+fn painted_hunk_headers(harness: &Harness<'_, AppState>) -> Vec<String> {
+    painted_text(harness)
+        .into_iter()
+        .filter(|t| t.starts_with("@@"))
+        .collect()
+}
+
+/// Settle a frame that ISSUED a scroll. The aim is applied when the scroll area
+/// ends the frame it was issued in, so the new offset first appears in the NEXT
+/// frame's paint — and `settle` returns as soon as two frames agree, which it
+/// can do on the frame before that. So a scroll is settled by stepping past it
+/// first, then letting the layout settle.
+fn settle_after_aim(harness: &mut Harness<'_, AppState>) {
+    for _ in 0..3 {
+        harness.step();
+    }
+    settle(harness);
+}
+
+#[track_caller]
+fn assert_hunk_aimed_at(painted: &[String], want: &str, must_not_see: &[&str], what: &str) {
+    assert!(
+        painted.contains(&want.to_owned()),
+        "{what}: the aimed hunk's header ({want}) is not on screen; painted \
+         headers:\n{painted:#?}"
+    );
+    for away in must_not_see {
+        assert!(
+            !painted.contains(&away.to_string()),
+            "{what}: the list is nowhere near the aimed hunk — {away} is on screen \
+             instead; painted headers:\n{painted:#?}"
+        );
+    }
+}
+
+/// Aim three hunks in one open diff and check each one arrives on screen, the
+/// list getting there from wherever the previous aim left it: the last hunk
+/// (from the top), the hunk one step above it, and the first hunk.
+///
+/// `side_by_side` picks the rendering mode, because the two modes page over
+/// DIFFERENT row streams over the same model and a hunk's row index is a slot
+/// in one of them. Both modes are asked the same question here on purpose: an
+/// aim that only works in one of them is a bug, and the mode names it.
+fn hunk_aim_sequence(repo: &Path, side_by_side: bool) {
+    const HUNKS: usize = 20;
+    let headers = diff_hunk_headers(repo);
+    assert_eq!(
+        headers.len(),
+        HUNKS,
+        "the fixture's premise: {HUNKS} hunk headers to aim between"
+    );
+    let mode = if side_by_side {
+        "side-by-side"
+    } else {
+        "unified"
+    };
+
+    let mut h = diff_harness(repo);
+    h.state_mut().ui.diff_side_by_side = side_by_side;
+    // Note what opening a diff costs the cursor: the keyed read's dispatch puts
+    // `diff_current_hunk` back to 0, so the FIRST paint of this diff aims hunk 0
+    // and spends that hunk's one aim. The near-the-top leg below therefore aims
+    // hunk 1 — the next hunk down, still at the top of a 740-row diff — which is
+    // also the one leg an "index space" bug cannot hide behind.
+    settle(&mut h);
+    open_preview(&mut h, &repo.join("deep.txt"));
+    assert_eq!(h.state().ui.diff_side_by_side, side_by_side);
+    assert!(
+        painted_hunk_headers(&h).len() < HUNKS,
+        "the pane cannot show all {HUNKS} headers at once — the premise of this test"
+    );
+
+    // --- the last hunk, from wherever the list is resting ---
+    h.state_mut().ui.diff_current_hunk = HUNKS - 1;
+    settle_after_aim(&mut h);
+    let deep = painted_hunk_headers(&h);
+    assert_hunk_aimed_at(&deep, &headers[HUNKS - 1], &[&headers[0]], mode);
+    assert!(
+        deep.iter().all(|hd| {
+            headers
+                .iter()
+                .position(|x| x == hd)
+                .is_some_and(|k| k >= HUNKS / 2)
+        }),
+        "{mode}: every painted header should be in the bottom half of the diff after \
+         aiming the last hunk, got {deep:?}"
+    );
+
+    // --- one hunk's step UP, from deep: the built row window now starts
+    // hundreds of rows down, and the target is a few rows above the fold ---
+    h.get_by_label("Previous hunk").click();
+    settle_after_aim(&mut h);
+    assert_eq!(h.state().ui.diff_current_hunk, HUNKS - 2);
+    let stepped = painted_hunk_headers(&h);
+    assert_hunk_aimed_at(
+        &stepped,
+        &headers[HUNKS - 2],
+        &[&headers[0]],
+        &format!("{mode}, one step up from deep"),
+    );
+
+    // --- and a hunk near the top, from down there ---
+    h.state_mut().ui.diff_current_hunk = 1;
+    settle_after_aim(&mut h);
+    let top = painted_hunk_headers(&h);
+    assert_hunk_aimed_at(
+        &top,
+        &headers[1],
+        &[&headers[HUNKS - 1]],
+        &format!("{mode}, a hunk near the top from deep"),
+    );
+}
+
+/// Hunk navigation aims a row the list never built, so a row INDEX has to
+/// become a position correctly whether the list is at the top or hundreds of
+/// rows down — in the rendering mode the developer is actually in.
+#[test]
+fn hunk_navigation_aims_the_hunk_it_names_side_by_side() {
+    let (_tmp, repo) = repo_deep_diff(20, 15, 20);
+    hunk_aim_sequence(&repo, true);
+}
+
+/// The same three aims, in the unified mode the app opens in.
+#[test]
+fn hunk_navigation_aims_the_hunk_it_names_unified() {
+    let (_tmp, repo) = repo_deep_diff(20, 15, 20);
+    hunk_aim_sequence(&repo, false);
 }

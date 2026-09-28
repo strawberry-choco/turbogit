@@ -14,7 +14,7 @@ use egui::{Color32, Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
 use test_support::harness::{click_menu_item, right_click_row};
-use turbogit_app::events::{AppEvent, LogPageMode};
+use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::keyed_read::Keyed;
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::error::TgError;
@@ -171,7 +171,7 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
             .send(AppEvent::LogLoaded {
                 root: root.id.clone(),
                 commits: Ok(commits),
-                mode: LogPageMode::Replace,
+                mode: LogBatchMode::Replace,
             })
             .expect("send LogLoaded");
     }

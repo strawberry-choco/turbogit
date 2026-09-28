@@ -12,7 +12,7 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::git2_exec::Git2Executor;
 use turbogit_engine_api::GitExecutor;
 
-/// Commits per page — the app's `LOG_PAGE_SIZE`. The engine sits below
+/// Commits per page — the app's `LOG_BATCH_SIZE`. The engine sits below
 /// `turbogit-app`, so the size is restated here rather than imported.
 const PAGE: usize = 50;
 
