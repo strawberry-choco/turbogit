@@ -675,11 +675,43 @@ fn a_commit_scrolled_outside_the_viewport_paints_nothing() {
     );
     let viewport = list_viewport(&harness);
     let rows = built_rows(&harness);
+    // The pitch, measured from the frame's own rows rather than assumed, so
+    // this bound scales with whatever the row height is.
+    let pitch = rows.windows(2).map(|w| w[1].0 - w[0].0).fold(0.0, f32::max);
+    // Every row built at the end of the window is one the viewport can show,
+    // plus at most the one the scroll area builds past its edge. The end of
+    // the window is where that overshoot is largest and least symmetric: the
+    // area clamps its offset to `content_height - viewport_height`, and the
+    // leftover of a partial row pitch is spent ABOVE the viewport's top edge
+    // while the last row sits flush against its bottom. So the bound is
+    // stated in rows, not as a hard-coded pixel slack: a fixed slack has to
+    // be re-tuned whenever the pane's height changes, and the 48px the shell
+    // gave back to the tool window when the repo header was deleted was
+    // enough to tip one over.
+    let above = rows
+        .iter()
+        .filter(|(y, _)| y + ROW_H / 2.0 <= viewport.top())
+        .count();
+    let below = rows
+        .iter()
+        .filter(|(y, _)| y - ROW_H / 2.0 >= viewport.bottom())
+        .count();
+    assert_eq!(
+        (above, below),
+        (1, 0),
+        "at most one row may be built past the viewport's top edge and none past \
+         its bottom; got {above} above and {below} below {viewport:?} \
+         (row centres {:?})",
+        rows.iter().map(|(y, _)| *y).collect::<Vec<_>>()
+    );
+    // …and the list built one viewport of rows, not a window's worth of them.
+    let fits = (viewport.height() / pitch).ceil() as usize;
     assert!(
-        rows.iter()
-            .all(|(y, _)| *y > viewport.top() - 30.0 && *y < viewport.bottom() + 30.0),
-        "every row built at the end of the window is one the viewport can show, \
-         plus at most the one the scroll area builds past its edge"
+        rows.len() <= fits + 1,
+        "the list built {} rows for a {:.0}px viewport at a {pitch:.0}px pitch \
+         — more than one viewport's worth",
+        rows.len(),
+        viewport.height()
     );
 }
 

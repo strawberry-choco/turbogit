@@ -73,9 +73,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     popups::vcs_operations(ui, state);
     popups::command_palette(ui, state);
     // Workspace picker (issue #34): painted after the shell and after the
-    // palette so a same-frame open works from the palette's Switch
-    // Workspace action — its only entry point since the topbar's selector
-    // was deleted.
+    // palette so a same-frame open works from either trigger — the sidebar's
+    // workspace header row, or the palette's Switch Workspace action.
     popups::workspace_picker(ui, state);
     if let Some(d) = state.ui.dialog {
         if d == Dialog::Push {

@@ -131,9 +131,10 @@ operations refresh root status synchronously. Built via `AppState::for_roots`.
 _Avoid_: test fixture, mock app, fake state
 
 **Shell**:
-The always-present frame of the main window — workspace sidebar, repo header,
-tab strip, status bar. Everything else renders inside it; nothing sits above
-the content, so the central body starts at the top window edge.
+The always-present frame of the main window — workspace sidebar, tab strip,
+status bar. Everything else renders inside it, the activity log panel at the
+bottom of the central body; nothing sits above the content, so the central body
+starts at the top window edge.
 _Avoid_: chrome (too vague), app frame
 
 **Sidebar rail**:
@@ -178,9 +179,9 @@ dismissed (Push, Settings, New Branch…).
 _Avoid_: window, popup (that is non-modal)
 
 **Inert control**:
-A visible, enabled-looking control with deliberately no behavior in v1 (the
-repo header's branch pill, unwired branch actions, unbound settings rows).
-Rendered per the mockup; scope gaps are recorded, never hidden.
+A visible, enabled-looking control with deliberately no behavior in v1 (unwired
+branch actions, unbound settings rows). Rendered per the mockup; scope gaps are
+recorded, never hidden.
 _Avoid_: disabled (reserved for genuinely disabled state), stub
 
 **Placeholder pane**:

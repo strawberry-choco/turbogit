@@ -1,5 +1,5 @@
-//! IDE shell frame (issue #9, spec §6): workspace sidebar, repo header,
-//! tab strip, status bar.
+//! IDE shell frame (issue #9, spec §6): workspace sidebar, tool tab strip,
+//! status bar.
 //!
 //! The shell is the always-present frame of the main window (CONTEXT.md:
 //! "Shell"); every page renders inside it. Region metrics come from spec
@@ -25,9 +25,9 @@ use crate::theme::Palette;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, Granularity, Tab};
 // --- Spec metrics (§4.2 fixed heights) --------------------------------------
-/// Repo header bar height (issue #03, screen 01).
-pub const REPO_HEADER_HEIGHT: f32 = 48.0;
-/// Tab strip height (`.tg-tabs`).
+/// Tab strip height (`.tg-tabs`). The strip is the content area's topmost
+/// chrome since the repo header was deleted, so this band now sits flush
+/// against the top window edge.
 pub const TAB_STRIP_HEIGHT: f32 = 32.0;
 /// Single tab item height.
 pub const TAB_ITEM_HEIGHT: f32 = 31.0;
@@ -39,13 +39,18 @@ pub const MIN_SIDEBAR_WINDOW_WIDTH: f32 = 1000.0;
 
 const TAB_ICON_SIZE: f32 = 14.0; // §6.2 tab icons
 const TAB_TEXT: f32 = crate::theme::TYPE_CONTROL;
+/// The active tab's brand selection rule, in px. The one measure the strip
+/// owns rather than borrowing from spec §4.2, and deliberately the same 2px
+/// the sidebar's active row draws (`sidebar::paint_active_band`) so the two
+/// selected states are one idea across the shell.
+const TAB_SELECTION_RULE: f32 = 2.0;
 
 /// Compose the whole shell: frozen shortcuts, the shell frame regions
-/// (repo header / center tabs / status bar) around the workspace
-/// sidebar, then the central body (Welcome placeholder or active tool
-/// window). The tool window spans the full content width — the third
-/// metadata column was removed in the local-changes redesign (its
-/// information moved to the status bar and the repo header).
+/// (center tabs / status bar) around the workspace sidebar, then the
+/// central body (Welcome placeholder or active tool window). The tool
+/// window spans the full content width — the third metadata column was
+/// removed in the local-changes redesign (its information moved to the
+/// status bar).
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     handle_shortcuts(ui, state);
 
@@ -63,10 +68,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     }
 
     // Panel order fixes the geometry: the status bar claims the bottom
-    // and the central body takes the rest, with the repo header and tab
-    // strip laid out inside it — the tool window spans the whole content
-    // width (the metadata rail that once split it was removed, issue 03).
-    // Nothing claims the top window edge: the CentralPanel starts there.
+    // and the central body takes the rest, with the tab strip laid out
+    // inside it — the tool window spans the whole content width (the
+    // metadata rail that once split it was removed, issue 03). Nothing
+    // claims the top window edge: the CentralPanel starts there, and the
+    // tab strip is the first band inside it.
     if state.ui.show_status_bar {
         render_status_bar(ui, state);
     }
@@ -80,12 +86,14 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         } else {
             // The tool window, the activity log panel (issue #04), and the
             // workspace sidebar (issue #05) share the central body with the
-            // repo header and tab strip. Reserve explicit rects: a
-            // `ui.horizontal` would size its children to one interact row,
-            // collapsing every ScrollArea inside the tool window. The
-            // sidebar claims the left edge of the work area; the repo
-            // header and tab strip start to its right; the activity log
-            // keeps its full-width strip at the bottom (screen 01).
+            // tab strip. Reserve explicit rects: a `ui.horizontal` would size
+            // its children to one interact row, collapsing every ScrollArea
+            // inside the tool window. The sidebar claims the left edge of the
+            // work area and runs the full height of it; the tab strip starts
+            // at the sidebar's right edge and is the content column's
+            // topmost band, since the repo header above it was deleted; the
+            // activity log keeps its full-width strip at the bottom (screen
+            // 01).
             let body = ui.available_rect_before_wrap();
             let activity_h = if state.ui.activity.expanded {
                 super::activity_panel::ACTIVITY_HEIGHT
@@ -114,13 +122,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 Pos2::new(sidebar_rect.max.x, work_rect.min.y),
                 work_rect.max,
             );
-            let header_rect = Rect::from_min_max(
-                right_rect.min,
-                Pos2::new(right_rect.max.x, right_rect.min.y + REPO_HEADER_HEIGHT),
-            );
+            // The tab strip took the deleted header's place at the top of
+            // the content column: it starts at the sidebar's right edge and
+            // is flush with the window's top edge.
             let tabs_rect = Rect::from_min_max(
-                Pos2::new(right_rect.min.x, header_rect.max.y),
-                Pos2::new(right_rect.max.x, header_rect.max.y + TAB_STRIP_HEIGHT),
+                right_rect.min,
+                Pos2::new(right_rect.max.x, right_rect.min.y + TAB_STRIP_HEIGHT),
             );
             let content_rect =
                 Rect::from_min_max(Pos2::new(right_rect.min.x, tabs_rect.max.y), right_rect.max);
@@ -137,13 +144,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                 super::sidebar::show(&mut sidebar_ui, state);
             }
             ui.advance_cursor_after_rect(sidebar_rect);
-            let mut header_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(header_rect)
-                    .layout(Layout::top_down(Align::Min)),
-            );
-            render_repo_header(&mut header_ui, header_rect, state);
-            ui.advance_cursor_after_rect(header_rect);
             let mut tabs_ui = ui.new_child(
                 UiBuilder::new()
                     .max_rect(tabs_rect)
@@ -437,236 +437,6 @@ fn paint_edge_line(ui: &Ui, edge: Edge) {
     paint_edge_line_at(ui, ui.max_rect(), edge);
 }
 
-// --- Repo header -------------------------------------------------------------
-
-/// Breadcrumb crumbs: project_dir basename, then the focused root's
-/// path relative to project_dir (joined with `/`). When the focused
-/// root equals project_dir, the crumbs collapse to a single entry.
-fn breadcrumb_labels(state: &AppState) -> Option<Vec<String>> {
-    if state.show_welcome() {
-        return None;
-    }
-    let project = state
-        .project_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .map(str::to_string);
-    let focused = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .map(|r| breadcrumb_root_name(state, r));
-    let mut crumbs = Vec::new();
-    if let Some(p) = project {
-        crumbs.push(p);
-    }
-    if let Some(r) = focused {
-        let same = crumbs.last() == Some(&r);
-        if !same {
-            crumbs.push(r);
-        }
-    }
-    if crumbs.is_empty() {
-        None
-    } else {
-        Some(crumbs)
-    }
-}
-
-/// Breadcrumb leaf: focused root's path components relative to
-/// project_dir joined by `/`, or the root's basename when the root lives
-/// outside the project tree.
-fn breadcrumb_root_name(state: &AppState, root: &turbogit_domain::model::Root) -> String {
-    match root.path.strip_prefix(&state.project_dir) {
-        Ok(r) if !r.as_os_str().is_empty() => r
-            .components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/"),
-        _ => root
-            .path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("<repo>")
-            .to_string(),
-    }
-}
-
-/// Repo header bar (issue #03, screen 01): the workspace breadcrumb
-/// (project / focused root's path relative to it) in place of the
-/// topbar's, then the branch pill and the orange dirty badge (issue 02,
-/// design doc §6) carrying the focused root's uncommitted count — all on
-/// one row, with Refresh right-aligned. The row's folder icon leads the
-/// path and nothing in it is clickable except Refresh. Sits on BG with a
-/// LINE bottom stroke; renders into the shell's reserved header strip to
-/// the right of the workspace sidebar (issue #05).
-fn render_repo_header(ui: &mut Ui, rect: Rect, state: &mut AppState) {
-    let Some(root) = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-    else {
-        return;
-    };
-    // Snapshot the data the header paints so the closure borrows `state`
-    // mutably only via `state.refresh` (Refresh button click).
-    let crumbs = breadcrumb_labels(state);
-    let root_name = root
-        .path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("<repo>")
-        .to_owned();
-    let branch = root
-        .current_branch
-        .clone()
-        .unwrap_or_else(|| "<detached>".to_owned());
-    let dirty = root.status.modified() + root.status.unversioned() + root.status.conflicted.len();
-
-    ui.painter()
-        .rect_filled(rect, CornerRadius::ZERO, Palette::BG);
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(rect)
-            .layout(Layout::top_down(Align::Min)),
-    );
-    Frame::new()
-        .inner_margin(Margin::symmetric(12, 0))
-        .show(&mut child, |ui| {
-            ui.style_mut().spacing.button_padding = crate::theme::DENSITY_COMPACT_BUTTON;
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                // Focused root folder icon, then the path that names it.
-                icons::icon(ui, Icon::FOLDER_GIT, 16.0, Palette::INK_2);
-                ui.add_space(8.0);
-                // Workspace breadcrumb, relocated here from the deleted
-                // topbar: the project, then the focused root's path
-                // relative to it. Only the label changed — the leaf keeps
-                // the strong ink and title size the bare root name had,
-                // so the header's hierarchy is untouched and the row only
-                // grows by the parent crumb. `None` cannot happen while a
-                // project is open, but the name keeps the row honest if it
-                // ever does.
-                match crumbs.as_deref() {
-                    Some(crumbs) => {
-                        for (i, crumb) in crumbs.iter().enumerate() {
-                            if i > 0 {
-                                ui.label(
-                                    RichText::new("/")
-                                        .font(crate::theme::chrome_font(crate::theme::TYPE_BODY))
-                                        .color(Palette::INK_3),
-                                );
-                            }
-                            let leaf = i + 1 == crumbs.len();
-                            let crumb = RichText::new(crumb.as_str())
-                                .font(crate::theme::chrome_font(if leaf {
-                                    crate::theme::TYPE_DETAIL_TITLE
-                                } else {
-                                    crate::theme::TYPE_BODY
-                                }))
-                                .color(if leaf { Palette::INK } else { Palette::INK_2 });
-                            ui.label(if leaf { crumb.strong() } else { crumb });
-                        }
-                    }
-                    None => {
-                        ui.label(
-                            RichText::new(&root_name)
-                                .strong()
-                                .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
-                                .color(Palette::INK),
-                        );
-                    }
-                }
-
-                // Air between the path and the branch pill. A chevron used
-                // to sit in this gap, and it was what kept the two apart;
-                // without it the path and the pill read as one cluster, so
-                // the gap takes two 12px panel-padding steps — the same
-                // ~32px of air the icon and its own item spacing carried,
-                // and twice the 12px that follows the pill, so the row
-                // still reads in two groups rather than one.
-                ui.add_space(crate::theme::PANEL_PADDING * 2.0);
-
-                // Branch pill (issue #03).
-                branch_pill(ui, &branch);
-
-                ui.add_space(12.0);
-
-                // Orange dirty badge (issue 02): the focused root's
-                // uncommitted count in the reserved counter orange.
-                dirty_badge(ui, dirty);
-
-                // Right-aligned Refresh (screen 01). Sharing the header
-                // row keeps the chrome to its spec height — a sibling top
-                // panel would stack a second full-height row instead.
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let refresh = ui.button(
-                        RichText::new("Refresh")
-                            .font(crate::theme::chrome_font(crate::theme::TYPE_BODY))
-                            .color(Palette::INK_2),
-                    );
-                    widgets::focus_ring(ui, &refresh);
-                    if refresh.clicked() {
-                        state.refresh(Affected::All);
-                    }
-                });
-            });
-        });
-    paint_edge_line_at(ui, rect, Edge::Bottom);
-}
-
-/// Branch pill: 22px-tall SURFACE_2-rounded chip carrying the branch name
-/// in BRAND ink.
-fn branch_pill(ui: &mut Ui, branch: &str) {
-    let galley = ui.painter().layout_no_wrap(
-        branch.to_owned(),
-        crate::theme::chrome_font(crate::theme::TYPE_BODY),
-        Palette::ACCENT_TEXT,
-    );
-    let pad = 6.0;
-    let h = 22.0;
-    let (rect, _) =
-        ui.allocate_exact_size(Vec2::new(galley.size().x + pad * 2.0, h), Sense::hover());
-    let radius = CornerRadius::same(crate::theme::CONTROL_RADIUS);
-    ui.painter().rect_filled(rect, radius, Palette::SURFACE_2);
-    ui.painter().rect_stroke(
-        rect,
-        radius,
-        Stroke::new(1.0, Palette::LINE_SUBTLE),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().galley_with_override_text_color(
-        Pos2::new(rect.left() + pad, rect.center().y - galley.size().y / 2.0),
-        galley,
-        Palette::ACCENT_TEXT,
-    );
-}
-
-/// Orange dirty badge (issue 02, design doc §6): a chip carrying the
-/// focused root's uncommitted count in the reserved counter orange (tinted
-/// fill + orange ink). Hidden when the tree is clean.
-fn dirty_badge(ui: &mut Ui, dirty_count: usize) {
-    if dirty_count == 0 {
-        return;
-    }
-    let fg = Palette::COUNTER;
-    let bg = widgets::tint_over_bg(fg, widgets::BADGE_TINT);
-    let galley = ui.painter().layout_no_wrap(
-        dirty_count.to_string(),
-        crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
-        fg,
-    );
-    let pad = widgets::CHIP_PAD_X;
-    let h = widgets::CHIP_HEIGHT;
-    let (rect, _) =
-        ui.allocate_exact_size(Vec2::new(galley.size().x + pad * 2.0, h), Sense::hover());
-    let radius = CornerRadius::same(crate::theme::CONTROL_RADIUS);
-    ui.painter().rect_filled(rect, radius, bg);
-    ui.painter().galley_with_override_text_color(
-        Pos2::new(rect.left() + pad, rect.center().y - galley.size().y / 2.0),
-        galley,
-        fg,
-    );
-}
 // --- Tab strip ---------------------------------------------------------------------
 
 /// Shell tabs in strip order (issue #03). The legacy History tab was
@@ -683,9 +453,27 @@ const SHELL_TABS: [(Tab, Icon, &str); 5] = [
     (Tab::Submodules, Icon::FOLDER_GIT, "Submodules"),
 ];
 
-/// Tab strip (32px, BG, bottom border LINE): icon + label entries; the
-/// active tab renders INK-on-SURFACE with a LINE border on its top/left/right
-/// edges only, top-rounded (spec §6.2).
+/// Tab strip (32px, bare BG, bottom border LINE): icon + label entries.
+/// Since the repo header above it was deleted the strip is the content
+/// area's **topmost** chrome — it sits flush against the top window edge
+/// — so it is treated as a top band rather than as a hanging tab row:
+///
+/// - The strip keeps bare `Palette::BG` and gains **no** top hairline. Its
+///   top edge *is* the window edge, and a rule there would frame the
+///   window inside itself. The content column therefore reads as one
+///   continuous surface from the tab strip down through the tool window,
+///   with the single bottom `LINE` edge carrying all of the
+///   chrome-from-content information (spec §6.2).
+/// - The active tab is no longer a floating pill inset from the strip's
+///   top/bottom. A pill needs surrounding air to read as a pill; with the
+///   header gone there is no air above it, so it would read as a detached
+///   chip jammed against the window frame. It is now a full-height band
+///   anchored to the top edge — a raised `SURFACE_2` fill in `INK` with a
+///   2px `BRAND` rule along its bottom edge, the same fill-plus-brand-rule
+///   vocabulary the sidebar's active row already uses
+///   (`sidebar::paint_active_band`) for "this is the selected one".
+///   The brand rule overwrites the strip's `LINE` across the active tab's
+///   own width, so the selection underline and the divider read as one edge.
 fn render_tab_strip(ui: &mut Ui, state: &mut AppState) {
     let width = ui.available_width();
     let (strip, _) = ui.allocate_exact_size(Vec2::new(width, TAB_STRIP_HEIGHT), Sense::hover());
@@ -705,6 +493,9 @@ fn render_tab_strip(ui: &mut Ui, state: &mut AppState) {
             .painter()
             .layout_no_wrap(label.clone(), font.clone(), Color32::WHITE);
         let content_w = TAB_ICON_SIZE + 6.0 + galley.size().x;
+        // The row is the spec's 31px tab height and is the click target;
+        // `tab_item` paints its band over the full 32px strip below, so the
+        // fill and brand rule reach the divider with no unclaimed sliver.
         let rect = Rect::from_min_size(
             Pos2::new(x, strip.top()),
             Vec2::new(24.0 + content_w, TAB_ITEM_HEIGHT),
@@ -727,21 +518,37 @@ fn tab_item(
     let response = ui.interact(rect, id, Sense::click());
     let active = state.ui.tab == tab;
     let painter = ui.painter().clone();
-    // Issue 02 (design doc §6): the active tool-window tab renders as a
-    // filled pill — a fully rounded SURFACE_2 chip inset from the strip's
-    // top/bottom edges — instead of a full-width box outline. The pill is
-    // 8px shorter than the 32px strip (4px grid) and floats within it, so
-    // the active tab reads as a chip rather than an open box.
-    let pill = Rect::from_center_size(
-        rect.center(),
-        Vec2::new(rect.width() - 6.0, TAB_STRIP_HEIGHT - 8.0),
+    // The active tab's band is the row's column over the *whole* strip
+    // (`rect.top()` is the strip's top edge — the caller places it there),
+    // anchored to the window frame rather than floating inside the band.
+    let band = Rect::from_min_max(
+        Pos2::new(rect.left(), rect.top()),
+        Pos2::new(rect.right(), rect.top() + TAB_STRIP_HEIGHT),
     );
-    let pill_radius = CornerRadius::same((pill.height() / 2.0) as u8);
+    // The band's only two rounded corners are the ones that meet the window
+    // edge (north): a full-strip-height band that is square where it touches
+    // the frame reads as a slab, and CONTROL_RADIUS there is the same soft
+    // shoulder every other raised surface in the app carries.
+    let band_radius = CornerRadius {
+        nw: crate::theme::CONTROL_RADIUS,
+        ne: crate::theme::CONTROL_RADIUS,
+        sw: 0,
+        se: 0,
+    };
     if active {
-        painter.rect_filled(pill, pill_radius, Palette::SURFACE_2);
+        painter.rect_filled(band, band_radius, Palette::SURFACE_2);
+        // The selection rule, 2px of brand on the band's bottom edge — the
+        // same measure and weight the sidebar's active-row band uses, so
+        // "selected" is one idea across the shell rather than two.
+        let rule = Rect::from_min_max(
+            Pos2::new(band.left(), band.bottom() - TAB_SELECTION_RULE),
+            Pos2::new(band.right(), band.bottom()),
+        );
+        painter.rect_filled(rule, CornerRadius::ZERO, Palette::BRAND);
     } else if response.hovered() {
-        // Subtle hover chip distinct from the active pill.
-        painter.rect_filled(pill, pill_radius, widgets::tint_over_bg(Palette::INK, 0.08));
+        // Hover wears the band's geometry but not its brand rule, so a
+        // hovered-but-inactive tab never reads as selected.
+        painter.rect_filled(band, band_radius, widgets::tint_over_bg(Palette::INK, 0.08));
     }
 
     let ink = if active { Palette::INK } else { Palette::INK_3 };

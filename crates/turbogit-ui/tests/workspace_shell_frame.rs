@@ -2,44 +2,46 @@
 //!
 //! Replaces the old IDE chrome (topbar menu / toolbar / sidebar rail /
 //! tab strip) with the screen-01 layout. Nothing claims the top window
-//! edge — the central panel starts at y=0 and the shell is four regions:
+//! edge — the central panel starts at y=0 and the shell is three regions:
 //!
-//! - Repo header (48px): the workspace breadcrumb (project / focused
-//!   root's path relative to it) relocated here from the deleted topbar,
-//!   then the focused root folder icon + name + chevron, branch pill,
-//!   orange dirty badge, and a right-aligned Refresh.
 //! - Center tabs (32px): Changes (count), Log, Branches, Worktrees
-//!   (count), Submodules. Branches/Worktrees/Submodules are empty-state
-//!   placeholders in v1.
+//!   (count), Submodules. The repo header that once sat above this strip
+//!   was deleted, so the strip is now the content column's topmost band
+//!   and sits flush against the window edge. Branches/Worktrees/Submodules
+//!   are empty-state placeholders in v1.
+//! - Workspace sidebar: the left rail's repo tree. The focused root's
+//!   branch lives on its repo row here, where the deleted header's branch
+//!   pill used to carry it (`workspace_sidebar` owns those assertions).
 //! - Status bar (24px): the version / git / indexed-repo line that came
 //!   here with the topbar's deletion (so it paints on Welcome too), then
 //!   aggregated workspace state (diverged · conflicts · unpulled ·
 //!   archived · dirty · total) plus granularity and repo scope. The
 //!   far-right metadata column was removed (redesign 03); its
-//!   Path/Branch/Upstream info lives in the repo header's breadcrumb and
-//!   branch pill, and in the status-bar aggregates.
+//!   Path/Branch/Upstream info lives in the sidebar tree, the Branches
+//!   popup, and the status-bar aggregates.
 //!
-//! The brand wordmark, the workspace selector and the
+//! The brand wordmark, the workspace selector, the repo header and the
 //! Fetch/Pull/Push/Branch/More cluster are gone from the shell; their
-//! entry points are the command palette (`Ctrl+Shift+A`) and the frozen
-//! shortcuts.
+//! entry points are the command palette (`Ctrl+Shift+A`), the frozen
+//! shortcuts (`Ctrl+T` for Refresh), and the Commit window's own
+//! `Refresh changes` button.
 //!
 //! Existing Commit and Log content renders inside the new Changes / Log
 //! tabs unchanged.
 //!
 //! Tests drive the real [`turbogit_ui::ui::render`] through
 //! `egui_kittest` over temporary git repositories (CONTEXT.md "Headless
-// harness") and assert only on public surfaces: painted labels and
-// public `AppState` transitions.
-use egui::{Pos2, Shape};
-use egui_kittest::{Harness, kittest::Queryable};
+//! harness") and assert only on public surfaces: painted labels and
+//! public `AppState` transitions.
+use egui::{Key, Modifiers};
+use egui_kittest::Harness;
 use std::path::{Path, PathBuf};
 use test_support::harness::{
-    assert_not_painted, assert_painted, filled_rects, galley_origin, settle,
+    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, settle,
 };
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::Palette;
-use turbogit_ui::ui::{shell, widgets};
+use turbogit_ui::ui::shell;
 /// Run `git` in `repo`, asserting success, and return stdout.
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
@@ -98,93 +100,69 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     )
 }
 
-// -- Cycle A — repo header: breadcrumb, branch pill, dirty badge, Refresh ------
-
-#[test]
-fn repo_header_shows_branch_pill_and_refresh() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-repoheader");
-    let _ = std::fs::remove_dir_all(&parent);
-    let parent = parent.parent().unwrap().join("wsf-repoheader");
-    let _ = std::fs::remove_dir_all(&parent);
-    std::fs::create_dir_all(&parent).unwrap();
-    let project_dir = parent.clone();
-    let repo = temp_repo(&parent, "alpha");
-    let state = app_state(&project_dir, &[repo]);
-    let mut h = harness(state);
-    settle(&mut h);
-
-    // The temp parent has a deterministic basename so the breadcrumb
-    // assertion is stable across CI machines. The breadcrumb came here
-    // with the topbar's deletion: the header paints the project, then
-    // the focused root's path relative to it.
-    assert_painted(&h, "wsf-repoheader");
-    assert_painted(&h, "alpha");
-    // Branch pill: the focused root's current branch is "main".
-    assert_painted(&h, "main");
-    // Refresh affordance is exposed in the header.
-    assert_painted(&h, "Refresh");
+/// Drive a manual refresh through `Ctrl+T` — the frozen refresh shortcut
+/// (`shell::handle_shortcuts`), and the shell-level survivor of the deleted
+/// repo header's Refresh button. It dispatches the same
+/// `state.refresh(Affected::All)` the header button did, so the headless
+/// harness still gets its ahead/behind and status caches filled
+/// synchronously.
+#[track_caller]
+fn manual_refresh(h: &mut Harness<'_, AppState>) {
+    h.key_press_modifiers(Modifiers::CTRL, Key::T);
+    settle(h);
 }
 
+// -- Cycle A — the shell's top band: the tab strip (the repo header above it
+//    was deleted, so the strip is now the content column's first band) ------
+
 #[test]
-fn repo_header_paints_orange_dirty_badge_with_uncommitted_count() {
-    // Issue 02 (design doc §6): the repo header collapses to a single row —
-    // name + branch chip + an orange dirty badge carrying the focused root's
-    // uncommitted count (modified + unversioned + conflicted paths).
+fn tab_strip_is_the_content_columns_topmost_band() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .unwrap()
-        .join(".scratch/workspace-shell-frame-repoheader-dirtybadge");
+        .join(".scratch/workspace-shell-frame-topband");
     let _ = std::fs::remove_dir_all(&parent);
-    let parent = parent.parent().unwrap().join("wsf-repoheader-dirtybadge");
+    let parent = parent.parent().unwrap().join("wsf-topband");
     let _ = std::fs::remove_dir_all(&parent);
     std::fs::create_dir_all(&parent).unwrap();
     let project_dir = parent.clone();
     let repo = temp_repo(&parent, "alpha");
-    // One uncommitted file → the focused root's dirty count is 1.
-    std::fs::write(repo.join("wip.txt"), "wip\n").unwrap();
-
     let state = app_state(&project_dir, &[repo]);
     let mut h = harness(state);
     settle(&mut h);
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
 
-    // The orange dirty badge: the only COUNTER-tinted chip on the header row
-    // (its fill is the deterministic tint over the app background). The alpha
-    // is the shared named badge tint, not a restated literal that would keep
-    // passing by coincidence if the token ever moved.
-    let badge_fill = widgets::tint_over_bg(Palette::COUNTER, widgets::BADGE_TINT);
-    let (badge, _) = filled_rects(&h)
-        .into_iter()
-        .find(|(_, c)| *c == badge_fill)
-        .unwrap_or_else(|| panic!("repo header must paint an orange dirty badge"));
-    // The badge sits on the 48px repo-header row, i.e. inside the first
-    // REPO_HEADER_HEIGHT of the window and above the tab strip. The band
-    // constant replaces the retired 38px-topbar offset as the suite's one
-    // literal geometry guard; the headless harness lays the shell out
-    // inside a content inset, so the 22px chip lands well under it.
-    assert!(
-        badge.top() < shell::REPO_HEADER_HEIGHT,
-        "the dirty badge must live inside the repo header row, not below it: {badge:?}"
-    );
-    // …and carries the uncommitted count as an exact galley inside it.
-    let count_origins: Vec<Pos2> = h
-        .output()
-        .shapes
+    // The active tab's band starts at the top of the content column — it is
+    // the strip's own top edge, since the 48px repo header that used to own
+    // that space is gone.
+    let label = galley_origin(&h, "Changes").expect("the active tab label paints");
+    let rects = filled_rects(&h);
+    let band = rects
         .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(shape) if shape.galley.text() == "1" => Some(shape.pos),
-            _ => None,
-        })
+        .find(|(r, c)| *c == Palette::SURFACE_2 && r.contains(label))
+        .map(|(r, _)| *r)
+        .expect("the active tab's band");
+
+    // Nothing at all paints in the content column above it: no header band, no
+    // breadcrumb, no dirty badge. The project → root breadcrumb and the
+    // header's per-file uncommitted count are deliberately gone, so the strip
+    // is now the content column's topmost chrome and the window edge above it
+    // is bare.
+    let content_left = band.left();
+    let mut above: Vec<String> = painted_galleys(&h)
+        .iter()
+        .filter(|g| g.rect.left() >= content_left && g.rect.top() < band.top() - 0.5)
+        .map(|g| format!("text {:?} at {:?}", g.text, g.rect))
         .collect();
+    above.extend(
+        rects
+            .iter()
+            .filter(|(r, _)| r.left() >= content_left && r.top() < band.top() - 0.5)
+            .map(|(r, _)| format!("rect {r:?}")),
+    );
     assert!(
-        count_origins.iter().any(|p| badge.contains(*p)),
-        "the dirty count galley sits inside the badge"
+        above.is_empty(),
+        "the tab strip must be the content column's topmost band; painted above it: {above:#?}"
     );
 }
 
@@ -237,10 +215,10 @@ fn unimplemented_tabs_render_empty_state_placeholder() {
     assert_painted(&h, "Branches");
 }
 
-// -- Cycle C -- active tab renders as a filled pill (issue 02)
+// -- Cycle C -- the active tab is a full-strip band with a brand rule --------
 
 #[test]
-fn active_tab_renders_as_a_filled_pill_not_a_box() {
+fn active_tab_renders_as_a_full_height_band_not_a_floating_pill() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -256,32 +234,43 @@ fn active_tab_renders_as_a_filled_pill_not_a_box() {
     let mut h = harness(state);
     settle(&mut h);
 
-    // The active shell tab is a filled pill: the lighter SURFACE_2 chip,
-    // inset from the full 32px strip, containing the "Changes" label.
-    // The old full-width box outline (a SURFACE chip spanning the strip
-    // height behind the label) must be gone.
+    // The active shell tab is a full-strip-height SURFACE_2 band, anchored to
+    // the top window edge, containing the "Changes" label. It is not the
+    // floating pill that used to float 4px inside the strip, and not the old
+    // full-width SURFACE box outline behind the label.
     let origin = galley_origin(&h, "Changes").expect("the active tab label paints");
     let rects = filled_rects(&h);
-    let pill = rects
+    let band = rects
+        .iter()
+        .find(|(r, c)| *c == Palette::SURFACE_2 && r.contains(origin))
+        .unwrap_or_else(|| {
+            panic!("active tab must paint a SURFACE_2 band containing its label; rects: {rects:#?}")
+        })
+        .0;
+    assert_eq!(
+        band.height(),
+        shell::TAB_STRIP_HEIGHT,
+        "the active tab is a full-strip-height band, not a pill inset from it"
+    );
+    // The selection rule: 2px of BRAND along the band's bottom edge, as wide
+    // as the band itself, overwriting the strip's LINE divider there — the
+    // same measure the sidebar's active row uses.
+    let rule = rects
         .iter()
         .find(|(r, c)| {
-            *c == Palette::SURFACE_2
-                && r.height() > 0.0
-                && r.height() < shell::TAB_STRIP_HEIGHT - 4.0
-                && r.contains(origin)
+            *c == Palette::BRAND
+                && (r.bottom() - band.bottom()).abs() < 0.5
+                && (r.left() - band.left()).abs() < 0.5
+                && (r.right() - band.right()).abs() < 0.5
         })
+        .map(|(r, _)| *r)
         .unwrap_or_else(|| {
-            panic!(
-                "active tab must paint a filled pill (SURFACE_2, inset from {}px); rects: {rects:#?}",
-                shell::TAB_STRIP_HEIGHT
-            )
+            panic!("a 2px BRAND rule must run along the active tab's bottom edge; band: {band:?}")
         });
-    // The pill is inset on the 4px grid: 8px shorter than the 32px strip
-    // (24 px tall) so it reads as a chip, not a full-height box.
     assert_eq!(
-        pill.0.height(),
-        shell::TAB_STRIP_HEIGHT - 8.0,
-        "the active-tab pill must be 8px shorter than the strip"
+        rule.height(),
+        2.0,
+        "the tab strip's selection rule is 2px, matching the sidebar's active band"
     );
     assert!(
         !rects
@@ -296,10 +285,10 @@ fn active_tab_renders_as_a_filled_pill_not_a_box() {
 #[test]
 fn shell_is_two_zones_without_metadata_rail() {
     // Local-changes redesign issue 03: the far-right metadata column is
-    // gone — its information lives in the status bar (issue 02) and the
-    // repo header. The shell must no longer paint the rail's header or its
-    // upstream row, while the branch pill and the status-bar aggregates
-    // stay.
+    // gone — its information lives in the status bar (issue 02) and, since
+    // the repo header's deletion, the sidebar tree. The shell must no longer
+    // paint the rail's header or its upstream row, while the status-bar
+    // aggregates stay.
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -345,10 +334,12 @@ fn shell_is_two_zones_without_metadata_rail() {
         assert_not_painted(&h, old);
     }
 
-    // No regression: the metadata information stays reachable. The branch
-    // pill still paints the focused root's branch, and the status bar still
-    // aggregates the workspace counters (issue 02).
-    assert_painted(&h, "main");
+    // No regression: the status bar still aggregates the workspace counters
+    // (issue 02). The focused root's branch — the fact the removed metadata
+    // rail carried and the repo header's pill repeated — now lives on the
+    // sidebar's repo row; this harness is narrower than
+    // `MIN_SIDEBAR_WINDOW_WIDTH`, so the rail is off screen and
+    // `workspace_sidebar` is where that assertion lives.
     assert_painted(&h, "1 total");
 }
 
@@ -397,8 +388,7 @@ fn status_bar_shows_diverged_count_when_root_is_ahead_of_upstream() {
     settle(&mut h);
     // Drive a manual refresh so the headless harness computes
     // ahead/behind synchronously.
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    manual_refresh(&mut h);
     // 1 root ahead of its upstream counts as "diverged" in v1 (any
     // local work that hasn't reached the remote is loosely diverged).
     assert_painted(&h, "1 diverged");
@@ -450,8 +440,7 @@ fn status_bar_paints_unpulled_dirty_granularity_and_scope_from_real_data() {
     state.ui.show_status_bar = true;
     let mut h = harness(state);
     settle(&mut h);
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    manual_refresh(&mut h);
 
     // Aggregated counters from the real root data (colors are asserted at
     // the pure seam in `ui::shell::tests`); every chip only paints when

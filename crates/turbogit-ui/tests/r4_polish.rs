@@ -263,16 +263,18 @@ fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, A
 
 #[test]
 fn vocabulary_button_paints_brand_focus_ring_when_focused() {
-    // The repo header is the shell's surviving vocabulary-button row, so it
-    // needs a project open (the Welcome page shows the shell chrome no more).
+    // The repo header — the shell's old vocabulary-button row — is gone, so the
+    // Changes card's `Refresh changes` icon button is the surviving carrier of
+    // that contract. It needs a project open (the Welcome page shows the shell
+    // chrome no more).
     let seed = seeded_project();
     let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Commit);
 
-    harness.get_by_label("Refresh").focus();
+    harness.get_by_label("Refresh changes").focus();
     settle(&mut harness);
 
-    let center = harness.get_by_label("Refresh").rect().center();
-    assert_ring_covers(&harness, center, "focused repo-header action button");
+    let center = harness.get_by_label("Refresh changes").rect().center();
+    assert_ring_covers(&harness, center, "focused commit-window refresh button");
 }
 
 #[test]
@@ -291,11 +293,11 @@ fn text_input_paints_brand_focus_ring_when_focused() {
 /// be ambiguous about which widget it sits on (§R4.4).
 #[test]
 fn only_one_focus_ring_is_visible_at_a_time() {
-    // Same repo-header button as the guardrail above, so the shell is up.
+    // Same vocabulary button as the guardrail above, so the shell is up.
     let seed = seeded_project();
     let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Commit);
 
-    harness.get_by_label("Refresh").focus();
+    harness.get_by_label("Refresh changes").focus();
     settle(&mut harness);
 
     let rings = brand_rings(&harness);
@@ -434,9 +436,10 @@ fn shell_chrome_holds_at_small_window_sizes() {
 
     let vp = viewport(560.0, 420.0);
     // Every chrome band stays painted and the status bar pins to the bottom.
-    // Labels are chosen unique across the shell frame (issue #03): the
-    // repo header's right-aligned action and center tab strip items.
-    assert_visible(&harness, "Refresh", vp, "repo header");
+    // The shell's chrome is now the tab strip and the status bar: the repo
+    // header above the strip was deleted, and the sidebar is off screen below
+    // `MIN_SIDEBAR_WINDOW_WIDTH`. Labels are the center tab strip items,
+    // unique across the shell frame (issue #03).
     assert_visible(&harness, "Changes", vp, "tab strip");
     assert_visible(&harness, "Log", vp, "tab strip");
 

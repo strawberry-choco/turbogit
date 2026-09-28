@@ -361,19 +361,19 @@ fn workspace_rows(state: &AppState) -> Vec<WorkspaceRow> {
 }
 
 /// Workspace picker (issue #34): the recents list, plus the two
-/// folder-picker flows the Welcome screen offers. Palette-only since the
-/// topbar's workspace selector was deleted — [`Action::SwitchWorkspace`]
-/// is the one entry point.
+/// folder-picker flows the Welcome screen offers. Two routes open it — the
+/// palette's [`Action::SwitchWorkspace`] and the sidebar's workspace header
+/// row, which records the anchor the dropdown hangs from.
 ///
 /// A state-driven [`egui::Window`] rather than a response-bound
 /// `Popup::menu` (ADR-0017): `Popup::menu` derives its open state from a
-/// click on a response that only exists during the topbar's own render, so
-/// the palette could never open it.
+/// click on a response that only exists during the trigger's own render, so
+/// neither the palette nor a later frame could open it.
 pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     // egui's own dropdown idiom (containers/popup.rs): a click outside only
     // dismisses once the surface was visible on the PREVIOUS frame, so the
-    // selector click that opens the picker cannot also close it this frame.
+    // trigger click that opens the picker cannot also close it this frame.
     let was_open_id = egui::Id::new("turbogit_workspace_picker_was_open");
     if !state.ui.workspace_picker_open {
         ctx.memory_mut(|m| m.data.insert_temp(was_open_id, false));
@@ -388,10 +388,10 @@ pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    // Position: the topbar's selector recorded an anchor (ADR-0017), but
-    // that region is gone — the palette is the only route, so the
-    // fallback below is the only one left. It hangs the dropdown from the
-    // top window edge, where the selector used to sit.
+    // Position: the sidebar's workspace header records an anchor at click
+    // time (ADR-0017) so the dropdown hangs under the row. `None` — the
+    // palette route, which has no trigger rect — falls back to the fixed
+    // position below.
     let pos = state
         .ui
         .workspace_picker_anchor

@@ -1,5 +1,11 @@
 # Switching workspaces happens from the topbar picker, reachable from the palette
 
+**Amended (2026-09-28): the topbar's trigger is gone and the sidebar's
+workspace header is now the mouse trigger.** The picker, its state, and this
+file's D1–D6 stand; only *which* surface opens it changed, and it is recorded
+here rather than in a new ADR because nothing about the decision moved. See
+the amendment note at the end.
+
 The topbar's workspace selector shipped as a stub that looked live and
 discarded every click; the only route to another workspace was a three-step
 detour (Ctrl+Shift+A → Open Welcome → a Welcome card). Issue #34 replaces the
@@ -10,14 +16,15 @@ would otherwise re-litigate.
 
 `Popup::menu(&selector)` is the local precedent (commit window's branch menu)
 and needs zero state, but it is mouse-only: its open state derives from a
-click on a response that only exists during the topbar's own render, so the
-command palette could never open it. ADR-0011 makes the palette the
-keyboard-accessibility fallback for everything the redesign relocates or
-turns inert; shipping a mouse-only workspace switch would reintroduce exactly
-the problem that ADR exists to prevent. Every other floating surface
-(`command_palette`, `vcs_operations`, `branches_popup`) is already a
-state-driven window painted after the shell in `ui::render`, so a click
-recorded during the topbar's render paints the picker in the same frame.
+click on a response that only exists during the trigger's own render, so
+neither the command palette nor any later frame could open it. ADR-0011 makes
+the palette the keyboard-accessibility fallback for everything the redesign
+relocates or turns inert; shipping a mouse-only workspace switch would
+reintroduce exactly the problem that ADR exists to prevent. Every other
+floating surface (`command_palette`, `vcs_operations`, `branches_popup`) is
+already a state-driven window painted after the shell in `ui::render`, so a
+click recorded during the trigger's render paints the picker in the same
+frame.
 
 ## D2 — the palette entry is palette-only; `Action::all()` is untouched
 
@@ -32,9 +39,9 @@ precedent `SwitchWorkspace` copies verbatim).
 Two session-only `UiState` fields (`workspace_picker_open`,
 `workspace_picker_anchor`) sit beside `vcs_popup` / `command_palette` /
 `branches_popup`, and neither enters `persistence::UiStateData`. The anchor
-is the selector's bottom-left captured at click time so the dropdown sits
-under the chevron without hardcoding a topbar x-offset; `None` (palette
-route) falls back to a fixed position. It is stored as a plain `(f32, f32)`
+is the trigger's bottom-left captured at click time so the dropdown sits
+under the row without hardcoding a trigger x-offset; `None` (palette route)
+falls back to a fixed position. It is stored as a plain `(f32, f32)`
 rather than `egui::Rect` because `turbogit-app` is egui-free by design —
 adding an egui type to store two numbers would trade the crate's boundary
 for nothing. The UI layer owns the `Pos2` conversion.
@@ -67,5 +74,24 @@ with no explanation. `open_recent` pre-checks `is_dir()` and surfaces
 Esc and click-outside are hand-rolled (a title-bar-less window gives
 neither for free). The click-outside path follows egui's own dropdown idiom
 (`containers/popup.rs`): a click only dismisses once the surface was visible
-on the *previous* frame, so the selector click that opens the picker cannot
+on the *previous* frame, so the trigger click that opens the picker cannot
 also close it in the same frame.
+
+## Amendment — the trigger is the sidebar's workspace header
+
+The topbar never got its selector back; it was deleted, which left the picker
+reachable only by keyboard (the palette) and no mouse affordance at all. The
+sidebar's workspace header row — the folder icon, project basename, repo count
+and the chevron that had always looked like a dropdown — is now the trigger:
+the whole band is a `ui.interact(…, Sense::click())` with a stable id, a hand
+cursor and a "Switch workspace" tooltip on hover.
+
+D1 still decides, and the same reason decides it a second time. The reason was
+never "the topbar is gone" — it was that a `Popup::menu` bound to one render's
+response can be opened *only* by that click. The header's response has exactly
+the same lifetime, so the same conclusion holds: the click records
+`workspace_picker_open` and the window paints later in the same frame. Making
+the header a `Popup::menu` would trade the palette's keyboard route for a
+dropdown that can only ever be opened by the one response it is bound to. D2
+(unchanged), D3 (the anchor is now the header row's bottom-left) and D4–D6
+(unchanged) are untouched by this.

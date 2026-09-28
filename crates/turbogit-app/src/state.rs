@@ -970,10 +970,10 @@ pub struct UiState {
     /// Whether the floating workspace picker is showing.
     pub workspace_picker_open: bool,
     /// Where the dropdown hangs from, in screen points: the trigger's
-    /// bottom-left. `None` — the only production value left since the
-    /// topbar's selector was deleted — means the picker's own fallback
-    /// position, which the palette's `Switch Workspace` action leaves it
-    /// at. Plain `f32` pairs — this crate is egui-free.
+    /// bottom-left. `Some` comes from the sidebar's workspace header click;
+    /// `None` — the palette route, which has no trigger rect — means the
+    /// picker's own fallback position. Plain `f32` pairs — this crate is
+    /// egui-free.
     pub workspace_picker_anchor: Option<(f32, f32)>,
     pub settings_open: bool,
     /// The Settings modal category currently shown (issue #26, screen 11).
