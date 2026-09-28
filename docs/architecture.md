@@ -39,7 +39,7 @@ flowchart TB
 
     subgraph UICrate["turbogit-ui"]
         THEME["theme.rs — dark-only palette (ADR-0003)"]
-        SHELL["ui/shell.rs — IDE shell<br/>(workspace sidebar / repo header / tab strip / status bar)"]
+        SHELL["ui/shell.rs — IDE shell<br/>(workspace sidebar / tab strip / status bar)"]
         WINDOWS["ui/{welcome,commit_window,log_window,worktrees,submodules}.rs"]
         DIFF["ui/diff/ — specialized diff component"]
         SURFACES["ui/{conflicts,push_dialog,remotes_dialog,popups,branch_widget,dialogs,settings_modal}.rs"]
@@ -145,9 +145,10 @@ prerequisite for anything else.
 
 ### 2. UI (`turbogit-ui`)
 - IntelliJ-style IDE shell composed in `shell::render`: a 280px workspace
-  sidebar, 48px repo header, 32px tab strip, 24px status bar. There is no
-  topbar — the central body starts at the top window edge. Global shortcut
-  dispatch lives here (five frozen shortcuts, ADR-0009).
+  sidebar, 32px tab strip, 24px status bar, with the activity log panel across
+  the bottom of the central body. There is no topbar — the central body starts
+  at the top window edge. Global shortcut dispatch lives here (five frozen
+  shortcuts, ADR-0009).
 - Central body routes between Welcome placeholder and active tool windows
   (Commit, Log). Floating surfaces render on top each frame: Branches popup,
   VCS operations popup, command palette, dialogs, push dialog, confirm prompts,

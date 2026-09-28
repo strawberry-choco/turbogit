@@ -8,15 +8,27 @@
 //! promote their repo with a path label; the rules are uniform under the
 //! live and smart-group filters (issue 03).
 //!
+//! Since the shell's repo header was deleted, the rail's repo row is where
+//! the focused root's branch is painted, and the rail is the only surface
+//! carrying the project → root path (as the tree itself). Refresh no longer
+//! has a button of its own here: the tests drive `Ctrl+T`, the frozen
+//! shortcut the shell's own `handle_shortcuts` still binds to the same
+//! `state.refresh(Affected::All)`.
+//!
 //! Tests drive the real [`turbogit_ui::ui::render`] through `egui_kittest`
 //! over temporary git repositories (CONTEXT.md "Headless harness") and
 //! assert only on public surfaces: painted labels, public `AppState`
 //! transitions, and the exact galley texts painted into the frame.
 use egui::accesskit::Role;
+use egui::{Key, Modifiers};
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
-use test_support::harness::{assert_not_painted, assert_painted, painted_text, settle};
+use test_support::harness::{
+    assert_not_painted, assert_painted, filled_rects, painted_galleys, painted_text, settle,
+};
 use turbogit_app::state::AppState;
+use turbogit_ui::theme::Palette;
+use turbogit_ui::ui::components::{RowState, row_fill};
 
 /// Run `git` in `repo`, asserting success, and return stdout.
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -177,6 +189,20 @@ fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
     );
 }
 
+/// Drive a manual refresh through `Ctrl+T`.
+///
+/// The repo header's right-aligned Refresh button is gone, and the rail has
+/// no refresh control of its own. `Ctrl+T` is the frozen shortcut the shell
+/// still binds to `state.refresh(Affected::All)` (`shell::handle_shortcuts`)
+/// — the same dispatch the header button made, reachable from anywhere the
+/// shell is up, so the headless harness gets its status/ahead-behind caches
+/// filled synchronously exactly as before.
+#[track_caller]
+fn manual_refresh(h: &mut Harness<'_, AppState>) {
+    h.key_press_modifiers(Modifiers::CTRL, Key::T);
+    settle(h);
+}
+
 // -- Cycle A — the tree paints: workspace header, folders, repo rows --
 
 #[test]
@@ -218,10 +244,9 @@ fn sidebar_repo_row_paints_ahead_badge_after_refresh() {
     let state = app_state(&project, &[alpha, lib]);
     let mut h = harness(state);
     settle(&mut h);
-    // Ahead/behind fills through the same synchronous refresh the header
-    // badge uses (headless harness path).
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    // Ahead/behind fills through the same synchronous `Ctrl+T` refresh the
+    // shell dispatches for a manual one (headless harness path).
+    manual_refresh(&mut h);
 
     assert_galley(&h, "↑1");
 }
@@ -309,8 +334,7 @@ fn smart_groups_paint_with_member_counts() {
     let state = app_state(&project, &[alpha, lib, extra]);
     let mut h = harness(state);
     settle(&mut h);
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    manual_refresh(&mut h);
 
     // The section header and every non-empty built-in group (the diverged
     // alpha is also behind its upstream, so "unpulled commits" joins the
@@ -343,8 +367,7 @@ fn clicking_a_smart_group_filters_the_tree_to_its_members() {
     let state = app_state(&project, &[alpha, lib, extra]);
     let mut h = harness(state);
     settle(&mut h);
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    manual_refresh(&mut h);
 
     // Only alpha has unpushed commits: the tree narrows to it, dropping
     // lib and extra plus the now-empty oss group.
@@ -399,8 +422,7 @@ fn clicking_unpulled_group_filters_to_repos_with_incoming_commits() {
     let state = app_state(&project, &[alpha, lib, extra]);
     let mut h = harness(state);
     settle(&mut h);
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    manual_refresh(&mut h);
 
     h.get_by_label("unpulled commits").click();
     settle(&mut h);
@@ -422,8 +444,7 @@ fn smart_group_membership_follows_a_refresh() {
     let state = app_state(&project, &[alpha, lib.clone()]);
     let mut h = harness(state);
     settle(&mut h);
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    manual_refresh(&mut h);
 
     // All-clean workspace: zero-member groups hide entirely (the section
     // header itself still paints, per the design).
@@ -436,8 +457,7 @@ fn smart_group_membership_follows_a_refresh() {
     // lib gets uncommitted work on disk; the next refresh collects it into
     // the dirty worktree group with no manual action beyond the refresh.
     std::fs::write(lib.join("wip.txt"), "wip\n").unwrap();
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    manual_refresh(&mut h);
     assert_painted(&h, "dirty worktree");
     assert_galley(&h, "1");
     // Membership is computed, not manual: the still-clean alpha joins
@@ -499,8 +519,8 @@ fn new_rule_editor_creates_a_rule_that_collects_and_filters_repos() {
 
     // …and evaluates like a built-in: clicking it narrows the tree to the
     // matching repos (lib only; the memberless frontend group drops out —
-    // the repo header's breadcrumb still names the focused repo, so assert
-    // on the group).
+    // the Commit window's one tree also paints repo names, so assert on the
+    // sidebar's own group header).
     h.get_by_label("release branches").click();
     settle(&mut h);
     assert_eq!(
@@ -617,20 +637,25 @@ fn rules_survive_an_app_restart() {
     assert_galley(&h2, "1");
 }
 
-// -- Cycle B — clicking a repo focuses it everywhere --
+// -- Cycle B — clicking a repo focuses it in the rail's own row -------------
 
 #[test]
-fn clicking_repo_row_focuses_it_in_header_and_breadcrumb() {
+fn clicking_repo_row_moves_the_focus_band_to_it() {
     let (project, alpha, lib) = two_group_project("focus");
     let state = app_state(&project, &[alpha.clone(), lib.clone()]);
     let mut h = harness(state);
     settle(&mut h);
 
-    // `for_roots` focuses the first registered root (alpha); the repo
-    // header/breadcrumb show alpha's name.
+    // `for_roots` focuses the first registered root (alpha), so the focus band
+    // starts on alpha's row.
     assert_eq!(
         h.state().selected_root,
         Some(turbogit_domain::model::RootId(alpha.clone().into()))
+    );
+    let alpha_row = h.get_by_label("alpha").rect();
+    assert!(
+        focused_band(&h).is_some_and(|b| alpha_row.intersect(b) == b),
+        "the first registered root's row must start out carrying the focus band"
     );
 
     h.get_by_label("lib").click();
@@ -641,10 +666,77 @@ fn clicking_repo_row_focuses_it_in_header_and_breadcrumb() {
         h.state().selected_root,
         Some(turbogit_domain::model::RootId(lib.clone().into()))
     );
-    // The shell follows everywhere: the repo header's breadcrumb repaints the
-    // focused repo's path/name (the metadata rail that once carried the path
-    // was removed in the redesign; the header breadcrumb keeps it reachable).
-    assert_painted(&h, "oss/lib");
+    // And the rail follows: the focus band moved with the selection. This is
+    // where the shell now shows the focused root — the project → root
+    // breadcrumb that used to live in the deleted repo header is gone, and
+    // the removed metadata rail took the path with it; the tree's own
+    // structure and this selection band are what carry it.
+    let lib_row = h.get_by_label("lib").rect();
+    let band = focused_band(&h).expect("the clicked repo row must paint the focus-selected band");
+    assert!(
+        lib_row.intersect(band) == band,
+        "the focus band must sit inside the clicked row; row {lib_row:?}, band {band:?}"
+    );
+}
+
+/// The focus-selected fill painted for a row, if any. `RowState::FocusSelected`
+/// is the tree/list vocabulary's focus band, and the fill is read off the token
+/// rather than restated, so it keeps tracking the theme.
+fn focused_band(h: &Harness<'_, AppState>) -> Option<egui::Rect> {
+    let fill = row_fill(RowState::FocusSelected);
+    filled_rects(h)
+        .into_iter()
+        .find(|(r, c)| *c == fill && r.height() > 0.0)
+        .map(|(r, _)| r)
+}
+
+/// A repo row paints its own branch, and the focused one is where the shell
+/// shows the current branch now that the repo header's branch pill is gone.
+#[test]
+fn focused_repo_row_paints_its_branch_where_the_header_pill_did() {
+    let (project, alpha, lib) = two_group_project("branch");
+    // A distinctive branch so the assertion cannot pass on some other "main".
+    git(&lib, &["checkout", "-q", "-b", "release/7"]);
+    let state = app_state(&project, &[alpha.clone(), lib.clone()]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    h.get_by_label("lib").click();
+    settle(&mut h);
+
+    // The branch is painted *inside lib's own row*, not merely somewhere in
+    // the frame.
+    let row = h.get_by_label("lib").rect();
+    let galleys = painted_galleys(&h);
+    let inside: Vec<&str> = galleys
+        .iter()
+        .filter(|g| row.intersect(g.rect) == g.rect)
+        .map(|g| g.text.as_str())
+        .collect();
+    assert!(
+        inside.contains(&"release/7"),
+        "the focused repo row must paint its branch; the row holds {inside:?}"
+    );
+    // The unfocused sibling keeps its own branch, so the row's branch label is
+    // a per-row fact rather than a single frame-wide readout.
+    let alpha_row = h.get_by_label("alpha").rect();
+    let alpha_inside: Vec<&str> = galleys
+        .iter()
+        .filter(|g| alpha_row.intersect(g.rect) == g.rect)
+        .map(|g| g.text.as_str())
+        .collect();
+    assert!(
+        alpha_inside.contains(&"main"),
+        "an unfocused repo row must still paint its own branch; the row holds {alpha_inside:?}"
+    );
+    // Palette-wise the branch is the row's quiet ink, one step down from the
+    // repo name beside it.
+    let branch_color = galleys
+        .iter()
+        .find(|g| g.text == "release/7" && row.intersect(g.rect) == g.rect)
+        .expect("the branch galley inside the focused row")
+        .color;
+    assert_eq!(branch_color, Palette::INK_3, "the branch label's ink");
 }
 
 // -- Cycle C — folder collapses key by relative path --
@@ -788,8 +880,7 @@ fn folder_rows_paint_subtree_dirty_badges_reflecting_the_worktree() {
     // dirty badge (a "1" for one dirty repo in the subtree) and in the
     // "dirty worktree" smart-group row.
     std::fs::write(lib.join("wip.txt"), "wip\n").unwrap();
-    h.get_by_label("Refresh").click();
-    settle(&mut h);
+    manual_refresh(&mut h);
     assert_galley(&h, "1");
 
     // A conflicted repo counts as dirty too (the smart-group predicate).
@@ -838,7 +929,8 @@ fn background_poll_badges_incoming_commits_without_manual_refresh() {
     );
 
     // One scheduler tick polls the remotes and lands the finding in the
-    // ahead/behind caches; the next frame badges the row with no Refresh.
+    // ahead/behind caches; the next frame badges the row with no manual
+    // refresh.
     h.state_mut().tick_incoming_poll(std::time::Instant::now());
     h.run();
 

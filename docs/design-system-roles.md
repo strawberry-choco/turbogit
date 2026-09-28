@@ -184,7 +184,9 @@ not.
 
 A chip is a compact fact marker. A pill is a branch-kit fact marker. A row is an
 interactive or data-list unit. A selection state is a row-state decision. None
-is a generic synonym for another.
+is a generic synonym for another. The shared chip vocabulary paints an
+unstroked fill, so a chip that needs a border is a different role with no
+shared equivalent and paints its own stroke.
 
 #### The `RefKind` asymmetry (intentional)
 
@@ -212,7 +214,7 @@ speculation.
 
 #### Per-site chip verdicts (ticket 08)
 
-Seven surfaces in the app look like the shared chip without being the same role.
+Five surfaces in the app look like the shared chip without being the same role.
 None of them was migrated. Each was adjudicated individually and is recorded
 here with the reasoning, not only the outcome, so the next maintainer inherits
 the judgement instead of re-deriving it. The verdict vocabulary is **migrate**,
@@ -221,18 +223,24 @@ the judgement instead of re-deriving it. The verdict vocabulary is **migrate**,
 **No site in this table was marked _migrate_.** The one chip-like surface that
 did move — the log file-row status pill — already had, and is recorded under
 *Log surface pills* below. Every other candidate is a case where adopting the
-shared chip would cost a border, an icon, a fixed numeral, or a nested button;
-those are design losses, not refactoring debt.
+shared chip would cost an icon, a fixed numeral, or a nested button; those are
+design losses, not refactoring debt.
 
 | Site | Where | Verdict | Reasoning |
 | --- | --- | --- | --- |
-| Shell repository-header chip | `ui::shell::branch_pill` | keep with a named token; the role also differs | It is a *bordered* chip: a `SURFACE_2` fill with a `LINE_SUBTLE` **inside** stroke around it. The shared chip vocabulary paints an unstroked fill, so migrating it would drop the border that is the whole point of the treatment — it is what makes the repository's current branch read as a named object rather than as a word floating in the header. Its radius already comes from the named `theme::CONTROL_RADIUS` token rather than a local literal, so the "named token" half of the verdict is already satisfied and there is nothing to name. |
-| Shell dirty badge | `ui::shell::dirty_badge` | keep with a named token; the role also differs | A counter, not a label: it is the focused root's uncommitted *count* in the reserved counter orange. It already derives its fill from the shared `widgets::BADGE_TINT` and its radius from `theme::CONTROL_RADIUS`, and it already reuses the shared `CHIP_HEIGHT`/`CHIP_PAD_X`. The shared `components::pill` count role is a branch-kit fact marker with its own smaller dimensions; adopting it here would resize the badge. |
 | Branch-tree sync chip | `ui::branch_tree_view::sync_chip` | keep with a named token; the role also differs | It carries a 10px status icon and monospaced `TYPE_CHIP` type inside its fill, which is the branch tree's sync-relationship vocabulary. The shared chip geometry has no icon slot and no mono variant, so adopting it would mean either dropping the icon or growing a config flag on the shared primitive — both of which breach non-negotiable boundary 5. Its radius is already the named `theme::CHIP_RADIUS`, and its fill already resolves through the shared `components::sync_bg` (which is itself now written as `tint_over_bg(sync_ink(kind), BADGE_TINT)` rather than a repeated `0.18`). |
 | Welcome step indicator | `ui::welcome::step_pill` | keep with a named token; the role also differs | A fixed 20×20 `SURFACE_3` numeral roundel, not a variable-width fact marker: its width is its height because the content is a single digit, and it is numbered 1–5 by position in a list. It already takes its radius from the named `theme::PILL_RADIUS` (which is itself defined as the welcome roundel's half-height, so the two can never disagree) and its centring from the shared two-axis text helper. The roundel's 20px edge is screen-specific geometry and stays a local `STEP_PILL` constant. |
 | Branches scope indicator | `ui::branches::scope_label` | keep because the role differs | **Not a chip.** It paints coloured text with no background, no fill, no radius, and no padding. Renamed from `scope_chip` to say what it is. |
 | Submodules status indicator | `ui::submodules::status_label` | keep because the role differs | **Not a chip.** It paints coloured text with no background, no fill, no radius, and no padding. Renamed from `status_chip` to say what it is. |
 | Settings removable pattern chip | `ui::settings_modal::pattern_chip` | **genuine gap, no shared equivalent** | A `SURFACE_2` frame carrying a label *and* a `×` remove control that is a real button with its own accessibility node (`Remove <pattern>`). The shared chip vocabulary has no slot for a nested interactive control, so there is no equivalent to adopt. Its radius is the named `theme::CONTROL_RADIUS`. **Deferred:** whether to add a shared "removable chip" primitive or to document this as a page-local frame is a decision for its own ticket. |
+
+**The two shell chip sites left with the repo header.** `shell::branch_pill`
+and `shell::dirty_badge` were adjudicated here while that header existed.
+Deleting the header deleted both functions, so their rows are removed rather
+than reworded, the same way the retired `status_badge` row below was. The one
+judgement among them that was not site-specific is now a rule of the shared
+chip vocabulary, in *Chip roles* above: a bordered chip has no shared
+equivalent.
 
 **Turning either coloured-text surface into a real chip is a design change
 requiring its own ticket, not a consolidation.** Giving `branches::scope_label`
@@ -379,13 +387,12 @@ page.
 rather than dividers, and one genuine mismatch was found and left for the
 follow-up sweep below: the commit window's tree indent guide
 (`commit_window::indent_guide`), the multi-selection summary's header rule
-(`multi_selection`), the sidebar's selection-bar top edge (`sidebar`), and the
-shell repository-header chip's border (`shell::branch_pill`) all wear
-`LINE_SUBTLE` and are all chrome; but the shell's own panel edge rules
-(`shell::paint_edge_line_at` — the repo-header, tab-strip and status-bar
-edges) wear `LINE`, the *footer-rule* value, even though their role is
-structural. Their role is identified here; their value is not re-pointed,
-because this ticket is about naming roles and not re-sweeping call sites.
+(`multi_selection`), and the sidebar's selection-bar top edge (`sidebar`) all
+wear `LINE_SUBTLE` and are all chrome; but the shell's own panel edge rules
+(`shell::paint_edge_line_at` — the tab-strip and status-bar edges) wear `LINE`,
+the *footer-rule* value, even though their role is structural. Their role is
+identified here; their value is not re-pointed, because this ticket is about
+naming roles and not re-sweeping call sites.
 
 ### A fourth hairline tone that no token owns
 

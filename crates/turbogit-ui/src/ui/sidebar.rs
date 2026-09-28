@@ -379,9 +379,27 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
+/// The header row's tooltip and accessible name — the one place the sidebar
+/// names the workspace switch in words, for anyone who has not found the
+/// keyboard route yet.
+const WORKSPACE_SWITCH_HINT: &str = "Switch workspace";
+
 /// Workspace header row: folder icon + project basename + right-aligned
-/// total repo count badge (screen 01's "37"). The workspace picker itself
-/// belongs to issue #34 — the row is inert in v1.
+/// total repo count badge (screen 01's "37") — and, as of issue #34's follow
+/// up, the mouse trigger for the workspace picker that already exists
+/// (`popups::workspace_picker`).
+///
+/// The row reads as one control, so the whole band is the hit target: the
+/// layout below shrinks to the icon / name / count / chevron cluster, and the
+/// rect is widened back out to the rail before the click is registered, so
+/// aiming at the chevron or at the empty space beside the project name both
+/// land. The composition itself is untouched — same icons, same type ramp, same
+/// 12px insets.
+///
+/// The one thing that is deferred is the chevron's *ink*: its slot is
+/// allocated in the layout (so nothing moves) but painted after the
+/// interaction exists, because the hover state it answers to is only known
+/// once the row has a click target.
 fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
     let name = state
         .project_dir
@@ -390,7 +408,11 @@ fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
         .unwrap_or("<workspace>")
         .to_string();
     let total = state.multi.roots.len().to_string();
-    ui.horizontal(|ui| {
+    let rail_width = ui.available_width();
+    // The chevron's size is both the slot it occupies and the stroke scale.
+    let chevron = 12.0;
+    let mut chevron_slot = None;
+    let painted = ui.horizontal(|ui| {
         ui.add_space(12.0);
         icons::icon(ui, Icon::FOLDER_GIT, 14.0, Palette::BRAND);
         ui.add_space(6.0);
@@ -407,9 +429,49 @@ fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
                     .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
                     .color(Palette::INK_2),
             );
-            icons::icon(ui, Icon::CHEVRON_DOWN, 12.0, Palette::INK_3);
+            let (slot, _) = ui.allocate_exact_size(Vec2::splat(chevron), Sense::hover());
+            chevron_slot = Some(slot);
         });
     });
+    // `ui.horizontal` shrinks to its content, so widen that rect back out to
+    // the rail: the hit target is the whole band, not the glyph cluster.
+    let content = painted.response.rect;
+    let row = Rect::from_min_max(
+        Pos2::new(content.left(), content.top()),
+        Pos2::new(content.left() + rail_width, content.bottom()),
+    );
+    let response = ui
+        .interact(row, ui.id().with("workspace_header"), Sense::click())
+        .on_hover_text(WORKSPACE_SWITCH_HINT);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, WORKSPACE_SWITCH_HINT));
+    let hovered = response.hovered();
+    if hovered {
+        // egui only sets the pointer for its own buttons; a `Sense::click()`
+        // row has to ask for the hand itself.
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if let Some(slot) = chevron_slot {
+        // One step up the ink ramp on hover, so the affordance reads as live
+        // without competing with the workspace name's primary ink.
+        icons::paint_icon(
+            ui.painter(),
+            slot.min,
+            chevron,
+            Icon::CHEVRON_DOWN,
+            if hovered {
+                Palette::INK_2
+            } else {
+                Palette::INK_3
+            },
+        );
+    }
+    if response.clicked() {
+        state.ui.workspace_picker_open = true;
+        // The dropdown hangs from the row's bottom-left (ADR-0017), clear of
+        // the band it came from.
+        state.ui.workspace_picker_anchor =
+            Some((row.left(), row.bottom() + crate::theme::ITEM_SPACING.y));
+    }
 }
 
 /// The SMART GROUPS section (issue #06, screens 01/04; user rules are

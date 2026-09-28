@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
-use test_support::harness::{assert_not_painted, assert_painted, painted_text};
+use test_support::harness::{assert_not_painted, assert_painted, painted_galleys, painted_text};
 use turbogit_app::activity::{ActivityEntry, ActivityKind, TimeWindow};
 use turbogit_app::state::AppState;
 
@@ -492,15 +492,25 @@ fn real_fetch_lands_in_the_panel() {
         harness.state().ui.activity.entries
     );
     // The new entry is visible in the painted feed: its repo label (alpha)
-    // appears more than once on screen — the workspace sidebar's repo row
-    // and the feed row.
-    let alpha_rows = painted_text(&harness)
+    // and the outcome it reported sit on one painted row. This is asserted
+    // against the row rather than as a raw whole-frame occurrence count,
+    // because the two other surfaces that used to print a second `alpha` —
+    // the now-deleted repo header's breadcrumb and, at this width, the
+    // sidebar (off screen below `MIN_SIDEBAR_WINDOW_WIDTH`) — are gone.
+    let galleys = painted_galleys(&harness);
+    let outcome = galleys
         .iter()
-        .filter(|t| t.trim() == "alpha")
-        .count();
+        .find(|g| g.text.starts_with("Fetch ·"))
+        .unwrap_or_else(|| panic!("the fetch outcome must be painted; painted:\n{galleys:#?}"));
+    let same_row = |g: &test_support::harness::PaintedGalley| {
+        g.text == "alpha" && g.rect.max.y > outcome.rect.min.y && g.rect.min.y < outcome.rect.max.y
+    };
+    let label = galleys
+        .iter()
+        .find(|g| same_row(g))
+        .unwrap_or_else(|| panic!("the feed row's repo label must paint; painted:\n{galleys:#?}"));
     assert!(
-        alpha_rows >= 2,
-        "the fetch entry's repo row should be painted; painted:\n{:?}",
-        painted_text(&harness)
+        label.rect.left() < outcome.rect.left(),
+        "the repo label leads its outcome on the feed row: label {label:?}, outcome {outcome:?}"
     );
 }
