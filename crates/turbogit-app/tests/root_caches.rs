@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
-use turbogit_app::events::{AppEvent, LogPageMode};
+use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::operation::OpKind;
 use turbogit_app::root_caches::{Affected, LogScope, RootCaches};
 use turbogit_app::state::AppState;
@@ -89,7 +89,7 @@ fn prime_fake_entries(state: &mut AppState, roots: &[RootId]) {
             .send(AppEvent::LogLoaded {
                 root: root.clone(),
                 commits: Ok(vec![fake_commit(root, "fake: untouched")]),
-                mode: LogPageMode::Replace,
+                mode: LogBatchMode::Replace,
             })
             .expect("send LogLoaded");
         state
@@ -462,7 +462,7 @@ fn refs_fetch_guard_dedupes_and_releases_on_refs_loaded_ok_and_err() {
     );
 }
 
-// --- Commit-log paging: the container holds a window, not one load ----------
+// --- Commit-log batching: the container holds a window, not one load ----------
 
 /// A commit with a chosen id — for the paging cases identity is the point.
 fn commit_as(root: &RootId, id: &str) -> Commit {
@@ -481,10 +481,10 @@ fn cached_ids(caches: &RootCaches, root: &RootId) -> Vec<String> {
         .collect()
 }
 
-/// The first page is also the whole cache: appending onto a root with nothing
+/// The first batch is also the whole cache: appending onto a root with nothing
 /// cached is exactly a store.
 #[test]
-fn appending_to_a_cold_root_stores_the_page() {
+fn appending_to_a_cold_root_stores_the_batch() {
     let mut caches = RootCaches::default();
     let root = RootId(PathBuf::from("alpha").into());
     assert!(caches.log(&root).is_none(), "a cold root has nothing");
@@ -496,10 +496,10 @@ fn appending_to_a_cold_root_stores_the_page() {
     assert_eq!(cached_ids(&caches, &root), ["a3", "a2"]);
 }
 
-/// The pages arrive newest-first and overlap by the anchor row, so an append
+/// The batches arrive newest-first and overlap by the anchor row, so an append
 /// must add only what is missing and never reorder what is already there.
 #[test]
-fn an_overlapping_page_appends_once_and_keeps_newest_first() {
+fn an_overlapping_batch_appends_once_and_keeps_newest_first() {
     let mut caches = RootCaches::default();
     let root = RootId(PathBuf::from("alpha").into());
     caches.store_log(
@@ -511,7 +511,7 @@ fn an_overlapping_page_appends_once_and_keeps_newest_first() {
         ],
     );
 
-    // Page 2 as the engine returns it: the anchor `a3` again, then new rows.
+    // Batch 2 as the engine returns it: the anchor `a3` again, then new rows.
     caches.append_log(
         root.clone(),
         vec![
@@ -526,7 +526,7 @@ fn an_overlapping_page_appends_once_and_keeps_newest_first() {
         "the anchor is already held, so it must not appear twice"
     );
 
-    // Replaying the same page whole — a retry, or a race with a refresh — is
+    // Replaying the same batch whole — a retry, or a race with a refresh — is
     // likewise harmless.
     caches.append_log(
         root.clone(),
@@ -539,7 +539,7 @@ fn an_overlapping_page_appends_once_and_keeps_newest_first() {
     assert_eq!(cached_ids(&caches, &root), ["a5", "a4", "a3", "a2", "a1"]);
 }
 
-/// A short page ends history: the window keeps what it had, and the flag the
+/// A short batch ends history: the window keeps what it had, and the flag the
 /// fetcher sets on the way in is what says so.
 #[test]
 fn an_empty_append_leaves_the_window_alone() {
@@ -556,7 +556,7 @@ fn an_empty_append_leaves_the_window_alone() {
     assert_eq!(cached_ids(&caches, &root), ["a2", "a1"]);
     assert!(
         caches.log_has_more(&root),
-        "an empty page on its own proves nothing about history"
+        "an empty batch on its own proves nothing about history"
     );
 
     caches.set_log_has_more(&root, false);

@@ -263,6 +263,33 @@ Unified mode pages by underlying diff lines, so it shows more rows than
 side-by-side for the same diff whenever pairs exist.
 _Avoid_: row model, diff line (a display row may pair two)
 
+**Loaded window**:
+The prefix of a listing the app currently holds for one root — its newest
+commits, oldest last — whether that listing is the root's whole log, one
+file's history, one ref's history, or a pickaxe search. It is the unit a Batch
+is added to, what "N shown" counts, and what a scope change replaces wholesale.
+A fresh operation or a filter that moves the listing resets it to one Batch;
+it is never evicted as it grows, so scrolling back to already-loaded history
+reads from cache rather than re-fetching.
+_Avoid_: page (that is a Batch), history, log
+
+**Batch**:
+One fetched slice of a listing — the unit a Loaded window grows by, and the
+only thing the app ever asks git for. A cold read asks for one batch; a later
+one asks for the batch after it, one row longer, so the row the window already
+holds comes back as the boundary checksum. A batch that comes back short says
+the listing is over, and its length against what was asked for is what sets
+the window's has-more flag. The glossary reserves "page" for a tab's rejected
+synonyms, so a fetched slice is a batch.
+_Avoid_: page (reserved), chunk, slice
+
+**Lane**:
+The graph column a commit's node is drawn in — the numbered column of the
+commit graph, assigned by a walk over the whole Loaded window rather than over
+the rows on screen, so a commit's lane does not change as it scrolls past. Its
+colour is a property of the window, not of the current filter.
+_Avoid_: graph column (that is the gutter), colour, thread
+
 **Current hunk**:
 The single hunk of the open diff that all hunk navigation and granular verbs
 act on: buttons, hover, and keyboard navigation set it; stage/unstage consume

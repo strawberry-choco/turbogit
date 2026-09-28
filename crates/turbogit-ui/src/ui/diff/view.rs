@@ -220,10 +220,10 @@ pub fn render_diff(
             // before the area begins are stashed for outer areas. At most
             // once per (diff, hunk) — re-issuing every frame would keep the
             // ScrollArea repainting forever.
-            if state.ui.diff_current_hunk < plan.hunk_first_slot.len()
+            if state.ui.diff_current_hunk < plan.hunk_slots.len()
                 && hunk_needs_scroll(ui, paint, state.ui.diff_current_hunk)
             {
-                let row_idx = plan.hunk_first_slot[state.ui.diff_current_hunk];
+                let row_idx = plan.hunk_slots[state.ui.diff_current_hunk].slot(side_by_side);
                 let pitch = ROW_H + ui.spacing().item_spacing.y;
                 let y = ui.max_rect().top() + (row_idx as f32 - visible.start as f32) * pitch;
                 let rect = Rect::from_min_size(
@@ -244,6 +244,30 @@ pub fn render_diff(
     );
 }
 
+/// Where one hunk's header band sits, per stream: the side-by-side slot and
+/// the unified slot.
+///
+/// The two are NOT the same number, and the difference is the whole reason this
+/// is a pair. A `DisplayRow::Pair` is ONE side-by-side row (the deletion and
+/// the addition share a line) but TWO unified rows, so every pair before a
+/// hunk's header shifts the unified slot one further along. A header is a full
+/// row in both modes — that part was always true — but the slot NUMBER it
+/// occupies is a property of the stream being paged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HunkSlot {
+    sbs: usize,
+    unified: usize,
+}
+
+impl HunkSlot {
+    const UNSET: Self = Self { sbs: 0, unified: 0 };
+
+    /// The slot in the stream this frame pages.
+    fn slot(&self, side_by_side: bool) -> usize {
+        if side_by_side { self.sbs } else { self.unified }
+    }
+}
+
 /// One frame's paint plan over the cached display model (issue 20): the
 /// filtered slot streams of both modes plus the per-hunk metadata the hunk
 /// header bands render (header slot for scroll aiming, hidden-row count
@@ -254,9 +278,9 @@ struct PaintPlan {
     /// Unified slots: `(display index, member)` with member 0 = full row,
     /// 1 = a Pair's deletion, 2 = a Pair's addition.
     unified: Vec<(usize, u8)>,
-    /// Per hunk: slot index of its header band (identical in both modes —
-    /// headers are full rows).
-    hunk_first_slot: Vec<usize>,
+    /// Per hunk: the slot its header band occupies in EACH stream — see
+    /// [`HunkSlot`], which is why one number is not enough.
+    hunk_slots: Vec<HunkSlot>,
     /// Per hunk: body bands hidden by collapsing.
     hunk_hidden: Vec<usize>,
     /// Per hunk: changed-line count of its body.
@@ -271,7 +295,7 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
     let mut plan = PaintPlan {
         sbs: Vec::with_capacity(model.display.len()),
         unified: Vec::new(),
-        hunk_first_slot: vec![0; hunk_count],
+        hunk_slots: vec![HunkSlot::UNSET; hunk_count],
         hunk_hidden: vec![0; hunk_count],
         hunk_lines: vec![0; hunk_count],
     };
@@ -285,7 +309,13 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
                 }
                 RowKind::Hunk => {
                     if row.hunk < hunk_count {
-                        plan.hunk_first_slot[row.hunk] = plan.sbs.len();
+                        // Each stream's OWN length before the header is pushed
+                        // is the slot that header is about to occupy — the two
+                        // are different numbers and are not interchangeable.
+                        plan.hunk_slots[row.hunk] = HunkSlot {
+                            sbs: plan.sbs.len(),
+                            unified: plan.unified.len(),
+                        };
                     }
                     plan.sbs.push(di);
                     plan.unified.push((di, 0));

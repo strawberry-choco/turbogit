@@ -38,7 +38,11 @@
    opt-in or bounded for 5k-line refactors (see `recommendations.md` R3).
 3. **Virtualization is the unlock.** VS Code's diff editor and the native GUIs all virtualize;
    TurboGit's existing `egui_extras::Table` virtualization (project MEMORY) is the right
-   primitive for the diff view too.
+   primitive for the diff view too. **Superseded 2026-09-28:** the parenthetical is the
+   error — `egui_extras` is used nowhere in TurboGit, and the "project MEMORY" it credits
+   was never checked against the tree. The diff viewer virtualizes over
+   `egui::ScrollArea::show_rows` (ADR-0014) and the commit list does the same (ADR-0026). The
+   finding that virtualization is the unlock stands.
 4. **Rust TUI proves the floor.** lazygit/gitui show a Rust git UI can be the fastest diff
    surface at trivial memory — validates TurboGit's Rust/egui choice for flow, separate from
    rendering fidelity.

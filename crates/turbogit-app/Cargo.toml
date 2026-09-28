@@ -19,7 +19,7 @@ turbogit-services = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 test-support = { workspace = true }
-# `FakeExecutor` so the paging suites can walk pages without git.
+# `FakeExecutor` so the batching suites can walk batches without git.
 turbogit-engine = { workspace = true, features = ["test-util"] }
 
 [lints]

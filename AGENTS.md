@@ -21,8 +21,9 @@ plus a thin root composition root.
   answers only), `shell_reads` (the named git reads that are not cached values),
   `events`, `root_caches`, `persistence`, `recents`, `diff_data` (plain
   diff-pane types), `diff_model` (the egui-free display model the diff read
-  answers with) and `diff_load` (the pane's byte sourcing and decode limits),
-  and the `granular` staging orchestrator.
+  answers with), `diff_load` (the pane's byte sourcing and decode limits),
+  `log_display` (the held log-window display model and its lane walk), and the
+  `granular` staging orchestrator.
 - `crates/turbogit-ui` — `theme` and every presentation module under `ui/`.
 - `crates/test-support` — the headless harness and kittest helpers, consumed as
   a dev-dependency.

@@ -16,6 +16,11 @@
 ## R1 — Virtualized Diff View (P0, highest priority)
 - **Evidence:** Universal agreement that large-diff smoothness matters (perf-notes: native >
   Electron); `egui_extras::Table` virtualization already used elsewhere in TurboGit.
+  **Superseded 2026-09-28:** that second clause was an inherited belief about the project,
+  not a reading of it — `egui_extras` is used nowhere in TurboGit. The diff view virtualizes
+  over `egui::ScrollArea::show_rows` given the row count and a uniform pitch (ADR-0014), and
+  the commit list now virtualizes the same way (ADR-0026). R1's requirement stands; the
+  primitive it names does not.
 - **Spec:** Render diff as a virtualized row model (one row per diff line). Reuse
   `egui_extras::Table`. Adopt the **trailing-spacer guard** (`ui.add_space(0.37)`) documented
   in project MEMORY to avoid the egui 0.35 `ScrollArea` `remap_clamp` panic on exact-fit

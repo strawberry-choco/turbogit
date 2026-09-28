@@ -33,6 +33,7 @@ use egui::{
     Popup, PopupKind, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2,
     WidgetInfo, WidgetType,
 };
+use std::ops::Range;
 use std::path::PathBuf;
 use turbogit_app::root_caches::{LogScope, file_stat};
 use turbogit_app::state::{
@@ -165,66 +166,14 @@ fn root_color(idx: usize) -> Color32 {
     GRAPH_COLORS[idx % GRAPH_COLORS.len()]
 }
 
-/// Assign each commit a lane color using a lightweight DAG walk so the list
-/// reads like a commit graph (Epic D1). Newest-first input assumed. Takes
-/// borrowed commits — the union is never owned (plan §1.3).
-fn assign_colors(commits: &[&Commit]) -> std::collections::HashMap<String, usize> {
-    use std::collections::HashMap;
-    let mut color_of: HashMap<String, usize> = HashMap::new();
-    let mut lanes: Vec<Option<String>> = Vec::new();
-    let mut next_color = 0usize;
-    for c in commits {
-        let idx = lanes
-            .iter()
-            .position(|l| l.as_deref() == Some(c.id.as_str()))
-            .unwrap_or_else(|| {
-                if let Some(e) = lanes.iter().position(|l| l.is_none()) {
-                    e
-                } else {
-                    lanes.push(None);
-                    lanes.len() - 1
-                }
-            });
-        color_of.entry(c.id.clone()).or_insert_with(|| {
-            // pick the lane's color, allocating a new one if needed
-            if idx < lanes.len() && lanes[idx].is_none() {
-                let c = next_color;
-                next_color += 1;
-                c
-            } else {
-                idx
-            }
-        });
-        lanes[idx] = c.parents.first().cloned();
-        for p in c.parents.iter().skip(1) {
-            if let Some(e) = lanes.iter_mut().find(|l| l.is_none()) {
-                e.replace(p.clone());
-                color_of.entry(p.clone()).or_insert_with(|| {
-                    let c = next_color;
-                    next_color += 1;
-                    c
-                });
-            } else {
-                lanes.push(Some(p.clone()));
-                color_of.entry(p.clone()).or_insert_with(|| {
-                    let c = next_color;
-                    next_color += 1;
-                    c
-                });
-            }
-        }
-    }
-    color_of
-}
-
 // --- Data plumbing ------------------------------------------------------------
 
-/// The roots whose history is displayed (roots-filter aware).
+/// The roots whose history is displayed (roots-filter aware). One definition,
+/// owned by the derived display window's own rule (log-view-scaling 04): the
+/// ref-fill, the pager's guard and the union the held window is derived from
+/// all read it from there, so "which roots are in view" cannot drift.
 fn visible_root_ids(state: &AppState) -> Vec<RootId> {
-    match &state.ui.log_root_filter {
-        Some(id) => vec![id.clone()],
-        None => state.multi.roots.iter().map(|r| r.id.clone()).collect(),
-    }
+    turbogit_app::log_display::visible_roots(state)
 }
 
 /// Lazily load (through the engine seam, cached) everything the four panes
@@ -276,36 +225,108 @@ fn ensure_log_data(state: &mut AppState) {
     }
 }
 
-/// Commits for `root` honoring the active path scope (issue #19): when a
-/// path scope is active and its scoped query is cached, that listing
-/// replaces the root's full log everywhere in this window (graph rows,
-/// details pane, changed-files parent lookup). Borrows the cache slices —
-/// no per-frame commit clones (plan §1.3).
-fn commits_for<'a>(state: &'a AppState, root: &RootId) -> Vec<&'a Commit> {
-    if let Some((scope_root, ref_name)) = &state.ui.log_ref_scope
-        && let Some(commits) = state.caches.ref_log(scope_root, ref_name)
-    {
-        return if scope_root == root {
-            commits.iter().collect()
-        } else {
-            Vec::new()
-        };
-    }
-    if let Some(path) = &state.ui.log_path_scope
-        && let Some(commits) = state.caches.path_log(root, path)
-    {
-        return commits.iter().collect();
-    }
-    state
-        .caches
-        .log(root)
-        .map(|c| c.iter().collect())
-        .unwrap_or_default()
+// --- Load more (log-view-scaling 03) --------------------------------------------
+
+/// One loaded window the log list is drawn from, and the only thing the Load-more
+/// affordance and its dispatch ever name.
+///
+/// A scope used to be fetched whole, so it had nothing more to offer and the
+/// pane suppressed the affordance inside one. Scopes page now, so the pane
+/// names windows instead of roots: the affordance is offered while ANY window
+/// behind the displayed listing says its history continues past what it holds,
+/// and pressing it pages exactly those windows.
+enum ListedWindow {
+    /// The unscoped union of every visible root's window. One entry rather than
+    /// one per root, because the app's own unscoped pager
+    /// ([`AppState::load_more_log`]) pages every registered root that says it has
+    /// more — including a root the roots filter hides — and that is the
+    /// behaviour this gate has always had.
+    Unscoped,
+    /// One scope's own window, in one root. A ref scope and a path scope are
+    /// each the whole listing on their own — the ref scope names its own root,
+    /// a path scope is read for the selected one — so a scope has exactly one
+    /// window to page and no second listing to keep in step.
+    Scoped(RootId, LogScope),
 }
 
-/// The cached commit `cid` of `root`, honoring the active path scope like
-/// [`commits_for`] — borrowed over the cache slice instead of cloning the
-/// whole listing for parent lookups (plan §1.3).
+impl ListedWindow {
+    /// Whether this window stops short of the end of its own history — the
+    /// per-window answer, and the only one the affordance is allowed to read.
+    /// Each window carries its own flag (log-view-scaling 01), so a scope
+    /// exhausted while the unscoped union has pages left is not re-offered.
+    fn has_more(&self, state: &AppState) -> bool {
+        match self {
+            Self::Unscoped => visible_root_ids(state)
+                .iter()
+                .any(|id| state.caches.log_has_more(id)),
+            Self::Scoped(root, scope) => state.caches.scoped_log_has_more(root, scope),
+        }
+    }
+
+    /// Ask this window for one more batch. A scope is paged by name through the
+    /// app's off-thread scoped read — one read per `(root, scope)` in flight, so
+    /// two scopes of one root never wait on each other, and the batch lands on a
+    /// later frame's drain like every other worker read.
+    fn load_more(&self, state: &mut AppState) {
+        match self {
+            Self::Unscoped => state.load_more_log(),
+            Self::Scoped(root, scope) => state.load_more_scoped_log(root, scope),
+        }
+    }
+}
+
+/// Every loaded window behind the listing the log pane is about to paint, in
+/// [`turbogit_app::log_display::sources`]'s own order and under its own scope
+/// rules — a ref scope REPLACES every other listing, a path scope replaces it
+/// with the selected root's window (and is nothing at all without a selected
+/// root), and an unscoped view unions the visible roots. The pickaxe union is
+/// then added per visible root, skipped inside a path scope, exactly as the
+/// display window's own derivation skips it.
+///
+/// One list for the gate, the pager and the status line, so "what the button
+/// loads", "whether it is offered" and "what N shown counts" are all read off
+/// the same rule instead of three that can drift.
+///
+/// A search is a window like any other now that it batches: the app asks for it
+/// from the front of its match stream and cuts the batch out of the tail, so a
+/// term that matches more commits than one batch holds is a listing that grows
+/// like the others rather than one frozen at the first batch. It used to be left
+/// out of this list because its batch was positioned with `--skip`, which counts
+/// the traversal rather than the matches, so every batch read as torn — see
+/// `a_search_scope_batches_and_pages_like_a_path_or_ref_scope` for the behaviour
+/// this replaced.
+fn listed_windows(state: &AppState) -> Vec<ListedWindow> {
+    let mut windows = match (&state.ui.log_ref_scope, &state.ui.log_path_scope) {
+        (Some((root, ref_name)), _) => {
+            vec![ListedWindow::Scoped(
+                root.clone(),
+                LogScope::Ref(ref_name.clone()),
+            )]
+        }
+        (None, Some(path)) => state
+            .selected_root
+            .clone()
+            .map(|root| ListedWindow::Scoped(root, LogScope::Path(path.clone())))
+            .into_iter()
+            .collect(),
+        (None, None) => vec![ListedWindow::Unscoped],
+    };
+    let query = state.ui.log_filter.trim();
+    if state.ui.log_path_scope.is_none() && !query.is_empty() {
+        windows.extend(
+            visible_root_ids(state)
+                .into_iter()
+                .map(|root| ListedWindow::Scoped(root, LogScope::Search(query.to_owned()))),
+        );
+    }
+    windows
+}
+
+/// The cached commit `cid` of `root`, honoring the active path scope and the
+/// ref scope like the displayed union does — borrowed over the cache slice
+/// instead of cloning the whole listing for parent lookups (plan §1.3). The
+/// scope rules themselves live in [`turbogit_app::log_display::sources`],
+/// where the held window is derived.
 fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a Commit> {
     if let Some((scope_root, ref_name)) = &state.ui.log_ref_scope
         && let Some(commits) = state.caches.ref_log(scope_root, ref_name)
@@ -323,70 +344,53 @@ fn find_commit<'a>(state: &'a AppState, root: &RootId, cid: &str) -> Option<&'a 
         .and_then(|commits| commits.iter().find(|c| c.id == cid))
 }
 
-/// The commits currently displayed: union across visible roots (newest first,
-/// live-filtered by the graph search box). With an active path scope (issue
-/// #19) only the selected root's scoped listing is shown — never another
-/// root's unscoped log. Yields borrowed commits sorted by `(time, id)`
-/// instead of cloning the union per frame (plan §1.3).
-fn visible_commits(state: &AppState) -> Vec<&Commit> {
-    // Ref scope (plan D9): only the scoped ref's cached listing is shown —
-    // same shape as the path scope below.
-    let mut commits: Vec<&Commit> = if let Some((root, ref_name)) = &state.ui.log_ref_scope {
-        state
-            .caches
-            .ref_log(root, ref_name)
-            .map(|c| c.iter().collect())
-            .unwrap_or_default()
-    } else if state.ui.log_path_scope.is_some() {
-        match &state.selected_root {
-            Some(root) => commits_for(state, root),
-            None => Vec::new(),
-        }
-    } else {
-        let roots: Vec<&RootId> = match &state.ui.log_root_filter {
-            Some(id) => vec![id],
-            None => state.multi.roots.iter().map(|r| &r.id).collect(),
-        };
-        roots
-            .into_iter()
-            .filter_map(|id| state.caches.log(id))
-            .flatten()
-            .collect()
-    };
-    commits.sort_by(|a, b| b.time.cmp(&a.time).then(a.id.cmp(&b.id)));
-    let filter = state.ui.log_filter.to_lowercase();
-    if filter.is_empty() {
-        return commits;
-    }
-    commits.retain(|c| {
-        c.message.to_lowercase().contains(&filter)
-            || c.id.to_lowercase().contains(&filter)
-            || c.author.name.to_lowercase().contains(&filter)
-    });
-    // Code-change hits (issue 17): union the cached pickaxe listing per
-    // visible root — a commit whose content changed the query's count shows
-    // even when message/hash/author do not match. Skipped inside a path
-    // scope: the scoped view must only ever list commits touching the
-    // scoped path, and the pickaxe cache is not path-scoped.
-    if state.ui.log_path_scope.is_none() {
-        let roots: Vec<&RootId> = match &state.ui.log_root_filter {
-            Some(id) => vec![id],
-            None => state.multi.roots.iter().map(|r| &r.id).collect(),
-        };
-        for id in roots {
-            // The cache is keyed by the trimmed raw query (what the engine
-            // received) — not the lowercased live-filter text.
-            if let Some(hits) = state.caches.search_log(id, state.ui.log_filter.trim()) {
-                for c in hits {
-                    if !commits.iter().any(|v| v.id == c.id) {
-                        commits.push(c);
-                    }
-                }
-            }
-        }
-        commits.sort_by(|a, b| b.time.cmp(&a.time).then(a.id.cmp(&b.id)));
-    }
-    commits
+// --- scroll-to-selected (issue 08) ---------------------------------------------
+
+/// Where the row at `index` sits inside the scroll area's content, in points,
+/// measured from the FIRST row the area built this frame (`visible`).
+///
+/// The offset is relative to what the area built, not to the top of the list:
+/// that is what makes the same row ask for a different scroll from a different
+/// place in the list, and therefore land ON the row rather than past it. The
+/// arithmetic is signed on purpose — an index under `visible.start` is a
+/// negative offset, and an unsigned subtraction would wrap into a scroll to the
+/// far end of the history.
+fn row_offset_from_built(index: usize, visible: Range<usize>, pitch: f32) -> f32 {
+    (index as f32 - visible.start as f32) * pitch
+}
+
+/// Whether a row of `row_height` whose top sits `offset` points below the first
+/// built row is already on screen, given a viewport that starts `view_top`
+/// points below that row and is `view_height` tall.
+///
+/// The viewport, not the built range, is the test, and the row has to be
+/// FULLY inside it. `show_rows` builds one row past the bottom edge on purpose,
+/// so a row can be in the frame and still be below the fold — treating "built"
+/// as "on screen" would leave a selection sitting just out of sight, which is
+/// the one outcome this whole path exists to prevent.
+fn row_is_in_view(offset: f32, row_height: f32, view_top: f32, view_height: f32) -> bool {
+    offset >= view_top && offset + row_height <= view_top + view_height
+}
+
+/// The scroll delta that puts a row's centre on the viewport's centre.
+///
+/// `Ui::scroll_with_delta` is inverted against the area's offset (egui applies
+/// `-delta` to it), so the delta is the viewport's centre MINUS the row's: a
+/// row below the middle yields a negative delta, which moves the offset forwards
+/// and reveals later history. The sign is the easy thing to get backwards, so it
+/// is a named function rather than an expression at the call site.
+fn centre_scroll_delta(row_centre: f32, viewport_centre: f32) -> f32 {
+    viewport_centre - row_centre
+}
+
+/// The display index of `id` in the held window, or `None` when the window does
+/// not hold it — a commit the live filter hid, or one outside this view's scope.
+/// The lookup is over the window's own order, so the index it returns is the
+/// index the list pages over. It lives here rather than on
+/// [`turbogit_app::log_display::LogDisplay`] because that module is egui-free
+/// state and this is a rendering question about a scroll area's rows.
+fn commit_index(rows: &[turbogit_app::log_display::LogRow], id: &str) -> Option<usize> {
+    rows.iter().position(|row| row.id == id)
 }
 
 fn ref_kind(kind: GitRefKind) -> RefKind {
@@ -699,8 +703,21 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
         }
     });
 
-    let commits = visible_commits(state);
-    let colors = assign_colors(&commits);
+    // The display window, held: the whole loaded window sorted, live-filtered
+    // and unioned with the pickaxe hits, derived when the loaded window or one
+    // of the four inputs moved and read as it stands this frame
+    // (log-view-scaling 04). An idle frame computes nothing here, and the
+    // lane colours come with it — walked over the whole loaded window, so a
+    // commit's colour does not change as it crosses the viewport.
+    let display = state.sync_log_display();
+    // Scroll-to-selected (issue 08): the request is one-shot, and it is taken
+    // here and answered INSIDE the scroll area below. Once rows outside the
+    // viewport are never built there is no realized row left to ask to scroll
+    // itself into view, so the list resolves the request to a row index and
+    // aims at it — the same resolution ADR-0014 reached for the diff viewer's
+    // hunk navigation.
+    let scroll_to = state.ui.log_scroll_to.take();
+    let colors = display.lanes();
     let date_mode = state.settings.date_format;
     // Scoped views are single-root by definition — no root stripes/legend.
     let multi_root = state.multi.roots.len() > 1
@@ -708,15 +725,14 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
         && state.ui.log_path_scope.is_none()
         && state.ui.log_ref_scope.is_none();
 
-    // Pagination (issue 17): "Load more" is offered while a visible root's
-    // cached window says history continues past it — and never in a scoped
-    // view, whose listing is fetched uncapped. The click is deferred like the row
-    // selections: `commits` borrows the caches until rendering ends.
-    let may_have_more = state.ui.log_path_scope.is_none()
-        && state.ui.log_ref_scope.is_none()
-        && visible_root_ids(state)
-            .iter()
-            .any(|id| state.caches.log_has_more(id));
+    // Pagination (issue 17, log-view-scaling 03): "Load more" is offered while
+    // any window behind the displayed listing says its history continues past
+    // what it holds — the unscoped union, a path or ref scope's own window, or
+    // a pickaxe term's window per root. The scope suppression this replaced was
+    // true only while a scope was fetched whole. The click is deferred like the
+    // row selections, so the list is drawn before anything is applied to it.
+    let windows = listed_windows(state);
+    let may_have_more = windows.iter().any(|window| window.has_more(state));
     let mut load_more = false;
 
     // Root-stripe legend chip row (11px INK_3) for multi-root setups.
@@ -741,42 +757,98 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     // Column micro-headers aligned with the cells below.
     header_cells(ui, multi_root);
 
-    // Row clicks are deferred (plan §1.3): the displayed union borrows the
-    // cache slices, so rows render against a shared AppState and the
-    // selection lands after the scroll pass ends. A press carries its own
-    // root, because the listing is a union across every visible root and a
-    // commit id alone does not say which repository it belongs to.
+    // Row clicks are deferred (plan §1.3): rows render against a shared
+    // AppState — the held window is read through a handle, and the selection
+    // lands after the scroll pass ends. A press carries its own root, because
+    // the listing is a union across every visible root and a commit id alone
+    // does not say which repository it belongs to.
     let mut clicked: Option<(RootId, String)> = None;
     let mut opened: Option<(RootId, String)> = None;
     // The height the list is given, captured before it takes it: egui 0.36
     // reports only the content's own rect back out, and an overflowing list
     // fills exactly this.
     let viewport_height = ui.available_rect_before_wrap().height();
-    let scrolled = ScrollArea::vertical().show(ui, |ui| {
-        for c in &commits {
-            match commit_row(ui, state, c, &colors, date_mode, multi_root) {
-                RowIntent::None => {}
-                RowIntent::Select => {
-                    if clicked.is_none() {
-                        clicked = Some((c.root.clone(), c.id.clone()));
-                    }
+    // Named id salt: the tool window hands every tab's body the same child id, so
+    // the Worktrees and Submodules lists — which also put an unnamed
+    // `ScrollArea` straight on it — would share persisted scroll offset and
+    // scrollbar visibility with this one, and flip-flop them (a zero-delay
+    // repaint loop). The diff viewer in the same window took the same
+    // precaution for the same reason (ADR-0014).
+    let scrolled = ScrollArea::vertical().id_salt("log_commit_list").show_rows(
+        ui,
+        crate::theme::FILE_ROW_HEIGHT,
+        display.len(),
+        |ui, visible| {
+            // Issued inside the closure because that is where egui consumes a
+            // scroll target: one set before the area begins is stashed for an
+            // outer area instead. `show_rows` also hands over the range it
+            // built, which is what the target's offset is measured from.
+            if let Some(id) = scroll_to.as_deref()
+                && let Some(index) = commit_index(display.rows(), id)
+            {
+                let pitch = crate::theme::FILE_ROW_HEIGHT + ui.spacing().item_spacing.y;
+                let offset = row_offset_from_built(index, visible.clone(), pitch);
+                // The row's band and the viewport, both read off THIS Ui, so the
+                // two are in one coordinate space and cannot need a mapping
+                // between them: the row sits at the built window's top plus the
+                // offset, and the viewport is the clip rect.
+                let row_centre = ui.max_rect().top() + offset + crate::theme::FILE_ROW_HEIGHT / 2.0;
+                let viewport = ui.clip_rect();
+                let view_top = viewport.top() - ui.max_rect().top();
+                if !row_is_in_view(
+                    offset,
+                    crate::theme::FILE_ROW_HEIGHT,
+                    view_top,
+                    viewport.height(),
+                ) {
+                    let viewport_centre = viewport.top() + viewport.height() / 2.0;
+                    ui.scroll_with_delta(Vec2::new(
+                        0.0,
+                        centre_scroll_delta(row_centre, viewport_centre),
+                    ));
                 }
-                RowIntent::SelectAndOpenMenu => {
-                    if clicked.is_none() {
-                        clicked = Some((c.root.clone(), c.id.clone()));
-                        opened = Some((c.root.clone(), c.id.clone()));
+            }
+            // Only the rows inside the viewport are built: the scroll area
+            // is given the whole window's row count and the row pitch, and
+            // hands back the range it can show. A commit row is a fixed
+            // height that paints its cells directly, so uniform height is
+            // already true and the list can page over its rows.
+            for index in visible {
+                // A row count that moved under us mid-frame is a miss, not
+                // a panic: the window is derived once per frame, but the
+                // range came from a count the pane read a moment earlier.
+                let Some(c) = display.row(index) else {
+                    continue;
+                };
+                match commit_row(ui, state, c, colors, date_mode, multi_root) {
+                    RowIntent::None => {}
+                    RowIntent::Select => {
+                        if clicked.is_none() {
+                            clicked = Some((c.root.clone(), c.id.clone()));
+                        }
+                    }
+                    RowIntent::SelectAndOpenMenu => {
+                        if clicked.is_none() {
+                            clicked = Some((c.root.clone(), c.id.clone()));
+                            opened = Some((c.root.clone(), c.id.clone()));
+                        }
                     }
                 }
             }
-        }
-        if commits.is_empty() {
-            ui.label(
-                RichText::new("No commits match.")
-                    .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                    .color(Palette::INK_3),
-            );
-        }
-    });
+        },
+    );
+
+    // "No commits match" is the one variable-height thing in the list, so it is
+    // drawn outside the paged rows: an empty result must not have to claim a row
+    // slot it does not have, and the message stays put where the pane has always
+    // shown it instead of scrolling away with a list that has nothing in it.
+    if display.is_empty() {
+        ui.label(
+            RichText::new("No commits match.")
+                .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                .color(Palette::INK_3),
+        );
+    }
 
     // Auto-load-more (P6): the trigger is a settled bottom on an overflowing
     // list, not a scroll gesture — so the wheel, the scrollbar and the
@@ -794,14 +866,19 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     }
 
     // Pagination status line (issue 17): what is shown + the Load more
-    // affordance while the fetched window may not cover the whole history.
+    // affordance while the fetched window may not cover the whole history. The
+    // count is the held display window's own length (log-view-scaling 04), so in
+    // a scope it reports the SCOPE's loaded window rather than the number of
+    // rows the list drew — the list builds only its viewport's rows, and the
+    // window is the thing the gate and the pager both work from, so the three
+    // describe the same listing.
     ui.horizontal(|ui| {
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if may_have_more && ui.small_button("Load more").clicked() {
                 load_more = true;
             }
             ui.label(
-                RichText::new(format!("{} shown", commits.len()))
+                RichText::new(format!("{} shown", display.len()))
                     .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
                     .color(Palette::INK_3),
             );
@@ -809,7 +886,9 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     });
 
     if load_more {
-        state.load_more_log();
+        for window in &windows {
+            window.load_more(state);
+        }
     }
     if let Some((root, id)) = clicked {
         // A press means this row's repository as well as this row's commit.
@@ -934,6 +1013,12 @@ fn apply_commit_action(
     action: CommitMenuAction,
 ) {
     state.ui.log_commit_menu = None;
+    // Every verb acts on the commit this menu was opened on and none of them
+    // changes the selection, so the list is asked to show that commit again
+    // (issue 08): the menu can outlive a scroll — it is app state, not a frame's
+    // local — and without this the verb confirms "this commit" about a row the
+    // list has since scrolled away from.
+    state.ui.log_scroll_to = Some(cid.to_owned());
     match action {
         // Clipboard writes are not git work and never were an `Operation`; this
         // is the app's single clipboard call site and its toast convention, with
@@ -1232,12 +1317,15 @@ fn commit_row(
     let budget = (date_x - 8.0 - if labels.is_empty() { 0.0 } else { PILL_RESERVE } - message_left)
         .max(24.0);
     let subject = c.message.lines().next().unwrap_or("");
-    let mut fit = truncate(subject, 44);
-    let mut subject_galley = painter.layout_no_wrap(fit.clone(), body_font(), Palette::INK);
-    while subject_galley.size().x > budget && fit.chars().count() > 1 {
-        fit.pop();
-        subject_galley = painter.layout_no_wrap(fit.clone(), body_font(), Palette::INK);
-    }
+    // Fitted to the column behind a width oracle, so the row spends a bounded
+    // number of layouts on the fit rather than one per dropped character.
+    let subject_fit = fit_to_budget(&truncate(subject, 44), budget, &|text: &str| {
+        painter
+            .layout_no_wrap(text.to_owned(), body_font(), Palette::INK)
+            .size()
+            .x
+    });
+    let subject_galley = painter.layout_no_wrap(subject_fit, body_font(), Palette::INK);
     let subject_w = subject_galley.size().x;
     painter.galley(
         Pos2::new(message_left, cy - subject_galley.size().y / 2.0),
@@ -1907,8 +1995,12 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     // Deferred action application (plan §1.3): the borrow of the cached
     // commit ended above, so `state.ui` is free to mutate here.
     if let DetailAction::SelectParent(parent) = action {
-        state.ui.selected_commit = Some(parent);
+        state.ui.selected_commit = Some(parent.clone());
         state.ui.log_selected_file = None;
+        // Following history has to show where it landed (issue 08): the parent
+        // is the next row DOWN, which the list may not have built, and the
+        // scroll area is the only thing that can bring it into view.
+        state.ui.log_scroll_to = Some(parent);
     }
 }
 
@@ -1932,9 +2024,174 @@ pub fn settled_at_bottom(offset: f32, viewport: f32, content: f32, tolerance: f3
     content > viewport && offset + tolerance >= content - viewport
 }
 
+/// The longest prefix of `text` that is at most `budget` wide, with the text
+/// layout pushed behind `measure` so the search itself needs no egui.
+///
+/// Cuts land on `char` boundaries, so a multibyte subject is shortened whole
+/// chars rather than split mid-codepoint, and a subject too wide even on its
+/// own keeps its first char rather than vanishing. A prefix only ever grows
+/// wider, so the char count is found by binary search: the row pays a handful
+/// of layouts where dropping one char at a time paid one per dropped char.
+fn fit_to_budget(text: &str, budget: f32, measure: &dyn Fn(&str) -> f32) -> String {
+    if measure(text) <= budget {
+        return text.to_owned();
+    }
+    let prefix = |chars: usize| -> String { text.chars().take(chars).collect() };
+    // `hi` is known not to fit (the whole text was measured a moment ago) and
+    // `lo` is the one char kept unconditionally, so the search closes on the
+    // last prefix that fits — or on that first char when none does.
+    let (mut lo, mut hi) = (1usize, text.chars().count());
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if measure(&prefix(mid)) <= budget {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    prefix(lo)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::settled_at_bottom;
+    use super::{
+        centre_scroll_delta, commit_index, fit_to_budget, row_is_in_view, row_offset_from_built,
+        settled_at_bottom,
+    };
+    use std::sync::Arc;
+    use turbogit_domain::model::{Commit, RootId, Signature, SignatureState};
+
+    /// A row the index lookup can find, built without a repository: the lookup
+    /// reads ids, so that is all a fixture has to be.
+    fn row(id: &str) -> turbogit_app::log_display::LogRow {
+        Arc::new(Commit {
+            id: id.to_owned(),
+            parents: vec![],
+            author: Signature {
+                name: "t".to_owned(),
+                email: "t@t".to_owned(),
+                time: 0,
+            },
+            committer: Signature {
+                name: "t".to_owned(),
+                email: "t@t".to_owned(),
+                time: 0,
+            },
+            message: id.to_owned(),
+            time: 0,
+            root: RootId(Arc::from(std::path::Path::new("alpha"))),
+            signature: SignatureState::Unsigned,
+        })
+    }
+
+    /// A commit row's height — the theme's own value, so these tests are about
+    /// ratios and cannot drift from the row model.
+    const ROW_H: f32 = crate::theme::FILE_ROW_HEIGHT;
+    /// The row pitch the log list pages at: the row height plus the row spacing
+    /// egui adds, which ticket 07's suite measures off a live frame at 30.0.
+    const PITCH: f32 = 30.0;
+
+    /// Width oracle standing in for `layout_no_wrap` in the subject-fit tests:
+    /// 6px per ASCII char, 10px per full-width one, 20px for the emoji — small
+    /// hand-checkable numbers, so a fit can be verified by counting chars
+    /// rather than by trusting a font.
+    fn advance(c: char) -> f32 {
+        if c == '🎉' {
+            20.0
+        } else if c.is_ascii() {
+            6.0
+        } else {
+            10.0
+        }
+    }
+
+    fn width_of(text: &str) -> f32 {
+        text.chars().map(advance).sum()
+    }
+
+    /// A subject exactly as wide as the column is painted whole — the fit cuts
+    /// only what does not fit.
+    #[test]
+    fn a_subject_that_fits_its_budget_is_returned_whole() {
+        let subject = "alpha: second commit";
+        let budget = width_of(subject);
+        assert_eq!(fit_to_budget(subject, budget, &width_of), subject);
+    }
+
+    /// A subject far wider than the column comes back as the widest prefix
+    /// that still fits — no ellipsis, and not one char shorter than it needs.
+    #[test]
+    fn a_subject_far_too_long_is_cut_to_the_widest_prefix_that_fits() {
+        // 200 chars at 6px apiece: only ten of them (60px) fit a 60px column.
+        let long = "a".repeat(200);
+        assert_eq!(fit_to_budget(&long, 60.0, &width_of), "a".repeat(10));
+        assert_eq!(fit_to_budget(&long, 59.0, &width_of), "a".repeat(9));
+        assert_eq!(fit_to_budget(&long, 1_200.0, &width_of), long);
+    }
+
+    /// A multibyte subject is cut between chars and never through one. The old
+    /// one-char-at-a-time drop was safe here only because each drop was a whole
+    /// `char`; a byte-wise cut would split a codepoint.
+    #[test]
+    fn a_multibyte_subject_is_cut_on_a_char_boundary() {
+        // Eight full-width chars (80px), then the emoji (20px), then four ASCII
+        // chars (24px): 124px whole, and every cut below falls between chars.
+        let subject = "日本語のコミット🎉done";
+        let fitted = fit_to_budget(subject, 60.0, &width_of);
+        assert_eq!(
+            fitted, "日本語のコミ",
+            "six full-width chars is exactly 60px"
+        );
+        assert!(
+            subject.starts_with(&fitted),
+            "the fit is a prefix of the subject, got {fitted:?}"
+        );
+        assert!(
+            !fitted.contains('\u{fffd}'),
+            "a char was split rather than dropped: {fitted:?}"
+        );
+        // The emoji is wide enough to matter: 99px stops short of it, 100px
+        // keeps it whole.
+        assert_eq!(fit_to_budget(subject, 99.0, &width_of), "日本語のコミット");
+        assert_eq!(
+            fit_to_budget(subject, 100.0, &width_of),
+            "日本語のコミット🎉"
+        );
+    }
+
+    /// A subject too wide on its own keeps its first char: the column is cut
+    /// short before the text is cut away, and the old loop stopped at one char
+    /// too rather than emptying the row.
+    #[test]
+    fn a_single_char_subject_is_never_cut_away_entirely() {
+        assert_eq!(fit_to_budget("x", 1.0, &width_of), "x");
+        assert_eq!(fit_to_budget("🎉", 1.0, &width_of), "🎉");
+    }
+
+    /// An empty subject stays empty — the row still paints, just nothing.
+    #[test]
+    fn an_empty_subject_stays_empty() {
+        assert_eq!(fit_to_budget("", 24.0, &width_of), "");
+    }
+
+    /// The fit is bounded: a subject at the row's 44-char cap costs a handful
+    /// of layouts, where dropping one char at a time cost one layout per
+    /// dropped character — the reason this rule was worth changing.
+    #[test]
+    fn a_subject_at_the_row_cap_costs_a_bounded_number_of_layouts() {
+        let long = "a".repeat(44);
+        let calls = std::cell::Cell::new(0usize);
+        let fitted = fit_to_budget(&long, 60.0, &|text: &str| {
+            calls.set(calls.get() + 1);
+            width_of(text)
+        });
+        assert_eq!(fitted, "a".repeat(10), "still the widest prefix that fits");
+        assert!(
+            calls.get() <= 7,
+            "a 44-char subject must not cost a layout per dropped char, got {}",
+            calls.get()
+        );
+    }
 
     const VIEWPORT: f32 = 300.0;
     const CONTENT: f32 = 1_000.0;
@@ -1965,6 +2222,186 @@ mod tests {
         assert!(
             !settled_at_bottom(BOTTOM - ROW - 1.0, VIEWPORT, CONTENT, ROW),
             "a row and a pixel short does not"
+        );
+    }
+
+    // --- scroll-to-selected (issue 08) -----------------------------------------
+
+    /// The offset of a row that the scroll area BUILT is zero, whatever its
+    /// index: the reference is the first built row, not the top of the list.
+    #[test]
+    fn a_row_in_the_built_range_offsets_from_the_first_built_row() {
+        assert_eq!(row_offset_from_built(10, 10..30, PITCH), 0.0);
+        assert_eq!(row_offset_from_built(29, 10..30, PITCH), 19.0 * PITCH);
+    }
+
+    /// A row just above the window is a NEGATIVE offset — the arithmetic is
+    /// signed, because a row index under the window's start would wrap a usize
+    /// subtraction into a huge positive scroll and throw the list to the end of
+    /// the history.
+    #[test]
+    fn a_row_above_the_visible_range_is_a_negative_offset() {
+        assert_eq!(
+            row_offset_from_built(9, 10..30, PITCH),
+            -PITCH,
+            "one row above the window is one pitch up"
+        );
+        assert_eq!(
+            row_offset_from_built(0, 10..30, PITCH),
+            -10.0 * PITCH,
+            "the first row of the window, ten rows above the view, is ten pitches up"
+        );
+    }
+
+    /// …and a row below it is the same distance the other way, measured from the
+    /// window's FIRST built row rather than from its bottom edge: the row one
+    /// past the end of a `10..30` window is twenty pitches down, not one.
+    #[test]
+    fn a_row_below_the_visible_range_is_a_positive_offset() {
+        assert_eq!(
+            row_offset_from_built(30, 10..30, PITCH),
+            20.0 * PITCH,
+            "the row one past the end of the window is twenty pitches below its first row"
+        );
+        assert_eq!(
+            row_offset_from_built(140, 10..30, PITCH),
+            130.0 * PITCH,
+            "a row far below the window keeps its distance from the window's start"
+        );
+    }
+
+    /// The last row of a window is reachable from the top, and the offset is the
+    /// whole way there — which is what makes a selection from the blame view
+    /// work on a commit far outside the drawn rows.
+    #[test]
+    fn the_last_row_of_a_window_is_reachable_from_the_top() {
+        assert_eq!(
+            row_offset_from_built(152, 0..20, PITCH),
+            152.0 * PITCH,
+            "the last row of a 153-row window is 152 pitches below the first built row"
+        );
+    }
+
+    /// The same row asks for a different scroll depending on where the list
+    /// already is, which is what makes the request land on the row rather than
+    /// past it.
+    #[test]
+    fn the_same_row_scrolls_differently_from_a_different_offset() {
+        let row = 100;
+        assert_eq!(
+            row_offset_from_built(row, 0..20, PITCH),
+            100.0 * PITCH,
+            "with the window at the top, row 100 is a hundred pitches down"
+        );
+        assert_eq!(
+            row_offset_from_built(row, 95..99, PITCH),
+            5.0 * PITCH,
+            "with the window five rows above it, the same row is five pitches down"
+        );
+    }
+
+    /// A row wholly inside the viewport is on screen, and the list is left
+    /// alone: a selection made on screen must not move the list under the
+    /// pointer. The viewport here starts 100 points below the first built row —
+    /// i.e. the area built a row or two above the top edge, as it does.
+    #[test]
+    fn a_row_inside_the_viewport_is_left_alone() {
+        // offset 150 → band 150..174, viewport 100..700: well inside.
+        assert!(row_is_in_view(150.0, ROW_H, 100.0, 600.0));
+        // Flush with both edges: inside, exactly.
+        assert!(row_is_in_view(100.0, ROW_H, 100.0, 600.0));
+        assert!(row_is_in_view(600.0 - ROW_H, ROW_H, 100.0, 600.0));
+    }
+
+    /// A row the scroll area built PAST the bottom edge is not on screen. This
+    /// is the case that makes the viewport the test rather than the built range:
+    /// `show_rows` builds one row beyond the fold, and treating that row as
+    /// visible would leave a selection just out of sight — the one outcome the
+    /// whole scroll-to-selected path exists to prevent.
+    #[test]
+    fn a_row_built_past_the_bottom_edge_is_not_on_screen() {
+        let viewport_top = 100.0;
+        let viewport_height = 600.0;
+        let bottom = viewport_top + viewport_height;
+        // The band hangs one point over the bottom edge.
+        assert!(!row_is_in_view(
+            bottom - ROW_H + 1.0,
+            ROW_H,
+            viewport_top,
+            viewport_height
+        ));
+        // The band is entirely below it.
+        assert!(!row_is_in_view(
+            bottom + 10.0,
+            ROW_H,
+            viewport_top,
+            viewport_height
+        ));
+        // The band is above the top edge, and a negative offset.
+        assert!(!row_is_in_view(
+            viewport_top - ROW_H,
+            ROW_H,
+            viewport_top,
+            viewport_height
+        ));
+        // …and the row that ends exactly on the edge IS on screen, which is what
+        // makes the last row of a window reachable without a scroll once the
+        // list is at its end.
+        assert!(row_is_in_view(
+            bottom - ROW_H,
+            ROW_H,
+            viewport_top,
+            viewport_height
+        ));
+    }
+
+    /// A viewport with no height shows nothing, so nothing can be "already on
+    /// screen" — a degenerate frame must not silence the scroll.
+    #[test]
+    fn an_empty_viewport_shows_no_rows() {
+        assert!(!row_is_in_view(0.0, ROW_H, 0.0, 0.0));
+    }
+
+    /// A row below the middle scrolls towards the end of the history, and a row
+    /// above it scrolls back — the sign is what `scroll_with_delta` inverts, so
+    /// it is pinned here rather than left to be discovered at the call site.
+    #[test]
+    fn a_scroll_delta_points_from_the_row_towards_the_viewport_centre() {
+        assert_eq!(
+            centre_scroll_delta(100.0, 300.0),
+            200.0,
+            "a row 200 points ABOVE the middle scrolls back down the history"
+        );
+        assert_eq!(
+            centre_scroll_delta(500.0, 300.0),
+            -200.0,
+            "a row 200 points BELOW the middle scrolls forward"
+        );
+        assert_eq!(
+            centre_scroll_delta(300.0, 300.0),
+            0.0,
+            "centred needs no scroll"
+        );
+    }
+
+    /// The commit→index lookup is over the held window's own order, so the index
+    /// it returns is the index the list pages over. A commit the window does not
+    /// hold has no index, and asking for a scroll to it must be a miss rather
+    /// than a guess.
+    #[test]
+    fn a_commit_index_is_its_position_in_the_held_window() {
+        let rows: Vec<_> = ["a", "b", "c"].into_iter().map(row).collect();
+        assert_eq!(commit_index(&rows, "a"), Some(0));
+        assert_eq!(commit_index(&rows, "c"), Some(2));
+        assert_eq!(
+            commit_index(&rows, "not-in-the-window"),
+            None,
+            "a commit outside the window has no index to scroll to"
+        );
+        assert_eq!(
+            commit_index(&[], "a"),
+            None,
+            "an empty window scrolls nowhere"
         );
     }
 }

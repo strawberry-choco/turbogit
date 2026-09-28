@@ -3,10 +3,13 @@
 //! channel, and all UI-only ephemeral state. The UI reads from here and never
 //! calls git directly; git work is dispatched as an
 //! [`Operation`] via [`AppState::dispatch`].
-use crate::events::{AppEvent, LogPageMode};
+use crate::events::{AppEvent, LogBatchMode};
 use crate::granular;
 use crate::operation::{OpKind, Operation};
-use crate::root_caches::{Affected, LogScope, RootCaches};
+use crate::root_caches::{
+    Affected, LogBatchSettle, LogScope, RootCaches, log_batch_plan as window_batch_plan,
+    scoped_batch_plan,
+};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -75,10 +78,12 @@ pub struct PushPreview {
 /// Maximum recent custom commands kept per workspace (issue 13).
 pub const MAX_RECENT_CUSTOM_COMMANDS: usize = 8;
 
-/// Commits per log page: every [`AppState::fetch_log`] takes exactly one, so a
-/// huge history never blocks the first paint, and the pane keeps paging until
-/// a page comes back short (log paging, P1/P4).
-pub const LOG_PAGE_SIZE: usize = 50;
+/// Commits per log batch: every [`AppState::fetch_log`] takes exactly one, so a
+/// huge history never blocks the first paint, and the pane keeps loading until
+/// a batch comes back short (log paging, P1/P4). A scoped listing — a file's
+/// history, a ref's, a pickaxe search — is held to the same batch size
+/// (log-view-scaling 01).
+pub const LOG_BATCH_SIZE: usize = 50;
 
 /// Where a new branch starts.
 ///
@@ -930,6 +935,14 @@ pub struct UiState {
     /// selected repository changes, so the graph never goes silently empty.
     pub log_ref_scope: Option<(RootId, String)>,
     pub selected_commit: Option<CommitId>,
+    /// The commit whose row the log list should reveal (issue 08). Set by the
+    /// three surfaces that select a commit from outside the list — the details
+    /// pane's parent link, the blame view's row click, and the commit context
+    /// menu — and consumed by the commit list, which resolves it to a row index
+    /// and aims its scroll area at that row. One-shot by construction: the list
+    /// takes it every frame, so a request is answered once and a selection that
+    /// is already on screen never yanks the list.
+    pub log_scroll_to: Option<CommitId>,
     /// A dispatched rewrite waiting for the log to prove it landed, so the
     /// selection can follow the history instead of dangling (ticket 10).
     pub pending_reselect: Option<PendingReselect>,
@@ -1218,6 +1231,14 @@ pub struct AppState {
     /// path-scoped logs, ahead/behind) behind one interface (CONTEXT.md
     /// "Root caches").
     pub caches: RootCaches,
+    /// The log pane's derived display window (log-view-scaling 04): the whole
+    /// loaded window as an owned, indexable row sequence with its lane index,
+    /// held beside the caches it was derived from. `None` until the first frame
+    /// asks for it; from then on it is only replaced when a batch lands, a scope
+    /// settles, the caches are invalidated, or one of the four UI inputs moves
+    /// (see [`crate::log_display::needs_rebuild`]). Private: the log pane goes
+    /// through [`Self::sync_log_display`], which owns the staleness rule.
+    log_display: Option<Arc<crate::log_display::LogDisplay>>,
     /// Override for the OS config dir hosting the global recents file
     /// (ADR-0005). `None` → `recents::default_config_dir()`. Tests inject a
     /// temp dir so the real user configuration is never touched.
@@ -1258,6 +1279,12 @@ pub struct AppState {
     /// guard releases when the `LogLoaded` event drains — on Ok and Err
     /// alike, because the worker always posts the event.
     log_fetch_inflight: HashSet<RootId>,
+    /// In-flight SCOPED log fetches per (root, scope) (log-view-scaling 02):
+    /// one per scope, not one per root, so two scopes of one root batch at once
+    /// and a slow scope cannot block a fast one. The guard releases when that
+    /// scope's `LogBatchLoaded` event drains — on Ok and Err alike, because the
+    /// worker always posts the event.
+    scoped_log_fetch_inflight: HashSet<(RootId, LogScope)>,
     /// In-flight ref-decoration fetches per root (log-open perf, D2): guards
     /// `fetch_refs` against re-dispatching every frame while a fetch is in
     /// flight; the guard releases when the `RefsLoaded` event drains, on Ok
@@ -1319,6 +1346,7 @@ impl AppState {
                 ..UiState::default()
             },
             caches: RootCaches::default(),
+            log_display: None,
             recents_config_dir,
             dir_picker: None,
             patch_writer: None,
@@ -1330,6 +1358,7 @@ impl AppState {
             #[cfg(test)]
             held_reads: Vec::new(),
             log_fetch_inflight: HashSet::new(),
+            scoped_log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
             fetching_stats: HashSet::new(),
             fetching_submodules: HashSet::new(),
@@ -1406,6 +1435,7 @@ impl AppState {
             // the headless suites assert against — NOT launch_in's visible shell.
             ui: UiState::default(),
             caches: RootCaches::default(),
+            log_display: None,
             recents_config_dir: None,
             dir_picker: None,
             patch_writer: None,
@@ -1417,6 +1447,7 @@ impl AppState {
             #[cfg(test)]
             held_reads: Vec::new(),
             log_fetch_inflight: HashSet::new(),
+            scoped_log_fetch_inflight: HashSet::new(),
             fetching_refs: HashSet::new(),
             fetching_stats: HashSet::new(),
             fetching_submodules: HashSet::new(),
@@ -1534,27 +1565,12 @@ impl AppState {
         }
     }
 
-    /// The next page request for `root`'s window, and the mode its answer
-    /// folds in under (P5): the window is derived from the cache, never
-    /// stored. An empty window asks for one page from the front of the
-    /// listing; a window holding `have` rows asks for the page after them —
-    /// `skip = have - 1` deep and one row longer than a page, so the row it
-    /// already holds comes back as the boundary checksum (P3). The walk always
-    /// starts at HEAD, so no commit can be lost behind a merge's second
-    /// parent (P2).
-    fn log_page_plan(&self, root: &RootId) -> (LogOpts, LogPageMode) {
-        let window = self.caches.log(root);
-        let have = window.map_or(0, |c| c.len());
-        let anchor = window.and_then(|c| c.last()).map(|c| c.id.clone());
-        let (rows, skip) = if have == 0 {
-            (LOG_PAGE_SIZE, None)
-        } else {
-            (LOG_PAGE_SIZE + 1, Some(have - 1))
-        };
-        let mode = match anchor {
-            None => LogPageMode::Replace,
-            Some(anchor) => LogPageMode::Append { anchor },
-        };
+    /// The next batch request for `root`'s window, and the mode its answer
+    /// folds in under (P5). The window is derived from the cache, never
+    /// stored — the scoped listings plan their batches by the same rule (see
+    /// [`crate::root_caches::log_batch_plan`]), and only the filter differs.
+    fn log_batch_plan(&self, root: &RootId) -> (LogOpts, LogBatchMode) {
+        let (rows, skip, mode) = window_batch_plan(self.caches.log(root));
         (
             LogOpts {
                 max_count: Some(rows),
@@ -1565,7 +1581,7 @@ impl AppState {
         )
     }
 
-    /// Fetch the next page of a root's commit log on a worker thread.
+    /// Fetch the next batch of a root's commit log on a worker thread.
     pub fn fetch_log(&mut self, root: RootId) {
         // One fetch per root in flight (log-open perf, D2): the tool-window
         // body asks every frame while the cache is cold; a second fetch for
@@ -1573,7 +1589,7 @@ impl AppState {
         if !self.log_fetch_inflight.insert(root.clone()) {
             return;
         }
-        let (opts, mode) = self.log_page_plan(&root);
+        let (opts, mode) = self.log_batch_plan(&root);
         self.pump_read(move |executor, tx| {
             let res = executor.log(&root.0, &opts);
             let _ = tx.send(AppEvent::LogLoaded {
@@ -1584,34 +1600,23 @@ impl AppState {
         });
     }
 
-    /// Fold one fetched page into `root`'s window (log paging).
+    /// Fold one fetched batch into `root`'s window (log paging).
     ///
-    /// An append page has to lead with the anchor row it was requested
-    /// against — that row is the checksum on the boundary. When it leads with
-    /// anything else, the listing moved under the request, so the window is
-    /// discarded and restarted at page 0 rather than growing a torn list (P3).
-    /// Either way the page's length against the rows it asked for is what says
-    /// whether history continues (P4).
-    fn settle_log_page(&mut self, root: &RootId, mode: LogPageMode, page: Vec<Commit>) {
-        let has_more;
-        match mode {
-            LogPageMode::Replace => {
-                has_more = page.len() == LOG_PAGE_SIZE;
-                self.caches.store_log(root.clone(), page);
-            }
-            LogPageMode::Append { anchor } => {
-                if page.first().map(|c| &c.id) != Some(&anchor) {
-                    self.caches.store_log(root.clone(), Vec::new());
-                    self.fetch_log(root.clone());
-                    return;
-                }
-                has_more = page.len() == LOG_PAGE_SIZE + 1;
-                // The leading row is the anchor the window already holds.
-                self.caches
-                    .append_log(root.clone(), page.into_iter().skip(1).collect());
-            }
+    /// The rules live on the window itself ([`RootCaches::settle_log_batch`]),
+    /// shared with the three scoped listings: a batch that does not lead with
+    /// the anchor row it was requested against means the listing moved under
+    /// the request, so nothing is held and the window is asked again from the
+    /// front rather than growing a torn list (P3). Either way the batch's
+    /// length against the rows it asked for is what says whether history
+    /// continues (P4).
+    fn settle_log_batch(&mut self, root: &RootId, mode: LogBatchMode, batch: Vec<Commit>) {
+        if matches!(
+            self.caches.settle_log_batch(root, mode, batch),
+            LogBatchSettle::Torn
+        ) {
+            // The tear dropped the window, so the next plan is batch 0 again.
+            self.fetch_log(root.clone());
         }
-        self.caches.set_log_has_more(root, has_more);
     }
 
     /// Fetch (and cache) ref decorations for a root on a worker thread
@@ -1655,10 +1660,10 @@ impl AppState {
         });
     }
 
-    /// Fetch one more page for every root whose window says history continues
+    /// Fetch one more batch for every root whose window says history continues
     /// past it — the manual "Load more" button and the log pane's automatic
     /// trigger. A root with nothing cached is NOT loaded here (the Log pane's
-    /// data-ensure step owns the first page), and a root at the end of its
+    /// data-ensure step owns the first batch), and a root at the end of its
     /// history issues no fetch at all.
     pub fn load_more_log(&mut self) {
         for root in self.multi.roots.clone() {
@@ -1666,6 +1671,34 @@ impl AppState {
                 self.fetch_log(root.id);
             }
         }
+    }
+
+    /// The log pane's display window, rebuilt only when the loaded window or one
+    /// of the UI-side inputs has moved (log-view-scaling 04). The log pane calls
+    /// this once per frame instead of re-deriving; the answer is a handle to the
+    /// held value, and cloning it is a refcount bump — never a copy, never a
+    /// borrow of the caches, so the frame stays free to mutate `state` while it
+    /// paints.
+    ///
+    /// The returned handle is the SAME allocation the frame before it got for as
+    /// long as nothing changed: a rebuild allocates a new one. That identity is
+    /// this method's contract, not an accident of the allocation, and it is what
+    /// lets the "an idle frame recomputes nothing" rule be stated and checked
+    /// without a counter in the production path.
+    pub fn sync_log_display(&mut self) -> Arc<crate::log_display::LogDisplay> {
+        let revision = self.caches.revision();
+        let inputs = crate::log_display::LogInputs::of(self);
+        if crate::log_display::needs_rebuild(self.log_display.as_deref(), revision, &inputs) {
+            let (loaded, hits) = crate::log_display::sources(self, &inputs);
+            self.log_display = Some(Arc::new(crate::log_display::derive(
+                revision, &inputs, loaded, hits,
+            )));
+        }
+        // Just built, or already held: the window is never absent here, so the
+        // pane reads one value and never has to special-case "no window yet".
+        self.log_display
+            .clone()
+            .expect("a rebuilt window is held; the branch above stored it")
     }
 
     /// Fetch (and cache) the linked-worktree list for a root on a worker
@@ -1739,11 +1772,60 @@ impl AppState {
     /// One scoped commit listing of `root` — a file's history, a ref's history
     /// or a pickaxe search — filled through the engine the app owns on miss.
     /// The three listings were three near-identical signatures; they are one
-    /// call taking a [`LogScope`].
+    /// call taking a [`LogScope`]. A scope that has never been read is read
+    /// ONE BATCH of (log-view-scaling 01), and one that already holds rows
+    /// answers from the cache, so the per-frame ask never grows the window by
+    /// itself; [`Self::load_more_scoped_log`] is what grows it.
     ///
     /// Borrows the cache: do not touch app state while holding the slice.
     pub fn ensure_log(&mut self, root: &RootId, scope: LogScope) -> &[Commit] {
         self.caches.ensure_log(self.executor.as_ref(), root, &scope)
+    }
+
+    /// The batch a scoped read of `root` asks for right now: the scope's own
+    /// filter, plus the position the window derives from what it holds
+    /// (log-view-scaling 01, 10). The mode comes back with it, so the batch that
+    /// arrives off-thread is folded in under the boundary it was measured
+    /// against — and a search's page, which holds its batch as a tail, is cut to
+    /// the batch itself when it settles.
+    fn scoped_log_batch_plan(&self, root: &RootId, scope: &LogScope) -> (LogOpts, LogBatchMode) {
+        let (rows, skip, mode) = scoped_batch_plan(scope, self.caches.scoped_log(root, scope));
+        (scope.batch_opts(rows, skip), mode)
+    }
+
+    /// Fetch the next batch of one scoped listing — the "Load more" of a file's
+    /// history, a ref's history, or a pickaxe search — on a worker thread
+    /// (log-view-scaling 02), mirroring [`Self::fetch_log`]: the frame that
+    /// asks dispatches and draws, and the batch lands through
+    /// [`AppEvent::LogBatchLoaded`] when the next drain runs.
+    ///
+    /// One read per (root, scope) in flight, so a second ask for the same
+    /// scope before its batch lands is a no-op, and a scope that reports the
+    /// end of its history is not asked at all. The guard releases on Ok and
+    /// Err alike, so a failed batch leaves the scope able to page again.
+    pub fn load_more_scoped_log(&mut self, root: &RootId, scope: &LogScope) {
+        if !self.caches.scoped_log_can_grow(root, scope) {
+            return;
+        }
+        // One fetch per (root, scope) in flight — the scope is half the key,
+        // so one scope's slow read cannot hold another scope's batch.
+        if !self
+            .scoped_log_fetch_inflight
+            .insert((root.clone(), scope.clone()))
+        {
+            return;
+        }
+        let (opts, mode) = self.scoped_log_batch_plan(root, scope);
+        let (r, s) = (root.clone(), scope.clone());
+        self.pump_read(move |executor, tx| {
+            let res = executor.log(&r.0, &opts);
+            let _ = tx.send(AppEvent::LogBatchLoaded {
+                root: r,
+                scope: s,
+                commits: res,
+                mode,
+            });
+        });
     }
 
     /// `root`'s hunk-span statistics, filled through the engine the app owns on
@@ -1844,7 +1926,7 @@ impl AppState {
                 Affected::All => true,
                 Affected::Root(id) => *id == sel,
             };
-            // Paging lives in `fetch_log`'s page plan, so the harness and the
+            // Paging lives in `fetch_log`'s batch plan, so the harness and the
             // shell ask for exactly the same window.
             if in_scope {
                 self.fetch_log(sel);
@@ -2266,16 +2348,16 @@ impl AppState {
         if &pending.root != root {
             return;
         }
-        let Some(page) = self.caches.log(root).map(<[Commit]>::to_vec) else {
+        let Some(window) = self.caches.log(root).map(<[Commit]>::to_vec) else {
             return;
         };
-        if page.iter().any(|c| c.id == pending.anchor) {
+        if window.iter().any(|c| c.id == pending.anchor) {
             return;
         }
         self.ui.pending_reselect = None;
         self.ui.selected_commit = turbogit_services::reselection::reselect_after_rewrite(
             &pending.plan,
-            &page,
+            &window,
             &pending.anchor,
             &pending.fate,
         );
@@ -2880,13 +2962,43 @@ impl AppState {
                     // worker always posts the event (log-open perf, D2).
                     self.log_fetch_inflight.remove(&root);
                     match commits {
-                        Ok(page) => {
-                            self.settle_log_page(&root, mode, page);
+                        Ok(batch) => {
+                            self.settle_log_batch(&root, mode, batch);
                             // A rewrite's selection follows the history here and
                             // nowhere else: this is the first moment the commit
                             // that took the acted-on one's place exists.
                             self.apply_pending_reselect(&root);
                         }
+                        Err(e) => self.last_error = Some(e.to_string()),
+                    }
+                }
+                AppEvent::LogBatchLoaded {
+                    root,
+                    scope,
+                    commits,
+                    mode,
+                } => {
+                    // Release the in-flight guard on Ok and Err alike — the
+                    // worker always posts the event (log-view-scaling 02).
+                    // Keyed by the scope that was read, so a batch frees only
+                    // the read that is waiting on it.
+                    self.scoped_log_fetch_inflight
+                        .remove(&(root.clone(), scope.clone()));
+                    match commits {
+                        Ok(batch) => {
+                            if matches!(
+                                self.caches
+                                    .settle_scoped_log_batch(&root, &scope, mode, batch),
+                                LogBatchSettle::Torn
+                            ) {
+                                // The tear left no window, so the next plan is
+                                // batch 0 again — read the same listing afresh.
+                                self.load_more_scoped_log(&root, &scope);
+                            }
+                        }
+                        // A failed batch surfaces and leaves the held window
+                        // alone; the guard is already released, so the scope
+                        // can be asked again.
                         Err(e) => self.last_error = Some(e.to_string()),
                     }
                 }

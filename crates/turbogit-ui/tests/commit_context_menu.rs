@@ -644,7 +644,7 @@ mod surface {
         assert_menu_item_gated, assert_not_painted, assert_painted, filled_rects, painted_galleys,
         painted_text,
     };
-    use turbogit_app::events::{AppEvent, LogPageMode};
+    use turbogit_app::events::{AppEvent, LogBatchMode};
     use turbogit_app::state::{AppState, Tab};
     use turbogit_domain::model::{LogOpts, RootId, VcsSettings};
     use turbogit_engine::cli::CliExecutor;
@@ -777,7 +777,7 @@ mod surface {
                 .send(AppEvent::LogLoaded {
                     root: root.id.clone(),
                     commits: Ok(commits),
-                    mode: LogPageMode::Replace,
+                    mode: LogBatchMode::Replace,
                 })
                 .expect("send LogLoaded");
         }
@@ -801,7 +801,7 @@ mod surface {
                 .send(AppEvent::LogLoaded {
                     root: root.id.clone(),
                     commits: Ok(commits),
-                    mode: LogPageMode::Replace,
+                    mode: LogBatchMode::Replace,
                 })
                 .unwrap();
         }
