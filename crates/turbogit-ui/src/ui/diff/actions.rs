@@ -5,7 +5,10 @@ use super::model::{line_counts, mono_font};
 use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
-use egui::{Color32, CornerRadius, Pos2, Rect, Response, Sense, Ui, Vec2, WidgetInfo, WidgetType};
+use egui::{
+    Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui,
+    UiBuilder, Vec2, WidgetInfo, WidgetType,
+};
 use std::collections::BTreeSet;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::DiffTarget;
@@ -111,12 +114,14 @@ pub(super) fn line_selected(
 
 /// Selected-line marker (spec R2 story 3): a BRAND edge bar on the row's
 /// left — the IDE-gutter convention, readable over both diff band tints.
+///
+/// Ticket 07: the bar is the one shared rail painter's, which absorbed this
+/// hand-rolled filled rect. The geometry is unchanged (it already sat flush at
+/// the leading edge); what it loses is the second definition of the width, which
+/// now comes from `theme::RAIL_WIDTH`, and the guarantee that a row elsewhere
+/// that grows a rail places it exactly here.
 pub(super) fn paint_selection_bar(painter: &egui::Painter, rect: &Rect) {
-    painter.rect_filled(
-        Rect::from_min_size(rect.left_top(), Vec2::new(2.0, rect.height())),
-        CornerRadius::ZERO,
-        Palette::BRAND,
-    );
+    crate::ui::components::paint_rail(painter, *rect);
 }
 
 /// The accumulated line selection for one hunk, when any.
@@ -153,6 +158,85 @@ fn dispatch_hunk_action(
     };
     granular::dispatch(state, path, target, stage);
 }
+// --- the two axes of scope ----------------------------------------------------
+
+/// One axis of scope, and the frame that makes its segments read as **one**
+/// control rather than a run of loose buttons (spec story 22).
+///
+/// The two axes sit side by side and both answer "which?", so the frame — not
+/// the labels — is what tells them apart. They take the two different kinds of
+/// frame the palette already has, and a test can see the difference because one
+/// boundary is laid down as a fill and the other is drawn as a stroke:
+///
+/// - [`Axis::Comparison`] — what is being compared (`Repo | Staged | Local`).
+///   A **filled pad**: the three chips sit *inside* a raised band, so the group
+///   is something the chips are contained by.
+/// - [`Axis::Granularity`] — what one action addresses
+///   (`File | Hunk | Line`). An **outlined track**: the boundary is drawn around
+///   the segments rather than laid down under them, which is a visibly
+///   different shape next to the comparison pad.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Axis {
+    Comparison,
+    Granularity,
+}
+
+/// Vertical breathing room between an axis's segments and its frame. Without it
+/// the frame's rect is exactly its segments' rect, and a frame that is
+/// indistinguishable from what it frames is not a frame — which is also what
+/// would let the track's own fill pose as a second boundary.
+///
+/// Half the shared control padding — the space a control already keeps from its
+/// own edge — rather than a new number.
+const AXIS_PAD_Y: f32 = crate::theme::BUTTON_PADDING.y / 2.0;
+
+/// Frame one axis of scope's segments as a single grouped control, and return
+/// the group's rect.
+///
+/// Two things make it a group rather than a row of siblings, and both are
+/// geometric, so a test can read them off painted output without knowing which
+/// helper drew what:
+///
+/// 1. **Contiguity** — the segments are laid out edge to edge, with the axis's
+///    own item spacing zeroed. A gap between two segments of one axis is
+///    exactly the "loose buttons" reading this exists to remove. (The spacing is
+///    set on the scope's child `Ui`, whose style is clone-on-write, so it cannot
+///    leak to the toolbar around it.)
+/// 2. **One outer boundary** — the axis paints exactly one frame rect, in the
+///    shape [`Axis`] asks for, behind its segments and derived from the same
+///    rect they were laid out in. The frame cannot drift away from the segments
+///    it groups, because it *is* their rect.
+pub(super) fn axis_group(ui: &mut Ui, axis: Axis, body: impl FnOnce(&mut Ui)) -> Rect {
+    // Reserved before the body runs so the frame lands behind the segments
+    // rather than over them.
+    let slot = ui.painter().add(egui::Shape::Noop);
+    let inner = ui.scope_builder(
+        UiBuilder::new().layout(Layout::left_to_right(Align::Center)),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            body(ui);
+        },
+    );
+    let segments = inner.response.rect;
+    // The frame is the same rect its segments were laid out in, grown by the
+    // pad: it can never drift away from what it groups, and it is never
+    // coincident with a segment's own fill (which is what would make "one outer
+    // boundary" ambiguous to read back off the output).
+    let frame = segments.expand2(Vec2::new(0.0, AXIS_PAD_Y));
+    let radius = CornerRadius::same(crate::theme::CONTROL_RADIUS);
+    let shape = match axis {
+        Axis::Comparison => egui::Shape::rect_filled(frame, radius, Palette::SURFACE_2),
+        Axis::Granularity => egui::Shape::rect_stroke(
+            frame,
+            radius,
+            Stroke::new(1.0, Palette::LINE),
+            StrokeKind::Inside,
+        ),
+    };
+    ui.painter().set(slot, shape);
+    segments
+}
+
 // --- toolbar widgets ---------------------------------------------------------
 
 /// Revision chips (spec §8.4): Repo/Staged/Local select the documented

@@ -241,16 +241,31 @@ fn origin_of(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
         })
 }
 
-/// The smallest SURFACE-filled rect containing `label`'s galley origin.
+/// The pane header's own hairline across `label`'s column: the shared pane
+/// header's one `RULE_STRUCTURAL` rule, the nearest one below the label.
+///
+/// The header used to paint a `SURFACE`-filled box around its label; it no
+/// longer does, because a pane header is a band and a hairline and a stroke
+/// would mean the header floats. The assertion downstream is unchanged in
+/// meaning: the three panes are the same width.
 fn header_band(harness: &Harness<'_, AppState>, label: &str) -> Rect {
     let pos = galley_origin(harness, label)
         .unwrap_or_else(|| panic!("{label} header label was not painted"));
-    filled_rects(harness)
+    let rules: Vec<Rect> = filled_rects(harness)
         .into_iter()
-        .filter(|(r, c)| *c == Palette::SURFACE && r.contains(pos))
-        .min_by_key(|(r, _)| r.area() as i64)
+        .filter(|(r, c)| *c == Palette::RULE_STRUCTURAL && r.left() <= pos.x && pos.x <= r.right())
         .map(|(r, _)| r)
-        .unwrap_or_else(|| panic!("{label} header band was not painted"))
+        .collect();
+    rules
+        .iter()
+        .copied()
+        .min_by_key(|r| ((r.top() - pos.y).abs() * 10.0) as i64)
+        .unwrap_or_else(|| {
+            panic!(
+                "{label} header band was not painted: the label is at {pos:?} and the \
+                 structural rules spanning it are {rules:?}"
+            )
+        })
 }
 
 /// Open the redesigned conflict resolver for the seeded conflicted file
@@ -605,14 +620,25 @@ fn resolver_renders_equal_width_panes_with_tinted_blocks() {
         "conflict marker strips must be painted"
     );
 
-    // The shared kit keeps the focused Result treatment on the header and on
-    // the inactive read-only cell, observable through painted strokes.
+    // The shared kit keeps the focused Result treatment on the header — as R1's
+    // 2pt accent rail at the pane's leading edge, painted by the one rail
+    // painter — and keeps the BRAND focus outline on the inactive read-only
+    // cell, which really is a floating editor.
     let result_header_pos = galley_origin(&h, "Result").expect("Result header painted");
     assert!(
-        stroked_rects(&h)
-            .iter()
-            .any(|(r, c)| *c == Palette::BRAND && r.contains(result_header_pos)),
-        "resolver Result header must carry the shared BRAND focus outline"
+        filled_rects(&h).iter().any(|(r, c)| {
+            *c == Palette::BRAND
+                && (r.width() - turbogit_ui::theme::RAIL_WIDTH).abs() < 0.01
+                && r.right() <= result_header_pos.x
+                && r.top() <= result_header_pos.y
+                && result_header_pos.y <= r.bottom()
+        }),
+        "resolver Result header must carry the shared 2pt BRAND focus rail beside \
+         it, at {result_header_pos:?}: {:?}",
+        filled_rects(&h)
+            .into_iter()
+            .filter(|(_, c)| *c == Palette::BRAND)
+            .collect::<Vec<_>>()
     );
     let inactive_result_pos =
         origin_of(&h, "<< unresolved >>").expect("inactive Result placeholder painted");

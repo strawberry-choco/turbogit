@@ -196,19 +196,6 @@ fn marker_bg() -> Color32 {
     tint_over_bg(Palette::STATE_WARNING, 0.15)
 }
 
-/// All stroked rectangles painted by the last frame as `(rect, color)`.
-fn stroked_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Rect(rs) if rs.stroke != egui::Stroke::NONE => Some((rs.rect, rs.stroke.color)),
-            _ => None,
-        })
-        .collect()
-}
-
 /// Paint-time origin of the first text galley whose content equals `text`
 /// modulo trailing newlines (block labels carry a trailing '\n').
 fn origin_of(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
@@ -222,15 +209,22 @@ fn origin_of(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
         })
 }
 
-/// The smallest SURFACE-filled rect containing `label`'s galley origin
-/// (i.e. the pane header band behind the label, not the window backdrop).
+/// The pane header's own hairline across `label`'s column: the shared pane
+/// header's one `RULE_STRUCTURAL` rule.
+///
+/// The header used to paint a `SURFACE`-filled box around its label, so this
+/// looked for the smallest such box. It no longer does — a pane header is a
+/// band and a hairline, not a box (a stroke means "this floats", and a pane's
+/// own header does not) — so the identification is now the header's own
+/// underline, the nearest one below the label. The assertion downstream is
+/// unchanged in meaning: the three panes are the same width.
 fn header_band(harness: &Harness<'_, AppState>, label: &str) -> Rect {
     let pos = galley_origin(harness, label)
         .unwrap_or_else(|| panic!("{label} header label was not painted"));
     filled_rects(harness)
         .into_iter()
-        .filter(|(r, c)| *c == Palette::SURFACE && r.contains(pos))
-        .min_by_key(|(r, _)| r.area() as i64)
+        .filter(|(r, c)| *c == Palette::RULE_STRUCTURAL && r.left() <= pos.x && pos.x <= r.right())
+        .min_by_key(|(r, _)| ((r.top() - pos.y).abs() * 10.0) as i64)
         .map(|(r, _)| r)
         .unwrap_or_else(|| panic!("{label} header band was not painted"))
 }
@@ -305,14 +299,25 @@ fn merge_editor_renders_three_equal_panes_with_tinted_blocks() {
         "conflict marker strips must be painted"
     );
 
-    // The Result pane is visually outlined as focused (BRAND stroke around
-    // the Result header region).
+    // The Result pane is marked as focused: a 2pt accent rail at its leading
+    // edge, in the air beside the header's title. R1's one rail shape, painted
+    // by the one rail painter — the old header drew a 2pt brand *stroke* around
+    // the whole band, which said "this floats" about a pane header.
     let result_pos = galley_origin(&h, "Result").expect("Result header painted");
     assert!(
-        stroked_rects(&h)
-            .iter()
-            .any(|(r, c)| *c == Palette::BRAND && r.contains(result_pos)),
-        "Result pane must carry the BRAND focus outline"
+        filled_rects(&h).iter().any(|(r, c)| {
+            *c == Palette::BRAND
+                && (r.width() - turbogit_ui::theme::RAIL_WIDTH).abs() < 0.01
+                && r.right() <= result_pos.x
+                && r.top() <= result_pos.y
+                && result_pos.y <= r.bottom()
+        }),
+        "Result pane must carry the shared 2pt BRAND focus rail beside its header, \
+         beside {result_pos:?}: {:?}",
+        filled_rects(&h)
+            .into_iter()
+            .filter(|(_, c)| *c == Palette::BRAND)
+            .collect::<Vec<_>>()
     );
 }
 

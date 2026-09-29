@@ -39,11 +39,26 @@ pub const MIN_SIDEBAR_WINDOW_WIDTH: f32 = 1000.0;
 
 const TAB_ICON_SIZE: f32 = 14.0; // §6.2 tab icons
 const TAB_TEXT: f32 = crate::theme::TYPE_CONTROL;
-/// The active tab's brand selection rule, in px. The one measure the strip
-/// owns rather than borrowing from spec §4.2, and deliberately the same 2px
-/// the sidebar's active row draws (`sidebar::paint_active_band`) so the two
-/// selected states are one idea across the shell.
-const TAB_SELECTION_RULE: f32 = 2.0;
+/// The active tab's accent underline, in px.
+///
+/// **The rail width, read from the token layer** — the same 2 px
+/// [`crate::theme::RAIL_WIDTH`] a selected row's leading rail is, and the second
+/// of R1's two non-button jobs for `BRAND`. The two numbers are one number, so
+/// they are read from one declaration: a local `2.0` here would be a second
+/// definition of the accent's thickness that could drift from the row's, and the
+/// underline would quietly stop matching the rail it is the horizontal twin of.
+///
+/// `tests/branch_component_kit.rs::the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter`
+/// pins the set of files that may **name** `RAIL_WIDTH` to exactly three — the
+/// token layer that defines it, `components.rs` (the one rail painter), and this
+/// module — so the reading is recorded rather than invisible. Note what that
+/// ratchet does *not* claim: it does not make this a rail site. A rail is a 2 px
+/// vertical bar at a row's **leading edge**, and this is a 2 px horizontal rule
+/// at a tab's **bottom edge**: same width dimension, same colour, different
+/// geometry, and routing it through `components::paint_rail` would paint a
+/// vertical bar. What the two share is the *width*, which is why they share the
+/// token; what they do not share is the painter.
+const TAB_SELECTION_RULE: f32 = crate::theme::RAIL_WIDTH;
 
 /// Compose the whole shell: frozen shortcuts, the shell frame regions
 /// (center tabs / status bar) around the workspace sidebar, then the
@@ -467,13 +482,21 @@ const SHELL_TABS: [(Tab, Icon, &str); 5] = [
 /// - The active tab is no longer a floating pill inset from the strip's
 ///   top/bottom. A pill needs surrounding air to read as a pill; with the
 ///   header gone there is no air above it, so it would read as a detached
-///   chip jammed against the window frame. It is now a full-height band
-///   anchored to the top edge — a raised `SURFACE_2` fill in `INK` with a
-///   2px `BRAND` rule along its bottom edge, the same fill-plus-brand-rule
-///   vocabulary the sidebar's active row already uses
-///   (`sidebar::paint_active_band`) for "this is the selected one".
-///   The brand rule overwrites the strip's `LINE` across the active tab's
-///   own width, so the selection underline and the divider read as one edge.
+///   chip jammed against the window frame. It is now a full-strip-height
+///   band anchored to the top edge — a 2px `BRAND` underline along its own
+///   bottom edge, with the label and its icon one step brighter than every
+///   inactive tab's.
+///
+/// **Those two marks and no others.** The band used to also carry a raised
+/// `SURFACE_2` fill, which made the active tab a *second* selection vocabulary
+/// beside the sidebar's — a filled slab here, a fill-plus-rail there, for the
+/// same fact. R1 gives `BRAND` three jobs in the whole app and the underline is
+/// one of them; a raised fill behind a tab is a fourth way of saying "this one"
+/// that no other surface in the app uses, and it is also the wrong rung of the
+/// raised ladder (the strip sits on `BG`, where raised is `SURFACE`, not
+/// `SURFACE_2` — R5). The underline overwrites the strip's `LINE` across the
+/// active tab's own width, so the selection underline and the divider read as
+/// one edge, which is why the two together need no second rule.
 fn render_tab_strip(ui: &mut Ui, state: &mut AppState) {
     let width = ui.available_width();
     let (strip, _) = ui.allocate_exact_size(Vec2::new(width, TAB_STRIP_HEIGHT), Sense::hover());
@@ -494,8 +517,8 @@ fn render_tab_strip(ui: &mut Ui, state: &mut AppState) {
             .layout_no_wrap(label.clone(), font.clone(), Color32::WHITE);
         let content_w = TAB_ICON_SIZE + 6.0 + galley.size().x;
         // The row is the spec's 31px tab height and is the click target;
-        // `tab_item` paints its band over the full 32px strip below, so the
-        // fill and brand rule reach the divider with no unclaimed sliver.
+        // `tab_item` paints its underline over the full 32px strip below, so
+        // the rule reaches the divider with no unclaimed sliver.
         let rect = Rect::from_min_size(
             Pos2::new(x, strip.top()),
             Vec2::new(24.0 + content_w, TAB_ITEM_HEIGHT),
@@ -504,6 +527,19 @@ fn render_tab_strip(ui: &mut Ui, state: &mut AppState) {
         x += rect.width() + 2.0;
     }
 }
+
+/// The ink an active tab's label and icon paint, and an inactive tab's.
+///
+/// Two ramp steps, and both are legal where they land: the strip's own fill is
+/// `Palette::BG`, on which `INK` measures 12.59:1 and `INK_3` measures 5.02:1.
+/// With the raised band gone there is no raised surface under either label, so
+/// the muted step is legal again on the active tab too — which is the point of
+/// removing the band rather than keeping it and merely adding the underline.
+/// The active tab is the *brightest* ink in the strip and the inactive tabs are
+/// the muted one: "which tool window am I in" is a reading-order question, and
+/// the ramp is the answer to that.
+const ACTIVE_TAB_INK: Color32 = Palette::INK;
+const INACTIVE_TAB_INK: Color32 = Palette::INK_3;
 
 fn tab_item(
     ui: &mut Ui,
@@ -518,40 +554,40 @@ fn tab_item(
     let response = ui.interact(rect, id, Sense::click());
     let active = state.ui.tab == tab;
     let painter = ui.painter().clone();
-    // The active tab's band is the row's column over the *whole* strip
-    // (`rect.top()` is the strip's top edge — the caller places it there),
-    // anchored to the window frame rather than floating inside the band.
+    // The band is the row's column over the *whole* strip (`rect.top()` is the
+    // strip's top edge — the caller places it there), anchored to the window
+    // frame rather than floating inside the band.
     let band = Rect::from_min_max(
         Pos2::new(rect.left(), rect.top()),
         Pos2::new(rect.right(), rect.top() + TAB_STRIP_HEIGHT),
     );
-    // The band's only two rounded corners are the ones that meet the window
-    // edge (north): a full-strip-height band that is square where it touches
-    // the frame reads as a slab, and CONTROL_RADIUS there is the same soft
-    // shoulder every other raised surface in the app carries.
-    let band_radius = CornerRadius {
-        nw: crate::theme::CONTROL_RADIUS,
-        ne: crate::theme::CONTROL_RADIUS,
-        sw: 0,
-        se: 0,
-    };
     if active {
-        painter.rect_filled(band, band_radius, Palette::SURFACE_2);
-        // The selection rule, 2px of brand on the band's bottom edge — the
-        // same measure and weight the sidebar's active-row band uses, so
-        // "selected" is one idea across the shell rather than two.
+        // The accent underline, the shared width, on the band's bottom edge —
+        // the same measure and weight the sidebar's active-row rail uses, so
+        // "selected" is one idea across the shell rather than two. It overwrites
+        // the strip's `LINE` divider across the tab's own width, so the
+        // selection mark and the divider read as one edge.
         let rule = Rect::from_min_max(
             Pos2::new(band.left(), band.bottom() - TAB_SELECTION_RULE),
             Pos2::new(band.right(), band.bottom()),
         );
         painter.rect_filled(rule, CornerRadius::ZERO, Palette::BRAND);
     } else if response.hovered() {
-        // Hover wears the band's geometry but not its brand rule, so a
-        // hovered-but-inactive tab never reads as selected.
-        painter.rect_filled(band, band_radius, widgets::tint_over_bg(Palette::INK, 0.08));
+        // Hover is a pointer state, not a selection: a quiet wash on `BG`, so
+        // a hovered-but-inactive tab never reads as the selected one — it has
+        // no underline and its label stays at the muted step.
+        painter.rect_filled(
+            band,
+            CornerRadius::ZERO,
+            widgets::tint_over_bg(Palette::INK, 0.08),
+        );
     }
 
-    let ink = if active { Palette::INK } else { Palette::INK_3 };
+    let ink = if active {
+        ACTIVE_TAB_INK
+    } else {
+        INACTIVE_TAB_INK
+    };
     let cy = rect.center().y;
     let mut cx = rect.left() + 12.0;
     icons::centered_icon(
@@ -591,15 +627,68 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
         )
         .show(ui, |ui| {
             ui.style_mut().spacing.button_padding = crate::theme::DENSITY_DENSE_BUTTON;
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                version_line(ui, state);
-                aggregated_status_chips(ui, &agg);
-                granular_status_chips(ui, state);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    status_total(&agg, ui);
+            // Two clusters on one row, each given its **own** rect rather than
+            // a nested `right_to_left` inside a `left_to_right`.
+            //
+            // The nested form does not hold its right edge: the left cluster is
+            // measured first, the nested layout takes whatever remains, and the
+            // total lands *past* the panel's right inset — at the default
+            // 1024 headless width it painted at x 1008..1040 in a panel whose
+            // content ends at 1008, so 32 points of the "1 total" label were
+            // off the window. Two explicit halves cannot drift that way: the
+            // right one is measured from the panel's own right edge, so the
+            // total's right edge is the inset no matter what the left cluster
+            // grows to.
+            let band = ui.max_rect();
+            // The right cluster gets a rect **measured from the panel's own
+            // right edge** and sized to its own content, then lays out left to
+            // right inside it. A `Layout::right_to_left` cannot do this job: a
+            // `ui.label` is a *wrapping* label, so it claims the whole
+            // remaining width and then anchors its galley at that rect's
+            // **right** edge — which puts the text's left edge at the panel's
+            // right inset and runs it off the window. At the default 1024
+            // headless width "1 total" painted at x 1008..1040 inside a panel
+            // whose content ends at 1008, so 32 points of the label were
+            // outside the frame. This bug predates every change in this ticket;
+            // it is what the "no clipping at the default size" criterion finds.
+            //
+            // Measuring from the right edge cannot drift: however far the left
+            // cluster grows, the total's right edge stays at the inset.
+            let total_text = status_total_text(&agg);
+            let total_w = ui
+                .painter()
+                .layout_no_wrap(
+                    total_text.clone(),
+                    crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
+                    STATUS_BAR_INK,
+                )
+                .size()
+                .x;
+            let spinner_w = if state.ui.busy {
+                ui.spacing().interact_size.y + ui.spacing().item_spacing.x
+            } else {
+                0.0
+            };
+            let split = (band.max.x - total_w - spinner_w).max(band.min.x);
+            let left_rect = Rect::from_min_max(band.min, Pos2::new(split, band.max.y));
+            let right_rect = Rect::from_min_max(Pos2::new(split, band.min.y), band.max);
+            ui.scope_builder(UiBuilder::new().max_rect(left_rect), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    version_line(ui, state);
+                    aggregated_status_chips(ui, &agg);
+                    granular_status_chips(ui, state);
+                });
+            });
+            ui.scope_builder(UiBuilder::new().max_rect(right_rect), |ui| {
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     if state.ui.busy {
                         ui.spinner();
                     }
+                    ui.label(
+                        RichText::new(total_text)
+                            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
+                            .color(STATUS_BAR_INK),
+                    );
                 });
             });
             paint_edge_line(ui, Edge::Top);
@@ -608,9 +697,18 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
 
 /// Version / git-status line (issue #34): app version, resolved git
 /// version, and the total indexed repo count — leftmost in the cluster,
-/// ahead of the aggregated counters, at the same quiet `INK_3` it wore in
-/// the deleted topbar. It paints on every screen: the status bar is the
-/// one chrome band Welcome keeps.
+/// ahead of the aggregated counters, at the same quiet ink every other status
+/// line wears. It paints on every screen: the status bar is the one chrome
+/// band Welcome keeps.
+///
+/// **The ink is `INK_2`, not `INK_3`, and that is a legality answer rather than
+/// a preference.** The band this line paints on is `Palette::SURFACE` — a
+/// *raised* surface — and ticket 02 narrowed `INK_3`'s legal set to the app
+/// background, the content surface and the sidebar surface. On `SURFACE` it
+/// measures 4.20:1, under AA, and the token layer's own instruction for a
+/// caller in that position is to step *up*. `INK_2` measures 6.58:1 there. The
+/// step-up is why every status-bar line shares one ink: the bar is one raised
+/// band, so it gets one step.
 fn version_line(ui: &mut Ui, state: &AppState) {
     ui.label(
         RichText::new(format!(
@@ -620,9 +718,17 @@ fn version_line(ui: &mut Ui, state: &AppState) {
             state.multi.roots.len(),
         ))
         .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-        .color(Palette::INK_3),
+        .color(Palette::INK_2),
     );
 }
+
+/// The status bar's one separator ink.
+///
+/// `INK_2` for the same reason [`version_line`] uses it: the bar's band is
+/// `Palette::SURFACE`, a raised surface, and `INK_3` is not legal there
+/// (4.20:1). One named value for the bar's quiet text means a fourth status
+/// line added later inherits the step-up instead of re-deciding it.
+const STATUS_BAR_INK: Color32 = Palette::INK_2;
 
 /// Staging-granularity readout (issue 19, screen 06): the armed line
 /// selection, the active granularity, and how many repos granular ops
@@ -636,7 +742,7 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
         ui.label(
             RichText::new("·")
                 .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-                .color(Palette::INK_3),
+                .color(STATUS_BAR_INK),
         );
         ui.colored_label(color, text);
     };
@@ -652,7 +758,7 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
         Granularity::Hunk => "hunk",
         Granularity::Line => "line",
     };
-    chip(ui, Palette::INK_2, format!("granularity: {granularity}"));
+    chip(ui, STATUS_BAR_INK, format!("granularity: {granularity}"));
     let scope = if state.ui.repo_selection.is_empty() {
         1
     } else {
@@ -660,15 +766,21 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
     };
     chip(
         ui,
-        Palette::INK_2,
+        STATUS_BAR_INK,
         format!("{scope} repo{} in scope", if scope == 1 { "" } else { "s" }),
     );
 }
 
-/// The three aggregated counters the status bar surfaces (issue #03) with
-/// their reserved colors (issue 02, design doc §6-7): diverged paints the
-/// error red, unpulled and dirty paint the counter orange — the orange is
-/// reserved for dirty/unpulled counters and no other chip on this surface.
+/// The three aggregated counters the status bar surfaces (issue #03).
+///
+/// **Not a colour map.** It used to be: a local enum whose `color()` spelled
+/// `STATUS_DIVERGED` / `COUNTER` / `COUNTER` out as bare tokens, sitting beside
+/// `theme::RepoState::color()` — two answers to "what colour is a diverged
+/// root" in the same file, one of them three lines from the other. This type
+/// now carries no colour at all; it names *which* aggregate a chip reports, and
+/// [`CounterChip::state`] answers through the one repository-state map. The
+/// consequence is the property worth having: a fourth aggregate added here
+/// cannot pick a colour, because there is nowhere to pick one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CounterChip {
     Diverged,
@@ -677,12 +789,18 @@ enum CounterChip {
 }
 
 impl CounterChip {
-    fn color(self) -> Color32 {
+    /// This chip's repository state, and through it the one colour map.
+    fn state(self) -> crate::theme::RepoState {
+        use crate::theme::RepoState as S;
         match self {
-            CounterChip::Diverged => Palette::STATUS_DIVERGED,
-            CounterChip::Unpulled => Palette::COUNTER,
-            CounterChip::Dirty => Palette::COUNTER,
+            CounterChip::Diverged => S::Diverged,
+            CounterChip::Unpulled => S::Unpulled,
+            CounterChip::Dirty => S::Dirty,
         }
+    }
+
+    fn color(self) -> Color32 {
+        self.state().color()
     }
 }
 
@@ -745,7 +863,7 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
             ui.label(
                 RichText::new("·")
                     .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-                    .color(Palette::INK_3),
+                    .color(STATUS_BAR_INK),
             );
         }
         first = false;
@@ -759,9 +877,12 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
         );
     }
     if agg.conflicts > 0 {
+        // A conflicted root is a *conflict*, so its chip reads the conflict
+        // state out of the one map too — the same error red as diverged, by
+        // design, with the word beside it saying which of the two it is.
         chip(
             ui,
-            Palette::STATE_ERROR,
+            crate::theme::RepoState::Conflict.color(),
             format!("{} conflict", agg.conflicts),
         );
     }
@@ -788,13 +909,17 @@ fn aggregated_status_chips(ui: &mut Ui, agg: &AggregatedStatus) {
     }
 }
 
-/// Right-cluster total count: "<N> total".
-fn status_total(agg: &AggregatedStatus, ui: &mut Ui) {
-    ui.label(
-        RichText::new(format!("{} total", agg.total))
-            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-            .color(Palette::INK_2),
-    );
+/// The right cluster's one line, as words: the total root count.
+///
+/// Split from the painting so the bar can **measure** it before laying out the
+/// cluster that holds it. The split exists because of a real bug: a wrapping
+/// `ui.label` inside a right-to-left layout anchors its galley at the rect's
+/// right edge and runs the text off the window, so the bar has to know the
+/// line's width *before* it decides where the right cluster starts. One
+/// function builds the string, one paints it, and there is no second spelling
+/// of the words.
+fn status_total_text(agg: &AggregatedStatus) -> String {
+    format!("{} total", agg.total)
 }
 
 // --- Tool window body --------------------------------------------------------------------

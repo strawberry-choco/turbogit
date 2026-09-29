@@ -427,7 +427,7 @@ fn clicking_an_item_returns_its_action() {
 
 // --- production path: the Branches surface ---------------------------------------
 
-mod surface {
+pub(crate) mod surface {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::Duration;
@@ -437,7 +437,7 @@ mod surface {
     use test_support::harness::{assert_painted, painted_galleys, painted_text};
     use turbogit_app::state::{AppState, Tab};
 
-    fn git(dir: &Path, args: &[&str]) -> String {
+    pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
             .args(args)
             .current_dir(dir)
@@ -458,7 +458,7 @@ mod surface {
     /// A project under the gitignored `<workspace>/.scratch/` holding one
     /// repo `alpha` on `main` with locals `feature-a` and `plain-b`. `main`
     /// and `feature-a` track a bare `origin`; `plain-b` stays untracked.
-    fn one_repo_project(tag: &str) -> PathBuf {
+    pub(crate) fn one_repo_project(tag: &str) -> PathBuf {
         let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(2)
@@ -487,7 +487,7 @@ mod surface {
         base
     }
 
-    fn branches_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
+    pub(crate) fn branches_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
         let state = AppState::new(project_dir);
         let mut fonts_installed = false;
         let mut harness = Harness::builder().with_step_dt(1.0 / 60.0).build_ui_state(
@@ -528,7 +528,7 @@ mod surface {
         panic!("shell layout did not settle within 300 frames");
     }
 
-    fn open_branches(harness: &mut Harness<'_, AppState>) {
+    pub(crate) fn open_branches(harness: &mut Harness<'_, AppState>) {
         harness.state_mut().ui.tab = Tab::Branches;
         settle_quiet(harness);
         assert_painted(harness, "feature-a");
@@ -589,7 +589,10 @@ mod surface {
     }
 
     /// The row's own Button node — a branch name can label several nodes.
-    fn row_node<'t>(harness: &'t Harness<'_, AppState>, name: &str) -> egui_kittest::Node<'t> {
+    pub(crate) fn row_node<'t>(
+        harness: &'t Harness<'_, AppState>,
+        name: &str,
+    ) -> egui_kittest::Node<'t> {
         harness
             .get_all_by_role(egui::accesskit::Role::Button)
             .find(|n| n.accesskit_node().label() == Some(name.to_string()))
@@ -1168,4 +1171,105 @@ mod surface {
             "the current branch cannot be deleted",
         );
     }
+}
+
+/// The branch context menu is a **floating surface**, so it keeps the 1px
+/// `LINE` stroke every other floating surface wears.
+///
+/// Its own test, and it lives here rather than only in the workspace-wide
+/// audit, for a specific reason: the branch menu is hosted through
+/// `widgets::menu_host::host_menu` inside an `egui::Area` — **not** an
+/// `egui::Window`. Nothing in egui's window machinery paints its frame, and
+/// `widgets::menu_surface` (which reads the token layer's mapped popup frame)
+/// is the only thing that does. A future change that routed the branch menu
+/// through a plain `Frame` with no stroke would leave every other floating
+/// surface in the app correct, and this is the assertion that notices.
+///
+/// The commit context menu's twin is asserted in `tests/r4_polish.rs`; the two
+/// are the same primitive reached from two surfaces, and each suite pins its
+/// own so neither can change without the other's test being seen.
+#[test]
+fn the_branch_context_menu_keeps_the_float_stroke() {
+    use test_support::harness::right_click_row;
+    let project = surface::one_repo_project("stroke");
+    let mut harness = surface::branches_harness(project);
+    // Wide enough for the whole menu, which the shared harness deliberately is
+    // not — a menu item clipped off the edge would probe a point outside the
+    // frame and the assertion would fail for the wrong reason.
+    harness.set_size(egui::vec2(900.0, 700.0));
+    test_support::harness::settle(&mut harness);
+    surface::open_branches(&mut harness);
+    right_click_row(&mut harness, "feature-a");
+    test_support::harness::settle(&mut harness);
+
+    // A node **inside the open menu** — a label the menu owns and the branch
+    // list does not, so the probe point is the menu's own content rather than
+    // the row it was opened on. ("Checkout" alone is a branch *row* too, and
+    // matching it would probe the list.)
+    let item = surface::row_node(&harness, "Checkout and pull").rect();
+    // Recursive, because a context menu is an `egui::Area` whose frame paints
+    // as a `Shape::Vec` — a top-level-only scan would see the rows' own
+    // geometry and never the frame.
+    fn walk(shape: &egui::Shape, out: &mut Vec<(egui::Rect, egui::Color32, f32)>) {
+        match shape {
+            egui::Shape::Rect(r)
+                if r.stroke.color != egui::Color32::TRANSPARENT && r.stroke.width > 0.0 =>
+            {
+                out.push((r.rect, r.stroke.color, r.stroke.width));
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut painted: Vec<(egui::Rect, egui::Color32, f32)> = Vec::new();
+    for clipped in harness.output().shapes.iter() {
+        walk(&clipped.shape, &mut painted);
+    }
+    let all_strokes = painted.clone();
+    let frame = painted
+        .into_iter()
+        .find(|(rect, _, width)| {
+            (*width - 1.0).abs() < 0.01
+                && rect.contains(item.center())
+                && rect.width() > item.width()
+        })
+        .map(|(rect, color, _)| (rect, color))
+        .unwrap_or_else(|| {
+            panic!(
+                "the branch context menu floats, so a 1px stroke surrounds its \
+                 own items; the item rect is {item:?}, the frame's strokes are \
+                 {all_strokes:?}"
+            )
+        });
+
+    // The stroke's **colour** is the token `LINE` — up to a uniform alpha the
+    // host applies to the whole menu, which is why the comparison is by
+    // un-multiplying rather than by equality. Stating it this way is what makes
+    // the assertion mean something: a frame that lost its stroke fails above,
+    // and a frame that kept one in some other colour fails here.
+    let (rect, stroke) = frame;
+    let alpha = stroke.a() as f32 / 255.0;
+    assert!(
+        (0.0..1.0).contains(&alpha),
+        "the menu frame's stroke is painted with a uniform alpha; got {stroke:?}"
+    );
+    let line = turbogit_ui::theme::Palette::LINE;
+    for (name, got, want) in [
+        ("red", stroke.r(), line.r()),
+        ("green", stroke.g(), line.g()),
+        ("blue", stroke.b(), line.b()),
+    ] {
+        let ratio = got as f32 / want as f32;
+        assert!(
+            (ratio - alpha).abs() < 0.02,
+            "the menu frame's stroke is `LINE` under the host's uniform alpha; \
+             the {name} channel is {ratio:.3} of it against an alpha of \
+             {alpha:.3} in {stroke:?}"
+        );
+    }
+    assert!(
+        rect.contains_rect(item) && rect.width() > item.width(),
+        "the stroke is the menu's own frame, around its items: frame {rect:?}, \
+         item {item:?}"
+    );
 }

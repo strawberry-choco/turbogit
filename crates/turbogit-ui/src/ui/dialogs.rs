@@ -88,9 +88,14 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
     ui.label("Apply the selected commit onto which branch?");
     if state.ui.dlg.cherry_pick_commit.is_none() {
         ui.label("No commit selected.");
-        if ui.button("Cancel").clicked() {
-            close(state);
-        }
+        // Even the empty state gets the shared footer: the action slot is a
+        // place in every one of this module's dialogs, and a Cancel that hangs
+        // off the body is exactly the shape the footer rule exists to stop.
+        widgets::dialog_footer(ui, |ui| {
+            if ui.button("Cancel").clicked() {
+                close(state);
+            }
+        });
         return;
     }
 
@@ -140,9 +145,13 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
             close(state);
         }
     }
-    if ui.button("Cancel").clicked() {
-        close(state);
-    }
+    // The shared footer, so the branch list above and the actions below are two
+    // places. Right-to-left keeps the painted order: `Cancel` rightmost.
+    widgets::dialog_footer(ui, |ui| {
+        if ui.button("Cancel").clicked() {
+            close(state);
+        }
+    });
 }
 
 fn new_branch(ui: &mut Ui, state: &mut AppState) {
@@ -436,12 +445,15 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
         ui.add_space(4.0);
     }
 
-    // FOOTER
-    ui.horizontal(|ui| {
-        if ui.button("Cancel").clicked() {
-            close(state);
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    // FOOTER — the shared one: a `RULE_FOOTER` hairline separating the body
+    // from the action slot, then the actions right-aligned. The merge dialog
+    // used to lay its buttons out in a bare `ui.horizontal` with no rule, so
+    // its action slot ran into the cascade banner above it and the dialog read
+    // as one undifferentiated column while every other modal had a footer.
+    // Right-to-left: `Merge` is named first so it lands rightmost and `Cancel`
+    // sits to its left, which is the order this dialog has always painted.
+    widgets::dialog_footer(ui, |ui| {
+        {
             let can_merge = !target.is_empty();
             let merge_btn = ui.add_enabled(can_merge, egui::Button::new("Merge"));
             if merge_btn.clicked() {
@@ -469,7 +481,10 @@ fn merge(ui: &mut Ui, state: &mut AppState) {
                 }
                 close(state);
             }
-        });
+        }
+        if ui.button("Cancel").clicked() {
+            close(state);
+        }
     });
 }
 
@@ -682,13 +697,12 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
         ui.add_space(4.0);
     }
 
-    // FOOTER
+    // FOOTER — the shared one, for the same reason the merge dialog's is: the
+    // action slot is its own place, separated from the body by the footer rule.
+    // Right-to-left: the start action lands rightmost, `Cancel` to its left.
     let protected = state.rebase_branch_is_protected();
-    ui.horizontal(|ui| {
-        if ui.button("Cancel").clicked() {
-            close(state);
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+    widgets::dialog_footer(ui, |ui| {
+        {
             let label = match state.ui.dlg.rebase_mode {
                 turbogit_domain::model::RebaseMode::Interactive => "Start interactive rebase",
                 turbogit_domain::model::RebaseMode::Standard => "Start rebase",
@@ -732,7 +746,10 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                 }
                 close(state);
             }
-        });
+        }
+        if ui.button("Cancel").clicked() {
+            close(state);
+        }
     });
 }
 
@@ -1007,7 +1024,12 @@ fn shorten_key(key: &str) -> String {
 fn shelve(ui: &mut Ui, state: &mut AppState) {
     ui.label("Shelf name:");
     ui.text_edit_singleline(&mut state.ui.dlg.shelve_name);
-    ui.horizontal(|ui| {
+    // The shared footer. Right-to-left, so the painted left-to-right order is
+    // the one this dialog has always had: `Shelve selected` · `Cancel`.
+    widgets::dialog_footer(ui, |ui| {
+        if ui.button("Cancel").clicked() {
+            close(state);
+        }
         if ui.button("Shelve selected").clicked() {
             let name = state.ui.dlg.shelve_name.clone();
             let mut changes = Vec::new();
@@ -1030,9 +1052,6 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
             }
             close(state);
         }
-        if ui.button("Cancel").clicked() {
-            close(state);
-        }
     });
 }
 
@@ -1040,18 +1059,10 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
     ui.label("Message:");
     ui.text_edit_singleline(&mut state.ui.dlg.stash_msg);
     ui.checkbox(&mut state.ui.dlg.stash_keep, "Keep index (--keep-index)");
-    ui.horizontal(|ui| {
-        if ui.button("Stash").clicked() {
-            let root = state.selected_root.clone();
-            let msg = state.ui.dlg.stash_msg.clone();
-            let keep = state.ui.dlg.stash_keep;
-            if let Some(root) = root {
-                state.dispatch(Operation::custom(
-                    "Stash",
-                    Affected::Root(root.clone()),
-                    move |v| v.stash_push(root.as_path(), &msg, keep),
-                ));
-            }
+    // The shared footer, preserving this dialog's three-button left-to-right
+    // order: `Stash` · `Pop latest` · `Cancel`.
+    widgets::dialog_footer(ui, |ui| {
+        if ui.button("Cancel").clicked() {
             close(state);
         }
         if ui.button("Pop latest").clicked() {
@@ -1064,7 +1075,17 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
             }
             close(state);
         }
-        if ui.button("Cancel").clicked() {
+        if ui.button("Stash").clicked() {
+            let root = state.selected_root.clone();
+            let msg = state.ui.dlg.stash_msg.clone();
+            let keep = state.ui.dlg.stash_keep;
+            if let Some(root) = root {
+                state.dispatch(Operation::custom(
+                    "Stash",
+                    Affected::Root(root.clone()),
+                    move |v| v.stash_push(root.as_path(), &msg, keep),
+                ));
+            }
             close(state);
         }
     });
@@ -1081,7 +1102,11 @@ fn rename_branch(ui: &mut Ui, state: &mut AppState) {
     ui.label(format!("Rename '{old}' to:"));
     let edit = ui.text_edit_singleline(&mut state.ui.dlg.rename_branch_new);
     edit.request_focus();
-    ui.horizontal(|ui| {
+    // The shared footer, preserving the painted order `Rename` · `Cancel`.
+    widgets::dialog_footer(ui, |ui| {
+        if ui.button("Cancel").clicked() {
+            close(state);
+        }
         if ui.button("Rename").clicked() {
             let new = state.ui.dlg.rename_branch_new.trim().to_string();
             if !new.is_empty() && new != old {
@@ -1090,9 +1115,6 @@ fn rename_branch(ui: &mut Ui, state: &mut AppState) {
                 }
                 close(state);
             }
-        }
-        if ui.button("Cancel").clicked() {
-            close(state);
         }
     });
 }
@@ -1139,12 +1161,16 @@ fn compare_branches(ui: &mut Ui, state: &mut AppState) {
                 ui.colored_label(Palette::INK_3, "No commits — branches are in sync.");
             }
         });
-    ui.horizontal(|ui| {
-        if ui.button("Swap Branches").clicked() {
-            swapped = true;
-        }
+    // The shared footer, preserving the painted order `Swap Branches` ·
+    // `Close`. This dialog is the clearest case for it: its body is a
+    // scrolling commit list, and without the rule the actions ran straight out
+    // of the list with nothing saying where the list stopped.
+    widgets::dialog_footer(ui, |ui| {
         if ui.button("Close").clicked() {
             close(state);
+        }
+        if ui.button("Swap Branches").clicked() {
+            swapped = true;
         }
     });
     if swapped {

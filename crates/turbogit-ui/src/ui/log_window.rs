@@ -3,21 +3,66 @@
 //! the legacy History tab is gone: file history lives here as a path-scoped
 //! view ("Show history for file…" on a changed-file entry).
 //!
-//! Layout (spec §8.3):
-//! 1. **Branches** (left, 210px): live search; LOCAL / REMOTE / TAGS groups
-//!    fed by ref decorations; a bottom `ROOTS` filter for multi-root projects.
-//! 2. **Graph** (center): live search toolbar, root-stripe legend, and the
-//!    commit table (Graph | Hash | Author | Message | Date) with one collapsed
-//!    `.tg-label` pill per decorated commit — the ref names (branch=brand,
-//!    remote=success, tag=warning) are revealed in its hover tooltip — and a
-//!    translucent `SELECTION_BG` row highlight that keeps lane colors readable.
-//! 3. **Changed files** (right-top, 320px): the selected commit's files with
-//!    status badges; clicking loads the diff.
-//! 4. **Commit details** (right-bottom, 440px SURFACE): the subject, the hash
-//!    chip, the author card, the committer / date / parents grid, the churn
-//!    summary, and the full message below. The pane says things about a commit
-//!    and does nothing to one (ADR-0024): every action lives in the row's
-//!    context menu, and the parent hashes stay the one link it owns.
+//! Layout (spec §8.3, re-chromed on the shared pane vocabulary — R2/R7):
+//! 1. **Branches** (left, 210px): a [`widgets::card`] wearing the one shared
+//!    pane header, then live search; LOCAL / REMOTE / TAGS groups fed by ref
+//!    decorations; a bottom `ROOTS` filter for multi-root projects.
+//! 2. **Graph** (center): the same shared header, a live search toolbar, a
+//!    root-swatch legend, and the commit table under the shared column-header
+//!    row (`ROOTS | HASH | AUTHOR | MESSAGE | DATE`) with one collapsed ref
+//!    marker per decorated commit — the ref names (branch=brand, remote=success,
+//!    tag=warning) are revealed in its hover tooltip — and the shared row
+//!    vocabulary for the rows themselves: the translucent `selection_bg()` focus
+//!    band (which composites over this pane to `#233455`, the same opaque value
+//!    as the selected-list-row fill) **plus the one 2px `BRAND` rail** at the
+//!    leading edge of a chosen row, and ink that does not change with selection.
+//!    The rail and the per-root swatch share that leading edge — see [`GUTTER`],
+//!    which is the whole width of the **ROOTS column**.
+//!
+//!    **The graph pane is a card, and the argument that used to say it was not
+//!    is inverted rather than deleted** (R2, R7). The old comment read: *it is
+//!    the remaining body, and a card over the whole of it would be a box around
+//!    a box.* That was true, and it stopped being true the moment the columns
+//!    stopped touching. The graph pane is no longer "the rest of the panel"; it
+//!    is a region of its own with [`PANE_COLUMN_GAP`] of app background on either
+//!    side of it, bounded on the left by the branches card and on the right by
+//!    the right column. A region separated from its neighbours by air is one
+//!    surface — R2's *cards are surfaces* — and the "rest" it used to be is
+//!    precisely what made it read as a box: a card with no edges of its own can
+//!    only be a box drawn around something else. The three columns are now peers,
+//!    separated by air, which is the arrangement the approved frame shows.
+//! 3. **Changed files** (right-top, 320px): a card with the shared header and
+//!    the file count as a count chip beside the title; the selected commit's
+//!    files with status badges; clicking loads the diff.
+//! 4. **Commit details** (right-bottom, 440px): a card with the shared header
+//!    — the subject, the hash chip, the **key/value fact list** (author, date,
+//!    committer, parents) above the message, the churn summary, and the full
+//!    message below. The pane says things about a commit and does nothing to one
+//!    (ADR-0024): every action lives in the row's context menu, and the parent
+//!    hashes stay the one link it owns. The list is built by
+//!    [`commit_detail_rows`] over the [`Commit`] the log already holds; it is
+//!    **not** the commit menu's action gates, which are a different question.
+//!
+//! The four headers are [`widgets::pane_header`] and the column row is
+//! [`widgets::column_header`]; there is no second header in this file, and
+//! `tests/git_log.rs` proves it by comparing all four headers' painted geometry
+//! to each other.
+//!
+//! Every row this window paints — the commit table's, the changed-files pane's
+//! and the ROOTS filter's — goes through the shared row shell in its **railed**
+//! variant, [`components::row_shell`], over a rect the row has already
+//! allocated. That is the whole of ticket 14's adoption: the shell takes a
+//! caller-allocated rect, so the log keeps its measured pitch, its virtualisation
+//! and its eliding, and shares the fill, the rail and the ink ramp instead of
+//! re-deciding them. `tests/branch_component_kit.rs` pins the "already-allocated
+//! rect" half of that contract from the shell's own source.
+//!
+//! **The blame view is a replacement, not a neighbour** (conformance issue 15).
+//! It occupies this table's slot in the same region, so it reads its row height
+//! and its cell offsets from [`CommitTable`] — the same numbers, published rather
+//! than re-spelled — and paints its rows through the same [`paint_log_row`]. A
+//! second table with its own height and its own offsets is what made switching to
+//! blame a visual reset, and the ticket is the one that ends it.
 
 use crate::theme::Palette;
 use crate::ui::branch_tree_view::{self, TreeEvent, TreeGroup, TreeProps};
@@ -29,9 +74,9 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::{self, BadgeKind, MenuItemKind, MenuItemProps, RefKind, menu_item};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Frame, Galley, Grid, Layout, Margin, Panel,
-    Popup, PopupKind, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2,
-    WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Frame, Galley, Grid, Layout, Panel, Popup,
+    PopupKind, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui, UiBuilder, Vec2, WidgetInfo,
+    WidgetType,
 };
 use std::ops::Range;
 use std::path::PathBuf;
@@ -73,8 +118,80 @@ const DETAILS_HEIGHT: f32 = 440.0;
 const LOG_FILE_ROW_HEIGHT: f32 = 40.0;
 /// Gap between the two churn numbers at the right edge of a file row.
 const STAT_GAP: f32 = 6.0;
-/// Root stripe width on multi-root rows.
+/// Root swatch width on multi-root rows — the ROOTS column's own content.
 const STRIPE_WIDTH: f32 = 3.0;
+/// Width of a commit row's leading gutter in a multi-root listing: the one
+/// shared rail's width plus [`STRIPE_WIDTH`].
+///
+/// **This is the rail-versus-stripe decision, made once (conformance issue 14),
+/// and it is also the ROOTS column's width (conformance issue 15). The two share
+/// the gutter, rail first.** The rail leads flush at the row's leading edge —
+/// where [`components::paint_rail`] puts it, and where every other rail in the
+/// app is — and the per-root swatch sits immediately inside it, so both are on
+/// screen at the same time and neither is ever displaced by the other. The 5 px
+/// the ticket expected this to cost does not arise, because the gutter was
+/// *already* 5 px wide: 3 px of swatch plus 2 px of air. The rail takes the air,
+/// the cells do not move by a point, and the selected row — the one row the user
+/// is reading — keeps its root colour.
+///
+/// The rail's width is the token layer's and only its one painter may name it,
+/// so the gutter is written as the single number the log's geometry needs and
+/// the swatch is placed at `GUTTER - STRIPE_WIDTH`, flush against the rail's
+/// trailing edge. `tests/git_log.rs` proves the arrangement from painted
+/// geometry: rail then swatch, both present on the selected row, and the same
+/// content offset the column header measures from.
+///
+/// **A 5px column and a 9px label do not fit, and the honest answer is that this
+/// column's label overhangs its own width.** [`COL_ROOTS`] therefore measures
+/// *backwards* from the header row's origin by exactly the gutter, which puts the
+/// label at the row's leading edge and the column's cells inside the gutter the
+/// rail and the swatch already occupy. The overhang is a header-only artefact:
+/// the header band is empty to the right of the label, and the cells the
+/// overhang runs toward are the unlabelled graph lane. What it may never do is
+/// reach the next label, so `tests/git_log.rs` asserts `ROOTS` ends clear of
+/// `HASH` rather than asserting the label fits its column — a fit is not
+/// available at this width and pretending otherwise would be a lie in the test.
+const GUTTER: f32 = 5.0;
+/// The air that divides the two cards stacked in the log's right column (R2).
+///
+/// A region divides itself from its neighbour with the space around it, and this
+/// is that space: 8 px, the margin those panels' frames already carried, so the
+/// gap reads as the same separation the surface swap replaced rather than as a
+/// number invented for this ticket. There is no rule between the two cards and
+/// no raised band wrapping both — one of those is the nested-boxes problem this
+/// migration exists to remove, and the other is what it removed.
+const PANE_GAP: f32 = 8.0;
+/// The air that divides the log's three **columns** (R2) — 10pt of app
+/// background between the branches card and the commits card, and between the
+/// commits card and the changed-files card. The approved Log frame is what the
+/// number is measured from: a scan across the tool-pane band finds `#1E1F22`
+/// (`Palette::BG`, the app background) for exactly ten points on each side of
+/// the commits card and nowhere else.
+///
+/// **This is deliberately a second name, not [`PANE_GAP`] under another spelling.**
+/// `PANE_GAP` is the rhythm *inside* the right column, where two cards stack
+/// against each other; this is the rhythm *between* columns, where three cards
+/// sit abreast. The two are different numbers drawn from the same frame (8
+/// stacked, 10 abreast) and they answer different questions, so one name for
+/// "the gap" is exactly how a 2 becomes a 10 by accident in one direction or a
+/// 10 becomes an 8 in the other. `PANE_GAP`'s existing use is unchanged.
+///
+/// Nothing draws this: it is *air*, and the app background is already painted
+/// behind the log body by the central panel. The layout's whole job is to stop
+/// covering it, which is why this ratchets from the painted output — a
+/// "separation" test that could be satisfied by three cards that merely touch
+/// would be satisfied by the layout this replaced.
+const PANE_COLUMN_GAP: f32 = 10.0;
+/// The one card padding the log's three panes use, in one place so the region's
+/// arithmetic in [`show_log`] and the card's own frame agree. It is 8 rather
+/// than the card default's [`crate::theme::PANEL_PADDING`] because 8 is the
+/// margin these panels' frames already carried: swapping a surface must not
+/// reflow what is inside it, and a 4-point move of every cell in three panes is
+/// a reflow nobody asked for. The card default's padding answers a different
+/// question — the air a card needs once its *stroke* is gone, where the stroke's
+/// two pixels were the only thing separating content from edge — and nothing
+/// was removed here.
+const PANE_CARD_PAD: i8 = 8;
 /// Uppercase micro text (§3.3) — shared control role (T2).
 const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL;
 /// Mono cell font size — shared body role (T2).
@@ -104,14 +221,52 @@ const COL_HASH: f32 = 26.0;
 const COL_AUTHOR: f32 = 84.0;
 /// Message column left edge — the wide column, sitting where the date used to.
 const COL_MESSAGE: f32 = 164.0;
+/// The **ROOTS column's** offset, and the only one that is negative.
+///
+/// Every other `COL_*` measures forward from the row's *content* edge, and the
+/// header row is handed a rect that already starts clear of the gutter (see
+/// [`table_content_left`]). The ROOTS column is the one column that **is** the
+/// gutter, so it measures backwards by exactly that gutter: its header label
+/// paints at the row's leading edge, over the rail and the per-root swatch it
+/// names, and its cells fill the space between the rail's trailing edge and the
+/// first cell column.
+///
+/// A 9px word does not fit in 5px, so the label overhangs its own column. That is
+/// stated rather than hidden, and it is bounded: the header band has nothing to
+/// the right of it until the unlabelled graph lane, and `tests/git_log.rs` holds
+/// the label clear of the next label (`HASH`) so a wider one fails loudly.
+const COL_ROOTS: f32 = -GUTTER;
 /// Gap between the right-aligned date and the row's trailing edge.
 const DATE_RIGHT_PAD: f32 = 8.0;
 /// Space held back from the message for a label pill (icon + padding + gap)
 /// so it never runs under the right-aligned date on decorated rows.
 const PILL_RESERVE: f32 = 30.0;
 
+/// The commit table's columns: one table, read by **both** the shared
+/// column-header row and every data row.
+///
+/// The offsets are the `COL_*` values the rows have always measured from, so
+/// this is not a new arrangement — it is the row's own arithmetic promoted to a
+/// table so the header has nothing to invent. The graph column stays out of it
+/// (it carries no header: it is the node, not a field), and the date trails the
+/// row, so it is measured from the trailing edge like the cell it labels.
+///
+/// **The ROOTS column leads**, and it is the first entry rather than an
+/// afterthought appended to the list: a free-floating label above the gutter is
+/// not a header — it would carry none of the shared chrome's ink and sit outside
+/// the header row's rule. In this table it is a column like any other, and the
+/// header row paints it in the same pass, in the same ink, from the same
+/// [`widgets::column_header`] call as `HASH`.
+const COMMIT_COLUMNS: [widgets::PaneColumn; 5] = [
+    widgets::PaneColumn::start("ROOTS", COL_ROOTS),
+    widgets::PaneColumn::start("HASH", COL_HASH),
+    widgets::PaneColumn::start("AUTHOR", COL_AUTHOR),
+    widgets::PaneColumn::start("MESSAGE", COL_MESSAGE),
+    widgets::PaneColumn::end("DATE", DATE_RIGHT_PAD),
+];
+
 /// Distinct lane colors for the commit graph (Epic D1). Also reused as the
-/// deterministic per-root stripe palette.
+/// deterministic per-root swatch palette.
 const GRAPH_COLORS: &[Color32] = &[
     Color32::from_rgb(80, 140, 230),
     Color32::from_rgb(220, 120, 140),
@@ -122,6 +277,30 @@ const GRAPH_COLORS: &[Color32] = &[
     Color32::from_rgb(230, 150, 90),
     Color32::from_rgb(150, 200, 220),
 ];
+
+/// The commit table's geometry, published for the view that replaces it.
+///
+/// The blame view occupies this table's slot in the same region, so it reads its
+/// row height and its cell offsets from here instead of from its own literals —
+/// a second private table is exactly what made switching to blame a visual
+/// reset. **Constants and nothing else**: no row state, no data, nothing that
+/// would let the two views drift into disagreeing about what a row *is*.
+pub(crate) struct CommitTable;
+
+impl CommitTable {
+    /// A commit row's height. The blame view's rows are this tall too, so
+    /// switching between the two views moves no line.
+    pub(crate) const ROW_HEIGHT: f32 = crate::theme::FILE_ROW_HEIGHT;
+    /// The hash cell's left edge, measured from the row's content edge.
+    pub(crate) const HASH: f32 = COL_HASH;
+    /// The author cell's left edge, likewise.
+    pub(crate) const AUTHOR: f32 = COL_AUTHOR;
+    /// The wide column's left edge — the subject here, the blamed line there.
+    pub(crate) const MESSAGE: f32 = COL_MESSAGE;
+    /// The inset the trailing column ends at, so a right-aligned cell tracks a
+    /// row that resizes in both tables rather than in one of them.
+    pub(crate) const DATE_RIGHT_PAD: f32 = DATE_RIGHT_PAD;
+}
 
 fn fmt_time(t: i64) -> String {
     match Utc.timestamp_opt(t, 0) {
@@ -161,9 +340,39 @@ fn truncate(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
-/// Deterministic color for the root at `idx` (stripes + legend).
+/// The one deterministic colour for the root at `idx`.
+///
+/// **This is the single source of per-root colour in the app.** It has four
+/// callers and no fifth palette is permitted: the ROOTS-filter row's dot, the
+/// legend swatch, the ROOTS column's per-row swatch, and the commit-graph lane
+/// node. All four ask this function, so "the same root is the same colour
+/// everywhere" is arithmetic rather than a convention —
+/// `tests/git_log.rs` compares the painted rects of the column, the lane and the
+/// legend for one root index and requires them equal.
+///
+/// A root's colour is chosen by its position in `state.multi.roots`, wrapped
+/// around the table, so it is stable for a given project and does not depend on
+/// the view.
 fn root_color(idx: usize) -> Color32 {
     GRAPH_COLORS[idx % GRAPH_COLORS.len()]
+}
+
+/// Where a repository sits in the project's root order — the index [`root_color`]
+/// takes, so every per-root marker asks the same question and gets the same
+/// answer.
+///
+/// A root that is not registered (a commit arriving from a root the ROOTS filter
+/// hides, a row painted before the multi-root scan settled) reads as the first
+/// root rather than panicking: a marker is a hint about which repository a row
+/// came from, and a missing hint is better than a dropped row in a list that
+/// virtualises.
+fn root_index_of(state: &AppState, root: &RootId) -> usize {
+    state
+        .multi
+        .roots
+        .iter()
+        .position(|r| &r.id == root)
+        .unwrap_or(0)
 }
 
 // --- Data plumbing ------------------------------------------------------------
@@ -420,51 +629,147 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
     let branches_w = BRANCHES_WIDTH.min((avail_w * 0.25).max(140.0));
     let files_w = FILES_WIDTH.min((avail_w * 0.32).max(180.0));
 
-    // Pane 1 — branches (left, 210px at full size).
+    // Pane 1 — branches (left, 210px at full size), with the inter-column
+    // gutter reserved as a wider panel whose trailing slice is left unpainted.
     Panel::left("log_branches_pane")
-        .exact_size(branches_w)
+        .exact_size(branches_w + PANE_COLUMN_GAP)
         .resizable(false)
-        .frame(
-            Frame::new()
-                .fill(Palette::SURFACE)
-                .inner_margin(Margin::same(8)),
-        )
-        .show(ui, |ui| branches_pane(ui, state));
-
-    // Panes 3+4 — right column: changed files on top, details pinned below.
-    Panel::right("log_right_column")
-        .exact_size(files_w)
-        .resizable(false)
-        .frame(Frame::new().fill(Palette::BG))
+        // The panel paints nothing at all: the card inside it is the surface, so
+        // a frame fill here would read as a second box around the card — the
+        // exact nesting R2 retires. The separator line is switched off for the
+        // same reason one notch further out: a 1px divider standing where the
+        // column ends is an edge on a content region, which is the one thing R2
+        // says a stroke must never be. The air is the separator now, and it is
+        // ten points of it.
+        .show_separator_line(false)
+        .frame(Frame::NONE)
         .show(ui, |ui| {
-            // The 300px details pane yields to short windows so the changed-
-            // files pane above it never collapses to zero height.
-            let details_h = DETAILS_HEIGHT.min((ui.available_height() - 80.0).max(96.0));
-            Panel::bottom("log_details_pane")
-                .exact_size(details_h)
-                .resizable(false)
-                .frame(
-                    Frame::new()
-                        .fill(Palette::SURFACE)
-                        .inner_margin(Margin::same(8)),
-                )
-                .show(ui, |ui| details_pane(ui, state));
-            files_pane(ui, state);
+            // The card takes the column's own width and stops short of the
+            // panel's trailing [`PANE_COLUMN_GAP`], which is left showing the app
+            // background. Nothing paints that slice, so the gutter is air rather
+            // than a fourth surface.
+            let region = ui.available_rect_before_wrap();
+            ui.scope_builder(
+                UiBuilder::new().max_rect(Rect::from_min_max(
+                    Pos2::new(region.left(), region.top()),
+                    Pos2::new(region.right() - PANE_COLUMN_GAP, region.bottom()),
+                )),
+                |ui| {
+                    pane_card(ui, |ui| branches_pane(ui, state));
+                },
+            );
         });
 
-    // Pane 2 — graph fills the remainder; the blame view (issue 18) takes
-    // its place while open, keeping the branches / files / details panes.
+    // Panes 3+4 — right column: changed files on top, details pinned below.
+    // The panel is one gutter wider than the column so the same air sits on its
+    // leading side, and the card is inset into it by the same constant.
+    Panel::right("log_right_column")
+        .exact_size(files_w + PANE_COLUMN_GAP)
+        .resizable(false)
+        .show_separator_line(false)
+        .frame(Frame::NONE)
+        .show(ui, |ui| {
+            let region = ui.available_rect_before_wrap();
+            ui.scope_builder(
+                UiBuilder::new().max_rect(Rect::from_min_max(
+                    Pos2::new(region.left() + PANE_COLUMN_GAP, region.top()),
+                    Pos2::new(region.right(), region.bottom()),
+                )),
+                |ui| {
+                    // The 300px details pane yields to short windows so the changed-
+                    // files pane above it never collapses to zero height.
+                    let details_h = DETAILS_HEIGHT.min((ui.available_height() - 80.0).max(96.0));
+                    // The details pane's own panel, and inside it the card that is its
+                    // surface. The `SURFACE` fill this frame used to carry is the
+                    // "raised background parent" the card replaced: a raised band
+                    // wrapping a bottom panel, on a background panel behind that.
+                    Panel::bottom("log_details_pane")
+                        .exact_size(details_h)
+                        .resizable(false)
+                        .frame(Frame::NONE)
+                        .show(ui, |ui| pane_card(ui, |ui| details_pane(ui, state)));
+                    // The files pane takes the rest of the column and wears its own
+                    // card, so the column is two surfaces with air between them rather
+                    // than one band with a panel cut out of it.
+                    //
+                    // The height asked for is the leftover **less one card padding**,
+                    // and that subtraction is not a fudge: `Frame` paints the rect its
+                    // content occupied *plus* the frame's margin, and a child ui's
+                    // content starts at the region's own top edge, so a card asked to
+                    // fill a region lands one padding outside it on every side. The
+                    // branches and details panes are inside their own panels and cannot
+                    // show that; the files pane's neighbour is 8 points away and can.
+                    ui.add_space(PANE_GAP);
+                    let files_h = (ui.available_height() - PANE_CARD_PAD as f32).max(0.0);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_width(), files_h),
+                        Layout::top_down(Align::Min),
+                        |ui| pane_card(ui, |ui| files_pane(ui, state)),
+                    );
+                },
+            );
+        });
+
+    // Pane 2 — graph fills the remainder, in a card of its own; the blame view
+    // (issue 18) takes its place while open, keeping the branches / files /
+    // details panes. Both are wrapped in the SAME `pane_card` call so the slot
+    // has one surface whatever is in it — the view swapped, the region did not.
+    //
+    // The leftovers' geometry is what makes the two gutters: the branches panel
+    // already claimed its [`PANE_COLUMN_GAP`], the right column already claimed
+    // its own, and the body that is left between them is the commits card's
+    // region exactly. The air is not subtracted from anything, so the two outer
+    // cards keep the widths they have always had.
     if state.ui.blame.is_some() {
-        super::blame_view::show_blame(ui, state);
+        pane_card(ui, |ui| super::blame_view::show_blame(ui, state));
     } else {
-        graph_pane(ui, state);
+        pane_card(ui, |ui| graph_pane(ui, state));
     }
+}
+
+/// Run one pane's body inside the log's one card.
+///
+/// [`widgets::card`] is the shared card, and everything it decides here is its
+/// default decision: the content surface, the card radius, and **no stroke** —
+/// [`widgets::CardFrame::bordered`] is reserved for a surface that floats above
+/// its surroundings, and a log pane is not one. There are four cards in this
+/// file's composition and they are all this function, so "a card paints no
+/// stroke" is one assertion rather than four.
+///
+/// The padding is [`PANE_CARD_PAD`], and the other thing this adds is the
+/// height. A card in a flow grows to its content, which is right for a card and
+/// wrong for a *pane*: the details pane is a pinned 440 px bottom panel with a
+/// height of its own, and a surface that stopped short of it would leave the
+/// panel's own background showing underneath. So the card is stretched to the
+/// region it was given — measured as the space actually left over, because a
+/// min-height claim would be measured from wherever the content left the cursor
+/// rather than from the pane's top edge, and a tall commit would then push the
+/// surface past its own panel.
+fn pane_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    widgets::card(
+        ui,
+        widgets::CardFrame::default().padded(PANE_CARD_PAD),
+        |ui| {
+            let height = ui.available_height();
+            let out = add(ui);
+            ui.add_space((height - ui.min_rect().height()).max(0.0));
+            out
+        },
+    )
+    .inner
 }
 
 // --- Pane 1: branches -------------------------------------------------------------
 
-fn branches_pane(ui: &mut Ui, state: &mut AppState) {
-    widgets::toolwindow_header(ui, "Branches", |_ui| {});
+/// The log pane's Branches column: the ref tree, its search, and the pane
+/// header above them.
+///
+/// Public so the shared-widget suite can render *this pane's own chrome* on its
+/// own, without the log workspace's panels, sidebars and file rows around it —
+/// which is what makes a cross-pane header-geometry comparison a comparison of
+/// headers. It is the same function the workspace composes, not a second one.
+pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
+    widgets::pane_header(ui, "BRANCHES", None, |_ui| {});
     ui.add_space(2.0);
     widgets::search_input(ui, "Search branches", &mut state.ui.log_branch_filter);
     ui.add_space(4.0);
@@ -594,16 +899,16 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
 
     let all_active = state.ui.log_root_filter.is_none();
     let (rect, response) = allocate_row(ui);
-    paint_row_fill(ui, &rect, all_active, response.hovered());
+    paint_log_row(ui, rect, all_active, response.hovered());
     // Painted via galley (not `ui.label`) so the row's widget label stays the
     // only accessibility node carrying "All roots".
-    let galley =
-        ui.painter()
-            .layout_no_wrap("All roots".to_owned(), body_font(), row_ink(all_active));
+    let galley = ui
+        .painter()
+        .layout_no_wrap("All roots".to_owned(), body_font(), row_name_ink());
     ui.painter().galley(
         Pos2::new(rect.left() + 4.0, rect.center().y - galley.size().y / 2.0),
         galley,
-        row_ink(all_active),
+        row_name_ink(),
     );
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "All roots"));
     widgets::focus_ring(ui, &response);
@@ -615,7 +920,7 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
         let active = state.ui.log_root_filter.as_ref() == Some(&root.id);
         let label = format!("Root {}", root.id.name());
         let (rect, response) = allocate_row(ui);
-        paint_row_fill(ui, &rect, active, response.hovered());
+        paint_log_row(ui, rect, active, response.hovered());
         if std::env::var("TG_PROBE_TRACE").as_deref() == Ok("1") {
             eprintln!(
                 "[root {label}] pointer={:?} rect={rect:?} hovered={}",
@@ -628,20 +933,22 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
                 .max_rect(rect)
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        // Root stripe dot in the root's color.
+        // The root's swatch in the filter row — the same `root_color` every
+        // other per-root marker asks, so the filter and the table agree.
         let cy = rect.center().y;
         child
             .painter()
             .circle_filled(Pos2::new(rect.left() + 7.0, cy), 3.5, root_color(idx));
-        // Galley text again: keep the widget label unique in the tree.
+        // Galley text again: keep the widget label unique in the tree. The ink is
+        // the row's own identity step, chosen or not.
         let text_galley =
             child
                 .painter()
-                .layout_no_wrap(label.clone(), body_font(), row_ink(active));
+                .layout_no_wrap(label.clone(), body_font(), row_name_ink());
         child.painter().galley(
             Pos2::new(rect.left() + 16.0, cy - text_galley.size().y / 2.0),
             text_galley,
-            row_ink(active),
+            row_name_ink(),
         );
         response.widget_info(|| {
             WidgetInfo::labeled(WidgetType::Button, true, format!("Root {}", root.id.name()))
@@ -656,6 +963,14 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
 // --- Pane 2: graph ------------------------------------------------------------------
 
 fn graph_pane(ui: &mut Ui, state: &mut AppState) {
+    // The pane's own header (R7), so the commit table is headed like every other
+    // pane rather than by a search box that happens to sit on top of it. No
+    // count chip: the window's row count is stated once, on the status line
+    // under the list, and a number in two places at once is two numbers to keep
+    // in step. The search box below is the pane's content, not its action slot
+    // — the slot is for verbs, and this pane's one verb ("Load more") is a
+    // pagination affordance that belongs with the list it pages.
+    widgets::pane_header(ui, "COMMITS", None, |_ui| {});
     // Filter toolbar: live search over message / hash / author / code
     // change, with the path scope (issue #19) rendered as a removable chip
     // on the right (issue 17).
@@ -719,11 +1034,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     let scroll_to = state.ui.log_scroll_to.take();
     let colors = display.lanes();
     let date_mode = state.settings.date_format;
-    // Scoped views are single-root by definition — no root stripes/legend.
-    let multi_root = state.multi.roots.len() > 1
-        && state.ui.log_root_filter.is_none()
-        && state.ui.log_path_scope.is_none()
-        && state.ui.log_ref_scope.is_none();
+    let multi_root = shows_root_gutter(state);
 
     // Pagination (issue 17, log-view-scaling 03): "Load more" is offered while
     // any window behind the displayed listing says its history continues past
@@ -735,15 +1046,19 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     let may_have_more = windows.iter().any(|window| window.has_more(state));
     let mut load_more = false;
 
-    // Root-stripe legend chip row (11px INK_3) for multi-root setups.
+    // The ROOTS-column legend: one swatch per root, in the root's own colour,
+    // under the name of the repository it belongs to. It is the legend for the
+    // column below, and it asks the same `root_color` the column's cells ask —
+    // which is the whole of "the same root is the same colour everywhere", and
+    // is asserted from the paint rather than from the names.
     if multi_root {
         ui.horizontal_wrapped(|ui| {
-            for (idx, root) in state.multi.roots.iter().enumerate() {
+            for root in &state.multi.roots {
                 let (rect, _) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), Sense::hover());
                 ui.painter().rect_filled(
                     rect,
                     CornerRadius::same(crate::theme::MARK_RADIUS),
-                    root_color(idx),
+                    root_color(root_index_of(state, &root.id)),
                 );
                 ui.label(
                     RichText::new(root.id.name())
@@ -1113,8 +1428,39 @@ fn mono_font() -> FontId {
     FontId::new(MONO_TEXT, FontFamily::Monospace)
 }
 
-fn row_ink(active: bool) -> Color32 {
-    if active { Palette::INK } else { Palette::INK_2 }
+/// The one ink rule for every row this window paints: a row's identity text
+/// reads at primary and does not change with the row's state.
+///
+/// Replaces the log's own `row_ink(active)`, which inverted ink with selection
+/// — an unselected row's name at `INK_2` and the same name at `INK` the moment
+/// it was chosen. That is the inversion the shared row grammar exists to
+/// remove: a selected row keeps the ink it had, and the selection is named by
+/// the band and the rail instead. Named as a function rather than spelled at
+/// three sites so "the log's row ink does not depend on selection" is one
+/// decision, and so the one construction-site rule that follows from it — a
+/// row's own ink is never the muted step, which is illegal on every band a row
+/// can be in — has a single place to be read from.
+///
+/// `pub(crate)` for the blame view, which replaces the commit table in the same
+/// slot: its rows wear these two inks or they wear a third answer to a question
+/// this table has already settled.
+pub(crate) fn row_name_ink() -> Color32 {
+    Palette::INK
+}
+
+/// The ink for a row's **secondary** text — its author, its date, the directory
+/// a file lives in.
+///
+/// One step down from [`row_name_ink`], and specifically **not** the muted step:
+/// a row's own secondary text sits on whichever band the row is in, and the
+/// muted step is not legal on a raised or selected band (3.81:1 on the hover
+/// fill, 3.52:1 on a chosen file row's band). Stepping up costs the row one
+/// level of hierarchy and buys the text the same AA it has at rest.
+///
+/// `pub(crate)` for the same reason as [`row_name_ink`]: the blame view's rows
+/// are in this table's slot, and its age cell is this table's date cell.
+pub(crate) fn row_meta_ink() -> Color32 {
+    Palette::INK_2
 }
 
 fn allocate_row(ui: &mut Ui) -> (Rect, Response) {
@@ -1160,63 +1506,136 @@ fn elide(
     }
 }
 
-/// Row fill decision for the commit table: active rows keep the translucent
-/// focus band, hovered rows take SURFACE_2, idle rows stay transparent. This is
-/// the shared row-state API at the log's own full-row rect (conformance
-/// issue 12); [`widgets::paint_row`] supplies the control radius, which is what
-/// this row has always rounded at.
-fn paint_row_fill(ui: &Ui, rect: &Rect, active: bool, hovered: bool) {
-    widgets::paint_row(
+/// Every row in this window reaches the shared row shell through here: the
+/// commit table's rows, the changed-files pane's rows, and the branches pane's
+/// ROOTS filter rows.
+///
+/// Two decisions, both the shared ones, and neither of them this module's:
+/// the **band** is `components::row_fill` (the translucent focus band while the
+/// row is chosen, the raised-on-card hover fill otherwise), and the **rail** is
+/// the one `components::paint_rail` at the row's leading edge, applied by the
+/// shell's [`components::RowShell::Railed`] variant.
+///
+/// The focus band is the log's band by decision, not by omission: it composites
+/// over the panel to the same opaque value as the selected-list-row fill
+/// (`selection_bg()` over the app background is `#233455`, and `ROW_SELECTED` is
+/// `#243456`) while letting the lane colours and the per-root swatch read
+/// through, which is what a graph needs and a tree does not. The rail is
+/// additive on top of it, so the chosen row is named the way every other chosen
+/// row in the app is named.
+///
+/// `pub(crate)` because the blame view replaces the commit table in the same slot
+/// and must paint its rows the same way: two row vocabularies in one region is a
+/// visual reset at the moment of switching, which is the one thing this row
+/// grammar exists to prevent.
+pub(crate) fn paint_log_row(ui: &Ui, rect: Rect, selected: bool, hovered: bool) {
+    components::row_shell(
         ui,
-        *rect,
-        if active {
+        rect,
+        if selected {
             components::RowState::FocusSelected
         } else {
             components::RowState::from_flags(false, hovered)
         },
+        components::RowShell::Railed,
     );
 }
 
-/// Micro column headers above the commit table, aligned with the row cells.
-/// Rows measure their content from `content_left` (the row left edge, plus
-/// the root stripe when `multi_root`); the headers replicate that origin and
-/// the shared [`COL_*`] offsets so header text sits directly over the cells.
+/// Whether this listing is a multi-root union — the one predicate that decides
+/// whether the ROOTS column and its gutter exist at all.
+///
+/// A scoped view is single-root by definition (a ref scope names its own root, a
+/// path scope reads the selected one) and so is a listing narrowed by the roots
+/// filter, so none of them has a per-root membership to report. Named rather
+/// than inlined because the header row, every data row **and the blame view**
+/// have to agree on it: a table whose cells sat at the gutter in one place and
+/// beside it in another is a column that is narrow in the header and wide in the
+/// rows, the exact bug the shared column table exists to prevent.
+pub(crate) fn shows_root_gutter(state: &AppState) -> bool {
+    state.multi.roots.len() > 1
+        && state.ui.log_root_filter.is_none()
+        && state.ui.log_path_scope.is_none()
+        && state.ui.log_ref_scope.is_none()
+}
+
+/// The commit table's column-header row, measured from the same row rect the
+/// cells below it measure from.
+///
+/// Before the shared row existed this was four hand-laid galleys at
+/// `Palette::INK_3` with no underline, duplicating the commit table's offsets a
+/// second time. It is now [`widgets::column_header`] reading
+/// [`COMMIT_COLUMNS`], so the labels cannot drift from the cells — and the
+/// labels' ink is pinned in `tests/widget_library.rs` to the muted step, not
+/// the dim one, because 9px is normal-size text.
+///
+/// **The ROOTS label is in this row** because it is an entry in
+/// [`COMMIT_COLUMNS`], not because something painted one above the gutter: a
+/// free-floating label would carry none of this chrome's ink and would sit
+/// outside the header row's rule. `tests/git_log.rs` pins that it shares this
+/// row's baseline and its ink with the other four.
 fn header_cells(ui: &mut Ui, multi_root: bool) {
-    let top = ui.cursor().top();
-    ui.add_space(16.0);
-    let left = ui.cursor().left();
-    let content_left = left + if multi_root { STRIPE_WIDTH + 2.0 } else { 0.0 };
-    let micro = FontId::new(MICRO_TEXT, FontFamily::Proportional);
-    for (title, dx) in [
-        ("HASH", COL_HASH),
-        ("AUTHOR", COL_AUTHOR),
-        ("MESSAGE", COL_MESSAGE),
-    ] {
-        let galley = ui
-            .painter()
-            .layout_no_wrap(title.to_owned(), micro.clone(), Palette::INK_3);
-        ui.painter().galley(
-            Pos2::new(content_left + dx, top + 2.0),
-            galley,
-            Palette::INK_3,
-        );
-    }
-    // The date trails the row, so its header right-aligns to the same edge.
-    let date = ui
-        .painter()
-        .layout_no_wrap("DATE".to_owned(), micro, Palette::INK_3);
-    let right = left + ui.available_width();
-    ui.painter().galley(
-        Pos2::new(right - DATE_RIGHT_PAD - date.size().x, top + 2.0),
-        date,
-        Palette::INK_3,
+    let available = ui.available_rect_before_wrap();
+    let left = table_content_left(available, multi_root);
+    widgets::column_header(
+        ui,
+        Rect::from_min_max(
+            Pos2::new(left, available.top()),
+            Pos2::new(available.right(), available.bottom()),
+        ),
+        &COMMIT_COLUMNS,
     );
 }
 
-/// One commit-table row: stripe | node | hash | author | message(+chips) | date.
+/// Where a commit-table row's cells start: the row's left edge, plus the
+/// leading gutter in multi-root views.
+///
+/// The header row and every data row go through here — and so does the blame
+/// view, which occupies the same slot — so a column can never sit beside the
+/// swatch in the header and over it in the rows. The gutter is the ROOTS column
+/// in full (the rail *and* the swatch), so it is the same number whatever the
+/// row's selection is: a row's columns are at the same x selected or not, which
+/// is the same "paint, not layout" rule the rail itself obeys.
+pub(crate) fn table_content_left(row: Rect, multi_root: bool) -> f32 {
+    row.left() + if multi_root { GUTTER } else { 0.0 }
+}
+
+/// Paint the ROOTS column's cell for one commit row: a full-height swatch in
+/// the root's own colour, filling the gutter immediately inside the rail.
+///
+/// **This is the fourth site that asks [`root_color`]** — after the ROOTS
+/// filter's dot, the legend swatch and the graph lane node — and the point of
+/// the ROOTS column is that all four answer for the same root. The colour comes
+/// from the one table by construction: this function takes an *index* and
+/// nothing else, so there is no argument through which a literal could arrive,
+/// and `tests/git_log.rs` compares its painted rect against the lane node's and
+/// the legend's for the same index.
+///
+/// The geometry is the rail-versus-stripe decision, not a new one: the swatch is
+/// `STRIPE_WIDTH` wide at `row.left() + GUTTER - STRIPE_WIDTH`, so it is flush
+/// against the rail's trailing edge and the cells begin at
+/// [`table_content_left`]. The rail leads at `[row.left(), row.left() + 2)` and
+/// never moves — not for a selected row, not for a root with a swatch, not for
+/// the column's header. See [`GUTTER`].
+fn paint_root_swatch(ui: &Ui, row: Rect, root_index: usize) {
+    ui.painter().rect_filled(
+        Rect::from_min_size(
+            Pos2::new(row.left() + GUTTER - STRIPE_WIDTH, row.top()),
+            Vec2::new(STRIPE_WIDTH, row.height()),
+        ),
+        CornerRadius::ZERO,
+        root_color(root_index),
+    );
+}
+
+/// One commit-table row: rail | ROOTS swatch | node | hash | author |
+/// message(+refs) | date.
 /// Renders against a shared [`AppState`] (the displayed union borrows the
 /// caches) and reports what a press on it asked for; the caller applies the
 /// selection after rendering (plan §1.3 defer pattern).
+///
+/// The band and the rail are [`paint_log_row`]'s, the cells are measured from
+/// [`table_content_left`] and the columns the header reads, and every cell's ink
+/// is the shared ramp's — none of them a function of the row's state.
 fn commit_row(
     ui: &mut Ui,
     state: &AppState,
@@ -1228,40 +1647,21 @@ fn commit_row(
     let selected = state.ui.selected_commit.as_deref() == Some(c.id.as_str());
     let (rect, response) = allocate_row(ui);
 
-    // Translucent selection (SELECTION_BG) keeps lane colors readable (§7.2).
-    if selected {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(crate::theme::CONTROL_RADIUS),
-            Palette::selection_bg(),
-        );
-    } else if response.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(crate::theme::CONTROL_RADIUS),
-            Palette::SURFACE_2,
-        );
-    }
+    // The shared row shell, in its railed variant, over the rect this row has
+    // already allocated: the focus band while the row is chosen, the raised
+    // hover fill under the pointer, and the one accent rail at the leading edge
+    // of a chosen row. The rail is paint over the band, not padding beside it,
+    // so every column below is at the same x selected or not.
+    paint_log_row(ui, rect, selected, response.hovered());
 
-    // Root stripe (multi-root only).
-    let mut content_left = rect.left();
+    // The ROOTS column's cell, immediately inside the rail — the two share the
+    // leading gutter, and neither displaces the other. See [`GUTTER`].
     if multi_root {
-        let idx = state
-            .multi
-            .roots
-            .iter()
-            .position(|r| r.id == c.root)
-            .unwrap_or(0);
-        ui.painter().rect_filled(
-            Rect::from_min_size(
-                Pos2::new(rect.left(), rect.top()),
-                Vec2::new(STRIPE_WIDTH, rect.height()),
-            ),
-            CornerRadius::ZERO,
-            root_color(idx),
-        );
-        content_left += STRIPE_WIDTH + 2.0;
+        paint_root_swatch(ui, rect, root_index_of(state, &c.root));
     }
+    // …and the origin the header row measured from, so a label sits over its
+    // cell in a multi-root view exactly as it does in a single-root one.
+    let content_left = table_content_left(rect, multi_root);
 
     // Graph cell: colored lane node (ring for merges).
     let lane = colors
@@ -1277,34 +1677,52 @@ fn commit_row(
     }
 
     // Hash | Author cells.
+    //
+    // Every ink here is a shared ramp step and **none of them depends on the
+    // row's state**: a selected row's text is the same colour as the same text
+    // on an unselected row, which is the whole content of "selection does not
+    // invert ink". Two of the four are steps *up* from what they were, because
+    // the band a chosen row takes is the selected value and the muted step is
+    // not legal on it (3.76:1 measured) and neither is the accent (2.89:1):
+    //
+    // | cell | ink | on the resting panel | on the chosen row's band |
+    // |---|---|---|---|
+    // | hash | [`Palette::LINK`] | 6.39:1 | 4.79:1 |
+    // | author | [`Palette::INK_2`] | 7.86:1 | 5.89:1 |
+    // | subject | [`Palette::INK`] | 12.59:1 | 9.43:1 |
+    // | date | [`Palette::INK_2`] | 7.86:1 | 5.89:1 |
+    //
+    // The hash is the one cell that moved off the accent: a hash is information
+    // the user reads to name a commit, it answers no press, and the accent
+    // measures 2.89:1 on the band a chosen row takes. `LINK` is the token the
+    // details pane's hash chip already wears for exactly that reason.
     let painter = ui.painter().clone();
     let cy = rect.center().y;
-    let hash_galley = painter.layout_no_wrap(
-        widgets::short_commit_ref(&c.id),
-        mono_font(),
-        Palette::BRAND,
-    );
+    let hash_galley =
+        painter.layout_no_wrap(widgets::short_commit_ref(&c.id), mono_font(), Palette::LINK);
     painter.galley(
         Pos2::new(content_left + COL_HASH, cy - hash_galley.size().y / 2.0),
         hash_galley,
-        Palette::BRAND,
+        Palette::LINK,
     );
     let author_galley =
-        painter.layout_no_wrap(truncate(&c.author.name, 10), body_font(), Palette::INK_2);
+        painter.layout_no_wrap(truncate(&c.author.name, 10), body_font(), row_meta_ink());
     painter.galley(
         Pos2::new(content_left + COL_AUTHOR, cy - author_galley.size().y / 2.0),
         author_galley,
-        Palette::INK_2,
+        row_meta_ink(),
     );
 
-    // Date cell: the trailing column, right-aligned to the row's edge.
+    // Date cell: the trailing column, right-aligned to the row's edge, at the
+    // secondary step rather than the muted one for the reason in the table
+    // above — the muted step is 3.76:1 on the band a chosen row takes.
     let date_galley =
-        painter.layout_no_wrap(fmt_date(c.time, date_mode), body_font(), Palette::INK_3);
+        painter.layout_no_wrap(fmt_date(c.time, date_mode), body_font(), row_meta_ink());
     let date_x = rect.right() - DATE_RIGHT_PAD - date_galley.size().x;
     painter.galley(
         Pos2::new(date_x, cy - date_galley.size().y / 2.0),
         date_galley,
-        Palette::INK_3,
+        row_meta_ink(),
     );
 
     // Message cell with one collapsed label pill — the wide column, sitting
@@ -1321,16 +1739,16 @@ fn commit_row(
     // number of layouts on the fit rather than one per dropped character.
     let subject_fit = fit_to_budget(&truncate(subject, 44), budget, &|text: &str| {
         painter
-            .layout_no_wrap(text.to_owned(), body_font(), Palette::INK)
+            .layout_no_wrap(text.to_owned(), body_font(), row_name_ink())
             .size()
             .x
     });
-    let subject_galley = painter.layout_no_wrap(subject_fit, body_font(), Palette::INK);
+    let subject_galley = painter.layout_no_wrap(subject_fit, body_font(), row_name_ink());
     let subject_w = subject_galley.size().x;
     painter.galley(
         Pos2::new(message_left, cy - subject_galley.size().y / 2.0),
         subject_galley,
-        Palette::INK,
+        row_name_ink(),
     );
     let mx = message_left + subject_w + 6.0;
 
@@ -1398,23 +1816,41 @@ fn commit_row(
     }
 }
 
-/// Paint one `.tg-label` pill (18px, neutral token colors) holding a label
-/// (tag) icon, and return its rect. The ref names live in the hover tooltip
-/// (see `commit_row`). Painter-only: registers no widget.
+/// Paint one collapsed ref marker (the tag icon on a neutral badge) and return
+/// its rect. The ref names live in the hover tooltip (see `commit_row`).
+/// Painter-only: registers no widget, because a child widget here would sit on
+/// top of the row and swallow its clicks.
 ///
-/// Deliberately *not* on [`widgets::ChipGeometry::paint`], unlike the file-row
-/// status pill: this pill carries no galley at all — it is a layout-level
-/// `ui.label` drawn straight to the painter — so there is no laid-out text for
-/// `paint` to place. It already sits on the shared chip tokens (height,
-/// padding, [`widgets::chip_radius`], [`BadgeKind::Neutral`] colors), and its
-/// centring is the icon rectangle arithmetic, which is a different calculation
-/// from the two-axis text centring in [`widgets::paint_centered_text`].
+/// **This marker is the neutral *badge*, not a ref chip** — the answer
+/// conformance issues 13/14 were asked to settle, and the reason is what the
+/// marker carries rather than how it is drawn. A ref chip is a *ref name* on
+/// [`widgets::REF_CHIP_COLORS`]'s raised-on-card fill at the compact chip radius;
+/// this marker carries no ref name at all (the names are in the tooltip, and the
+/// rows stay scannable because of it), so painting it at the chip radius would
+/// spend the one role that means "a ref name" on a thing that names no ref, and
+/// the compact radius would then mean two things in the app. It is the badge
+/// family instead: [`widgets::BadgeKind::Neutral`]'s pair and the **pill slot**
+/// ([`widgets::CHIP_GEOMETRY`]), which is the shape the module docs keep
+/// distinct from the chips' compact slot on purpose.
+///
+/// So the geometry and the colours are read from those two shared values rather
+/// than re-spelled, and no second chip constructor is created: the chip set stays
+/// closed at three, `widgets::ref_chip` stays the only function that produces a
+/// ref chip, and the log's marker is pinned to the badge pair by
+/// `tests/git_log.rs` — which is the seam a painter-only helper is only provable
+/// from.
+///
+/// The icon's centring is the icon rectangle arithmetic, which is a different
+/// calculation from the two-axis text centring in [`widgets::paint_centered_text`]
+/// and the reason this is not on [`widgets::ChipGeometry::paint`]: there is no
+/// laid-out galley here to place.
 fn paint_label_pill(painter: &egui::Painter, x: f32, cy: f32) -> Rect {
     const ICON_SIZE: f32 = 12.0;
     let colors = BadgeKind::Neutral.colors();
+    let geometry = widgets::CHIP_GEOMETRY;
     let rect = Rect::from_min_size(
-        Pos2::new(x, cy - widgets::CHIP_HEIGHT / 2.0),
-        Vec2::new(ICON_SIZE + widgets::CHIP_PAD_X * 2.0, widgets::CHIP_HEIGHT),
+        Pos2::new(x, cy - geometry.height / 2.0),
+        Vec2::new(ICON_SIZE + geometry.pad_x * 2.0, geometry.height),
     );
     painter.rect_filled(rect, widgets::chip_radius(), colors.bg);
     icons::paint_icon(
@@ -1464,14 +1900,12 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         .and_then(|(root, cid)| state.caches.file_stats_for(root, cid))
         .unwrap_or(&[]);
 
-    // Header: the count is a chip of its own (redesign issue 04), not a suffix
-    // on the title. Without a selection there is no count to state.
-    ui.horizontal(|ui| {
-        widgets::group_title(ui, "Changed files");
-        if selection.is_some() {
-            widgets::badge(ui, &files.len().to_string(), BadgeKind::Neutral);
-        }
-    });
+    // The pane's own header (R7): the title, and the file count as the shared
+    // count chip beside it rather than a fourth badge of its own. Without a
+    // selection there is no count to state, which is the `None` case the header
+    // was built for.
+    let count = selection.map(|_| files.len().to_string());
+    widgets::pane_header(ui, "CHANGED FILES", count.as_deref(), |_ui| {});
 
     let Some((root_id, cid)) = selection else {
         ui.label(
@@ -1692,7 +2126,7 @@ fn file_row(
 ) -> FileAction {
     let selected = state.ui.log_selected_file.as_ref() == Some(&change.path);
     let (rect, response) = allocate_file_row(ui);
-    paint_row_fill(ui, &rect, selected, response.hovered());
+    paint_log_row(ui, rect, selected, response.hovered());
 
     // Painter-only contents so the row owns the pointer (see commit_row).
     let painter = ui.painter().clone();
@@ -1729,8 +2163,10 @@ fn file_row(
         text_right -= galley.size().x + STAT_GAP;
     }
 
-    // Line 1: the file name, tail-elided only when the pane cannot fit it.
-    let ink = row_ink(selected);
+    // Line 1: the file name, tail-elided only when the pane cannot fit it. The
+    // name is the row's identity text and reads at primary whether the row is
+    // chosen or not — selection is the band's and the rail's to name.
+    let ink = row_name_ink();
     let name = change
         .path
         .file_name()
@@ -1740,18 +2176,15 @@ fn file_row(
     painter.galley(Pos2::new(mx, rect.top() + 7.0), name_galley, ink);
 
     // Line 2: the directory it lives in, de-emphasized. A file at the repo
-    // root has none, so that row carries the name line alone.
+    // root has none, so that row carries the name line alone. The directory is
+    // secondary text on the row's own band, so it takes the secondary step
+    // rather than the muted one (see `row_meta_ink`).
     if let Some(dir) = change.path.parent().filter(|p| !p.as_os_str().is_empty()) {
         let dir_font = FontId::new(MICRO_TEXT, FontFamily::Proportional);
         let dir_text = dir.to_string_lossy().replace('\\', "/");
-        let dir_galley = elide(
-            &painter,
-            &dir_text,
-            dir_font,
-            Palette::INK_3,
-            text_right - mx,
-        );
-        painter.galley(Pos2::new(mx, rect.top() + 22.0), dir_galley, Palette::INK_3);
+        let dir_ink = row_meta_ink();
+        let dir_galley = elide(&painter, &dir_text, dir_font, dir_ink, text_right - mx);
+        painter.galley(Pos2::new(mx, rect.top() + 22.0), dir_galley, dir_ink);
     }
 
     let mut churn_right = rect.right() - 4.0;
@@ -1812,16 +2245,155 @@ enum DetailAction {
     SelectParent(CommitId),
 }
 
+/// One line of the details pane's key/value list: a key, a value, and — for the
+/// parents only — the one thing in this pane that is a link.
+///
+/// The three fields rather than a `String` is what keeps the parents *behaving*
+/// like the pane's one navigation affordance instead of being flattened into
+/// text that looks like every other value. A root commit carries no parents, so
+/// the row still appears with `empty` set: the key says what would be there and
+/// an em dash says there is nothing, which is a fact about the commit and not a
+/// gap in the layout.
+struct DetailRow {
+    key: &'static str,
+    value: String,
+    parents: Vec<CommitId>,
+    empty: bool,
+}
+
+impl DetailRow {
+    /// A row whose value is text.
+    fn text(key: &'static str, value: impl Into<String>) -> Self {
+        Self {
+            key,
+            value: value.into(),
+            parents: Vec::new(),
+            empty: false,
+        }
+    }
+
+    /// The parents row: a list of hashes, each one a link that jumps the
+    /// selection to that commit.
+    fn parents(key: &'static str, parents: &[CommitId]) -> Self {
+        Self {
+            key,
+            value: String::new(),
+            parents: parents.to_vec(),
+            empty: parents.is_empty(),
+        }
+    }
+}
+
+/// The commit's own facts, as the details pane's key/value list: author, date,
+/// committer, parents — in that order, above the message body.
+///
+/// **This is not [`CommitFacts`], and the name is deliberately not borrowed from
+/// it.** `CommitFacts` is the gate set a commit *action* reads — is the
+/// repository dirty, is its branch protected, is the commit reachable from the
+/// current branch, is the project multi-root, what is the repository called.
+/// Every one of those answers "may this verb run", and not one of them is a
+/// fact *about the commit*; the two questions are unrelated, and reusing the
+/// type would have meant the pane's contents changed shape every time an action
+/// was added or removed. So the list is built here, over the [`Commit`] the log
+/// already holds: the author, the committer, the timestamps, the parents and the
+/// signature state are all fields of the commit the pane is about to describe.
+/// **No new data plumbing, no git call, no cache read** — the previous
+/// arrangement showed the same information in a different shape.
+///
+/// The signature suffix stays on the committer's value (issue 17): which
+/// signature a commit carries is a fact about the committer's act, and there is
+/// nowhere else in this pane for it to live.
+fn commit_detail_rows(commit: &Commit) -> Vec<DetailRow> {
+    let sig_suffix = match commit.signature {
+        SignatureState::Unsigned => String::new(),
+        SignatureState::Good => " · signed ✓".to_string(),
+        SignatureState::Bad => " · signature BAD".to_string(),
+        SignatureState::Unverified => " · signed (unverified)".to_string(),
+    };
+    vec![
+        DetailRow::text(
+            "Author",
+            format!("{} <{}>", commit.author.name, commit.author.email),
+        ),
+        DetailRow::text("Date", fmt_time(commit.time)),
+        DetailRow::text(
+            "Committer",
+            format!(
+                "{} <{}>{}",
+                commit.committer.name, commit.committer.email, sig_suffix
+            ),
+        ),
+        DetailRow::parents("Parents", &commit.parents),
+    ]
+}
+
+/// The pane's key/value list: one shared key column so every value starts at
+/// the same x, keys on the **label** ink and values on the **value** ink.
+///
+/// The inks are the two roles this pane already had and are now stated as roles
+/// rather than as a per-call decision: a key is a field label — the muted step,
+/// the same one `micro_text` has always worn, legal on this content surface and
+/// never the dim step, because a commit's own facts may not be rendered only at
+/// 3.2:1 — and a value is the thing the label names, at primary.
+///
+/// It is a [`Grid`] with two columns and no raised container, which is what a
+/// key/value list *is*: the values align because they share a key column, not
+/// because each one was measured. The `SURFACE_3` panel the rows used to sit in
+/// is the nested-box shape R2 removes, and with the list no longer three loose
+/// rows in the corner of a box there is nothing for it to divide.
+fn paint_detail_list(ui: &mut Ui, rows: &[DetailRow], action: &mut DetailAction) {
+    Grid::new("log_commit_facts")
+        .num_columns(2)
+        .spacing([10.0, 4.0])
+        .show(ui, |ui| {
+            for row in rows {
+                ui.label(micro_text(row.key));
+                if row.empty {
+                    ui.label(RichText::new("—").font(body_font()).color(Palette::INK_3));
+                } else if row.parents.is_empty() {
+                    ui.label(
+                        RichText::new(&row.value)
+                            .font(body_font())
+                            .color(Palette::INK),
+                    );
+                } else {
+                    ui.horizontal(|ui| {
+                        for parent in &row.parents {
+                            if ui
+                                .link(
+                                    RichText::new(widgets::short_commit_ref(parent))
+                                        .font(mono_font())
+                                        .color(Palette::INK),
+                                )
+                                .clicked()
+                            {
+                                *action = DetailAction::SelectParent(parent.clone());
+                            }
+                        }
+                    });
+                }
+                ui.end_row();
+            }
+        });
+}
+
 fn details_pane(ui: &mut Ui, state: &mut AppState) {
     // Every interaction defers (plan §1.3): the pane borrows the cached
     // commit below, so clicks set `action` and mutations land at the end.
     let mut action = DetailAction::None;
-    widgets::group_title(ui, "Commit details");
+    // The pane's own header (R7), over no raised parent (see [`pane_card`]).
+    widgets::pane_header(ui, "COMMIT DETAILS", None, |_ui| {});
     // Compact vertical rhythm so the full message fits the pane.
     ui.style_mut().spacing.item_spacing.y = 3.0;
 
     // Split-borrow the selection (plan §1.3): the commit is looked up over
     // the cache slice and the file summary iterates the cached list in place.
+    //
+    // The empty state is a page-owned answer — nothing is selected, so there is
+    // no commit to describe — and it is the one branch of this pane that paints
+    // no facts at all. Reshaping the populated state is exactly the edit that
+    // quietly deletes it, so `tests/git_log.rs` asserts it from a frame with
+    // nothing selected.
     let Some((root_id, cid)) = state
         .selected_root
         .as_ref()
@@ -1853,86 +2425,14 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         widgets::hash_chip(ui, &widgets::short_commit_ref(&commit.id), "");
     });
 
-    // Author card: initials, name, email, and the day on the trailing edge.
-    ui.horizontal(|ui| {
-        widgets::avatar_initials(ui, &commit.author.name);
-        ui.vertical(|ui| {
-            ui.label(
-                RichText::new(&commit.author.name)
-                    .font(body_font())
-                    .color(Palette::INK),
-            );
-            ui.label(micro_text(&commit.author.email));
-        });
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(micro_text(
-                fmt_time(commit.time)
-                    .split(' ')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string(),
-            ));
-        });
-    });
-
-    // Meta grid on a quiet container: one shared label column keeps the values
-    // aligned (issue 05). The committer keeps its signature suffix (issue 17)
-    // and the parents stay links that jump the selection.
-    let sig_suffix = match commit.signature {
-        SignatureState::Unsigned => String::new(),
-        SignatureState::Good => " · signed ✓".to_string(),
-        SignatureState::Bad => " · signature BAD".to_string(),
-        SignatureState::Unverified => " · signed (unverified)".to_string(),
-    };
+    // The key/value list, above the message body: a commit's facts are
+    // scannable without opening anything (spec §user-story 30). It replaced an
+    // avatar card that said the author's name and the day in prose, wrapped
+    // around a meta grid that said the same two things again as labelled rows —
+    // so the author and the date are now each stated once, in one shape, and the
+    // keys line up where an eye can run down them.
     ui.add_space(4.0);
-    Frame::new()
-        .fill(Palette::SURFACE_3)
-        .corner_radius(CornerRadius::same(crate::theme::CONTROL_RADIUS))
-        .inner_margin(Margin::same(8))
-        .show(ui, |ui| {
-            Grid::new("log_commit_meta")
-                .num_columns(2)
-                .spacing([10.0, 4.0])
-                .show(ui, |ui| {
-                    ui.label(micro_text("Committer"));
-                    ui.label(
-                        RichText::new(format!(
-                            "{} <{}>{}",
-                            commit.committer.name, commit.committer.email, sig_suffix
-                        ))
-                        .font(body_font())
-                        .color(Palette::INK),
-                    );
-                    ui.end_row();
-                    ui.label(micro_text("Date"));
-                    ui.label(
-                        RichText::new(fmt_time(commit.time))
-                            .font(body_font())
-                            .color(Palette::INK),
-                    );
-                    ui.end_row();
-                    ui.label(micro_text("Parents"));
-                    if commit.parents.is_empty() {
-                        ui.label(RichText::new("—").font(body_font()).color(Palette::INK_3));
-                    } else {
-                        ui.horizontal(|ui| {
-                            for p in &commit.parents {
-                                if ui
-                                    .link(
-                                        RichText::new(widgets::short_commit_ref(p))
-                                            .font(mono_font())
-                                            .color(Palette::INK),
-                                    )
-                                    .clicked()
-                                {
-                                    action = DetailAction::SelectParent(p.clone());
-                                }
-                            }
-                        });
-                    }
-                    ui.end_row();
-                });
-        });
+    paint_detail_list(ui, &commit_detail_rows(commit), &mut action);
 
     // Churn: the bar git measured, then the file count and the `+X −Y` totals.
     // Before the stats land only the file count is known, so that is all that
@@ -1970,11 +2470,14 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         });
     });
 
-    // The message body: everything under the subject, which now leads the
-    // pane (issue 05) — repeating it here would spend the pane's last inches
-    // on a line the user has already read. This stays the pane's only
-    // scrolling region, with the viewport capped to what is left so the
-    // `ScrollArea` cannot claim the whole pane and clip the metadata above.
+    // The message body: everything under the subject, which leads the pane
+    // (issue 05) — repeating it here would spend the pane's last inches on a line
+    // the user has already read. It is deliberately LAST: the key/value list
+    // above it is a commit's facts, and a fact is worth more than prose when
+    // both fit; when they do not, the list is the part that must not be pushed
+    // off the bottom of the pane. This stays the pane's only scrolling region,
+    // with the viewport capped to what is left so the `ScrollArea` cannot claim
+    // the whole pane and clip the metadata above.
     let body: Vec<&str> = commit
         .message
         .lines()
@@ -2004,7 +2507,29 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// Muted micro label — the details pane's secondary text role (issue 05).
+/// Muted micro label — **the details pane's key ink**.
+///
+/// This helper is named as if it belonged to the column header, and it does
+/// not: the commit table's header cells are [`widgets::column_header`], which
+/// owns its own ink, and every one of this helper's callers is in the
+/// commit-details pane. After the key/value reshape it has three, and all three
+/// are the same role:
+///
+/// - the `Author` / `Date` / `Committer` / `Parents` **keys** in
+///   [`paint_detail_list`];
+/// - the em dash standing in for a value the commit does not have;
+/// - the "N files changed" count under the churn bar.
+///
+/// So "a key is the muted step" is now the pane's stated rule rather than six
+/// coincident call sites, and the values it names are [`Palette::INK`].
+///
+/// [`Palette::INK_3`] is also the right step for it rather than a stale one: R3
+/// puts field labels and metadata on the muted step, at [`MICRO_TEXT`] on a
+/// content surface, which clears 4.5:1. The dim step is reserved for
+/// placeholders, dim path suffixes and hatches and may never be the only
+/// rendering of something the user needs — a commit's author is exactly that.
+/// `tests/git_log.rs` pins both halves: the ink is the ramp's, and it is never
+/// the dim one.
 fn micro_text(text: impl Into<String>) -> RichText {
     RichText::new(text)
         .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))

@@ -464,7 +464,7 @@ fn click_selects_the_row_visibly_and_never_checks_out() {
     assert!(
         !filled_rects(&harness)
             .iter()
-            .any(|(_, fill)| *fill == turbogit_ui::theme::Palette::SELECTION),
+            .any(|(_, fill)| *fill == turbogit_ui::theme::Palette::ROW_SELECTED),
         "nothing is selected at rest"
     );
 
@@ -483,11 +483,10 @@ fn click_selects_the_row_visibly_and_never_checks_out() {
     );
     let row = row_node(&harness, "feature-a").rect();
     assert!(
-        filled_rects(&harness)
-            .iter()
-            .any(|(r, fill)| *fill == turbogit_ui::theme::Palette::SELECTION
-                && (r.center() - row.center()).length() < 2.0),
-        "the selected row is filled with the selection token, rows: {row:?}"
+        filled_rects(&harness).iter().any(|(r, fill)| *fill
+            == turbogit_ui::theme::Palette::ROW_SELECTED
+            && (r.center() - row.center()).length() < 2.0),
+        "the selected row is filled with the selected-row fill, rows: {row:?}"
     );
 
     // Clicking never checks out.
@@ -505,6 +504,9 @@ fn click_selects_the_row_visibly_and_never_checks_out() {
 /// right edge. Vertically the list is bounded by the tab strip instead —
 /// see [`tool_window_top`], which derives that edge from painted geometry.
 const LIST_RIGHT: f32 = 1024.0;
+/// The window's own left edge: the bound that keeps a band name read here from
+/// picking up the sidebar's project row, which prints the same repository name.
+const LIST_LEFT: f32 = 0.0;
 
 /// The tool window's top edge, derived from the shell's own tab strip rather
 /// than restated as a literal.
@@ -1806,13 +1808,25 @@ fn two_current_branches_are_distinct_rows_owned_by_their_repo() {
     assert_section(&harness, "LOCAL", 2);
 
     // What tells the two `main`s apart is the section each one sits in, not a
-    // name repeated on the row. The section headers' status dots anchor that:
-    // the first main falls between alpha's header and beta's, the second below
-    // beta's.
-    let mut header_y: Vec<f32> = filled_circles(&harness)
-        .into_iter()
-        .filter(|(_, r, _)| *r == 4.0)
-        .map(|(c, _, _)| c.y)
+    // name repeated on the row. The section headers anchor that: the first main
+    // falls between alpha's band and beta's, the second below beta's.
+    //
+    // **What moved, and why.** These were read off the band's 4px heading status
+    // dot. Ticket 16 removed that dot: the band's state reaches the screen as
+    // the mark pair's leading dot beside the state summary, so there is one dot
+    // per band instead of two, and it is at the mark radius. The bands are now
+    // located by the repository names they print, which is what a reader reads
+    // them by.
+    let mut header_y: Vec<f32> = ["alpha", "beta"]
+        .iter()
+        .map(|repo| {
+            painted_galleys(&harness)
+                .into_iter()
+                .find(|g| g.text == *repo && g.pos.x > LIST_LEFT && g.pos.y > 0.0)
+                .unwrap_or_else(|| panic!("the `{repo}` band names its repository"))
+                .pos
+                .y
+        })
         .collect();
     header_y.sort_by(f32::total_cmp);
     assert_eq!(header_y.len(), 2, "one repo header per section");
@@ -1881,13 +1895,38 @@ fn repo_filter_narrows_the_list_and_the_header_says_so() {
     // Unfiltered: the header names the whole scope.
     assert_painted(&harness, "all 2 repos");
 
-    // Pick beta from the scope picker.
-    harness.get_by_label("Scope…").click();
+    // The scope chip is a **control**, so it is the mouse path to the filter:
+    // press it, and the picker it owns chooses the repository. The chip's own
+    // accessible label is its state ("all 2 repos"), never a bare "Scope" —
+    // ADR-0027's answer to the accessibility objection the reversal overrode.
+    let chip = harness.get_by_role_and_label(egui::accesskit::Role::Button, "all 2 repos");
+    assert!(
+        chip.rect().height() >= 18.0,
+        "the scope indicator is a chip, not a bare label: {chip:?}"
+    );
+    assert!(
+        test_support::harness::filled_rects(&harness)
+            .into_iter()
+            .any(|(r, f)| f == turbogit_ui::theme::Palette::RAISED && r.intersects(chip.rect())),
+        "and it paints the count chip's raised fill, so the one blue object in \
+         the toolbar is still New Branch"
+    );
+    chip.click();
     settle_quiet(&mut harness);
     harness.get_by_label("Show beta").click();
     settle_quiet(&mut harness);
 
-    // The header announces the narrowing, alpha's rows vanish, beta's stay.
+    // The chip announces the narrowing, alpha's rows vanish, beta's stay.
+    assert_eq!(
+        harness
+            .state()
+            .ui
+            .branches_repo_filter
+            .as_ref()
+            .map(|r| r.name()),
+        Some("beta".to_string()),
+        "the chip's click is what changed the list's repository filter"
+    );
     assert_painted(&harness, "filtered to beta");
     assert_not_painted(&harness, "feature-a");
     assert_painted(&harness, "clever");
@@ -2259,39 +2298,53 @@ fn repo_section_headers_name_their_repo_inside_the_list() {
     let mut harness = two_repo_harness(dir);
     open_branches_tab(&mut harness);
 
-    // The header's three parts hang together, so the status dots anchor the
-    // assertions: the repo name paints beside its own dot, and that same header
-    // line carries the repo's current branch as a chip. (Only section dots are
-    // 4px; the sidebar's are 3.5px.)
-    let mut dots: Vec<egui::Pos2> = filled_circles(&harness)
-        .into_iter()
-        .filter(|(_, r, _)| *r == 4.0)
-        .map(|(center, _, _)| center)
-        .collect();
-    dots.sort_by(|a, b| a.y.total_cmp(&b.y));
-    assert_eq!(dots.len(), 2, "one status dot per repo section: {dots:?}");
-
+    // **What moved, and why.** This suite used to anchor the bands on a 4px
+    // heading status dot on their left. Ticket 16 removed that dot: the band's
+    // state reaches the screen as the *mark pair* — one leading dot beside the
+    // state summary — so a band has one dot, at the mark radius, and it leads
+    // the words rather than the name. The bands are now located by the
+    // repository names they print, below the tab strip.
+    let list_top = tool_window_top(&harness);
     let galleys = painted_galleys(&harness);
-    for (repo, dot) in ["alpha", "beta"].iter().zip(&dots) {
-        let named = galleys
-            .iter()
-            .any(|g| g.text == *repo && (g.pos.y - dot.y).abs() < 20.0 && g.pos.x > dot.x);
-        assert!(
-            named,
-            "`{repo}` names the section header its status dot belongs to (dot at {dot:?})"
-        );
-    }
+    let mut bands: Vec<f32> = ["alpha", "beta"]
+        .iter()
+        .map(|repo| {
+            galleys
+                .iter()
+                .find(|g| g.text == *repo && g.pos.y > list_top)
+                .unwrap_or_else(|| panic!("`{repo}` names the band inside the list"))
+                .pos
+                .y
+        })
+        .collect();
+    bands.sort_by(f32::total_cmp);
+    assert_eq!(bands.len(), 2, "one band per repo section");
 
-    // The chip rides the same header line, rendered by the shared current-branch
-    // pill — one treatment with the row's badge.
+    // One mark per band, in that repository's state colour, on the band's line.
+    let list_x = LIST_RIGHT;
+    let marks: Vec<_> = filled_circles(&harness)
+        .into_iter()
+        .filter(|(c, r, _)| c.y > list_top && c.x < list_x && (*r - 3.0).abs() < f32::EPSILON)
+        .collect();
+    assert!(
+        marks
+            .iter()
+            .all(|(c, _, _)| bands.iter().any(|y| (c.y - y).abs() < 20.0)),
+        "each mark leads a band's state summary, on that band's own line: \
+         marks {marks:?} vs bands {bands:?}"
+    );
+
+    // The head ref rides the same band line, and it is a **ref chip**: a ref
+    // name on the raised-on-card surface in the data face. It used to be a pill
+    // filling the accent token with brand ink.
     let chip = galleys
         .iter()
-        .find(|g| g.text == "main" && dots.iter().any(|d| (g.pos.y - d.y).abs() < 20.0))
-        .expect("a current-branch chip paints on a header line");
+        .find(|g| g.text == "main" && bands.iter().any(|y| (g.pos.y - y).abs() < 20.0))
+        .expect("a head-ref chip paints on a band line");
     assert_eq!(
         chip.color,
-        Palette::BRAND_INK,
-        "the header's current-branch chip uses the shared pill's ink"
+        Palette::INK_2,
+        "the band's head ref is a neutral ref chip, inked in the chip's own step"
     );
     assert_eq!(
         chip.family,
@@ -2362,10 +2415,39 @@ fn names_are_monospace_and_labels_and_counts_are_sans() {
         FontFamily::Monospace,
         "a remote's name is data"
     );
+    // The remote *group*'s own count is a label beside the remote's name, so it
+    // is chrome. It is located by that name rather than by its text: with
+    // remotes open, a section header's count **chip** also prints "2", and that
+    // one is a chip (the data face, by the shared vocabulary), so a first-match
+    // read of the string answers about the wrong object.
+    let origin = galleys
+        .iter()
+        .find(|g| g.text == "origin")
+        .expect("the remote's name");
+    let group_count = galleys
+        .iter()
+        .find(|g| {
+            g.text == "2" && (g.pos.y - origin.pos.y).abs() < 12.0 && g.pos.x > origin.rect.right()
+        })
+        .unwrap_or_else(|| panic!("the remote group's own count paints beside its name"));
     assert_eq!(
-        family_of("2"),
+        group_count.family,
         FontFamily::Proportional,
         "the expanded remote group's count is chrome"
+    );
+    // …and the section bands' counts are the shared count chip, which is
+    // monospaced so a column of counts aligns digit-for-digit.
+    let local = galleys.iter().find(|g| g.text == "LOCAL").expect("LOCAL");
+    let section_count = galleys
+        .iter()
+        .find(|g| {
+            g.text == "4" && (g.pos.y - local.pos.y).abs() < 12.0 && g.pos.x > local.rect.right()
+        })
+        .expect("the LOCAL band's count chip");
+    assert_eq!(
+        section_count.family,
+        FontFamily::Monospace,
+        "a count chip is monospaced, like every chip"
     );
 }
 
@@ -2376,7 +2458,10 @@ fn toolbar_composes_scope_and_new_branch_without_remotes_toggle() {
     open_branches_tab(&mut harness);
 
     // The toolbar keeps the scope chip before New Branch, with no remotes toggle.
-    let scope = harness.get_by_label("Scope…").rect();
+    // The chip's label is its state, so the query names the state.
+    let scope = harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "all 2 repos")
+        .rect();
     let new_branch = harness.get_by_label("New Branch").rect();
     assert!(
         scope.max.x <= new_branch.min.x,
@@ -2409,7 +2494,9 @@ fn toolbar_search_shares_the_row_and_stays_in_the_window() {
 
     let win = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1024.0, 768.0));
     let search = harness.get_by_label("Search branches").rect();
-    let scope = harness.get_by_label("Scope…").rect();
+    let scope = harness
+        .get_by_role_and_label(egui::accesskit::Role::Button, "all 2 repos")
+        .rect();
     assert!(
         win.contains_rect(search),
         "the search box is inside the window: {search:?}"
@@ -2464,43 +2551,244 @@ fn pull_and_push_stay_one_click_away_on_the_branches_tab() {
     );
 }
 
+/// **The ladder is gone.** A branch name is a **ref chip** in the row's own ink,
+/// whatever the branch's sync state, and the state is **coloured text beside
+/// it**. This replaces a suite that asserted the opposite — diverged read red
+/// *in the name*, unpulled read amber *in the name* — so identity and state were
+/// the same kind of thing and the name changed colour with the state.
 #[test]
-fn branch_names_render_in_their_state_colors() {
+fn a_branch_name_is_a_ref_chip_and_its_state_is_coloured_text_beside_it() {
     use turbogit_ui::theme::Palette;
 
-    // The current branch is marked by its row band and `current` badge, not by
-    // tinted ink, so its name reads at the same primary as a plain local row.
+    // The current branch and a plain local branch read at the same ink: the band,
+    // the rail and the marker carry "where am I", not the name.
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
     assert_eq!(
         row_name_color(&harness, "main"),
         Some(Palette::T_PRIMARY),
-        "the active branch keeps plain ink; the band and badge carry the fact"
+        "the active branch keeps the row's own ink; the band, the rail and the \
+         marker carry the fact"
     );
     assert_eq!(
         row_name_color(&harness, "zebra"),
         Some(Palette::T_PRIMARY),
-        "a plain local branch reads at primary ink"
+        "a plain local branch reads at the same primary ink"
     );
 
-    // Diverged (ahead *and* behind its upstream) → red.
+    // Diverged (ahead *and* behind its upstream): the **name** is unmoved, and
+    // the words beside it wear the diverged red.
     let (_project, dir) = sync_repo_project();
     let mut harness = branches_harness(dir);
     open_branches_tab(&mut harness);
     assert_eq!(
         row_name_color(&harness, "feat"),
-        Some(Palette::STATUS_DIVERGED),
-        "a branch diverged from its upstream reads red"
+        Some(Palette::T_PRIMARY),
+        "a diverged branch's *name* is not the state: the state is beside it"
     );
+    // A diverged row carries one mark per *direction*, and each direction wears
+    // its own state from the one map — ahead is unpushed, behind is unpulled.
+    // That is `sync_badge`'s contract (one badge per direction) restated in ink.
+    // Compared as a set: which direction is drawn first is a layout decision, and
+    // the claim is that both inks are the map's and that neither is borrowed.
+    let mut diverged = state_inks_on_row(&harness, "feat");
+    diverged.sort_by_key(|c| (c.r(), c.g(), c.b()));
+    let mut expected = vec![
+        turbogit_ui::theme::RepoState::Unpulled.color(),
+        turbogit_ui::theme::RepoState::Unpushed.color(),
+    ];
+    expected.sort_by_key(|c| (c.r(), c.g(), c.b()));
+    assert_eq!(
+        diverged, expected,
+        "…and the words beside it wear the one repository-state map, one ink \
+         per direction"
+    );
+    // A branch with nothing to report says nothing: silence is the in-sync
+    // answer, and it is the band's summary that speaks for the repository.
+    assert!(
+        state_inks_on_row(&harness, "main").is_empty(),
+        "a branch in sync paints no state words beside its name"
+    );
+}
+/// The inks of the state words a row paints beside its name, left to right.
+///
+/// The mark pair paints its dot and its words in one colour, so every painted
+/// word on the row that is *not* the name, the tracking ref or the current
+/// marker is state. Scoped by the row's own rect, because "3 behind" paints on
+/// every row that is three behind — and every ink is checked against the one
+/// map, so a state that grew a colour of its own would fail here rather than in
+/// the token suite.
+fn state_inks_on_row(harness: &Harness<'_, AppState>, name: &str) -> Vec<egui::Color32> {
+    let Some(row) = row_nodes(harness, name)
+        .into_iter()
+        .next()
+        .map(|n| n.rect())
+    else {
+        return Vec::new();
+    };
+    let Some(name_galley) = galleys_in(harness, row)
+        .into_iter()
+        .find(|g| g.text == name)
+    else {
+        return Vec::new();
+    };
+    let mut words: Vec<PaintedGalley> = galleys_in(harness, row)
+        .into_iter()
+        .filter(|g| {
+            g.text != name
+                && g.text != "origin/main"
+                && g.text != "Current"
+                && g.pos.x > name_galley.rect.right()
+        })
+        .collect();
+    words.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x));
+    // Every colour the one state map can produce, asked of the map rather than
+    // transcribed. A hand-written list of variants is **not** exhaustiveness
+    // checked — an inferred-length array just grows, silently — which is how the
+    // seventh `RepoState` (`Uninitialized`, work the user is owed, wearing the
+    // muted ink) came to be missing from this list while the suite stayed green
+    // and the check quietly stopped covering the new state. So the set is derived
+    // from the enum's own declaration and the enumeration is asserted closed
+    // against it; `every_repo_state_variant_is_enumerated_here` in
+    // `tests/branch_component_kit.rs` is the same mechanism over the same enum,
+    // and the two lists have to agree because both are read from `theme.rs`.
+    let map: Vec<egui::Color32> = all_repo_states()
+        .iter()
+        .map(|state| state.color())
+        .collect();
+    for g in &words {
+        assert!(
+            map.contains(&g.color),
+            "`{}` on the `{name}` row is painted in {:?}, which is not a colour \
+             any repository state produces: state text comes from \
+             `RepoState::color()` and nowhere else",
+            g.text,
+            g.color
+        );
+    }
+    words.iter().map(|g| g.color).collect()
+}
+
+/// Every `RepoState` variant, read from `theme.rs`'s own declaration and compared
+/// against the written-out list.
+///
+/// Rust has no way to say "this enum gained a variant" from inside a test that
+/// has to compile — no reflection, no stable `variant_count` — so the check is the
+/// only honest form available: a *removed* variant is a compile error (the list
+/// names a path that no longer exists) and an *added* one is this assertion,
+/// naming the variant that arrived. The alternative, a bare array literal, is
+/// what silently skipped `Uninitialized`.
+fn all_repo_states() -> Vec<turbogit_ui::theme::RepoState> {
+    const LISTED: [turbogit_ui::theme::RepoState; 7] = [
+        turbogit_ui::theme::RepoState::Clean,
+        turbogit_ui::theme::RepoState::Dirty,
+        turbogit_ui::theme::RepoState::Conflict,
+        turbogit_ui::theme::RepoState::Diverged,
+        turbogit_ui::theme::RepoState::Unpushed,
+        turbogit_ui::theme::RepoState::Unpulled,
+        turbogit_ui::theme::RepoState::Uninitialized,
+    ];
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/theme.rs"),
+    )
+    .expect("read theme.rs");
+    // Comments blanked, so a doc comment on a variant is not read as one.
+    let mut declared: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in blank_comments(&src).lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("pub enum RepoState") {
+            inside = true;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if trimmed == "}" {
+            break;
+        }
+        if !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && trimmed.ends_with(',')
+            && trimmed
+                .trim_end_matches(',')
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            declared.push(trimmed.trim_end_matches(',').to_owned());
+        }
+    }
+    let listed: Vec<String> = LISTED.iter().map(|s| format!("{s:?}")).collect();
+    assert_eq!(
+        listed, declared,
+        "the repository states this suite knows about are not the states the map \
+         declares. A new `RepoState` has to be added here — or the check that \
+         every painted state word wears a colour from the map quietly stops \
+         covering it, which is exactly what happened when `Uninitialized` landed."
+    );
+    LISTED.to_vec()
+}
+
+/// `src` with every comment replaced by spaces, line structure intact.
+fn blank_comments(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let (mut i, mut block, mut line, mut string) = (0usize, false, false, false);
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied().unwrap_or('\0');
+        if block {
+            if c == '*' && next == '/' {
+                block = false;
+                out.push_str("  ");
+                i += 1;
+            } else {
+                out.push(if c == '\n' { '\n' } else { ' ' });
+            }
+        } else if line {
+            if c == '\n' {
+                line = false;
+                out.push('\n');
+            } else {
+                out.push(' ');
+            }
+        } else if string {
+            out.push(c);
+            if c == '\\' {
+                if let Some(escaped) = chars.get(i + 1) {
+                    out.push(*escaped);
+                }
+                i += 1;
+            } else if c == '"' {
+                string = false;
+            }
+        } else if c == '/' && next == '/' {
+            line = true;
+            out.push_str("  ");
+            i += 1;
+        } else if c == '/' && next == '*' {
+            block = true;
+            out.push_str("  ");
+            i += 1;
+        } else {
+            if c == '"' {
+                string = true;
+            }
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
 }
 
 #[test]
-fn unpulled_branch_names_read_amber() {
+fn an_unpulled_branch_states_its_state_beside_the_name_not_on_it() {
     use turbogit_ui::theme::Palette;
 
     let (_project, dir) = single_repo_project();
     let mut harness = branches_harness(dir);
+    open_branches_tab(&mut harness);
     {
         let st = harness.state_mut();
         let id = st.selected_root.clone().expect("selected root");
@@ -2523,17 +2811,24 @@ fn unpulled_branch_names_read_amber() {
     }
     open_branches_tab(&mut harness);
 
-    // Behind-only is "unpulled": amber. Red is reserved for a branch that has
-    // genuinely diverged (ahead *and* behind), so the two are never conflated.
+    // Behind-only is "unpulled": the counter orange, in the words beside the
+    // name. Red is reserved for a branch that has genuinely diverged (ahead
+    // *and* behind), so the two are never conflated.
+    assert_eq!(
+        state_inks_on_row(&harness, "unpulled"),
+        vec![Palette::COUNTER],
+        "an unpulled branch states it in words, in the one map's colour — which \
+         for `Unpulled` is the reserved counter orange"
+    );
     assert_eq!(
         row_name_color(&harness, "unpulled"),
-        Some(Palette::STATE_WARNING),
-        "an unpulled branch reads amber"
+        Some(Palette::T_PRIMARY),
+        "and the name itself is unmoved: identity and state are two objects"
     );
 }
 
 #[test]
-fn repo_status_dots_paint_their_status_color() {
+fn repo_status_marks_paint_their_status_color() {
     use turbogit_ui::theme::Palette;
 
     let (_project, dir) = two_repo_project();
@@ -2559,20 +2854,239 @@ fn repo_status_dots_paint_their_status_color() {
     }
     open_branches_tab(&mut harness);
 
-    // One status dot per repo section (a 4px dot — the sidebar's are 3.5px).
+    // **What moved, and why.** The bands' 4px heading status dot is gone; the
+    // band's state is the mark pair's leading dot beside its state summary, at
+    // the mark radius. The mark is what carries the colour, so this is the same
+    // claim at the mark's own geometry.
+    let list_top = tool_window_top(&harness);
     let list_x = LIST_RIGHT;
-    let dots: Vec<_> = filled_circles(&harness)
-        .into_iter()
-        .filter(|(c, r, _)| c.y > 80.0 && c.x < list_x && *r == 4.0)
+    let band_names: Vec<f32> = ["alpha", "beta"]
+        .iter()
+        .map(|repo| {
+            painted_galleys(&harness)
+                .into_iter()
+                .find(|g| g.text == *repo && g.pos.y > list_top)
+                .unwrap_or_else(|| panic!("the `{repo}` band names its repository"))
+                .pos
+                .y
+        })
         .collect();
-    assert_eq!(dots.len(), 2, "one status dot per repo header: {dots:?}");
-    assert!(
-        dots.iter().any(|(_, _, f)| *f == Palette::COUNTER),
-        "the unpulled repo's dot is the counter orange: {dots:?}"
+    let marks: Vec<_> = filled_circles(&harness)
+        .into_iter()
+        .filter(|(c, r, _)| {
+            c.y > list_top
+                && c.x < list_x
+                && (*r - turbogit_ui::ui::components::STATE_DOT_R).abs() < f32::EPSILON
+                && band_names.iter().any(|y| (c.y - y).abs() < 20.0)
+        })
+        .collect();
+    assert_eq!(
+        marks.len(),
+        2,
+        "one state mark per repo band, on that band's own line: {marks:?}"
     );
     assert!(
-        dots.iter().any(|(_, _, f)| *f == Palette::AHEAD),
-        "the clean repo's dot is the ahead green: {dots:?}"
+        marks.iter().any(|(_, _, f)| *f == Palette::COUNTER),
+        "the unpulled repo's mark is the counter orange: {marks:?}"
+    );
+    assert!(
+        marks.iter().any(|(_, _, f)| *f == Palette::AHEAD),
+        "the clean repo's mark is the ahead green: {marks:?}"
+    );
+}
+
+// --- 16: the pane's own vocabulary at the screen seam ----------------------------
+
+/// The scope chip's click is the thing that changes the list's repository
+/// filter. Not a label that happens to sit beside a button, and not a chip that
+/// is only a label: press the chip, choose a repository, and the list below
+/// narrows to it — and comes back.
+///
+/// **The reversal this pins.** `branches::scope_label` used to paint bare
+/// coloured text and sit beside a separate quiet "Scope…" button, with a comment
+/// saying a chip would "newly register an accessibility node for a piece of
+/// status text". ADR-0027 reversed that: the node is the node for a control with
+/// a state and an action, so a screen-reader user gains the filter. The comment
+/// is gone from the code and replaced by the argument, and this is the behaviour
+/// half of the answer.
+/// The pane's scope control: a `Button` whose accessible label is its **state**
+/// ("all 2 repos" / "filtered to beta"), never a bare word.
+fn scope_chip<'h>(harness: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> {
+    harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|l| l.starts_with("all ") || l.starts_with("filtered to "))
+        })
+        .unwrap_or_else(|| panic!("the scope chip is a Button whose label is its state"))
+}
+
+#[test]
+fn the_scope_chip_is_the_control_that_narrows_the_list() {
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    open_branches_tab(&mut harness);
+
+    // Unnarrowed: the chip states the scope, and both repositories' rows paint.
+    assert_eq!(
+        scope_chip(&harness).accesskit_node().label(),
+        Some("all 2 repos".to_string()),
+        "the chip announces the state, not a bare word"
+    );
+    assert_painted(&harness, "feature-a");
+    assert_painted(&harness, "clever");
+
+    // Press the chip → the picker it owns → one repository. The filter is the
+    // observable, not the geometry.
+    scope_chip(&harness).click();
+    settle_quiet(&mut harness);
+    harness.get_by_label("Show beta").click();
+    settle_quiet(&mut harness);
+    assert_eq!(
+        harness
+            .state()
+            .ui
+            .branches_repo_filter
+            .as_ref()
+            .map(|r| r.name()),
+        Some("beta".to_string()),
+        "the chip's click is what changed the list's repository filter"
+    );
+    assert_not_painted(&harness, "feature-a");
+    assert_painted(&harness, "clever");
+    assert_eq!(
+        scope_chip(&harness).accesskit_node().label(),
+        Some("filtered to beta".to_string()),
+        "and the chip says so: a node that announced a bare noun would tell a \
+         screen-reader user a control exists, not what it is set to"
+    );
+
+    // And back again, from the same chip.
+    scope_chip(&harness).click();
+    settle_quiet(&mut harness);
+    harness.get_by_label("All repos").click();
+    settle_quiet(&mut harness);
+    assert!(
+        harness.state().ui.branches_repo_filter.is_none(),
+        "the picker clears the filter"
+    );
+    assert_painted(&harness, "feature-a");
+}
+
+/// **No chip anywhere in the pane fills the brand token**, and no row band is a
+/// solid brand fill either. The one blue object left in the branches screen is
+/// the New Branch button, which is a *control* — a chip or a row band in the
+/// brand token is the blue soup this ticket exists to remove.
+///
+/// Scoped by **shape**, not by a region: a chip is the shared chip height, a row
+/// band is the shared row height, and the shell's own brand chrome (the active
+/// tab's underline) and the toolbar's primary button are neither. The claim is
+/// about chips and row bands, and the constants that define those two shapes are
+/// the filter — so a chip that grew to some third height would still be caught by
+/// the chip-height assertion's sibling below, and a reader can see which object
+/// each half is about.
+#[test]
+fn no_chip_in_the_branches_pane_fills_the_brand_token() {
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    open_branches_tab(&mut harness);
+    // Multi-repo, so the scope chip is painted, and a current row is painted, so
+    // every chip the pane can produce is on screen at once.
+    assert_painted(&harness, "all 2 repos");
+
+    let brand = turbogit_ui::theme::Palette::BRAND;
+    let brand_rects: Vec<egui::Rect> = filled_rects(&harness)
+        .into_iter()
+        .filter(|(_, fill)| *fill == brand)
+        .map(|(rect, _)| rect)
+        .collect();
+
+    // (1) No chip. The current chip is the vocabulary's one chip allowed near
+    // the accent, and it takes the *selected-row* fill, not a solid brand — so
+    // even it is absent here, and the assertion is about the whole chip height.
+    let brand_chips: Vec<egui::Rect> = brand_rects
+        .iter()
+        .copied()
+        .filter(|rect| (rect.height() - turbogit_ui::ui::widgets::CHIP_HEIGHT).abs() < 0.01)
+        .collect();
+    assert!(
+        brand_chips.is_empty(),
+        "no chip in the pane fills the brand token: {brand_chips:?}"
+    );
+
+    // (2) No solid brand row band. Inside the list the brand is only ever the 2px
+    // rail at a marked row's leading edge — the current row, and any selected
+    // row — so a row band of brand width would be the old selection fill back.
+    let row_bands: Vec<egui::Rect> = brand_rects
+        .iter()
+        .copied()
+        .filter(|rect| (rect.height() - turbogit_ui::ui::components::BRANCH_ROW_H).abs() < 0.5)
+        .collect();
+    let rails: Vec<&egui::Rect> = row_bands
+        .iter()
+        .filter(|rect| (rect.width() - turbogit_ui::theme::RAIL_WIDTH).abs() < 0.01)
+        .collect();
+    assert_eq!(
+        rails.len(),
+        row_bands.len(),
+        "every brand-filled row band is a 2px rail at the row's leading edge, \
+         never a solid brand band: {row_bands:?}"
+    );
+    assert!(
+        !rails.is_empty(),
+        "…and there is at least one: the pane marks its current row with a rail, \
+         so this half reads a live value rather than an absent one"
+    );
+}
+
+/// **A repository band's Fetch fetches that repository only.**
+///
+/// `dispatch` records a pre-fetch remote snapshot for exactly the roots the
+/// operation carries, so `ui.branches_fetch_before` is the operation's own
+/// root list, read back. Clicking the *second* band's Fetch must leave the first
+/// repository out of it — which is the whole reason the control hangs on the
+/// band and not on the collapsed remote rollup, which has no group header of its
+/// own to carry a repository-scoped action.
+#[test]
+fn a_repository_bands_fetch_fetches_that_repository_only() {
+    let (_project, dir) = two_repo_project();
+    let mut harness = two_repo_harness(dir);
+    open_branches_tab(&mut harness);
+    harness.state_mut().ui.branches_fetch_before.clear();
+
+    // Both bands paint a Fetch; `row_nodes`-style ordering puts beta's second.
+    let fetches: Vec<egui::Rect> = harness
+        .get_all_by_label("Fetch")
+        .map(|n| n.rect())
+        .collect();
+    assert_eq!(fetches.len(), 2, "one Fetch per repository band");
+    let beta = fetches
+        .iter()
+        .max_by(|a, b| a.top().total_cmp(&b.top()))
+        .copied()
+        .expect("beta's band");
+    harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| n.rect().top() == beta.top())
+        .expect("beta's Fetch button")
+        .click();
+    pump_until(&mut harness, "beta's band reported its fetch", |s| {
+        !s.ui.branches_fetch_before.is_empty()
+    });
+
+    let roots: Vec<String> = harness
+        .state()
+        .ui
+        .branches_fetch_before
+        .iter()
+        .map(|(id, _)| id.name())
+        .collect();
+    assert_eq!(
+        roots,
+        vec!["beta".to_string()],
+        "one root, and it is the band that was pressed: the action is \
+         per-repository, so fetching one slow remote does not fetch all of them"
     );
 }
 

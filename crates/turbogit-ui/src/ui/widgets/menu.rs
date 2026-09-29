@@ -221,8 +221,8 @@ fn menu_item_row(ui: &mut Ui, props: &MenuItemProps<'_>) -> Response {
 /// This is deliberately not `ui.separator()`: that paints egui's stock
 /// `noninteractive.bg_stroke` (`#3C3C3C`), which `configure_style` never
 /// assigns. And the content-divider role is no help either — `RULE_CONTENT`
-/// aliases `DIVIDER` aliases `SURFACE` (`#2B2D30`), exactly the menu's own
-/// fill, so a rule using it is invisible inside a menu. The structural
+/// aliases the raised surface (`#2B2D30`), exactly the menu's own fill, so a
+/// rule using it is invisible inside a menu. The structural
 /// hairline (`LINE_SUBTLE`) is the only token that reads on the menu
 /// surface; a dedicated `MENU_RULE` role is follow-up work.
 ///

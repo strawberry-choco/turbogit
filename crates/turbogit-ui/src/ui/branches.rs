@@ -26,7 +26,7 @@ use crate::ui::branch_menu::{BranchMenuAction, BranchMenuProps, branch_menu};
 use crate::ui::branch_tree_view::{self, LocalRow, TreeEvent, TreeGroup, TreeProps};
 use crate::ui::branches_tree::{self, BranchNode, BranchView};
 use crate::ui::components::{
-    KIT_BUTTON_H, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button,
+    self, KIT_BUTTON_H, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button,
 };
 use crate::ui::widgets;
 
@@ -357,10 +357,13 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
     if kit_button(&mut actions_ui, KitButton::Primary, "New Branch").clicked() {
         state.open_new_branch(NewBranchBase::Unset, true, None);
     }
-    // Scope label (issue 04): only when several repos are in scope.
+    // The scope chip (issue 04, reversed in ticket 16): only when several repos
+    // are in scope. It lives *inside* the measured cluster — the cluster's used
+    // left edge is what bounds the search input, so anything appended after it
+    // lands at the band's right edge, off-screen.
     if state.multi.roots.len() > 1 {
         actions_ui.add_space(PAD_STRIP);
-        scope_label(&mut actions_ui, state);
+        scope_chip(&mut actions_ui, state);
     }
     let actions_left = actions_ui.min_rect().min.x;
 
@@ -384,32 +387,46 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The scope label (issue 04): "all N repos" when nothing is narrowed, or
-/// "filtered to X" when a single repo is selected. The label opens a picker that
-/// narrows the list to one repo using today's filter semantics.
+/// The pane's **scope chip**: "all N repos" when nothing is narrowed, or
+/// "filtered to X" when one repository is. It is a chip because it is a
+/// **control** — pressing it is how the list below is narrowed — and the picker
+/// is folded into it, so the scope is one affordance rather than a label
+/// beside a separate "Scope…" button.
 ///
-/// Not a chip, and deliberately not one: it paints **coloured text with no
-/// background at all**, so it shares no geometry, no radius and no fill with the
-/// shared chip vocabulary. Turning it into a real chip would introduce a
-/// background where none exists and would newly register an accessibility node
-/// for a piece of status text — a design change that needs its own ticket, not a
-/// consolidation. See `docs/design-system-roles.md`.
-fn scope_label(ui: &mut Ui, state: &mut AppState) {
-    let filtered = state.ui.branches_repo_filter.is_some();
+/// **This reverses an earlier decision, and the reversal is recorded rather
+/// than quietly applied.** The comment this replaces read:
+///
+/// > Not a chip, and deliberately not one: it paints **coloured text with no
+/// > background at all**, so it shares no geometry, no radius and no fill with
+/// > the shared chip vocabulary. Turning it into a real chip would introduce a
+/// > background where none exists and would newly register an accessibility
+/// > node for a piece of status text — a design change that needs its own
+/// > ticket, not a consolidation.
+///
+/// It was not wrong about the rule (a chip is a filled, bounded fact marker) —
+/// it was wrong about what the thing **is**. R7 gives every tool pane one
+/// chrome row — title, optional count chip, right-aligned action slot — and a
+/// pane that says which repositories it is showing, in a row meant to be acted
+/// on, and then offers the filter in a separate quiet button beside it, splits
+/// one decision into two. Under R7 the scope indicator is the pane's scope
+/// *selector*. The accessibility objection is answered rather than overruled:
+/// the objection holds for a label and does not hold for a control — once this
+/// is something you press, the node it registers is the node for a control with
+/// a state and an action, and a screen-reader user **gains** the filter instead
+/// of losing status text. ADR-0027 §"Two decisions v2 reverses" carries the
+/// full argument, and `docs/design-system-roles.md` names this reversal.
+///
+/// The chip carries the **count chip's** treatment (R6) — the raised fill for
+/// the chrome row it sits on, with secondary ink — so the one blue object left
+/// in this pane is the New Branch button. Its accessible label is its **state**,
+/// never a bare "Scope", so the node describes what the pane is showing before
+/// it says it can be changed.
+fn scope_chip(ui: &mut Ui, state: &mut AppState) {
     let label = match &state.ui.branches_repo_filter {
         Some(id) => format!("filtered to {}", id.name()),
         None => format!("all {} repos", state.multi.roots.len()),
     };
-    ui.label(
-        RichText::new(label)
-            .font(chrome_font(TYPE_CONTROL))
-            .color(if filtered {
-                Palette::STATE_WARNING
-            } else {
-                Palette::T_MUTED
-            }),
-    );
-    if kit_button(ui, KitButton::Quiet, "Scope…").clicked() {
+    if components::scope_chip(ui, &label).clicked() {
         state.ui.branches_scope_picker_open = !state.ui.branches_scope_picker_open;
     }
     if state.ui.branches_scope_picker_open {

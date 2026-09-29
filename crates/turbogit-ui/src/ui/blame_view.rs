@@ -4,30 +4,62 @@
 //! and the changed-file context menu; a row's commit navigates back to the
 //! log with that commit selected, and the current path filter is untouched
 //! by opening or closing the view.
+//!
+//! **This view replaces the commit table; it does not sit beside it**
+//! (conformance issue 15). It occupies the same slot in the same region, so a
+//! reader who switches between the two is looking at the same table twice — and
+//! anything this file decided for itself was a visual reset at the moment of
+//! switching. Everything it used to spell out for itself is now read from
+//! [`log_window::CommitTable`]: the row height, the leading gutter the ROOTS
+//! column owns, the hash / author / wide-column offsets, the trailing column's
+//! right inset, and the two row inks. Its rows go through the same
+//! [`log_window::paint_log_row`], so the band and the one accent rail are the
+//! commit table's rather than a second answer to "what is a chosen row".
+//!
+//! The two cells that are *not* shared, and why: the wide column holds a source
+//! line here rather than a subject (so it is labelled `LINE`, and it is measured
+//! from the same offset the subject is), and the trailing column is a relative
+//! age rather than a formatted date. The offsets and the inks are still the
+//! table's.
 
 use crate::theme::Palette;
+use crate::ui::log_window::{
+    CommitTable, paint_log_row, row_meta_ink, row_name_ink, shows_root_gutter, table_content_left,
+};
 use crate::ui::widgets;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
-    CornerRadius, FontFamily, FontId, Pos2, RichText, ScrollArea, Sense, Ui, Vec2, WidgetInfo,
-    WidgetType,
+    FontFamily, FontId, Pos2, Rect, RichText, ScrollArea, Sense, Ui, Vec2, WidgetInfo, WidgetType,
 };
 use turbogit_app::keyed_read::Read;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::BlameLine;
 
-/// Blame row height (slightly tighter than log rows — a file's lines).
-const ROW_HEIGHT: f32 = 20.0;
 /// Uppercase micro text (§3.3) — shared control role (T2).
 const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL;
 /// Mono cell font size — shared body role (T2).
 const MONO_TEXT: f32 = crate::theme::TYPE_BODY;
 
-/// Cell x offsets within a row, mirroring the log table's rhythm.
-const HASH_X: f32 = 4.0;
-const AUTHOR_X: f32 = 84.0;
-const AGE_X: f32 = 194.0;
-const CONTENT_X: f32 = 264.0;
+/// The blame pane's columns: one table, read by **both** the shared
+/// column-header row and every row below it, at the commit table's own offsets.
+///
+/// The offsets are [`CommitTable`]'s, not this file's: a blame row's hash sits
+/// where a commit row's hash sits, its author where a commit row's author sits,
+/// its line where a commit row's subject sits, and its age trails the row on the
+/// same right inset the date cell uses. Two tables of offsets is what made
+/// switching to blame a reset, and conformance issue 15 is the ticket that ends
+/// it, so this file holds no cell offset of its own any more.
+///
+/// The labels are the content's, not the geometry's: `HASH` and `AUTHOR` say the
+/// same thing here as in the commit table, while the wide column is a source
+/// line and the trailing one a relative age, so naming those two after the
+/// commit table's `MESSAGE` and `DATE` would be a lie about what they hold.
+const BLAME_COLUMNS: [widgets::PaneColumn; 4] = [
+    widgets::PaneColumn::start("HASH", CommitTable::HASH),
+    widgets::PaneColumn::start("AUTHOR", CommitTable::AUTHOR),
+    widgets::PaneColumn::start("LINE", CommitTable::MESSAGE),
+    widgets::PaneColumn::end("AGE", CommitTable::DATE_RIGHT_PAD),
+];
 
 fn mono_font() -> FontId {
     FontId::new(MONO_TEXT, FontFamily::Monospace)
@@ -79,7 +111,7 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     // The header's close affordance sets a flag; like every interaction in
     // the log workspace it is applied after the borrow-heavy render ends.
     let mut close = false;
-    widgets::toolwindow_header(ui, "Blame", |ui| {
+    widgets::pane_header(ui, "BLAME", None, |ui| {
         if ui
             .link("Close blame")
             .on_hover_text("Back to the commit log")
@@ -99,17 +131,28 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     );
     ui.add_space(2.0);
 
-    // Column micro-headers aligned with the cells below.
-    let left = ui.cursor().left();
-    let top = ui.cursor().top();
-    for (title, dx) in [("COMMIT", HASH_X), ("AUTHOR", AUTHOR_X), ("AGE", AGE_X)] {
-        let galley = ui
-            .painter()
-            .layout_no_wrap(title.to_owned(), micro_font(), Palette::INK_3);
-        ui.painter()
-            .galley(Pos2::new(left + dx, top + 2.0), galley, Palette::INK_3);
-    }
-    ui.add_space(16.0);
+    // Whether the ROOTS column's gutter exists in this listing. Read from the
+    // commit table's own predicate, not re-decided here: a blame view that
+    // reserved the gutter on a different rule than the table it replaced would
+    // put every one of its columns 5px out from under the table's the moment the
+    // user switched back.
+    let multi_root = shows_root_gutter(state);
+
+    // The column header row, from the shared column chrome and the same
+    // `[BLAME_COLUMNS]` table the rows measure their cells from (R7), at the
+    // commit table's own content edge so its labels sit over the commit table's
+    // cells. It replaces three hand-laid galleys at the control size with no
+    // rule under them, which is how this pane had a header no other pane could
+    // be compared against.
+    let available = ui.available_rect_before_wrap();
+    widgets::column_header(
+        ui,
+        Rect::from_min_max(
+            Pos2::new(table_content_left(available, multi_root), available.top()),
+            Pos2::new(available.right(), available.bottom()),
+        ),
+        &BLAME_COLUMNS,
+    );
 
     let lines = match verdict {
         Read::Fresh(lines) if lines.is_empty() => {
@@ -145,7 +188,7 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     let mut clicked: Option<String> = None;
     ScrollArea::vertical().show(ui, |ui| {
         for line in lines.iter() {
-            if blame_row(ui, line, &target.rev) {
+            if blame_row(ui, line, &target.rev, multi_root) {
                 clicked = Some(line.commit.clone());
             }
         }
@@ -166,57 +209,73 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// One blamed line: highlight when the blamed-at commit introduced it,
-/// paint hash | author | age | content, and report whether it was clicked.
-fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str) -> bool {
+/// One blamed line: highlight when the blamed-at commit introduced it, paint
+/// hash | author | age | line, and report whether it was clicked.
+///
+/// **The row is the commit table's row.** Its height is
+/// [`CommitTable::ROW_HEIGHT`] and its band and rail are
+/// [`paint_log_row`]'s, so a line the blamed commit introduced takes the same
+/// selected band and the same 2px accent rail a chosen commit row takes — a
+/// tint alone, as this used to paint, is a selection without the rail every
+/// other chosen row in the app wears.
+///
+/// Its cells are measured from [`table_content_left`] at the commit table's
+/// offsets, which is what makes the **ROOTS column line up**: on a multi-root
+/// listing this view reserves the gutter the column owns rather than painting
+/// over it, so its hash starts where the commit table's hash started. The gutter
+/// stays empty here on purpose — a blame target names one repository and one
+/// file, so a per-root swatch repeated down a screen of lines would name a root
+/// the view is already scoped to, and it would make this a fifth site asking
+/// `root_color` for a value the ROOTS column has already said.
+fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str, multi_root: bool) -> bool {
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(Vec2::new(width, CommitTable::ROW_HEIGHT), Sense::click());
 
-    if line.commit == rev {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(crate::theme::MARK_RADIUS),
-            Palette::selection_bg(),
-        );
-    } else if response.hovered() {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(crate::theme::MARK_RADIUS),
-            Palette::SURFACE_2,
-        );
-    }
+    paint_log_row(ui, rect, line.commit == rev, response.hovered());
 
+    let content_left = table_content_left(rect, multi_root);
     let painter = ui.painter().clone();
     let cy = rect.center().y;
     let hash = painter.layout_no_wrap(
         widgets::short_commit_ref(&line.commit),
         mono_font(),
-        Palette::BRAND,
+        Palette::LINK,
     );
     painter.galley(
-        Pos2::new(rect.left() + HASH_X, cy - hash.size().y / 2.0),
+        Pos2::new(content_left + CommitTable::HASH, cy - hash.size().y / 2.0),
         hash,
-        Palette::BRAND,
+        Palette::LINK,
     );
     let author: String = line.author.chars().take(12).collect();
-    let author_g = painter.layout_no_wrap(author, body_font(), Palette::INK_2);
+    let author_g = painter.layout_no_wrap(author, body_font(), row_meta_ink());
     painter.galley(
-        Pos2::new(rect.left() + AUTHOR_X, cy - author_g.size().y / 2.0),
+        Pos2::new(
+            content_left + CommitTable::AUTHOR,
+            cy - author_g.size().y / 2.0,
+        ),
         author_g,
-        Palette::INK_2,
+        row_meta_ink(),
     );
-    let age = painter.layout_no_wrap(fmt_age(line.time), micro_font(), Palette::INK_3);
+    // The age trails the row on the commit table's own right inset, because a
+    // right-aligned trailing cell that tracked a different inset in one of the
+    // two tables is a column that moved when the view did.
+    let age = painter.layout_no_wrap(fmt_age(line.time), body_font(), row_meta_ink());
+    let age_x = rect.right() - CommitTable::DATE_RIGHT_PAD - age.size().x;
     painter.galley(
-        Pos2::new(rect.left() + AGE_X, cy - age.size().y / 2.0),
+        Pos2::new(age_x, cy - age.size().y / 2.0),
         age,
-        Palette::INK_3,
+        row_meta_ink(),
     );
     let content: String = line.content.trim_end().to_owned();
-    let content_g = painter.layout_no_wrap(content.clone(), mono_font(), Palette::INK);
+    let content_g = painter.layout_no_wrap(content.clone(), mono_font(), row_name_ink());
     painter.galley(
-        Pos2::new(rect.left() + CONTENT_X, cy - content_g.size().y / 2.0),
+        Pos2::new(
+            content_left + CommitTable::MESSAGE,
+            cy - content_g.size().y / 2.0,
+        ),
         content_g,
-        Palette::INK,
+        row_name_ink(),
     );
 
     response.widget_info(|| {
