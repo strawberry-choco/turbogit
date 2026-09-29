@@ -13,6 +13,19 @@ const COMPACT_BUTTON_HEIGHT: f32 = 28.0; // h-7 compact variants
 const ICON_BUTTON_SIZE: f32 = 28.0; // square ghost (dialog close X)
 const BUTTON_ICON_SIZE: f32 = 16.0; // §5.3: 16×16 in buttons
 
+// The compact primary's whole reason to exist is the pane-header band, so the
+// compact height **is** the band height. Asserted here rather than restated at
+// the call site: a band that grew would otherwise leave a button that no longer
+// fits it, and the failure would show up as a pane whose header is taller than
+// every other pane's rather than as a number that disagrees with a number.
+const _: () = {
+    assert!(
+        COMPACT_BUTTON_HEIGHT == super::containers::PANE_HEADER_HEIGHT,
+        "the compact primary is sized for the pane-header band, so the two \
+         numbers are one decision"
+    )
+};
+
 // --- Token-derived color math ----------------------------------------------
 
 /// Linear blend of two opaque colors; `t` is the amount of `b` mixed into `a`.
@@ -52,6 +65,24 @@ pub enum ButtonVariant {
     Compact,
     /// Square ghost holding only an icon (e.g. dialog close X).
     Icon,
+    /// The primary at the **band height** (28 px): the brand primary sized to sit
+    /// in a pane header's fixed-height band.
+    ///
+    /// This is [`Self::Primary`] and nothing else. It exists because the shared
+    /// vocabulary had a 32 px primary and a 28 px *ghost* and no brand button at
+    /// the height a pane header is, so the one place that needed a primary
+    /// inside a header band reached for a page-local button family instead — which
+    /// is a second vocabulary, and the R1 primary is precisely the thing that must
+    /// not have two spellings. It is a **height**, not a colour: the fill and ink
+    /// ladders are shared with `Primary` arm for arm (and
+    /// `tests/widget_library.rs` asserts the two ladders are equal), because a
+    /// brand button that is 4 px shorter must not also be a slightly different
+    /// blue.
+    ///
+    /// A host that needs a *third* height, a different radius, or a different
+    /// fill is not this variant: R5 says the host knows its own surface, and this
+    /// vocabulary deliberately has no flags to be configured with.
+    CompactPrimary,
 }
 
 impl ButtonVariant {
@@ -59,9 +90,13 @@ impl ButtonVariant {
     pub fn fill(self, state: WidgetState) -> Color32 {
         use WidgetState::{Active, Disabled, Hovered, Idle};
         match (self, state) {
-            (Self::Primary, Idle | Disabled) => Palette::BRAND,
-            (Self::Primary, Hovered) => mix(Palette::BRAND, Color32::WHITE, 0.10),
-            (Self::Primary, Active) => mix(Palette::BRAND, Color32::WHITE, 0.20),
+            (Self::Primary | Self::CompactPrimary, Idle | Disabled) => Palette::BRAND,
+            (Self::Primary | Self::CompactPrimary, Hovered) => {
+                mix(Palette::BRAND, Color32::WHITE, 0.10)
+            }
+            (Self::Primary | Self::CompactPrimary, Active) => {
+                mix(Palette::BRAND, Color32::WHITE, 0.20)
+            }
             (_, Idle | Disabled) => Color32::TRANSPARENT,
             (_, Hovered) => Palette::SURFACE_2,
             (_, Active) => Palette::SURFACE_3,
@@ -76,7 +111,7 @@ impl ButtonVariant {
         use WidgetState::{Active, Disabled, Hovered, Idle};
         match (self, state) {
             (_, Disabled) => Palette::INK_3,
-            (Self::Primary, _) => Palette::BRAND_INK,
+            (Self::Primary | Self::CompactPrimary, _) => Palette::BRAND_INK,
             (_, Idle) => Palette::INK_2,
             (_, Hovered | Active) => Palette::INK,
         }
@@ -148,6 +183,22 @@ pub fn ghost_button(ui: &mut Ui, icon: Option<Icon>, label: &str) -> Response {
 /// hover/press instead of taking surface fills.
 pub fn primary_button(ui: &mut Ui, icon: Option<Icon>, label: &str) -> Response {
     button_response(ui, ButtonVariant::Primary, icon, Some(label))
+}
+
+/// **The brand primary at the band height** (28 px): [`ButtonVariant::CompactPrimary`]
+/// as a control, for a pane header's right-aligned action slot.
+///
+/// It exists because [`PANE_HEADER_HEIGHT`](super::containers::PANE_HEADER_HEIGHT)
+/// is a fixed 28 px band that grows to fit its tallest child, so a 32 px
+/// [`primary_button`] in that slot makes one pane's header taller than every
+/// other pane's and pushes its own hairline down with it — and the cross-pane
+/// header-geometry ratchet in `tests/widget_library.rs` is right to catch that.
+/// Before this, the one call site that needed it reached for a page-local button
+/// family, which is a second spelling of the R1 primary. Same brand ladder, same
+/// ink, same radius: only the height differs, and the height is what the band
+/// names.
+pub fn compact_primary_button(ui: &mut Ui, label: &str) -> Response {
+    button_response(ui, ButtonVariant::CompactPrimary, None, Some(label))
 }
 
 /// Compact ghost button (`h-7 px-3 text-xs`) for dense toolbars and footers.
@@ -286,7 +337,10 @@ fn button_response_sized(
     width_override: Option<f32>,
 ) -> Response {
     let enabled = ui.is_enabled();
-    let compact = matches!(variant, ButtonVariant::Compact);
+    let compact = matches!(
+        variant,
+        ButtonVariant::Compact | ButtonVariant::CompactPrimary
+    );
     let icon_only = icon.is_some() && label.is_none();
 
     let text_style = if compact {
@@ -302,13 +356,13 @@ fn button_response_sized(
         .unwrap_or_else(|| crate::theme::chrome_font(crate::theme::TYPE_CONTROL));
 
     let pad_x = pad_x_override.unwrap_or(match variant {
-        ButtonVariant::Compact => 12.0, // px-3
+        ButtonVariant::Compact | ButtonVariant::CompactPrimary => 12.0, // px-3
         ButtonVariant::Icon => 6.0,
         _ => ui.style().spacing.button_padding.x,
     });
     let height = height_override.unwrap_or(match variant {
         ButtonVariant::Icon => ICON_BUTTON_SIZE,
-        ButtonVariant::Compact => COMPACT_BUTTON_HEIGHT,
+        ButtonVariant::Compact | ButtonVariant::CompactPrimary => COMPACT_BUTTON_HEIGHT,
         _ => BUTTON_HEIGHT,
     });
     let icon_size = icon_size_override.unwrap_or(BUTTON_ICON_SIZE);

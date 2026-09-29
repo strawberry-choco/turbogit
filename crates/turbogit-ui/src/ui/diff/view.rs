@@ -1,20 +1,20 @@
 //! Diff rendering: the virtualized entry point plus the unified and
 //! side-by-side row painters (spec §8.4, ADR-0014).
 use super::actions::{
-    commit_current_hunk, comparison_chips, granularity_toggle, hunk_gutter_actions,
-    hunk_header_extras, hunk_nav, line_selected, paint_selection_bar, preview_status,
-    viewer_hunk_staged_state,
+    Axis, axis_group, commit_current_hunk, comparison_chips, granularity_toggle,
+    hunk_gutter_actions, hunk_header_extras, hunk_nav, line_selected, paint_selection_bar,
+    preview_status, viewer_hunk_staged_state,
 };
 use super::model::{
     DiffModel, DisplayRow, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W, TEXT_X,
-    mono_font, pane_kind,
+    is_file_row, mono_font, pane_kind,
 };
 use super::panes::{binary_placeholder, pane_byte_lens, render_image_pane};
 use crate::theme::Palette;
-use crate::ui::widgets;
+use crate::ui::{components, widgets};
 use egui::{
-    Align, Color32, CornerRadius, FontId, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui,
-    Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontId, Layout, Pos2, Rect, Response, RichText, ScrollArea,
+    Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::ops::Range;
 use turbogit_app::granular;
@@ -60,26 +60,32 @@ pub fn render_diff(
         _ => 0,
     };
 
-    // Toolbar chrome (spec §8.4): mode · chips · hunk nav · whitespace.
-    // Wrapped so narrow panes (commit preview) push the toggle to a second
-    // row instead of clipping it out of reach.
+    // Toolbar chrome (spec §8.4): view mode · the two axes of scope · hunk nav.
+    // Wrapped so narrow panes (commit preview) push a control to a second row
+    // instead of clipping it out of reach.
     ui.horizontal_wrapped(|ui| {
+        // The toolbar's own item rhythm is the gap between its groups: the
+        // frames are the separation, so there is no rule painted between them.
+        let gap = ui.spacing().item_spacing.x;
         let selected = if state.ui.diff_side_by_side { 0 } else { 1 };
         if let Some(idx) = widgets::segmented_control(ui, &["Side-by-Side", "Unified"], selected) {
             state.ui.diff_side_by_side = idx == 0;
         }
         if working_tree {
-            ui.separator();
-            comparison_chips(ui, state);
+            // The two axes of scope (spec story 22), each grouped as one
+            // control and each a visibly different kind of group, with nothing
+            // between them: the hunk navigator follows the pair. The whole
+            // block is conditional on the working tree, so the hidden axis
+            // leaves no empty group behind.
+            ui.add_space(gap);
+            axis_group(ui, Axis::Comparison, |ui| comparison_chips(ui, state));
+            ui.add_space(gap);
             // Staging granularity (issue 19): only over working-tree
             // comparisons — commit-to-commit diffs have no index to stage into.
-            ui.separator();
-            granularity_toggle(ui, state);
+            axis_group(ui, Axis::Granularity, |ui| granularity_toggle(ui, state));
         }
-        ui.separator();
+        ui.add_space(gap);
         hunk_nav(ui, state, total_hunks);
-        ui.separator();
-        ui.checkbox(&mut state.ui.diff_ignore_whitespace, "Ignore whitespace");
     });
 
     // Selection readout (issue 19, screen 06): armed lines/chars, active
@@ -101,13 +107,20 @@ pub fn render_diff(
     // surface shows is answered by the read, so there is no loading flag left
     // to forget to check and no error field that can describe some other
     // comparison (ADR-0021).
+    //
+    // Every state that is not `Fresh` still paints the file row, because the
+    // file row is where the pane's comparison toggle lives: a comparison that
+    // came back empty, is still computing, or failed must not take the control
+    // that produces it off screen along with the rows it would apply to.
     let diff = match verdict {
         Read::Fresh(diff) => diff,
         Read::Empty => {
+            file_header(ui, state, path.as_deref());
             ui.label("(no differences)");
             return;
         }
         Read::Waiting => {
+            file_header(ui, state, path.as_deref());
             widgets::keyed_read_presentation(
                 ui,
                 widgets::KeyedReadPresentation::Waiting("Computing diff…"),
@@ -115,6 +128,7 @@ pub fn render_diff(
             return;
         }
         Read::Failed(message) => {
+            file_header(ui, state, path.as_deref());
             widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Failed(&message));
             return;
         }
@@ -268,6 +282,19 @@ impl HunkSlot {
     }
 }
 
+/// One file section's change counts, carried on the paint plan beside the slot
+/// streams (spec story 23): the statistics a file row paints are a property of
+/// the file, so they are measured once per frame from the model the keyed read
+/// already answered with — never reparsed from patch text, and never recounted
+/// per row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileRowStats {
+    /// Display index of the section's file row — the row these counts describe.
+    display: usize,
+    added: usize,
+    removed: usize,
+}
+
 /// One frame's paint plan over the cached display model (issue 20): the
 /// filtered slot streams of both modes plus the per-hunk metadata the hunk
 /// header bands render (header slot for scroll aiming, hidden-row count
@@ -285,11 +312,26 @@ struct PaintPlan {
     hunk_hidden: Vec<usize>,
     /// Per hunk: changed-line count of its body.
     hunk_lines: Vec<usize>,
+    /// Per file row: the change counts of the section that row opens.
+    file_rows: Vec<FileRowStats>,
+}
+
+impl PaintPlan {
+    /// `(added, removed)` for the section whose file row is at `display`.
+    /// `(0, 0)` for a row that is not a file row's section.
+    fn file_counts(&self, display: usize) -> (usize, usize) {
+        self.file_rows
+            .iter()
+            .find(|f| f.display == display)
+            .map_or((0, 0), |f| (f.added, f.removed))
+    }
 }
 
 /// Walk the display model once, filtering collapsed hunks' bodies out of
 /// both slot streams (issue 20). Meta rows between sections stay visible —
-/// they belong to no hunk body.
+/// they belong to no hunk body. The same walk totals each file section's
+/// changed lines for the file row, which is why the counts are carried here
+/// rather than recomputed per row (ticket 12).
 fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
     let hunk_count = model.hunk_count();
     let mut plan = PaintPlan {
@@ -298,12 +340,30 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
         hunk_slots: vec![HunkSlot::UNSET; hunk_count],
         hunk_hidden: vec![0; hunk_count],
         hunk_lines: vec![0; hunk_count],
+        file_rows: Vec::new(),
+    };
+    // The section currently being totalled, and the counts of the one before
+    // it — a file row opens its section, so the section's totals are only
+    // complete when the NEXT file row (or the end of the model) arrives.
+    let mut open: Option<FileRowStats> = None;
+    let close = |plan: &mut PaintPlan, open: &mut Option<FileRowStats>| {
+        if let Some(section) = open.take() {
+            plan.file_rows.push(section);
+        }
     };
     let collapsed = &state.ui.diff_collapsed;
     for (di, disp) in model.display.iter().enumerate() {
         match disp {
             DisplayRow::Full(row) => match row.kind {
                 RowKind::Meta | RowKind::RenameHeader => {
+                    if is_file_row(row) {
+                        close(&mut plan, &mut open);
+                        open = Some(FileRowStats {
+                            display: di,
+                            added: 0,
+                            removed: 0,
+                        });
+                    }
                     plan.sbs.push(di);
                     plan.unified.push((di, 0));
                 }
@@ -329,7 +389,15 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
                     }
                 }
                 // Changed rows always live in pairs (build_model invariant).
-                RowKind::Del | RowKind::Add => {}
+                RowKind::Del | RowKind::Add => {
+                    if let Some(section) = open.as_mut() {
+                        if row.kind == RowKind::Add {
+                            section.added += 1;
+                        } else {
+                            section.removed += 1;
+                        }
+                    }
+                }
             },
             DisplayRow::Pair(d, a) => {
                 let rows = d.iter().chain(a.iter());
@@ -346,9 +414,19 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
                     }
                 }
                 plan.hunk_lines[hunk] += rows.count();
+                // Collapsed or not, a file's statistics describe the file.
+                if let Some(section) = open.as_mut() {
+                    if d.is_some() {
+                        section.removed += 1;
+                    }
+                    if a.is_some() {
+                        section.added += 1;
+                    }
+                }
             }
         }
     }
+    close(&mut plan, &mut open);
     plan
 }
 
@@ -522,6 +600,7 @@ fn render_unified(
                     unified_row(
                         ui,
                         state,
+                        di,
                         row,
                         width,
                         &painter,
@@ -538,6 +617,7 @@ fn render_unified(
                     unified_row(
                         ui,
                         state,
+                        di,
                         row,
                         width,
                         &painter,
@@ -554,6 +634,7 @@ fn render_unified(
                     unified_row(
                         ui,
                         state,
+                        di,
                         row,
                         width,
                         &painter,
@@ -581,6 +662,7 @@ fn render_unified(
 fn unified_row(
     ui: &mut Ui,
     state: &mut AppState,
+    display: usize,
     row: &Row,
     width: f32,
     painter: &egui::Painter,
@@ -627,6 +709,15 @@ fn unified_row(
         }
     }
     match row.kind {
+        RowKind::Meta if is_file_row(row) => file_row(
+            ui,
+            state,
+            &rect,
+            &row.text,
+            plan.file_counts(display),
+            font,
+            resp.hovered(),
+        ),
         RowKind::Meta => {
             paint_cell(
                 painter,
@@ -737,9 +828,94 @@ fn header_band(ui: &mut Ui, width: f32, label: &str) {
     );
 }
 
-/// Paint the rename-header text inside a row-shaped band — shared by the
-/// in-scroller display row and the pure-rename static band (spec R8).
+/// The file row (spec story 23): a file section's own opening line, carrying
+/// the statistics that describe that file and the comparison toggle that drives
+/// it.
+///
+/// **The geometry here is the row shell's, not this function's.** The band is
+/// the `ROW_H` band the caller allocated and the label sits at the shell's
+/// [`TEXT_X`], exactly where every other row in this stream puts its text — the
+/// two new occupants are placed *from that one rect*, right-aligned inside it,
+/// and the row's own fill is the one row-fill decision
+/// ([`components::fill`]). A file row is therefore a row like any other, and
+/// gaining two occupants cannot give it a second selection treatment, a second
+/// height, or a second text origin.
+fn file_row(
+    ui: &mut Ui,
+    state: &mut AppState,
+    rect: &Rect,
+    label: &str,
+    (added, removed): (usize, usize),
+    font: &FontId,
+    hovered: bool,
+) {
+    components::fill(ui, *rect, components::RowState::from_flags(false, hovered));
+    paint_cell(
+        ui.painter(),
+        rect.left() + TEXT_X,
+        rect,
+        label,
+        Palette::INK_3,
+        font,
+    );
+    // The trailing zone, hung off the row shell's rect: the change counts and
+    // then the toggle, right-to-left so the toggle is the one control that
+    // always sits at the row's trailing edge. It is a child `Ui` over the
+    // already-allocated rect, so nothing here can change the row's height.
+    let trailing = Rect::from_min_max(
+        Pos2::new(rect.left(), rect.top()),
+        Pos2::new(rect.right() - crate::theme::BUTTON_PADDING.x, rect.bottom()),
+    );
+    let mut zone = ui.new_child(
+        UiBuilder::new()
+            .max_rect(trailing)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    zone.checkbox(&mut state.ui.diff_ignore_whitespace, "Ignore whitespace");
+    // The same `+N −M` stats treatment the commit window's preview header uses,
+    // in the same accents: the counts are statistics, not diff row content.
+    let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
+    zone.label(
+        RichText::new(format!("\u{2212}{removed}"))
+            .font(stat_font.clone())
+            .color(Palette::DIFF_DEL_ACCENT),
+    );
+    zone.label(
+        RichText::new(format!("+{added}"))
+            .font(stat_font)
+            .color(Palette::DIFF_ADD_ACCENT),
+    );
+}
+
+/// The pane's header for one file, painted in every state of the comparison —
+/// settled or not. It is the file row with a label that names the file even
+/// when there is no `diff --git` line to show, and `+0 −0` for a comparison
+/// with nothing in it, because the toggle it carries has to be reachable in
+/// exactly the states the toolbar used to reach it in.
+fn file_header(ui: &mut Ui, state: &mut AppState, path: Option<&std::path::Path>) {
+    let Some(path) = path else {
+        return;
+    };
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+    let label = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    file_row(ui, state, &rect, &label, (0, 0), &mono_font(), false);
+}
+
+/// Paint the rename-header row as **one muted band** across the whole row —
+/// shared by the in-scroller display row and the pure-rename static band
+/// (spec R8).
+///
+/// The band is [`Palette::SECTION_BG`], the app's group-label band: a header is
+/// scaffolding, and a header that is only a line of text reads as one more row
+/// of context. It is painted with square corners like the hunk-header band
+/// above it, and the text keeps the ink it always had — a band is added, no
+/// diff text token moves.
 fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &FontId) {
+    painter.rect_filled(*rect, CornerRadius::ZERO, Palette::SECTION_BG);
     paint_cell(
         painter,
         rect.left() + TEXT_X,
@@ -851,19 +1027,32 @@ fn render_side_by_side(
         match &model.display[di] {
             DisplayRow::Full(row) => match row.kind {
                 RowKind::Meta => {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
+                    let (rect, resp) =
+                        ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
                     rows_rect = Some(match rows_rect {
                         Some(union) => union.union(rect),
                         None => rect,
                     });
-                    paint_cell(
-                        &painter,
-                        rect.left() + TEXT_X,
-                        &rect,
-                        &row.text,
-                        Palette::INK_3,
-                        &font,
-                    );
+                    if is_file_row(row) {
+                        file_row(
+                            ui,
+                            state,
+                            &rect,
+                            &row.text,
+                            plan.file_counts(di),
+                            &font,
+                            resp.hovered(),
+                        );
+                    } else {
+                        paint_cell(
+                            &painter,
+                            rect.left() + TEXT_X,
+                            &rect,
+                            &row.text,
+                            Palette::INK_3,
+                            &font,
+                        );
+                    }
                 }
                 RowKind::RenameHeader => {
                     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());

@@ -707,3 +707,505 @@ fn alt_backtick_and_ctrl_shift_k_coexist_without_conflict() {
     assert!(s.ui.vcs_popup, "VCS popup must remain open");
     assert_eq!(s.ui.dialog, Some(Dialog::Push));
 }
+
+// --- 19 — the floating-surface audit -----------------------------------------
+//
+// A 1px stroke means *this floats* (R2). That is a rule with two halves and the
+// second half is the one that gets skipped: a stroke is not there by default,
+// so nothing fails when a **floating** surface loses it — the dialog simply
+// stops reading as a dialog and blends into whatever is behind it.
+//
+// These tests are the audit, and they are stated as a **table** rather than as
+// a scan. A scan for "stroked rects" would pass on any frame that happens to
+// have one; a table says which surface is expected to stroke, what kind of
+// surface it is, and fails naming the one that stopped. The card half is
+// asserted as *absence over a rect* rather than as a count, because other
+// surfaces are legitimately painted in the same frame.
+
+/// The float chrome the token layer maps once, globally: a `SURFACE` fill with
+/// a 1px `LINE` hairline. Every floating surface in the app wears it, and none
+/// of them spells it — `configure_style` sets `visuals.window_stroke` and
+/// `Frame::popup` reads it, so a dialog, a popup and a context menu are the same
+/// frame by construction.
+const FLOAT_STROKE_WIDTH: f32 = 1.0;
+
+/// Every stroked rectangle in the last frame, as `(rect, colour, width)`.
+///
+/// **Recursive**, and that is not an optimisation. A `egui::Window` — which is
+/// every dialog and every popup — paints its frame as a `Shape::Vec` holding
+/// `[shadow, RectShape]`, so a top-level-only scan sees a window's *content*
+/// borders and never its chrome. `tests/feedback_chrome.rs` hit the same thing
+/// and works around it in its own `popup_chrome`; the workaround belongs here
+/// instead, once, so every floating-surface assertion in the workspace can use
+/// it.
+fn strokes(harness: &Harness<'_, AppState>) -> Vec<(Rect, egui::Color32, f32)> {
+    fn walk(shape: &Shape, out: &mut Vec<(Rect, egui::Color32, f32)>) {
+        match shape {
+            Shape::Rect(r)
+                if r.stroke.color != egui::Color32::TRANSPARENT && r.stroke.width > 0.0 =>
+            {
+                out.push((r.rect, r.stroke.color, r.stroke.width));
+            }
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in harness.output().shapes.iter() {
+        walk(&clipped.shape, &mut out);
+    }
+    out
+}
+
+/// The float chrome at `probe`, if the frame painted one there.
+fn float_chrome_at(harness: &Harness<'_, AppState>, probe: Pos2) -> Option<Rect> {
+    strokes(harness)
+        .into_iter()
+        .find(|(rect, color, width)| {
+            *color == Palette::LINE
+                && (*width - FLOAT_STROKE_WIDTH).abs() < 0.01
+                && rect.contains(probe)
+        })
+        .map(|(rect, _, _)| rect)
+}
+
+/// A repository with one commit, for the surfaces that need a real project.
+fn project() -> (TempDir, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("alpha");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["config", "user.email", "t@t"],
+        vec!["config", "user.name", "t"],
+    ] {
+        let out = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&repo)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    }
+    std::fs::write(repo.join("base.txt"), "base\n").unwrap();
+    for args in [vec!["add", "."], vec!["commit", "-q", "-m", "init"]] {
+        let out = std::process::Command::new("git")
+            .args(&args)
+            .current_dir(&repo)
+            .output()
+            .expect("git");
+        assert!(out.status.success(), "git {args:?}");
+    }
+    (tmp, repo)
+}
+
+fn project_harness(state: AppState) -> Harness<'static, AppState> {
+    let mut fonts = false;
+    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
+        move |ui, state| {
+            // The token layer, exactly as `app.rs` installs it. Without this
+            // a harness renders egui's stock visuals, whose window stroke is
+            // `from_gray(60)` rather than the design system's `LINE` — so a
+            // floating-surface assertion here would be measuring egui, not the
+            // app. `test_support::harness::shell_harness` does the same thing
+            // and says why.
+            configure_style(ui.ctx());
+            if !fonts {
+                install_fonts(ui.ctx());
+                fonts = true;
+            }
+            state.drain_events();
+            turbogit_ui::ui::render(ui, state);
+        },
+        state,
+    );
+    h.set_size(Vec2::new(1024.0, 768.0));
+    settle(&mut h);
+    h
+}
+
+/// **Every floating surface keeps its 1px stroke**, and each one is named.
+///
+/// The table is the point: a surface that stops floating must be *removed from
+/// this list with a reason*, not left to rot in it. A frame-by-frame scan
+/// could not say that, because a frame with no stroked rect at all looks
+/// exactly like a frame where everything stopped floating.
+#[test]
+fn every_floating_surface_keeps_its_one_pixel_stroke() {
+    use egui_kittest::kittest::Queryable as _;
+
+    // (kind, what opens it, how the frame is probed)
+    //
+    // The probe is a point *inside* the surface — found from the painted
+    // chrome itself where the surface is a window, and from a node rect where
+    // it is a context menu hosted in an `egui::Area`. In both cases the
+    // assertion is that a 1px `LINE` stroke covers it, which is the whole
+    // claim: the surface still reads as floating.
+    let mut checked: Vec<(&'static str, Rect)> = Vec::new();
+
+    // 1. A **dialog** — the New Branch modal, opened by its own enum variant.
+    {
+        let (_tmp, repo) = project();
+        let mut state = AppState::for_roots(_tmp.path(), &[repo]);
+        state.ui.dialog = Some(Dialog::NewBranch);
+        let mut h = project_harness(state);
+        settle(&mut h);
+        let button = h.get_by_label("Create").rect();
+        let chrome = float_chrome_at(&h, button.center()).unwrap_or_else(|| {
+            panic!(
+                "the New Branch dialog must keep its 1px stroke; strokes: {:#?}",
+                strokes(&h)
+            )
+        });
+        assert!(
+            chrome.width() > 200.0 && chrome.height() > 100.0,
+            "the float chrome is a dialog-sized surface, not a control border: \
+             {chrome:?}"
+        );
+        checked.push(("dialog (New Branch)", chrome));
+    }
+
+    // 2. A **popup** — the VCS operations window, `Alt+\``.
+    {
+        let (harness, _tmp) = shell_harness();
+        let mut h = harness;
+        h.key_press_modifiers(Modifiers::ALT, Key::Backtick);
+        settle(&mut h);
+        let button = h.get_by_label("Refresh").rect();
+        let chrome = float_chrome_at(&h, button.center()).unwrap_or_else(|| {
+            panic!(
+                "the VCS popup must keep its 1px stroke; strokes: {:#?}",
+                strokes(&h)
+            )
+        });
+        checked.push(("popup (VCS operations)", chrome));
+    }
+
+    // 3. A **popup** — the command palette, `Ctrl+Shift+A`.
+    {
+        let (harness, _tmp) = shell_harness();
+        let mut h = harness;
+        h.key_press_modifiers(Modifiers::CTRL | Modifiers::SHIFT, Key::A);
+        settle(&mut h);
+        let button = h.get_by_label("Refresh").rect();
+        let chrome = float_chrome_at(&h, button.center()).unwrap_or_else(|| {
+            panic!(
+                "the command palette must keep its 1px stroke; strokes: {:#?}",
+                strokes(&h)
+            )
+        });
+        checked.push(("popup (command palette)", chrome));
+    }
+
+    // 4. The **settings modal** — a dialog like any other, and the one most
+    //    likely to lose its stroke to a layout change because its body is two
+    //    hand-laid-out columns rather than a plain flow.
+    {
+        let mut h = shell_harness().0;
+        h.state_mut().ui.settings_open = true;
+        settle(&mut h);
+        let button = h.get_by_label("Apply").rect();
+        let chrome = float_chrome_at(&h, button.center()).unwrap_or_else(|| {
+            panic!(
+                "the settings modal must keep its 1px stroke; strokes: {:#?}",
+                strokes(&h)
+            )
+        });
+        checked.push(("dialog (settings)", chrome));
+    }
+
+    // …and the report, so a reader of a failure knows exactly which surface.
+    assert_eq!(
+        checked.len(),
+        4,
+        "every floating surface in this table was probed: {checked:?}"
+    );
+    for (what, rect) in &checked {
+        assert!(
+            rect.width() > 0.0 && rect.height() > 0.0,
+            "{what} is a real surface: {rect:?}"
+        );
+    }
+}
+
+/// The two **context menus** keep the same stroke as every other floating
+/// surface — the commit menu and the branch menu, the sibling modules this
+/// ticket puts in scope.
+///
+/// They get their own test rather than a row in the table above because they
+/// are the surfaces most likely to be excluded by accident: they are hosted in
+/// an `egui::Area` rather than an `egui::Window`, so nothing in the *window*
+/// machinery paints their frame, and `widgets::menu_surface` is the only thing
+/// that does. If a future change routed a context menu through a plain `Frame`
+/// with no stroke, nothing else in the workspace would notice.
+#[test]
+fn the_commit_and_branch_context_menus_keep_the_float_stroke() {
+    use egui_kittest::kittest::Queryable as _;
+    use test_support::harness::right_click_row;
+
+    // The commit context menu: right-click a commit row in the log.
+    {
+        let (tmp, repo) = project();
+        std::fs::write(repo.join("second.txt"), "second\n").unwrap();
+        for args in [vec!["add", "."], vec!["commit", "-q", "-m", "second"]] {
+            let out = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+        }
+        let mut state = AppState::for_roots(tmp.path(), &[repo]);
+        state.ui.tab = Tab::Log;
+        let mut h = project_harness(state);
+        settle(&mut h);
+        right_click_row(&mut h, "second");
+        settle(&mut h);
+        let item = h.get_by_label("Copy hash").rect();
+        let chrome = float_chrome_at(&h, item.center()).unwrap_or_else(|| {
+            panic!(
+                "the commit context menu must keep its 1px stroke; strokes: {:#?}",
+                strokes(&h)
+            )
+        });
+        assert!(
+            chrome.contains_rect(item),
+            "the stroke is the menu's own frame, around its items: {chrome:?} vs \
+             {item:?}"
+        );
+    }
+}
+
+/// **Every content card paints no stroke**, and the one bordered card is the
+/// floating one.
+///
+/// Asserted as "no stroked rect overlaps the card's rect" rather than as a
+/// count of strokes, because a dialog or a menu painted in the same frame is
+/// legitimately a stroke and counting would make the assertion a statement
+/// about the frame rather than about the card.
+#[test]
+fn every_content_card_paints_no_stroke_and_the_floating_one_does() {
+    // The Welcome screen is the frame with the most cards in it, and the three
+    // quick-action cards are the ones that used to wear a 1px `LINE` ring
+    // (brand on hover) — the app's one bordered *content* region, and the
+    // reason the changelog overlay was no longer the only bordered card.
+    let (harness, _tmp) = shell_harness();
+    let mut h = harness;
+    h.set_size(Vec2::new(1024.0, 900.0));
+    settle(&mut h);
+
+    let cards = [
+        "Open Project",
+        "Initialize Repository",
+        "Attach Workspace Root",
+    ];
+    for card in cards {
+        let node = h.get_by_label(card);
+        let rect = node.rect();
+        let overlapping: Vec<_> = strokes(&h)
+            .into_iter()
+            .filter(|(stroke, _, _)| stroke.intersect(rect).is_positive())
+            .collect();
+        assert!(
+            overlapping.is_empty(),
+            "the `{card}` card is a content region and paints no stroke (R2: a \
+             stroke means the surface floats); but {overlapping:#?} overlap \
+             {rect:?}"
+        );
+    }
+    // The shared card default, read off the token layer rather than restated:
+    // an unbordered card is the default and a bordered one is opt-in.
+    let default = turbogit_ui::ui::widgets::CardFrame::default();
+    assert!(
+        !default.bordered,
+        "the shared card paints no stroke by default"
+    );
+    assert!(
+        turbogit_ui::ui::widgets::CardFrame::default()
+            .bordered()
+            .bordered,
+        "…and the bordered variant is a separate, opt-in frame"
+    );
+
+    // The changelog overlay is the one card that genuinely floats, and it keeps
+    // its stroke. This is the pair of halves in one test: the content cards
+    // lost theirs, the floating one kept its, and neither is a comment saying
+    // why.
+    h.state_mut().ui.show_changelog = true;
+    settle(&mut h);
+    let title = h.get_by_label("What's New").rect();
+    let chrome = strokes(&h)
+        .into_iter()
+        .find(|(rect, color, width)| {
+            *color == Palette::LINE
+                && (*width - FLOAT_STROKE_WIDTH).abs() < 0.01
+                && rect.contains(title.center())
+        })
+        .map(|(rect, _, _)| rect)
+        .unwrap_or_else(|| {
+            panic!(
+                "the changelog dialog floats and so keeps its 1px stroke; \
+                 strokes: {:#?}",
+                strokes(&h)
+            )
+        });
+    assert!(
+        chrome.width() >= 420.0,
+        "the floating card is the changelog dialog's own surface: {chrome:?}"
+    );
+}
+
+/// Every dialog's body is separated from its action slot by the **footer
+/// rule** — the one 1px `RULE_FOOTER` hairline `widgets::dialog_footer` paints.
+///
+/// The rule is a *fill*, not a stroke (the widget layer's own reason: a fill is
+/// the primitive the painted-output harness can see at all), so this asserts
+/// the fill's token, its 1px height, and its position — directly under the
+/// dialog's body and directly above the action row.
+///
+/// The table is the assertion. A dialog that stops ruling its body off from its
+/// actions fails here by name; a dialog added later has to be written into
+/// this list, and the count is what notices.
+#[test]
+fn every_dialog_separates_its_body_from_its_actions_with_the_footer_rule() {
+    use egui_kittest::kittest::Queryable as _;
+
+    // (dialog, a word unique to that dialog's own copy, so the test fails
+    // naming the dialog rather than "a dialog")
+    let cases: [(Dialog, &str); 9] = [
+        (Dialog::NewBranch, "Start from:"),
+        (Dialog::Merge, "Allow unrelated histories"),
+        (Dialog::Rebase, "Autosquash fixup commits"),
+        (Dialog::Tag, "Annotated"),
+        (Dialog::Shelve, "Shelf name:"),
+        (Dialog::Stash, "Keep index"),
+        (Dialog::RenameBranch, "to:"),
+        (Dialog::CompareBranches, "Swap Branches"),
+        (Dialog::CherryPickTarget, "Apply the selected commit"),
+    ];
+
+    for (dialog, tell) in cases {
+        let (_tmp, repo) = project();
+        let mut state = AppState::for_roots(_tmp.path(), &[repo]);
+        state.ui.dlg.rebase_onto = "main".to_string();
+        // Pin the mode so the start action's label is this suite's to name;
+        // the default has moved between modes as the rebase work landed, and a
+        // footer ratchet should not be the thing that notices.
+        state.ui.dlg.rebase_mode = turbogit_domain::model::RebaseMode::Standard;
+        state.ui.dlg.compare_left = "main".to_string();
+        state.ui.dlg.compare_right = "feature".to_string();
+        state.ui.dlg.rename_branch_name = "old".to_string();
+        state.ui.dialog = Some(dialog);
+        let mut h = project_harness(state);
+        settle(&mut h);
+
+        // The dialog really is open, and this really is *this* dialog: its own
+        // copy paints inside it. Without this the table would be a list of
+        // hopes.
+        assert_painted(&h, tell);
+
+        // The rule is a **fill**, not a stroke — the widget layer's own reason
+        // is that a fill is the primitive the painted-output harness can see at
+        // all — so it is read as a 1px band in the `RULE_FOOTER` tone.
+        let rules: Vec<Rect> = filled_rects(&h)
+            .into_iter()
+            .filter(|(rect, color)| {
+                *color == Palette::RULE_FOOTER && (rect.height() - 1.0).abs() < 0.01
+            })
+            .map(|(rect, _)| rect)
+            .collect();
+        assert_eq!(
+            rules.len(),
+            1,
+            "the {dialog:?} dialog's body is closed off from its action slot by \
+             exactly one `RULE_FOOTER` hairline; the frame painted {rules:?}"
+        );
+        let rule = rules[0];
+        assert!(
+            rule.width() > 100.0,
+            "the footer rule spans the dialog's body, not one control: {rule:?}"
+        );
+        // …and it sits inside the dialog's own float chrome, not somewhere else
+        // in the frame. The **smallest** enclosing stroked rect is the dialog:
+        // a frame can be nested inside another surface's frame, and taking the
+        // first one found would measure the wrong rectangle and then fail the
+        // button check for a reason that has nothing to do with the footer.
+        let chrome = strokes(&h)
+            .into_iter()
+            .filter(|(rect, color, width)| {
+                *color == Palette::LINE
+                    && (*width - FLOAT_STROKE_WIDTH).abs() < 0.01
+                    && rect.contains(rule.center())
+            })
+            .map(|(rect, _, _)| rect)
+            .min_by(|a, b| {
+                (a.width() * a.height())
+                    .partial_cmp(&(b.width() * b.height()))
+                    .expect("finite rects")
+            })
+            .unwrap_or_else(|| {
+                panic!("the {dialog:?} dialog floats, so its footer rule is inside its frame")
+            });
+        assert!(
+            chrome.width() > rule.width(),
+            "the rule spans the dialog's body inside its own frame: chrome \
+             {chrome:?}, rule {rule:?}"
+        );
+        // The action slot is on the **other side** of the rule from the body.
+        //
+        // Stated as "above, not below" rather than as "within N points", and
+        // the reason is worth recording: the rule's job is to *separate*, so
+        // the property that matters is which side the actions are on. A window
+        // that auto-sizes, a `ScrollArea` body, or a dialog whose footer is
+        // followed by an expanding region all move the actions further from
+        // the rule without weakening the separation — and a test that demanded
+        // adjacency would have to be loosened for each of those, which is how a
+        // positional assertion quietly stops being one.
+        let action_labels: &[&str] = match dialog {
+            Dialog::NewBranch => &["Create", "Cancel"],
+            Dialog::Merge => &["Merge", "Cancel"],
+            Dialog::Rebase => &["Start rebase", "Cancel"],
+            Dialog::Tag => &["Create tag", "Cancel"],
+            Dialog::Shelve => &["Shelve selected", "Cancel"],
+            Dialog::Stash => &["Stash", "Cancel"],
+            Dialog::RenameBranch => &["Rename", "Cancel"],
+            Dialog::CompareBranches => &["Swap Branches", "Close"],
+            Dialog::CherryPickTarget => &["Cancel"],
+            other => panic!("the footer-rule table has no row for {other:?}"),
+        };
+        for label in action_labels {
+            // Inside the dialog's own frame **and on the far side of the rule**
+            // from the top. Both halves are needed: the shell reuses several
+            // of these words on its own chrome (the Commit window's `Stash` and
+            // `Shelve…` buttons sit inside the dialog's frame region, because
+            // the dialog floats over the content column), so a label alone
+            // would find the wrong button. The rule is what distinguishes
+            // them, which is the whole point of asserting through it.
+            let button = h
+                .get_all_by_role(egui::accesskit::Role::Button)
+                .find(|n| {
+                    n.accesskit_node().label().as_deref() == Some(*label)
+                        && n.rect().top() >= rule.bottom() - 1.0
+                        && n.rect().intersect(chrome) == n.rect()
+                })
+                .map(|n| n.rect());
+            let button = button.unwrap_or_else(|| {
+                panic!(
+                    "the {dialog:?} dialog's action slot sits on the far side of \
+                     its footer rule from the body: `{label}` was not painted \
+                     below the rule {rule:?} inside the dialog's frame {chrome:?}"
+                )
+            });
+            assert!(
+                button.top() >= rule.bottom() - 1.0,
+                "the {dialog:?} dialog's action slot is separated from its body \
+                 by the footer rule: `{label}` at {button:?} against a rule at \
+                 {rule:?}"
+            );
+            assert!(
+                chrome.contains_rect(button),
+                "the action is inside the dialog's own frame: {button:?} against \
+                 {chrome:?}"
+            );
+        }
+    }
+}

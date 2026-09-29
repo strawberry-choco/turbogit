@@ -31,8 +31,8 @@
 use std::collections::HashMap;
 
 use egui::{
-    Align, Color32, CornerRadius, Layout, Pos2, Rect, RichText, ScrollArea, Sense, Ui, UiBuilder,
-    Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, RichText, ScrollArea, Sense, Ui,
+    UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use turbogit_app::state::TreeState;
 use turbogit_domain::model::{Branch, BranchKind, RootId};
@@ -42,18 +42,18 @@ use crate::theme::{
 };
 use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches::{branch_matches, matches_query, row_meta};
-use crate::ui::branches_tree::{
-    self, BranchNode, BranchView, RemoteGroup, RepoSection, RepoStatus,
-};
+use crate::ui::branches_tree::{self, BranchNode, BranchView, RemoteGroup, RepoSection};
 use crate::ui::components::{
-    BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, PillKind, RowState, SECTION_H,
-    current_row_fill, kit_button, kit_button_width, middle_truncate_to_width, pill, pill_width,
-    row_fill, row_ink, section_header, sync_badge, sync_bg, sync_ink,
+    BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H,
+    current_row_fill, kit_button, kit_button_width, middle_truncate_to_width, paint_rail,
+    ref_chip_with_ink, ref_chip_with_ink_width, row_fill, row_ink, section_header, state_mark,
+    state_mark_width, sync_badge, sync_ink,
 };
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::menu_host::{self, MenuId};
+use crate::ui::widgets::{self, ref_chip};
 
-/// Height of one repo section header (status dot + repo name + current chip).
+/// Height of one repo section header (repo name + head-ref chip + state mark).
 const REPO_HEADER_H: f32 = 30.0;
 
 /// Share of a branch row's content width held by the icon + name zone; the
@@ -480,12 +480,20 @@ fn paint_nodes(
     }
 }
 
-/// One repo section header: a status dot, the repo name (sans), a repo-level
-/// Fetch (issue 03 — one click away even with remotes hidden), and a chip
-/// showing the repo's current branch (mono). `show_identity` is false for a
-/// single-repo project, where the grouping is invisible: the identity chrome
-/// (dot, name, chip) is suppressed so no redundant repo header appears, but the
-/// Fetch control stays so primary actions remain one click away.
+/// One repo section header — the **repository band** (ticket 16). Its
+/// composition, left to right: the repository's name in the interface face, its
+/// head ref as a **neutral ref chip** (never a brand-filled pill), and — on the
+/// right — its state summary as the **mark pair** (a leading dot and coloured
+/// words), then a Fetch that fetches **this repository only**.
+///
+/// The band has no second dot: the mark pair's dot *is* the band's state mark,
+/// so the state reaches the screen as exactly one dot and one sentence, which is
+/// what R6 asks for and what `tests/branch_component_kit.rs` counts.
+///
+/// `show_identity` is false for a single-repo project, where the grouping is
+/// invisible: the identity cluster (name, chip) is suppressed so no redundant
+/// repo band appears, but the Fetch control stays so primary actions remain one
+/// click away.
 fn repo_header(
     ui: &mut Ui,
     section: &RepoSection,
@@ -494,18 +502,18 @@ fn repo_header(
 ) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, REPO_HEADER_H), Sense::hover());
-    // A repository reads as a block, and its header is the one strip that says
+    // A repository reads as a block, and its band is the one strip that says
     // so. SURFACE, so the band is neither a row's hover fill nor a current row's
-    // brand tint.
+    // band.
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
     // Identity on the left, summary and Fetch on the right. Without an explicit
     // split a truncating repo name consumes the whole strip.
     let split_x = rect.left() + rect.width() * HEADER_IDENTITY_SHARE;
-    let pill_w = section
+    let chip_w = section
         .current_branch
         .as_deref()
-        .map(|cur| pill_width(ui, cur, PillKind::Current) + 8.0)
+        .map(|cur| ref_chip_with_ink_width(ui, cur) + 8.0)
         .unwrap_or(0.0);
     let mut left = ui.new_child(
         UiBuilder::new()
@@ -518,14 +526,10 @@ fn repo_header(
     left.spacing_mut().item_spacing.x = 0.0;
     left.add_space(PAD_LIST);
     if show_identity {
-        // Status dot.
-        let (dot_rect, _) = left.allocate_exact_size(Vec2::splat(8.0), Sense::hover());
-        left.painter()
-            .circle_filled(dot_rect.center(), 4.0, repo_status_color(section.status));
-        left.add_space(8.0);
-        // Repo name (UI sans), fitted to what is left of its current-branch
-        // pill so neither can be pushed off the line.
-        let name_w = (split_x - (dot_rect.right() + 16.0 + pill_w) - PAD_LIST).max(24.0);
+        // Repo name (UI sans — a name the developer gave a folder, not a
+        // machine identifier), fitted to what is left of its head-ref chip so
+        // neither can be pushed off the line.
+        let name_w = (split_x - rect.left() - 2.0 * PAD_LIST - chip_w).max(24.0);
         let name = middle_truncate_to_width(
             &left,
             &section.repo_name,
@@ -540,15 +544,23 @@ fn repo_header(
             )
             .selectable(false),
         );
-        // The current branch is part of the repo's identity, so it rides the
-        // name rather than trailing the strip.
+        // The head ref rides the name rather than trailing the strip, and it is
+        // a **ref chip**: a ref name on the raised-on-card surface, in the chip
+        // radius, at the chip type size, in the data face. It used to be a pill
+        // that filled the accent token with brand ink, which spent the one blue
+        // the pane has left (New Branch) on a piece of chrome and made the head
+        // ref look like a button.
         if let Some(cur) = &section.current_branch {
             left.add_space(8.0);
-            pill(&mut left, cur, PillKind::Current);
+            ref_chip(&mut left, cur);
         }
     }
 
-    // Right cluster: the repo's Fetch, with the status words in front of it.
+    // Right cluster: the repo's Fetch, with the state summary in front of it.
+    // The summary is the **mark pair** — a leading dot and the words, the count
+    // and the separator all wearing the one map's colour — and it is never a
+    // chip: a state behind a fill stops reading as state and starts reading as
+    // a category.
     let mut right = ui.new_child(
         UiBuilder::new()
             .max_rect(Rect::from_min_max(
@@ -561,7 +573,9 @@ fn repo_header(
     right.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.add_space(PAD_LIST);
         // Repo-level Fetch (issue 03): one click away even with remotes hidden,
-        // because the old Remote group header is gone.
+        // because the old Remote group header is gone. It reports
+        // `FetchRequested { root }`, so the caller fetches **that** repository —
+        // the action is per-repository and says so by carrying the root.
         if kit_button(ui, KitButton::Quiet, "Fetch").clicked() {
             events.push(TreeEvent::FetchRequested {
                 root: section.root_id.clone(),
@@ -569,17 +583,32 @@ fn repo_header(
         }
         if show_identity {
             ui.add_space(PAD_LIST);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(header_summary(section))
-                        .font(chrome_font(TYPE_CONTROL))
-                        .color(section.status.color()),
-                )
-                .selectable(false)
-                .truncate(),
-            );
+            let summary = fit_summary(ui, &header_summary(section), ui.available_width());
+            state_mark(ui, &summary, section.status.color());
         }
     });
+}
+
+/// The band's state summary, elided from the right when the strip cannot hold
+/// it. Geometry decides, never the words: a state that is silently dropped is
+/// worse than one that is visibly cut.
+fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
+    if state_mark_width(ui, text) <= avail {
+        return text.to_owned();
+    }
+    let mut keep = text.chars().count();
+    while keep > 1 {
+        keep -= 1;
+        let candidate: String = text
+            .chars()
+            .take(keep)
+            .chain(std::iter::once('…'))
+            .collect();
+        if state_mark_width(ui, &candidate) <= avail {
+            return candidate;
+        }
+    }
+    "…".to_owned()
 }
 
 /// The header's status in words: the current branch's upstream counts, then the
@@ -592,11 +621,6 @@ fn header_summary(section: &RepoSection) -> String {
         .collect();
     parts.push(section.status.words().to_string());
     parts.join(" · ")
-}
-
-/// Shared semantic colors, identical to the sidebar and sync badges.
-fn repo_status_color(status: RepoStatus) -> Color32 {
-    status.color()
 }
 
 /// One directory group header inside a repo section: the directory segment
@@ -791,11 +815,25 @@ fn remote_rollup_row(
 }
 
 /// One 30px branch row, laid out as three measured zones — icon + name,
-/// tracking branch, status badges — each painted at an explicit x so the
-/// columns line up down the list. Its fill comes from [`row_fill`], or from
-/// [`current_row_fill`] when it carries the current branch, which also takes the
-/// `current` badge. Clicking reports [`TreeEvent::RowClicked`] (never checks out —
-/// the caller decides).
+/// tracking branch, state words — each painted at an explicit x so the columns
+/// line up down the list.
+///
+/// **Identity and state are two different objects, and this row is where that
+/// stops being a convention.** The name is a **ref chip** (the shared chip
+/// geometry on the raised-on-card fill, in the row's own ink); the ahead /
+/// behind / dirty state is **coloured text** beside it, with a leading mark,
+/// coloured from the one repository-state map. The `current` chip is the only
+/// other filled thing on the row, so **no row carries two filled pills**.
+///
+/// The fill is the shared row shell's: [`row_fill`] for a chosen row, or
+/// [`current_row_fill`] for the repository's current ref, and a **2px brand
+/// rail** at the leading edge through the one [`paint_rail`] whenever the row is
+/// the current ref or the chosen one. No row in this pane ever resolves to
+/// [`Palette::SELECTION`]: that token belongs to `current_row_fill` alone, and a
+/// chosen row — current or not — takes [`Palette::ROW_SELECTED`].
+///
+/// Clicking reports [`TreeEvent::RowClicked`] (never checks out — the caller
+/// decides).
 #[allow(clippy::too_many_arguments)]
 fn branch_row(
     ui: &mut Ui,
@@ -839,13 +877,21 @@ fn branch_row(
     );
 
     let row_state = if selected {
-        RowState::Selected
+        RowState::RowSelected
     } else if hovered {
         RowState::Hover
     } else {
         RowState::Default
     };
-    let fill = if is_current && !is_remote {
+    // A **chosen** row is one thing whichever of the two facts it also carries:
+    // it takes the list-row fill, never the current-ref token, so a selected
+    // current row cannot paint a band no other row in the app can produce. The
+    // current ref's own resting band is only consulted while the row is *not*
+    // chosen, which is the state in which nothing else is marking the row.
+    let marked = selected || (is_current && !is_remote);
+    let fill = if selected {
+        row_fill(row_state)
+    } else if is_current && !is_remote {
         current_row_fill(row_state)
     } else {
         row_fill(row_state)
@@ -858,9 +904,16 @@ fn branch_row(
         ui.painter()
             .rect_filled(rect, CornerRadius::same(crate::theme::CHIP_RADIUS), fill);
     }
+    // The rail is **paint, not layout**: drawn over the row's own fill at its
+    // leading edge, so a marked row's first text origin *is* an unmarked row's.
+    // Reserving its width as padding would shift every row's content the moment
+    // it is selected or made current.
+    if marked {
+        paint_rail(ui.painter(), rect);
+    }
 
     // --- The row's three zones, laid out once over the full rect ---------------
-    // icon + name | tracking branch | status badges. Every boundary comes from
+    // icon + name | tracking branch | state words. Every boundary comes from
     // measuring what actually paints there, so nothing drifts with the length
     // of a branch name.
     let chips = &meta.badge;
@@ -868,16 +921,26 @@ fn branch_row(
     let name_x = rect.left() + PAD_LIST + indent;
     let text_x = name_x + KIT_ICON + 6.0;
     let shows_pill = is_current && !is_remote;
+    // The current marker is a **word**, not a filled chip, and this is the
+    // measurement that reserves its slot. The reason is the design frame's, and
+    // it is a real one: the current chip's fill *is* the selected-row fill, so a
+    // filled marker on the current row would put the same opaque value on it
+    // that a chosen row takes — the marker would name the current ref in exactly
+    // the way the selection already names itself, and a row would carry a
+    // second filled shape whose whole job was to repeat a colour its own band
+    // already had. The row already answers "which one is current" with its
+    // band, its rail, and the repository band's head-ref chip above it.
     let pill_w = if shows_pill {
-        pill_width(ui, "current", PillKind::Current)
+        current_marker_width(ui) + 8.0
     } else {
         0.0
     };
     let content_right = rect.right() - PAD_LIST;
-    let mut badges_w: f32 = chips
-        .iter()
-        .map(|(_kind, label)| sync_chip_width(ui, label) + 4.0)
-        .sum();
+    let mut badges_w: f32 = pill_w
+        + chips
+            .iter()
+            .map(|(_kind, label)| state_mark_width(ui, label) + 4.0)
+            .sum::<f32>();
 
     // The name/tracking split reads off the row's own width and nothing else —
     // not this row's badges, not its current marker — which is what gives the
@@ -885,26 +948,27 @@ fn branch_row(
     let share_x = text_x + (content_right - 8.0 - text_x).max(0.0) * NAME_ZONE_SHARE;
     let name_w = (share_x - 8.0 - text_x).max(0.0);
 
-    // Space is then yielded in a stated order: the `current` badge never gives
+    // Space is then yielded in a stated order: the `current` marker never gives
     // way and the name keeps its share; the tracking line shrinks to whatever
-    // lies between the name zone and the group, and the status badges give up
+    // lies between the name zone and the group, and the state words give up
     // entirely before they would cross into the name zone. In the ~210px Git
     // Log pane this ordering is the difference between marking the current
     // branch and not marking it.
     let name_right = share_x - 8.0;
-    let shows_badges = name_right - badges_w - pill_w >= text_x;
+    let shows_badges = name_right - badges_w >= text_x;
     if !shows_badges {
-        badges_w = 0.0;
+        // Only the state words give way; the current marker keeps its slot.
+        badges_w = pill_w;
     }
-    // Right to left: the current badge, then the status badges.
-    let pill_x = content_right - pill_w;
-    let badges_right = pill_x - if shows_pill { 6.0 } else { 0.0 };
+    // Right to left: the current marker, then the state words.
+    let badges_right = content_right;
     let badges_x = badges_right - badges_w;
     let track_x = share_x;
     let track_w = (badges_x - 8.0 - share_x).max(0.0);
 
-    // The badges zone: right-anchored and permanent. A row's actions live in
-    // its context menu, so hovering never takes its status chips away.
+    // The trailing zone: the current marker and the state words, right-anchored
+    // and permanent. A row's actions live in its context menu, so hovering never
+    // takes what the row says about itself away.
     let actions_rect = Rect::from_min_max(
         Pos2::new(rect.left(), rect.top()),
         Pos2::new(badges_right, rect.bottom()),
@@ -916,19 +980,33 @@ fn branch_row(
     );
     zone.spacing_mut().item_spacing.x = 0.0;
     zone.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        // The current marker takes the trailing slot, so it lines up down the
+        // list and is never the thing a narrow row squeezes out. It is the
+        // accent **text** ink — the ink the current chip would have used — on no
+        // fill at all, so the accent still says "the current ref" and the row
+        // never grows a second filled shape.
+        if shows_pill {
+            let _ = current_marker(ui);
+        }
         // Mid-operation state is first-class on the row (issue 09): a
-        // merge in progress reads "merging…" and survives tab switches.
+        // merge in progress reads "merging…" and survives tab switches. It is a
+        // state, so it is a mark and a coloured word like every other one.
         if is_current && props.merge_in_progress {
             ui.add_space(8.0);
-            ui.label(
-                RichText::new(crate::ui::components::mid_op_label("merging"))
-                    .font(data_font(TYPE_CONTROL))
-                    .color(Palette::STATE_WARNING),
+            state_mark(
+                ui,
+                &crate::ui::components::mid_op_label("merging"),
+                Palette::STATE_WARNING,
             );
         }
         if shows_badges {
             for (kind, label) in chips.iter().rev() {
-                sync_chip(ui, *kind, label);
+                // **Coloured text with a leading mark**, never a chip: the
+                // reserved counter orange and the diverged red are state inks
+                // and a state behind a fill reads as a category. This is the
+                // site the v1 `sync_chip` used to tint a chip background with
+                // `RepoState::color()`.
+                state_mark(ui, label, sync_ink(*kind));
                 ui.add_space(4.0);
             }
         }
@@ -937,11 +1015,7 @@ fn branch_row(
         // branch snapshot the caller assembles).
         if branch.kind == BranchKind::Remote && branch.gone {
             ui.add_space(8.0);
-            ui.label(
-                RichText::new("gone")
-                    .font(chrome_font(TYPE_CHIP))
-                    .color(Palette::STATE_ERROR),
-            );
+            state_mark(ui, "gone", Palette::STATE_ERROR);
         }
     });
 
@@ -971,24 +1045,30 @@ fn branch_row(
     }
 
     // The name zone: a leading icon so the column has a fixed left edge, then
-    // the label fitted to what is actually left of the tracking zone.
+    // the name **as a ref chip**.
+    //
+    // The v1 ink ladder is gone, and that is the point of the ticket: it
+    // painted diverged red, ahead/behind amber and everything else the row's own
+    // ink, so the *identity* text changed colour with the branch's *state* and
+    // the two read as one thing. Identity is now one object (the ref chip, in
+    // the row's ink) and state is another (coloured text, in the state zone).
     let ink = if is_remote {
-        // Remote rows are reference material: quiet by design.
-        Palette::T_SECONDARY
-    } else if branch.ahead > 0 && branch.behind > 0 {
-        // Diverged from upstream: red (issue 04).
-        Palette::STATUS_DIVERGED
-    } else if branch.ahead > 0 || branch.behind > 0 {
-        // Ahead (unpushed) or behind (unpulled): amber (issue 04).
-        Palette::STATE_WARNING
+        Palette::INK_2
     } else {
         // Plain local branch: stale-aware primary (preserves §14.1 dimming).
         row_ink(meta.stale)
     };
     // Display the leaf's own label: remote leaves carry the prefix-stripped
     // name because their group header already names the remote (issue 03), so
-    // "origin/" is never re-printed here.
-    let name = middle_truncate_to_width(ui, label, &data_font(TYPE_BODY), name_w);
+    // "origin/" is never re-printed here. The chip adds its own inset on each
+    // side, so the truncation budget leaves room for it or the chip would paint
+    // over the tracking column's left edge.
+    let name = middle_truncate_to_width(
+        ui,
+        label,
+        &data_font(TYPE_CHIP),
+        (name_w - widgets::COMPACT_CHIP_GEOMETRY.pad_x * 2.0).max(0.0),
+    );
     let name_rect = Rect::from_min_max(
         Pos2::new(name_x, rect.top()),
         Pos2::new(share_x - 8.0, rect.bottom()),
@@ -1003,26 +1083,7 @@ fn branch_row(
     child.spacing_mut().item_spacing.x = 0.0;
     icons::icon(&mut child, Icon::GIT_BRANCH, KIT_ICON, ink);
     child.add_space(6.0);
-    child.add(
-        egui::Label::new(RichText::new(name).font(data_font(TYPE_BODY)).color(ink))
-            .selectable(false),
-    );
-    // The `current` badge takes the slot the group maths reserved for it, so it
-    // lines up down the list and is never the thing a narrow row squeezes out.
-    if shows_pill {
-        let pill_rect = Rect::from_min_max(
-            Pos2::new(pill_x, rect.top()),
-            Pos2::new(pill_x + pill_w, rect.bottom()),
-        );
-        ui.new_child(
-            UiBuilder::new()
-                .max_rect(pill_rect)
-                .layout(Layout::left_to_right(Align::Center)),
-        )
-        .with_layout(Layout::left_to_right(Align::Center), |ui| {
-            pill(ui, "current", PillKind::Current);
-        });
-    }
+    ref_chip_with_ink(&mut child, &name, ink);
 
     if response.clicked() {
         events.push(TreeEvent::RowClicked {
@@ -1053,6 +1114,60 @@ fn branch_row(
         });
     }
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &branch.name));
+}
+
+/// The words a branch row's current marker paints, in the accent **text** ink
+/// and on no fill.
+///
+/// The v1 marker was `PillKind::Current`: the accent token filled solid, with
+/// brand ink on it. It became a second blue shape on every current row, and it
+/// competed with the one control the pane means you to press. The current
+/// *chip* is the vocabulary's replacement — but its fill is the selected-row
+/// fill, which is the whole reason it is not used here: on a current row it
+/// would be indistinguishable from the row's own selection, so the marker would
+/// name the current ref in precisely the way the selection already names
+/// itself. The row answers the question with its band, its rail, and the
+/// repository band's head-ref chip; the marker is the word beside it.
+const CURRENT_MARKER: &str = "Current";
+
+/// How wide [`current_marker`] paints — the word, measured once, in the face and
+/// size it is painted at. The row reserves through this rather than guessing.
+fn current_marker_width(ui: &Ui) -> f32 {
+    ui.painter()
+        .layout_no_wrap(
+            CURRENT_MARKER.to_owned(),
+            chrome_font(TYPE_CHIP),
+            Color32::WHITE,
+        )
+        .size()
+        .x
+}
+
+/// The current row's marker: the word "Current" in [`Palette::ACCENT_TEXT`],
+/// which is the ink the current chip would have used, on no background at all.
+///
+/// Painted by allocating and placing, the way the mark pair does, rather than
+/// through a `Label`: a `Label` lays its own nested wrapping UI out from the
+/// left, which puts the word at the *start* of the row's trailing zone instead
+/// of its end, and the trailing zone is right-to-left.
+fn current_marker(ui: &mut Ui) -> Response {
+    let font = chrome_font(TYPE_CHIP);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(CURRENT_MARKER.to_owned(), font, Palette::ACCENT_TEXT);
+    let (rect, response) = ui.allocate_exact_size(
+        Vec2::new(galley.size().x, widgets::CHIP_HEIGHT),
+        Sense::hover(),
+    );
+    if ui.is_rect_visible(rect) {
+        ui.painter().galley(
+            Pos2::new(rect.left(), rect.center().y - galley.size().y / 2.0),
+            galley,
+            Palette::ACCENT_TEXT,
+        );
+    }
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, CURRENT_MARKER));
+    response
 }
 
 /// Inline rename editor on the row (issue 11): a draft input plus the
@@ -1118,57 +1233,6 @@ fn rename_editor(
             );
         });
     }
-}
-
-/// How wide [`sync_chip`] will paint one badge — the row measures its badge
-/// zone with this before painting anything. Every kind carries an icon, so only
-/// the label's measured width varies.
-fn sync_chip_width(ui: &Ui, label: &str) -> f32 {
-    let font = data_font(TYPE_CHIP);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font, Color32::WHITE);
-    let icon_s = 10.0;
-    let pad = 5.0;
-    pad * 2.0 + icon_s + 2.0 + galley.size().x
-}
-
-/// One tinted sync chip: 10px icon + words (issue 03) on the §13 meaning-color
-/// tint. 18px tall, radius 3, mono data type.
-fn sync_chip(ui: &mut Ui, kind: crate::ui::components::SyncKind, label: &str) {
-    let fg = sync_ink(kind);
-    let bg = sync_bg(kind);
-    let font = data_font(TYPE_CHIP);
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, fg);
-    let icon_s = 10.0;
-    let pad = 5.0;
-    let w = sync_chip_width(ui, label);
-    let h = crate::ui::widgets::CHIP_HEIGHT;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
-    ui.painter()
-        .rect_filled(rect, CornerRadius::same(crate::theme::CHIP_RADIUS), bg);
-
-    let icon = match kind {
-        crate::ui::components::SyncKind::Ahead => Icon::ARROW_UP,
-        crate::ui::components::SyncKind::Behind => Icon::ARROW_DOWN,
-        crate::ui::components::SyncKind::InSync => Icon::CHECK,
-        crate::ui::components::SyncKind::Gone => Icon::ALERT_TRIANGLE,
-        crate::ui::components::SyncKind::Diverged => Icon::ARROW_RIGHT_LEFT,
-    };
-    let mut x = rect.left() + pad;
-    icons::paint_icon(
-        ui.painter(),
-        Pos2::new(x, rect.center().y - icon_s / 2.0),
-        icon_s,
-        icon,
-        fg,
-    );
-    x += icon_s + 2.0;
-    ui.painter().galley_with_override_text_color(
-        Pos2::new(x, rect.center().y - galley.size().y / 2.0),
-        galley,
-        fg,
-    );
 }
 
 /// One tag row: quiet mono name (tags are reference material, issue 13 makes
@@ -1270,8 +1334,6 @@ fn empty_state(ui: &mut Ui, events: &mut Vec<TreeEvent>) {
         }
     });
 }
-
-use crate::ui::widgets;
 
 /// One local-branch reference for the keyboard path (plan D6): the owning
 /// repository, the branch, its repo's current branch (for the marker), and the

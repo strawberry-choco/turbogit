@@ -332,6 +332,69 @@ fn blame_opens_from_the_footer_and_paints_per_line_attribution() {
 
 // --- Cycle 4: current commit's lines highlighted -------------------------------
 
+/// The card the commit table renders into, and the one the blame view replaces it
+/// in — the **widest** tall `CONTENT_BG` rect in the log body.
+///
+/// Widest rather than named, because that is what makes it the middle column: the
+/// branches card is a fixed 210pt and the right column a fixed 344pt, so the
+/// leftover column is always the one that takes the space. This is the fixture's
+/// single-root shape, so there is no ambiguity to resolve.
+fn centre_card(harness: &Harness<'_, AppState>) -> Rect {
+    filled_rects(harness)
+        .into_iter()
+        .filter(|(rect, fill)| {
+            *fill == turbogit_ui::theme::Palette::CONTENT_BG && rect.height() > 100.0
+        })
+        .max_by_key(|(rect, _)| rect.width().round() as i64)
+        .map(|(rect, _)| rect)
+        .expect("the log body's centre column paints a card")
+}
+
+/// **Blame renders into the commit table's card — the same card, at the same
+/// rect, with its rows inside it.**
+///
+/// The log's three columns are separated by ten points of app background and the
+/// commit table is a card like the other two, so the centre column is now a
+/// *region with edges*. That raises a question this file did not have to answer
+/// before: the blame view replaces the commit table in that slot, so it has to
+/// land in the same card rather than paint a region of its own that happens to
+/// overlap. The two existing ratchets here — shared row height, shared column
+/// offsets, shared band and rail — all compare blame against the commit table
+/// *relative to one another*, which is exactly the kind of comparison that would
+/// stay green if both views moved a card apart. This one is absolute: the card
+/// is read off the paint before blame opens and again after, and the two rects
+/// have to be the same one.
+#[test]
+fn blame_fills_the_commit_tables_card() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    let table_card = centre_card(&harness);
+
+    select_commit_and_file(&mut harness, &seed);
+    harness.get_by_label("Blame").click();
+    settle(&mut harness);
+
+    let blame_card = centre_card(&harness);
+    assert_eq!(
+        blame_card, table_card,
+        "blame REPLACES the commit table in the same region, so it fills the same card: \
+         the commit table's card was {table_card:?} and blame's is {blame_card:?}. A view \
+         that painted a region of its own over the slot would be a second surface in the \
+         one place the frame draws a single one."
+    );
+    for (id, content) in [
+        (&seed.c1, "alpha: initial commit"),
+        (&seed.c2, "alpha: second commit"),
+    ] {
+        let row = harness.get_by_label(&blame_row_label(id, content)).rect();
+        assert!(
+            blame_card.contains_rect(row),
+            "the `{content}` blame row is inside the card it replaced the commit table \
+             in: row {row:?}, card {blame_card:?}"
+        );
+    }
+}
+
 /// Every paint-time origin of a galley painting exactly `text` — the same
 /// string can appear in several panes (blame row + details message).
 fn galley_origins(harness: &Harness<'_, AppState>, text: &str) -> Vec<Pos2> {
@@ -446,5 +509,475 @@ fn context_menu_opens_blame_and_the_path_scope_survives_it() {
     assert!(
         harness.state().ui.blame.is_some(),
         "context menu opens blame"
+    );
+}
+
+// --- The blame surface's column chrome ------------------------------------------
+
+/// **The blame surface's columns are labelled by the shared column chrome.**
+///
+/// The blame view *replaces* the commit table in the same slot, so its header is
+/// the same header: four labels in the one tracked type in the muted ink, over
+/// one structural hairline. It used to be three hand-laid galleys at the 11px
+/// control size with no rule under them at all — a header no other pane could be
+/// compared against, which is what "switching to blame is a visual reset" looks
+/// like when only the header is counted.
+#[test]
+fn the_blame_surface_labels_its_columns_with_the_shared_column_chrome() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_commit_and_file(&mut harness, &seed);
+    harness.get_by_label("Blame").click();
+    settle(&mut harness);
+
+    let galleys = test_support::harness::painted_galleys(&harness);
+    for label in BLAME_LABELS {
+        let painted = galleys.iter().find(|g| g.text == label).unwrap_or_else(|| {
+            panic!(
+                "the blame surface must label its `{label}` column; painted: {:#?}",
+                galleys.iter().map(|g| &g.text).collect::<Vec<_>>()
+            )
+        });
+        assert_eq!(
+            painted.color,
+            turbogit_ui::theme::Palette::INK_3,
+            "the `{label}` column header is a label the user reads, so it takes the \
+             muted step — the same one the commit table's headers wear"
+        );
+        assert_ne!(
+            painted.color,
+            turbogit_ui::theme::Palette::INK_4,
+            "9px is normal-size text; the dim step is 3.2:1 and is reserved for \
+             placeholders, dim path suffixes and hatches"
+        );
+    }
+
+    // One structural hairline under them, and no second rule in the same band.
+    let top = galleys
+        .iter()
+        .find(|g| g.text == BLAME_LABELS[0])
+        .expect("the first column is labelled")
+        .pos
+        .y;
+    let rules: Vec<Rect> = filled_rects(&harness)
+        .into_iter()
+        .filter(|(_, fill)| *fill == turbogit_ui::theme::Palette::RULE_STRUCTURAL)
+        .map(|(rect, _)| rect)
+        .filter(|r| (r.height() - 1.0).abs() < 0.01 && r.top() >= top)
+        // Scoped to the blame surface's own column of the frame. The sidebar
+        // wears the same shared pane header and paints the same hairline, so a
+        // frame-wide count here describes how many pane headers the window
+        // happens to show rather than what the blame surface is wearing.
+        .filter(|r| r.left() >= turbogit_ui::ui::sidebar::SIDEBAR_WIDTH)
+        .collect();
+    assert_eq!(
+        rules.len(),
+        2,
+        "the blame surface wears the shared pane header's hairline and the column \
+         header's, and nothing else: {rules:?}"
+    );
+}
+
+/// The blame surface's column labels, in reading order.
+///
+/// `HASH` and `AUTHOR` are spelled the commit table spells them, because they
+/// mean the same things; the wide column holds a source line and the trailing one
+/// a relative age, so those two say what they hold.
+const BLAME_LABELS: [&str; 4] = ["HASH", "AUTHOR", "LINE", "AGE"];
+
+/// The header label painting `text` in `harness`'s centre pane.
+fn blame_header(harness: &Harness<'_, AppState>, text: &str) -> Pos2 {
+    test_support::harness::painted_galleys(harness)
+        .into_iter()
+        .find(|g| g.text == text && g.pos.x >= turbogit_ui::ui::sidebar::SIDEBAR_WIDTH)
+        .map(|g| g.pos)
+        .unwrap_or_else(|| panic!("the blame surface labels `{text}`"))
+}
+
+/// The one row label the blame surface publishes for a blamed line.
+fn blame_row_label(id: &str, content: &str) -> String {
+    format!("{} {content}", short(id))
+}
+
+/// The blame view's source with every comment blanked, one space per character
+/// so line structure survives — **and every line of code kept**.
+///
+/// The same reasoning as `git_log.rs`'s `code_only`: a scan for `CommitTable::*`
+/// has to be about what the module *calls*, or this file's own documentation —
+/// which names every one of those constants while explaining why — would satisfy
+/// the ratchet forever.
+///
+/// The "kept" half matters as much as the "blanked" half. A helper that blanks
+/// the code as well as the comments returns a file of newlines and spaces, and
+/// then every `!scan.contains(needle)` over it is true for the uninteresting
+/// reason that the needle cannot be in there at all. That is not a ratchet; it
+/// is a comment about one. The mutation that caught it here replaced
+/// `CommitTable::ROW_HEIGHT` with a literal `20.0` and left the file full of prose
+/// about `CommitTable::ROW_HEIGHT` — the broken scan passed it.
+fn code_only(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let (mut i, mut block, mut line) = (0usize, false, false);
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied().unwrap_or('\0');
+        if block {
+            if c == '*' && next == '/' {
+                block = false;
+                out.push(' ');
+                out.push(' ');
+                i += 2;
+                continue;
+            }
+        } else if line {
+            if c == '\n' {
+                line = false;
+                out.push('\n');
+                i += 1;
+                continue;
+            }
+        } else if c == '/' && next == '/' {
+            line = true;
+            out.push(' ');
+            out.push(' ');
+            i += 2;
+            continue;
+        } else if c == '/' && next == '*' {
+            block = true;
+            out.push(' ');
+            out.push(' ');
+            i += 2;
+            continue;
+        }
+        out.push(if c == '\n' || !(block || line) {
+            c
+        } else {
+            ' '
+        });
+        i += 1;
+    }
+    out.into_iter().collect()
+}
+
+/// **The blame view's row height and cell offsets are the commit table's, read
+/// from its own published constants — not this module's literals.**
+///
+/// Three seams, and the middle one is the one the ticket asks for.
+///
+/// The **height** is asserted against `theme::FILE_ROW_HEIGHT`, which *is* the
+/// commit table's row-height constant (a commit row allocates exactly that), and
+/// deliberately not against the number 20.0: restating the number would let a
+/// hard-coded blame height pass as long as somebody updated two places, and the
+/// whole claim is that there is only one place.
+///
+/// The **source** seam is what actually forbids the hard-coding: `blame_view.rs`
+/// must name `CommitTable::ROW_HEIGHT` (and `CommitTable::HASH` / `AUTHOR` /
+/// `MESSAGE` / `DATE_RIGHT_PAD`), must not define a cell offset of its own, and
+/// must measure its cells from the commit table's own
+/// `table_content_left`/`shows_root_gutter` — which is how the **ROOTS column**
+/// lines up: on a multi-root listing this view reserves the gutter the column
+/// owns rather than painting over it or inventing its own. The blame fixture
+/// here is single-root, so that half is a source claim rather than a painted
+/// one, and it is stated as such rather than glossed.
+///
+/// The **offsets** are then compared end to end: the blame surface's header
+/// labels are read off the paint, the commit table's are read off the paint in
+/// the same harness, and the three leading columns must be at the same x in
+/// both — with the commit table's own header row as the control.
+#[test]
+fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_commit_and_file(&mut harness, &seed);
+
+    // ---- the source seam: no private geometry ----------------------------
+    let blame_src = code_only(include_str!("../src/ui/blame_view.rs"));
+    for constant in [
+        "CommitTable::ROW_HEIGHT",
+        "CommitTable::HASH",
+        "CommitTable::AUTHOR",
+        "CommitTable::MESSAGE",
+        "CommitTable::DATE_RIGHT_PAD",
+    ] {
+        assert!(
+            blame_src.contains(constant),
+            "`blame_view.rs` must read `{constant}` from the commit table rather \
+             than declaring its own: a second table of offsets is what made \
+             switching to blame a visual reset"
+        );
+    }
+    for own_geometry in [
+        "const HASH_X",
+        "const AUTHOR_X",
+        "const AGE_X",
+        "const CONTENT_X",
+        "const ROW_HEIGHT",
+    ] {
+        assert!(
+            !blame_src.contains(own_geometry),
+            "`blame_view.rs` declares `{own_geometry}` again: the blame view \\
+             replaces the commit table in the same slot, so its geometry is the \\
+             commit table's. Read it from `log_window::CommitTable`."
+        );
+    }
+    assert!(
+        blame_src.contains("table_content_left") && blame_src.contains("shows_root_gutter"),
+        "the blame view must measure its cells from the commit table's own content \\
+         edge and its own ROOTS-gutter predicate, so the ROOTS column lines up with \\
+         it instead of the two views disagreeing by 5px"
+    );
+    assert!(
+        blame_src.contains("paint_log_row"),
+        "…and its rows must go through the commit table's row painter, so the band \\
+         and the rail are the same decision in both views"
+    );
+
+    // ---- the row height, against the shared constant ----------------------
+    harness.get_by_label("Blame").click();
+    settle(&mut harness);
+    let first = harness
+        .get_by_label(&blame_row_label(&seed.c1, "alpha: initial commit"))
+        .rect();
+    let second = harness
+        .get_by_label(&blame_row_label(&seed.c2, "alpha: second commit"))
+        .rect();
+    for (name, row) in [("first", first), ("second", second)] {
+        assert_eq!(
+            row.height(),
+            turbogit_ui::theme::FILE_ROW_HEIGHT,
+            "the {name} blame row is the commit table's row height. This is asserted \\
+             against the token the commit table's rows allocate, NOT against the \\
+             20.0 this view used to hard-code: a hard-coded height is a second \\
+             answer to a question one constant already answers."
+        );
+    }
+
+    // ---- the offsets, against the commit table's own header row ----------
+    let blame_hash = blame_header(&harness, "HASH");
+    let blame_author = blame_header(&harness, "AUTHOR");
+    let blame_line = blame_header(&harness, "LINE");
+    let blame_age_label_right = test_support::harness::painted_galleys(&harness)
+        .into_iter()
+        .find(|g| g.text == "AGE")
+        .expect("the blame surface labels its trailing column")
+        .rect
+        .right();
+    // The blame row's own trailing cell, measured before switching away.
+    let blame_row = harness
+        .get_by_label(&blame_row_label(&seed.c1, "alpha: initial commit"))
+        .rect();
+    let blame_age = test_support::harness::painted_galleys(&harness)
+        .into_iter()
+        .find(|g| blame_row.contains(g.pos) && g.pos.x > blame_row.left() + 200.0)
+        .expect("the blame row paints a trailing age cell");
+
+    // The control: the commit table's own header and row, one closing-the-view
+    // click away, in the same harness and the same window.
+    harness.get_by_label("Close blame").click();
+    settle(&mut harness);
+    let table_label = |label: &str| -> test_support::harness::PaintedGalley {
+        test_support::harness::painted_galleys(&harness)
+            .into_iter()
+            .find(|g| g.text == label && g.pos.x >= turbogit_ui::ui::sidebar::SIDEBAR_WIDTH)
+            .unwrap_or_else(|| panic!("the commit table labels its `{label}` column"))
+    };
+    let commit_row = harness
+        .get_by_label(&format!("{} alpha: second commit", short(&seed.c2)))
+        .rect();
+    let commit_date = test_support::harness::painted_galleys(&harness)
+        .into_iter()
+        .find(|g| commit_row.contains(g.pos) && g.pos.x > commit_row.left() + 200.0)
+        .expect("the commit row paints a trailing date cell");
+
+    for (label, blame, control) in [
+        ("HASH", blame_hash, table_label("HASH").pos),
+        ("AUTHOR", blame_author, table_label("AUTHOR").pos),
+        ("LINE / MESSAGE", blame_line, table_label("MESSAGE").pos),
+    ] {
+        assert_eq!(
+            blame.x, control.x,
+            "the blame `{label}` column starts where the commit table's does: {} vs \
+             {}. Blame REPLACES the commit table in the same slot, so a column that \
+             moved when the view did is a visual reset at the moment of switching.",
+            blame.x, control.x
+        );
+    }
+    // The trailing column shares an EDGE on both sides, from the same inset.
+    assert_eq!(
+        blame_age_label_right,
+        table_label("DATE").rect.right(),
+        "the two trailing columns' labels end where the same inset puts them: \
+         blame AGE ends at {}, the commit table's DATE at {}",
+        blame_age_label_right,
+        table_label("DATE").rect.right()
+    );
+    assert_eq!(
+        (blame_row.right() - blame_age.rect.right()).abs(),
+        (commit_row.right() - commit_date.rect.right()).abs(),
+        "the trailing CELL ends on the same inset in both views — the commit \
+         table's `DATE_RIGHT_PAD`, read from `CommitTable::DATE_RIGHT_PAD` rather \
+         than restated: blame {} vs commit {}",
+        blame_row.right() - blame_age.rect.right(),
+        commit_row.right() - commit_date.rect.right()
+    );
+}
+
+/// **The blame view's rows paint the same fills and the same rail as the commit
+/// table's rows.**
+///
+/// Blame used to paint a bare `selection_bg()` tint and a hand-picked
+/// `SURFACE_2` hover — a second answer to "what does a chosen row look like", in
+/// the region the commit table had already answered. Both now go through the
+/// commit table's own `paint_log_row`, so the assertion is that a blamed-at line
+/// takes the selected band *and* the one 2px accent rail at its leading edge, at
+/// its full height, in the accent — and that a line from a different commit takes
+/// neither.
+///
+/// The comparison is against the **commit table's** chosen row in the same
+/// harness, not against the token names, so "the same fills" is arithmetic: the
+/// same band colour at the row's own rect, the same rail width, the same leading
+/// edge, the same span.
+#[test]
+fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
+    let seed = seeded_project();
+    let mut harness = log_harness(&seed);
+    select_commit_and_file(&mut harness, &seed);
+
+    // The control, first: what a chosen commit row looks like in this frame.
+    let commit_row = harness
+        .get_by_label(&format!("{} alpha: second commit", short(&seed.c2)))
+        .rect();
+    let commit_band = filled_rects(&harness)
+        .into_iter()
+        .find(|(rect, color)| {
+            *color == turbogit_ui::theme::Palette::selection_bg() && *rect == commit_row
+        })
+        .map(|(rect, _)| rect)
+        .expect("a chosen commit row paints the shared selected band");
+    let commit_rail = filled_rects(&harness)
+        .into_iter()
+        .find(|(rect, color)| {
+            *color == turbogit_ui::theme::Palette::BRAND
+                && (rect.width() - turbogit_ui::theme::RAIL_WIDTH).abs() < 0.01
+                && rect.top() >= commit_row.top()
+                && rect.bottom() <= commit_row.bottom()
+        })
+        .map(|(rect, _)| rect)
+        .expect("a chosen commit row paints the one accent rail");
+
+    harness.get_by_label("Blame").click();
+    settle(&mut harness);
+
+    // The blamed-at line is the "chosen" row of this view: c2 introduced the
+    // second line of the file.
+    let chosen = harness
+        .get_by_label(&blame_row_label(&seed.c2, "alpha: second commit"))
+        .rect();
+    let plain = harness
+        .get_by_label(&blame_row_label(&seed.c1, "alpha: initial commit"))
+        .rect();
+
+    // The band: the same colour, at the row's own rect.
+    let bands: Vec<Rect> = filled_rects(&harness)
+        .into_iter()
+        .filter(|(rect, color)| {
+            *color == turbogit_ui::theme::Palette::selection_bg() && *rect == chosen
+        })
+        .map(|(rect, _)| rect)
+        .collect();
+    assert_eq!(
+        bands,
+        vec![chosen],
+        "the line the blamed commit introduced takes the commit table's own \
+         selected band at its own rect: painted {bands:?} for row {chosen:?} \
+         (the commit table's chosen row band was {commit_band:?})"
+    );
+    assert_eq!(
+        chosen.height(),
+        commit_row.height(),
+        "…and a row is the same height"
+    );
+
+    // The rail: the one painter's output — token width, at the leading edge, for
+    // the row's full height, in the accent. And exactly one of them, for the one
+    // line that is "chosen".
+    //
+    // Scoped to the blame surface's own rows rather than to the frame: the
+    // branches pane and the changed-files pane keep their own chosen-row rails in
+    // the same frame, and a frame-wide count would be counting the window's
+    // selections rather than this view's.
+    let rails: Vec<Rect> = filled_rects(&harness)
+        .into_iter()
+        .filter(|(rect, color)| {
+            *color == turbogit_ui::theme::Palette::BRAND
+                && (rect.width() - turbogit_ui::theme::RAIL_WIDTH).abs() < 0.01
+                && (chosen.contains_rect(*rect) || plain.contains_rect(*rect))
+        })
+        .map(|(rect, _)| rect)
+        .collect();
+    assert_eq!(
+        rails.len(),
+        1,
+        "one blamed-at line carries exactly one rail, and the line from a different \
+         commit carries none: {rails:?} across rows {chosen:?} and {plain:?}"
+    );
+    let rail = rails[0];
+    assert_eq!(rail.left(), chosen.left(), "at the row's leading edge");
+    assert_eq!(rail.top(), chosen.top());
+    assert_eq!(rail.height(), chosen.height(), "for the row's full height");
+    assert_eq!(
+        (rail.left(), rail.width(), rail.height()),
+        (
+            commit_rail.left(),
+            commit_rail.width(),
+            commit_rail.height()
+        ),
+        "the blame view's rail is the commit table's rail, to the pixel: {rail:?} \
+         vs {commit_rail:?}. A rail the blame view sized for itself is a visual \
+         reset at the moment of switching."
+    );
+
+    // …and the line from a different commit takes neither the band nor the rail.
+    assert!(
+        !plain.contains_rect(rail),
+        "a line from a different commit must not carry the rail: {plain:?} vs {rail:?}"
+    );
+    assert!(
+        !filled_rects(&harness).iter().any(|(rect, color)| *color
+            == turbogit_ui::theme::Palette::selection_bg()
+            && *rect == plain),
+        "…nor the band"
+    );
+
+    // The cell inks, from the commit table's own two ink functions: the blamed
+    // line is a row of this table, so its text wears the table's inks.
+    let galleys = test_support::harness::painted_galleys(&harness);
+    let hash = galleys
+        .iter()
+        .find(|g| g.text == short(&seed.c2) && chosen.contains(g.pos))
+        .expect("the blamed line paints a commit hash");
+    let author = galleys
+        .iter()
+        .find(|g| g.text == "Test" && chosen.contains(g.pos))
+        .expect("the blamed line paints an author");
+    let content = galleys
+        .iter()
+        .find(|g| g.text == "alpha: second commit" && chosen.contains(g.pos))
+        .expect("the blamed line paints its source content");
+    assert_eq!(
+        hash.color,
+        turbogit_ui::theme::Palette::LINK,
+        "the blame view's hash cell wears the commit table's hash ink (`LINK`), not \
+         the accent: an information cell is not a call to action"
+    );
+    assert_eq!(
+        author.color,
+        turbogit_ui::theme::Palette::INK_2,
+        "…and its author cell the commit table's secondary step"
+    );
+    assert_eq!(
+        content.color,
+        turbogit_ui::theme::Palette::INK,
+        "…and its content cell the commit table's primary step"
     );
 }

@@ -12,6 +12,7 @@
 //! Gated behind the `harness` feature so `turbogit-app`'s tests keep using
 //! the recording executor without paying `egui_kittest`'s compile cost.
 
+use egui::epaint::TextShape;
 use egui::{Color32, FontFamily, Pos2, Rect, Shape};
 use egui_kittest::Harness;
 use turbogit_app::state::AppState;
@@ -118,11 +119,40 @@ pub struct PaintedGalley {
     /// The painted extent — origin plus the galley's laid-out size. Where a
     /// column ends is as much a fact of the frame as where it starts.
     pub rect: Rect,
-    /// `RichText::color` / the widget's ink, from the galley's layout job.
+    /// The ink this string was **painted** with.
+    ///
+    /// NOT simply `job.sections[0].format.color`, which is the obvious-looking
+    /// one-liner and the wrong one. A galley keeps the colour it was *laid out*
+    /// with, and this codebase lays text out in `Color32::WHITE`, then applies
+    /// the real ink at paint time by overriding the text colour
+    /// (`Painter::galley_with_override_text_color`). Reading the layout colour
+    /// alone therefore reports `WHITE` for every shared button, kit button,
+    /// sidebar row, menu item and segmented option — a test built on it passes
+    /// or fails for the wrong reason. [`paint_ink`] is the one place that
+    /// resolves paint-time override first and laid-out colour second.
     pub color: Color32,
     /// The resolved face — `Proportional` for chrome, `Monospace` for data
     /// (branch and remote names).
     pub family: FontFamily,
+}
+
+/// The ink one painted text shape actually drew with — the single
+/// implementation of the layout-vs-paint colour rule.
+///
+/// A galley keeps the color it was *laid out* with, so a widget that overrides
+/// the color at paint time — which is how every shared button, kit button,
+/// sidebar row and menu item takes its ink — is only visible through the text
+/// shape's `override_text_color`. Prefer the override, and fall back to the
+/// laid-out color.
+///
+/// `Color32::TRANSPARENT` is reserved for the degenerate galley that carries no
+/// sections at all; "there is no such painted text" is the caller's business
+/// to represent (see [`painted_ink`]'s `Option`).
+fn paint_ink(shape: &TextShape) -> Color32 {
+    shape
+        .override_text_color
+        .or_else(|| shape.galley.job.sections.first().map(|s| s.format.color))
+        .unwrap_or(Color32::TRANSPARENT)
 }
 
 /// Every text galley painted by the last frame.
@@ -135,7 +165,8 @@ pub struct PaintedGalley {
 /// shapes happen to arrive in. Color and font both land in the galley's layout
 /// job, so a token-colored, face-correct label (the active branch's soft blue
 /// monospace, a diverged branch's red) is assertable from painted output alone —
-/// no reach into widget internals.
+/// no reach into widget internals. The color is resolved by [`paint_ink`], so
+/// it is the paint-time ink rather than the layout-time placeholder.
 pub fn painted_galleys<S>(harness: &Harness<'_, S>) -> Vec<PaintedGalley> {
     harness
         .output()
@@ -148,9 +179,7 @@ pub fn painted_galleys<S>(harness: &Harness<'_, S>) -> Vec<PaintedGalley> {
                     text: shape.galley.text().to_owned(),
                     pos: shape.pos,
                     rect: Rect::from_min_size(shape.pos, shape.galley.size()),
-                    color: section
-                        .map(|s| s.format.color)
-                        .unwrap_or(Color32::TRANSPARENT),
+                    color: paint_ink(shape),
                     family: section
                         .map(|s| s.format.font_id.family.clone())
                         .unwrap_or(FontFamily::Proportional),
@@ -159,6 +188,29 @@ pub fn painted_galleys<S>(harness: &Harness<'_, S>) -> Vec<PaintedGalley> {
             _ => None,
         })
         .collect()
+}
+
+/// The ink the last frame painted `needle` in, matched exactly.
+///
+/// The single-string sibling of [`painted_galleys`]: where a suite wants "the
+/// colour this one string was drawn with" rather than a list to search, this
+/// answers it, using the same layout-vs-paint rule (see [`paint_ink`]).
+///
+/// Exact matching keeps distinct labels unambiguous, the same discipline
+/// [`galley_origin`] uses to relate a label to the region containing it.
+/// `None` means the frame painted no such text at all — a string that exists
+/// nowhere reads the same as one that exists with a transparent ink, and
+/// collapsing the two into a sentinel colour is how a test comes to assert
+/// against a colour nothing ever painted.
+pub fn painted_ink<S>(harness: &Harness<'_, S>, needle: &str) -> Option<Color32> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .find_map(|clipped| match &clipped.shape {
+            Shape::Text(text) if text.galley.text() == needle => Some(paint_ink(text)),
+            _ => None,
+        })
 }
 
 /// Every filled rectangle painted by the last frame as `(rect, fill)`.

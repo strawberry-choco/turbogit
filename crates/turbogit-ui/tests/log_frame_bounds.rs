@@ -77,12 +77,20 @@ fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
 /// The central graph band between the branches pane and the right column — the
 /// region a commit row lives in, and the only one the row count is read from
 /// (the branches pane paints its own dots).
+///
+/// The branches pane's band is found by the **card's** surface token, not the
+/// raised one it used to be: the log's three carded panes wear
+/// `CONTENT_BG` at the card radius with no stroke (design-system v2, R2), and
+/// the branches pane is the narrow one at the far left. Nothing about the
+/// geometry this derives changed — the band is still ~210px wide at the same
+/// left edge — so this is the surface token following the pane, stated here
+/// because "the graph region" silently became unmeasurable if it was not.
 fn graph_region(harness: &Harness<'_, AppState>) -> Rect {
     let branches = filled_rects(harness)
         .into_iter()
-        .find(|(r, c)| *c == Palette::SURFACE && r.width() >= 200.0 && r.width() <= 220.0)
+        .find(|(r, c)| *c == Palette::CONTENT_BG && r.width() >= 200.0 && r.width() <= 220.0)
         .map(|(r, _)| r)
-        .expect("branches pane band not painted");
+        .expect("branches pane card not painted");
     let body_right = filled_rects(harness)
         .iter()
         .map(|(r, _)| r.right())

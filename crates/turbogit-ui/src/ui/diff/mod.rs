@@ -14,16 +14,25 @@
 //!   run per frame, and hunk navigation scrolls by row index so unrealized
 //!   rows stay reachable.
 //! - **Segmented control** toggles Side-by-Side | Unified rendering.
-//! - **Revision chips** select the working-tree comparison pair:
-//!   Repo = HEAD↔worktree, Staged = HEAD↔index, Local = index↔worktree.
-//!   Explicit commit-to-commit targets (Git Log) keep their fixed pair and
-//!   hide the chips.
+//! - **Two axes of scope** (spec story 22), each framed as ONE grouped control
+//!   and each a visibly different kind of group: `Repo | Staged | Local` select
+//!   the working-tree comparison pair (Repo = HEAD↔worktree, Staged = HEAD↔index,
+//!   Local = index↔worktree) in a filled pad, `File | Hunk | Line` choose what one
+//!   staging action addresses in an outlined track. The second is working-tree
+//!   only — commit-to-commit diffs have no index to stage into — and hides
+//!   without leaving an empty frame behind. Explicit commit-to-commit targets
+//!   (Git Log) keep their fixed pair and show neither.
 //! - **Hunk navigation** ‹ n/N › steps between parsed hunks.
-//! - **Ignore whitespace** feeds `DiffOpts::ignore_whitespace` into the
-//!   engine call and the cache key.
+//! - **The file row carries its own statistics** (spec story 23): a file
+//!   section's `+N −M` change counts, and the **Ignore whitespace** checkbox
+//!   that feeds `DiffOpts::ignore_whitespace` into the engine call and the cache
+//!   key. The row is painted in every state of the comparison — settled, empty,
+//!   still computing or failed — so the control that produces an empty
+//!   comparison does not disappear with it.
 //! - Add/del lines paint token-exact backgrounds (`DIFF_ADD_BG` /
 //!   `DIFF_DEL_BG`) with muted `INK_3` gutter numbers; hunk headers sit on
-//!   SURFACE (spec §2.3).
+//!   SURFACE (spec §2.3). None of the diff pair, the added/removed accent pair
+//!   or the row fills is touched by any of the above.
 //! - **Gutter staging (spec R2)**: every hunk-header band carries compact
 //!   "+" / "−" controls that stage / unstage that whole hunk by composing a
 //!   patch from the cached raw diff (ADR-0013) and applying it through the

@@ -6,13 +6,13 @@ use egui::{
 };
 
 use super::chips::BADGE_TINT;
+use super::chips::count_chip;
 use super::controls::tint_over_bg;
 use super::inputs::INPUT_ICON_SIZE;
-use crate::theme::{CONTROL_RADIUS, Palette, TYPE_CONTROL};
+use crate::theme::{CONTROL_RADIUS, Palette, TYPE_CONTROL, TYPE_SECTION};
 use crate::ui::icons::{self, Icon};
 use turbogit_services::history_editor::RebaseCaution;
 
-const TOOLWINDOW_HEADER_HEIGHT: f32 = 28.0;
 const CHURN_BAR_HEIGHT: f32 = 4.0;
 const ALERT_ICON_SIZE: f32 = INPUT_ICON_SIZE;
 const MICRO_TEXT: f32 = TYPE_CONTROL;
@@ -77,7 +77,14 @@ pub fn dialog_footer<R>(ui: &mut Ui, buttons: impl FnOnce(&mut Ui) -> R) -> Inne
 
 // --- Section chrome ----------------------------------------------------------
 
-/// The two tones a bordered card frame may wear.
+/// Width of the one hairline a card is allowed to paint around itself, and
+/// only under [`CardFrame::bordered`]. A named constant because egui folds the
+/// stroke width into the frame's inner margin, so this number is also the
+/// number of points of padding a bordered card gains on every side.
+pub const BORDER_HAIRLINE_WIDTH: f32 = 1.0;
+
+/// The two tones a card frame may wear: the fill it paints with, which a
+/// bordered and an unbordered card choose from the same two rungs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CardSurface {
     /// The content tone — a card sitting on a `BG` panel.
@@ -99,9 +106,10 @@ pub enum CardSizing {
     MinWidth(f32),
 }
 
-/// Card geometry: the fill, corner radius, and hairline stroke that make a
-/// panel read as a card, plus the two things a call site genuinely varies —
-/// inner padding and how the card claims its width. One owner for the shape.
+/// Card geometry: the fill and corner radius that make a panel read as a card,
+/// the edge it wears (see [`CardFrame::bordered`]), plus the two things a call
+/// site genuinely varies — inner padding and how the card claims its width. One
+/// owner for the shape.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct CardFrame {
     /// Which of the two card tones this frame wears.
@@ -110,19 +118,68 @@ pub struct CardFrame {
     pub pad: i8,
     /// How the card claims its width.
     pub sizing: CardSizing,
+    /// Whether a 1px `LINE` hairline is drawn around the card's own edge.
+    /// `false` by default, and `true` only for a surface that floats.
+    pub bordered: bool,
 }
 
 impl Default for CardFrame {
+    /// The default card: a *surface*, not a floating panel — no stroke.
+    ///
+    /// The rule this default exists to install is stated here, on the default
+    /// itself, so a later reader asking "did we drop the border?" gets the
+    /// answer in the code rather than in a test name or a design doc:
+    ///
+    /// > **A card is a surface, and a stroke means the surface floats.**
+    ///
+    /// A 1px hairline is therefore reserved for the four surfaces that really
+    /// do sit above their surroundings — popovers, dialogs, menus and toasts —
+    /// and for nothing else. A content region separates itself with the air it
+    /// already carries: [`crate::theme::PANEL_PADDING`] on every side, which is
+    /// exactly what the hairline was redundant with. That is why dropping the
+    /// line does not collapse the region, and why there is no padding change to
+    /// pair with it — a padding change would move every carded region's
+    /// content.
+    ///
+    /// A region that genuinely wants a border is asking for a different
+    /// surface, and asks for it with [`CardFrame::bordered`] rather than by
+    /// painting its own hairline.
     fn default() -> Self {
         Self {
             surface: CardSurface::Content,
             pad: crate::theme::PANEL_PADDING as i8,
             sizing: CardSizing::Stretch,
+            bordered: false,
         }
     }
 }
 
 impl CardFrame {
+    /// Draw a 1px `LINE` hairline around the card's own edge — the one case in
+    /// which a stroke is allowed to mean something, because the surface
+    /// carrying it floats above its surroundings (a popover, a dialog, a menu,
+    /// a toast).
+    ///
+    /// Reserved, not offered: a *content* region that calls this is asking for
+    /// a different surface, and a view-phase pass is not a licence to hand the
+    /// border back to a region that only wanted a line around its text. The
+    /// app's one in-tree caller is the Welcome changelog, which lives in an
+    /// `egui::Area` above the page.
+    ///
+    /// Two consequences worth knowing before picking it, both from egui
+    /// folding `Frame::stroke.width` into the frame's inner margin
+    /// (`Frame::total_margin`):
+    ///
+    /// - the body sits [`Self::pad`] + 1 pt from the card's edge, where the
+    ///   unbordered card of the same padding sits [`Self::pad`] pt from it, and
+    /// - the card is 2 pt taller than the unbordered one of the same content.
+    pub fn bordered(self) -> Self {
+        Self {
+            bordered: true,
+            ..self
+        }
+    }
+
     /// Wear the raised `SURFACE` tone instead of `CONTENT_BG`.
     pub fn raised(self) -> Self {
         Self {
@@ -145,14 +202,15 @@ impl CardFrame {
     }
 }
 
-/// Bordered card surface (Local Changes redesign): the containment the
-/// mockup gives every region, so neighbouring controls read as one group
-/// instead of as a flat stack of headings and separators.
+/// Card surface: the containment every region gets, so neighbouring controls
+/// read as one group instead of as a flat stack of headings and separators.
 ///
 /// The default fill is [`Palette::CONTENT_BG`], deliberately *not* `BG` — the
 /// panel behind a card is `BG`, so a `BG` card would be invisible (risk R2). A
 /// card that sits on a `CONTENT_BG` surface asks for
-/// [`CardFrame::raised`] instead. The body lays out inside the frame's margin
+/// [`CardFrame::raised`] instead. The card paints **no stroke**: the
+/// [`CardFrame`] default states the rule, and [`CardFrame::bordered`] is the
+/// only way to get a hairline. The body lays out inside the frame's margin
 /// and, under the default [`CardSizing::Stretch`], is stretched to the
 /// caller's full available width, so a card spans its pane rather than hugging
 /// its content. The returned rect is the card's outer edge, which is what a
@@ -166,23 +224,31 @@ pub fn card<R>(
         CardSurface::Content => Palette::CONTENT_BG,
         CardSurface::Raised => Palette::SURFACE,
     };
-    Frame::new()
+    let mut card = Frame::new()
         .fill(fill)
-        .stroke(Stroke::new(1.0, Palette::LINE))
         .corner_radius(CornerRadius::same(crate::theme::CARD_RADIUS))
-        .inner_margin(Margin::same(frame.pad))
-        .show(ui, |ui| {
-            match frame.sizing {
-                CardSizing::Stretch => ui.set_width(ui.available_width()),
-                CardSizing::MinWidth(w) => ui.set_min_width(w),
-            }
-            add_contents(ui)
-        })
+        .inner_margin(Margin::same(frame.pad));
+    // The hairline is the *only* stroke a card may paint, it is off by default,
+    // and it exists for a surface that floats — see `CardFrame::bordered`.
+    if frame.bordered {
+        card = card.stroke(Stroke::new(BORDER_HAIRLINE_WIDTH, Palette::LINE));
+    }
+    card.show(ui, |ui| {
+        match frame.sizing {
+            CardSizing::Stretch => ui.set_width(ui.available_width()),
+            CardSizing::MinWidth(w) => ui.set_min_width(w),
+        }
+        add_contents(ui)
+    })
 }
 
 /// Header strip inside a [`card`]: the caller's own header rows, ruled off
 /// from the body below by a hairline. Shared so every carded region gets
 /// identical containment while each states what it holds.
+///
+/// This is a *rule inside* a card, not the card's own edge, so the "a stroke
+/// means it floats" rule does not reach it: there is at most one of these per
+/// carded region, and it divides a region rather than boxing one.
 ///
 /// The row layout is the caller's, not this function's, because a header is
 /// not always one line — the changes card puts its title and icon cluster on
@@ -197,11 +263,14 @@ pub fn card_header(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
 /// padding, the containment a dialog hands a preview, a summary, or an
 /// explanatory note.
 ///
-/// This is the *unbordered* sibling of [`card`], which is a bordered content
-/// region on `CONTENT_BG`. Pass a colour in `severity` for a note that is also a
-/// warning — the merge-cascade and rebase summaries, which must read as
-/// attention without becoming the app's contained alert ([`alert_box`] is
-/// filled rather than stroked, and is the other one).
+/// This is a *different primitive* from [`card`], not a bordered card, and it
+/// strokes for a different reason: a `severity` ink, not a floating edge. Pass
+/// a colour in `severity` for a note that is also a warning — the
+/// merge-cascade and rebase summaries, which must read as attention without
+/// becoming the app's contained alert ([`alert_box`] is filled rather than
+/// stroked, and is the other one). Never fold this into
+/// [`CardFrame::bordered`]: a note is an inset, and a bordered card is a
+/// surface.
 pub fn note<R>(
     ui: &mut Ui,
     severity: Option<Color32>,
@@ -261,22 +330,283 @@ pub fn recovery_note(ui: &mut Ui, backup_ref: &str) {
     ui.monospace(backup_ref.to_owned());
 }
 
-/// Tool-window header (28px): 11px uppercase muted title left, right-aligned
-/// actions slot (§7.1, §3.3).
-pub fn toolwindow_header<R>(
+// --- Pane chrome (R7) ---------------------------------------------------------
+//
+// **One pane header, one column-header row.** A new pane makes no decision
+// about its chrome because there is nothing to decide: the two functions below
+// are the whole vocabulary, and the retired `toolwindow_header` is gone from
+// this module rather than kept as a second way to say the same thing. The
+// conflict grammar's module-private header was absorbed into [`pane_header`]
+// for the same reason — a second implementation is not a harmless second
+// spelling, it is a header the user can tell apart from the first one.
+
+/// Height of the one pane header's band, in points.
+///
+/// A named constant because the claim "every tool pane has the same header" is
+/// only checkable if the bands are comparable: `tests/widget_library.rs`
+/// renders the worktrees, submodules and log panes and compares their painted
+/// header geometry to each other, and that comparison means something because
+/// all three read this one number.
+pub const PANE_HEADER_HEIGHT: f32 = 28.0;
+
+/// Height of the one column-header row's band. Sized to the 9px label it holds
+/// plus its air, and the band the log's commit table already reserved for its
+/// micro headers, so adopting the shared row moved the table by exactly the
+/// underline it gained.
+pub const COLUMN_HEADER_HEIGHT: f32 = 16.0;
+
+/// Width of the one hairline a pane header and a column-header row each paint
+/// under themselves. One pixel, and *one line*: two rules between a header and
+/// its content is the nested-boxes problem this migration exists to remove, and
+/// it comes back quietly — a caller wanting more air adds `ui.add_space`.
+const HEADER_RULE_HEIGHT: f32 = 1.0;
+
+/// Air between a pane header's title and its optional count chip.
+const PANE_HEADER_CHIP_GAP: f32 = 6.0;
+
+/// Allocate a header band of exactly `height` with **no** inter-item gap above
+/// or below it, and run `add` in it.
+///
+/// egui's own allocation advances the caller's cursor past the rect *plus*
+/// `spacing.item_spacing.y`, so a band followed by its own hairline would float
+/// that hairline six points below the band it belongs to — a rule that is
+/// decoration rather than structure. A header is band-then-rule with nothing in
+/// between, so the gap is suppressed here and handed back to the caller
+/// afterwards, which keeps the rhythm of everything *after* the header exactly
+/// as it was.
+fn header_band<R>(
+    ui: &mut Ui,
+    width: f32,
+    height: f32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> InnerResponse<R> {
+    let gap = ui.spacing().item_spacing.y;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let band = ui.allocate_ui_with_layout(
+        Vec2::new(width, height),
+        Layout::left_to_right(Align::Center),
+        add,
+    );
+    ui.spacing_mut().item_spacing.y = gap;
+    band
+}
+
+/// The one pane header (R7): a 9px tracked title in the muted ink, an optional
+/// [count chip](count_chip), a right-aligned action slot, **one**
+/// [`Palette::RULE_STRUCTURAL`] hairline, then the pane's content.
+///
+/// The single implementation every tool pane uses — worktrees, submodules, the
+/// log's branches strip, the blame surface, and the changes card that joins it
+/// in the changes-screen ticket. `count` is `None` for a pane with nothing to
+/// count, and that is the common case: a count chip is a fact the pane already
+/// knows, never a fourth kind of badge invented here.
+///
+/// The returned [`InnerResponse`] is the *band's* rect, not the header's whole
+/// extent — a caller that wants to mark the header (the conflict grammar's
+/// focus rail) measures the rule from its own cursor.
+///
+/// **The title is rendered exactly as written.** The case is the caller's word
+/// to get right, because it is the pane's own title and the app renders every
+/// one of them upper (the `BRANCHES` strip beside the log is the case that had
+/// drifted, and it drifted *here*). `tests/widget_library.rs` pins that across
+/// the panes it renders rather than hiding the decision inside a `to_uppercase`
+/// nobody can see fail.
+pub fn pane_header<R>(
     ui: &mut Ui,
     title: &str,
+    count: Option<&str>,
     actions: impl FnOnce(&mut Ui) -> R,
 ) -> InnerResponse<R> {
+    // The width is read ONCE, before the band is allocated. A band takes the
+    // full available width, so re-reading it afterwards asks a horizontal
+    // layout for the air its own first child already used — which is zero, and
+    // which silently produced a hairline one pixel wide.
     let width = ui.available_width();
-    ui.allocate_ui_with_layout(
-        Vec2::new(width, TOOLWINDOW_HEADER_HEIGHT),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.label(micro_header(title));
-            ui.with_layout(Layout::right_to_left(Align::Center), actions)
-                .inner
-        },
+    let band = header_band(ui, width, PANE_HEADER_HEIGHT, |ui| {
+        // The title and its count chip are one mark, not two: the gap between
+        // them is named below rather than left to item spacing.
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let (font, ink) = pane_title();
+        ui.label(RichText::new(title).font(font).color(ink));
+        if let Some(count) = count {
+            ui.add_space(PANE_HEADER_CHIP_GAP);
+            count_chip(ui, count);
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), actions)
+            .inner
+    });
+    pane_header_rule(ui, width);
+    band
+}
+
+/// The one hairline a pane header paints under itself, and the shared body of
+/// the header rule — [`Palette::RULE_STRUCTURAL`], the chrome that gives a
+/// surface its structure, across `width`.
+///
+/// Split out because "the band" and "the rule" are two different measurements
+/// and a caller that has to re-derive the rule's geometry to mark the header
+/// will eventually derive it differently.
+///
+/// Returns the rule it painted, so a caller that needs the rule's rect
+/// measures the same one instead of allocating a second strip and hoping it
+/// lands in the same place.
+fn pane_header_rule(ui: &mut Ui, width: f32) -> Rect {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, HEADER_RULE_HEIGHT), Sense::hover());
+    ui.painter()
+        .rect_filled(rect, CornerRadius::ZERO, Palette::RULE_STRUCTURAL);
+    rect
+}
+
+/// How one column of a column-oriented pane places its cells against its
+/// offset.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ColumnAlign {
+    /// `x` is the offset from the pane's own left edge: the cell starts there.
+    Start,
+    /// `x` is the inset from the pane's trailing edge: the cell *ends* there.
+    /// The log's date column is the case — it has to track a row that resizes.
+    End,
+}
+
+/// One column of a column-oriented pane: the label its header cell shows, and
+/// the offset its cells sit at, measured from the pane's own row rect.
+///
+/// **The same `x` places the header's label and the data row's cell.** That is
+/// the entire reason this type exists, and it is why a pane passes one table
+/// to [`column_header`] *and* reads the same table back when it lays out its
+/// rows: a column cannot be narrow in the header and wide in the rows, because
+/// there is one number for both and no second table for a header to consult.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct PaneColumn {
+    /// The label the header cell shows, in the app's one case.
+    pub label: &'static str,
+    /// The offset, interpreted by `align`.
+    pub x: f32,
+    /// Which edge `x` measures from.
+    pub align: ColumnAlign,
+}
+
+impl PaneColumn {
+    /// A column measured from the pane's own left edge.
+    pub const fn start(label: &'static str, x: f32) -> Self {
+        Self {
+            label,
+            x,
+            align: ColumnAlign::Start,
+        }
+    }
+
+    /// A trailing column measured from the pane's own right edge.
+    pub const fn end(label: &'static str, inset: f32) -> Self {
+        Self {
+            label,
+            x: inset,
+            align: ColumnAlign::End,
+        }
+    }
+
+    /// Where this column's cell starts, given the row rect both the header and
+    /// the data rows measure from.
+    pub fn origin(&self, row: Rect) -> f32 {
+        match self.align {
+            ColumnAlign::Start => row.left() + self.x,
+            ColumnAlign::End => row.right() - self.x,
+        }
+    }
+}
+
+/// The one column-header row (R7): every column's label at 9px in the muted ink
+/// over a single [`Palette::RULE_STRUCTURAL`] underline spanning the pane.
+///
+/// `row` is the rect the labels measure from, and it is the *same* rect the
+/// pane's data rows measure from — which is what makes the labels sit over
+/// their cells instead of near them. Returns the underline's rect.
+///
+/// **The ink is [`Palette::INK_3`], not [`Palette::INK_4`].** 9px is
+/// normal-size text, `INK_4` is 3.2:1, and a column header is a label the user
+/// reads to know what a bare number or timestamp means — never the dimmest
+/// step. This is pinned in `tests/widget_library.rs` because the target frames
+/// were drawn with the dim value before the contrast was checked, so the
+/// temptation during implementation is to copy the frame.
+pub fn column_header(ui: &mut Ui, row: Rect, columns: &[PaneColumn]) -> Rect {
+    let (font, ink) = pane_title();
+    // The width is read ONCE, before the band is allocated, for the same reason
+    // as in `pane_header`: a band takes the full available width, so reading it
+    // afterwards asks a horizontal layout for the air its own allocation used.
+    let width = ui.available_width();
+    let band = header_band(ui, width, COLUMN_HEADER_HEIGHT, |_| {});
+    let rule = pane_header_rule(ui, width);
+    // The labels are painted against the rule, not against the band callback's
+    // idea of where it is. Two ways of getting this wrong look identical from
+    // the band's own geometry: the rule is the band's *last* pixel, so it is
+    // the one measurement in this function that is both known and checkable,
+    // and every other position is derived from it rather than re-read from a
+    // cursor that has already moved on.
+    //
+    // Painting them from inside the band callback instead — reading
+    // `available_rect_before_wrap().top()`, which is where the band was *about
+    // to be* — drew every label 8pt high and put the rule straight through the
+    // lower third of them. `the_column_header_row_underlines_itself_once_in_the
+    // _structural_tone` is the ratchet.
+    let centre_y = rule.top() - HEADER_RULE_HEIGHT - COLUMN_HEADER_HEIGHT / 2.0;
+    for column in columns {
+        let galley = ui
+            .painter()
+            .layout_no_wrap(column.label.to_owned(), font.clone(), ink);
+        let x = match column.align {
+            ColumnAlign::Start => column.origin(row),
+            // A trailing column's label ends where its cell ends.
+            ColumnAlign::End => column.origin(row) - galley.size().x,
+        };
+        ui.painter()
+            .galley(Pos2::new(x, centre_y - galley.size().y / 2.0), galley, ink);
+    }
+    let _ = band;
+    rule
+}
+
+/// Run one data cell of a flow row at `columns[index]`'s own offset, reserving
+/// whatever air is between the cursor and that offset first.
+///
+/// The column-oriented panes that lay their rows out as flows (worktrees,
+/// submodules) use this rather than a grid, so a row's cells land on the same
+/// offsets its header was painted from. A cell whose own content has already
+/// passed its column's offset is **not** pushed backwards — the row runs on
+/// instead, because a table that reversed to keep a column honest would be
+/// worse than the overflow it is preventing. The log's commit table paints its
+/// cells straight at [`PaneColumn::origin`] and needs nothing from here.
+pub fn column_cell<R>(
+    ui: &mut Ui,
+    columns: &[PaneColumn],
+    index: usize,
+    cell: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let want = columns[index].origin(ui.max_rect());
+    let have = ui.cursor().left();
+    if want > have {
+        ui.add_space(want - have);
+    }
+    cell(ui)
+}
+
+/// The one tracked micro type in the app: the section type size, in the chrome
+/// face, in the muted ink — `(font, ink)`, so a title and a label cannot be
+/// laid out with one and painted with the other.
+///
+/// Read by exactly two functions, [`pane_header`] and [`column_header`], which
+/// is what "the tracking is uniform" means here: a pane title and a column
+/// label are the same mark at two scales of importance, and the one thing that
+/// must not differ between them is the type.
+///
+/// Note the ink: the muted step, which clears 4.5:1 on every surface a title is
+/// painted on. The dim step is sub-AA and is reserved for placeholders, dim
+/// path suffixes and hatches — a reader who reaches for it here because the
+/// target frame is dimmer fails `a_column_header_is_ink_3_and_never_the_dim_ink`
+/// on purpose.
+fn pane_title() -> (FontId, Color32) {
+    (
+        FontId::new(TYPE_SECTION, FontFamily::Proportional),
+        Palette::INK_3,
     )
 }
 

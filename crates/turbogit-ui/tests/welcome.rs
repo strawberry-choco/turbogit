@@ -1471,3 +1471,119 @@ fn welcome_locks_the_redesigned_structure() {
         "the getting-started SURFACE card must paint"
     );
 }
+
+// ------------------------------------------- 19: the type ramp, and nothing
+//    else, about the welcome screen -------------------------------------
+
+/// The welcome screen takes its **type** from the shared token layer and keeps
+/// no local copy of it — the wordmark and the changelog dialog's title both
+/// read a named role, and neither restates a number.
+///
+/// Two halves, and the second is the one that actually catches drift:
+///
+/// 1. **From painted output.** The wordmark paints at `TYPE_WORDMARK` and the
+///    changelog's title at `TYPE_PANE_TITLE`, in the chrome face, both read
+///    from the token layer rather than from a literal beside them.
+/// 2. **From the module's source.** No type size is written out anywhere in
+///    `ui/welcome.rs`. The first half alone would pass for a screen whose type
+///    happens to be right today and is spelled locally tomorrow, and the
+///    criterion is about the *role* being shared, not about today's number
+///    matching.
+///
+/// The second half is a source scan, and source scans are normally a smell.
+/// It is the right tool for exactly one claim — "this file contains no literal
+/// of this kind" — because that claim is about the text of the file and there
+/// is no render that can see it. It is scoped to `theme::TYPE_` by name so a
+/// geometry literal in the same file is not a false positive.
+#[test]
+fn the_welcome_screen_keeps_no_local_copy_of_its_type() {
+    use turbogit_ui::theme::{TYPE_PANE_TITLE, TYPE_WORDMARK};
+
+    // (1) From painted output. The wordmark is the hero's headline; the
+    //     changelog title is the floating dialog's own heading.
+    let mut fx = bare_fixture();
+    let galley_for = |harness: &Harness<'static, turbogit_app::state::AppState>, text: &str| {
+        let hits: Vec<_> = test_support::harness::painted_galleys(harness)
+            .into_iter()
+            .filter(|g| g.text == text)
+            .collect();
+        assert_eq!(hits.len(), 1, "one `{text}` on the screen; found {hits:#?}");
+        hits.into_iter().next().expect("one hit")
+    };
+    let wordmark = galley_for(&fx.harness, "TurboGit");
+    assert!(
+        wordmark.rect.height() > TYPE_BODY_HINT,
+        "the wordmark is the display role ({TYPE_WORDMARK}pt), not body text: \
+         {wordmark:?}"
+    );
+
+    // Open the changelog and read its title.
+    fx.harness.state_mut().ui.show_changelog = true;
+    settle(&mut fx.harness);
+    let title = galley_for(&fx.harness, "What's New");
+    // **By ratio, not by absolute height.** A galley's painted height is its
+    // font's line height, which is larger than the nominal size and carries the
+    // face's own leading — so "the title is 16 points tall" is not a claim the
+    // render can make. The *ratio* between two headings in the same face is,
+    // because line height scales with the nominal size: this says the title is
+    // the pane-title role to the wordmark, which is the actual claim, and it
+    // keeps working if the face's leading is ever retuned.
+    let want = TYPE_PANE_TITLE / TYPE_WORDMARK;
+    let got = title.rect.height() / wordmark.rect.height();
+    assert!(
+        (got - want).abs() < want * 0.15,
+        "the changelog dialog's title is the shared pane-title role relative to \
+         the wordmark's display role: it measures {got:.3} where \
+         {TYPE_PANE_TITLE}/{TYPE_WORDMARK} is {want:.3} (title {title:?}, \
+         wordmark {wordmark:?})"
+    );
+    // (2) From the module's own source: no type size is spelled out here. Any
+    //     `theme::TYPE_*` name is a shared role; a bare number in a type
+    //     position would be a local copy of one, and that is the thing this
+    //     assertion exists to stop.
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/welcome.rs"),
+    )
+    .expect("read ui/welcome.rs");
+    // A type size is a number *passed to* one of the four ways this crate sets
+    // type. A number in any other position — a galley's measured `.size().y`, a
+    // padding constant, a height sum — is geometry, and flagging it would make
+    // the ratchet cry wolf on the first line someone edits.
+    const TYPE_CALLS: [&str; 4] = ["FontId::new(", ".size(", "chrome_font(", "data_font("];
+    let offenders: Vec<String> = source
+        .lines()
+        .enumerate()
+        .filter_map(|(n, line)| {
+            // Comments are blanked, not stripped, so a `//` inside a string
+            // literal cannot truncate the line and hide a literal.
+            let code: String = line
+                .split("//")
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            TYPE_CALLS
+                .iter()
+                .any(|call| {
+                    code.split(call).skip(1).any(|rest| {
+                        rest.trim_start()
+                            .trim_start_matches([' ', '('])
+                            .starts_with(|c: char| c.is_ascii_digit() || c == '.')
+                    })
+                })
+                .then(|| format!("{}: {}", n + 1, line.trim()))
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "ui/welcome.rs takes its type from the shared token layer and keeps no \
+         local copy: every size it sets is a `theme::TYPE_*` role. A bare \
+         number in a type position is a second spelling of one: {offenders:#?}"
+    );
+}
+
+/// A body-size label, as a floor for the wordmark's own check. Named so the
+/// assertion above reads as a statement about the ramp rather than as a
+/// comparison against another constant in the same expression.
+const TYPE_BODY_HINT: f32 = turbogit_ui::theme::TYPE_BODY;

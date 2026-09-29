@@ -20,11 +20,12 @@
 //! assert only on public surfaces: painted labels, public `AppState`
 //! transitions, and the exact galley texts painted into the frame.
 use egui::accesskit::Role;
-use egui::{Key, Modifiers};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui::{Color32, Key, Modifiers, Rect};
+use egui_kittest::{Harness, kittest::Queryable as _};
 use std::path::{Path, PathBuf};
 use test_support::harness::{
-    assert_not_painted, assert_painted, filled_rects, painted_galleys, painted_text, settle,
+    assert_not_painted, assert_painted, filled_circles, filled_rects, painted_galleys,
+    painted_text, settle,
 };
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::Palette;
@@ -983,4 +984,567 @@ fn a_repo_with_nested_repos_collapses_and_expands_by_its_relative_path() {
     settle(&mut h);
     assert!(h.query_by_label("Select repo core").is_some());
     assert!(!h.state().ui.sidebar_collapsed.contains("app"));
+}
+
+// -- 19 — the rail's vocabulary: one surface, one state map, one chip, one
+//    pane header --------------------------------------------------
+//
+// The rail is the surface with the most small marks in the app — a surface, a
+// selection, a state, four kinds of number and two section headers — and every
+// one of them used to be spelled locally. These four tests are the rail's share
+// of the design-system contract, and each is scoped to the *sidebar's own*
+// files so a change in another screen cannot make them pass vacuously.
+
+/// Every fill painted inside `row`, as `(rect, colour)`.
+fn fills_in(h: &Harness<'_, AppState>, row: egui::Rect) -> Vec<(egui::Rect, egui::Color32)> {
+    filled_rects(h)
+        .into_iter()
+        .filter(|(rect, _)| row.intersect(*rect) == *rect)
+        .collect()
+}
+
+/// Every filled circle painted inside `row`, as `(centre, radius, colour)`.
+fn circles_in(h: &Harness<'_, AppState>, row: egui::Rect) -> Vec<(egui::Pos2, f32, egui::Color32)> {
+    filled_circles(h)
+        .into_iter()
+        .filter(|(centre, _, _)| row.contains(*centre))
+        .collect()
+}
+
+/// The rail paints **its own** surface token, and it is the sidebar's fill.
+///
+/// Ticket 08 resolved the token's fate in favour of the sidebar adopting it,
+/// which left "the surface token has a real consumer" satisfied by a comment
+/// rather than by a render. This is the assertion that turns it back into a
+/// fact: the rail's root fill is `Palette::SIDEBAR`, and the value is the
+/// designed one — darker than the app background it sits beside, so the left
+/// rail reads as a surface the content is *beside* rather than as an unlabelled
+/// gap in it.
+#[test]
+fn the_rail_paints_its_own_surface_token() {
+    let (project, alpha, lib) = two_group_project("surface");
+    let state = app_state(&project, &[alpha, lib]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    let rail = filled_rects(&h)
+        .into_iter()
+        .find(|(rect, color)| {
+            *color == Palette::SIDEBAR
+                && (rect.width() - turbogit_ui::ui::sidebar::SIDEBAR_WIDTH).abs() < 0.5
+        })
+        .map(|(rect, _)| rect)
+        .expect("the rail paints `Palette::SIDEBAR` at the rail's own width");
+    assert!(
+        rail.height() > 100.0,
+        "the rail's fill is the whole rail, not a strip: {rail:?}"
+    );
+    // The value is the designed one, and the two relationships the token layer
+    // documents about it are what make the rail's ladder hold: darker than the
+    // app background beside it, darker than every raised surface inside it.
+    assert!(
+        Palette::SIDEBAR != Palette::BG,
+        "the sidebar surface is distinct from the app background — that is the \\
+         whole reason the token exists"
+    );
+    for raised in [Palette::SURFACE, Palette::SURFACE_2, Palette::SURFACE_3] {
+        assert_ne!(
+            Palette::SIDEBAR,
+            raised,
+            "the rail must be darker than every raised surface, so a hover fill \\
+             or a selection band inside it steps *up* from it"
+        );
+    }
+}
+
+/// A repository's state is a **dot** in the rail's status gutter, and its
+/// colour is the one repository-state map's answer.
+///
+/// R6 in one test: a state is a mark, so it is a circle and not a filled
+/// rectangle; and it is coloured from `RepoState::color`, so a clean repository
+/// and a diverged one can never wear the same colour. The dot is found by
+/// geometry — a circle inside the repository row — rather than by a colour, so
+/// a dot that came from anywhere but the map fails here rather than passing
+/// because the right token happened to be named.
+#[test]
+fn a_repository_rows_state_is_a_dot_in_the_one_state_colour_map() {
+    use turbogit_ui::theme::RepoState;
+    let (project, alpha, lib) = two_group_project("dot");
+    // `alpha` diverges: one local commit and one fetched upstream commit, so it
+    // is neither clean nor merely unpushed. `lib` stays clean.
+    // The bare remote `temp_repo` seeds sits beside the repo, so the "upstream"
+    // commit is pushed from a second clone of it — the same shape the poll test
+    // above uses.
+    let parent = alpha.parent().unwrap().to_path_buf();
+    let bare = parent.join("alpha.origin");
+    let other = parent.join("alpha-other");
+    git(
+        &parent,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["config", "user.email", "test@example.com"]);
+    git(&other, &["config", "user.name", "Test"]);
+    git(&other, &["checkout", "-q", "main"]);
+    std::fs::write(other.join("remote.txt"), "remote\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "remote only"]);
+    git(&other, &["push", "-q", "origin", "main"]);
+    git(&alpha, &["fetch", "-q"]);
+    std::fs::write(alpha.join("local.txt"), "local\n").unwrap();
+    git(&alpha, &["add", "."]);
+    git(&alpha, &["commit", "-q", "-m", "local only"]);
+
+    let state = app_state(&project, &[alpha, lib]);
+    let mut h = harness(state);
+    settle(&mut h);
+    manual_refresh(&mut h);
+
+    let dot_in = |row_label: &str| -> Vec<(egui::Pos2, f32, egui::Color32)> {
+        let row = h.get_by_label(row_label).rect();
+        circles_in(&h, row)
+    };
+    let alpha_dots = dot_in("alpha");
+    let lib_dots = dot_in("lib");
+    assert_eq!(
+        alpha_dots.len(),
+        1,
+        "a diverged repository paints exactly one state dot in its row, and it \\
+         is a circle: {alpha_dots:?}"
+    );
+    assert_eq!(
+        lib_dots.len(),
+        1,
+        "a clean repository paints exactly one state dot in its row too — the \\
+         dot is the repository's state, not a warning: {lib_dots:?}"
+    );
+    // The colours are the map's, read through the sidebar's own accessor, so
+    // the assertion keeps tracking the theme rather than restating a token.
+    assert_eq!(
+        alpha_dots[0].2,
+        turbogit_ui::ui::sidebar::dot_color(RepoState::Diverged),
+        "the diverged repository's dot wears the one state map's diverged colour"
+    );
+    assert_eq!(
+        lib_dots[0].2,
+        turbogit_ui::ui::sidebar::dot_color(RepoState::Clean),
+        "the clean repository's dot wears the one state map's clean colour"
+    );
+    // …and the two are different, which is the claim the map exists for.
+    assert_ne!(
+        alpha_dots[0].2, lib_dots[0].2,
+        "a clean repository and a diverged one must never look alike"
+    );
+    // One dot size across the rail: the smart-group rows' dots and the
+    // repository rows' dots are the same mark at the same scale.
+    assert_eq!(
+        alpha_dots[0].1, lib_dots[0].1,
+        "the rail carries one state-dot radius"
+    );
+
+    // The negative half, and it is the one R6 is really about: **no
+    // repository state reaches the rail as a filled shape.** A dot is a mark;
+    // behind a fill it stops reading as state and starts reading as a
+    // category, which is the mistake the branches screen made twice.
+    let state_colors = [Palette::COUNTER, Palette::AHEAD, Palette::STATUS_DIVERGED];
+    for row_label in ["alpha", "lib"] {
+        let row = h.get_by_label(row_label).rect();
+        for (rect, color) in fills_in(&h, row) {
+            assert!(
+                !state_colors.contains(&color),
+                "a repository state must not fill a rect in the rail: {row_label} \\
+                 painted {color:?} in {rect:?}"
+            );
+        }
+    }
+}
+
+/// Every number in the rail is the **count chip** — the shared geometry and the
+/// shared colour pair — so a number is not a fourth kind of badge.
+///
+/// The four counters that are numbers: the workspace header's repository total,
+/// the folder rows' repository totals, and the smart-group and user-rule rows'
+/// member counts. Each is asserted from painted output against
+/// `widgets::COMPACT_CHIP_GEOMETRY` and `widgets::COUNT_CHIP_COLORS`, read off
+/// the shared vocabulary rather than restated — so a rail that spelled its own
+/// chip geometry, or reached for a different fill, fails here.
+#[test]
+fn the_sidebar_counters_are_count_chips() {
+    let (project, alpha, ui, cli, lib) = two_by_two_project("chips");
+    let state = app_state(&project, &[alpha, ui, cli, lib]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    let geometry = turbogit_ui::ui::widgets::COMPACT_CHIP_GEOMETRY;
+    let colors = turbogit_ui::ui::widgets::COUNT_CHIP_COLORS;
+    let chips: Vec<Rect> = filled_rects(&h)
+        .into_iter()
+        .filter(|(rect, color)| {
+            *color == colors.bg
+                && (rect.height() - geometry.height).abs() < 0.01
+                && (rect.width() - geometry.pad_x * 2.0) > 0.0
+        })
+        .map(|(rect, _)| rect)
+        .collect();
+    assert!(
+        chips.len() >= 4,
+        "the fixture must exercise every kind of counter — the workspace total, \\
+         a folder total and the two smart-group counts. Found {chips:?}"
+    );
+    for chip in &chips {
+        assert_eq!(
+            chip.height(),
+            geometry.height,
+            "a counter is the count chip's height, not a literal: {chip:?}"
+        );
+        // The ink is the chip's own secondary ink, resolved at paint time —
+        // a galley laid out in white and never overridden would read as white
+        // here and would be unreadable on the raised fill.
+        let inks: Vec<_> = painted_galleys(&h)
+            .into_iter()
+            .filter(|g| chip.contains_rect(g.rect))
+            .map(|g| (g.text.clone(), g.color))
+            .collect();
+        assert!(
+            !inks.is_empty(),
+            "a count chip carries a number: {chip:?} painted no text"
+        );
+        for (text, ink) in inks {
+            assert_eq!(
+                ink, colors.fg,
+                "a count chip's number wears the chip's own ink; `{text}` in \\
+                 {chip:?} painted {ink:?}"
+            );
+        }
+    }
+    // And the negative: a counter never wears a repository-state colour. A
+    // number is a mark, not a category.
+    for (rect, color) in filled_rects(&h) {
+        if (rect.height() - geometry.height).abs() < 0.01 {
+            assert_ne!(
+                color,
+                Palette::COUNTER,
+                "a count chip never fills the reserved counter orange: {rect:?}"
+            );
+            assert_ne!(
+                color,
+                Palette::AHEAD,
+                "a count chip never fills a repository-state colour: {rect:?}"
+            );
+        }
+    }
+}
+
+/// The reserved counter orange appears in the rail **only** where it is a dirt
+/// or unpushed count.
+///
+/// This is the ratchet for the reservation itself, and it is stated as a
+/// positive list rather than a scan for the colour, because a scan cannot say
+/// *where* a colour is allowed. Three sites earn it, and each is named with
+/// the fact that earns it:
+///
+/// | Site | Why orange is legal there |
+/// |---|---|
+/// | a folder row's **dirty** subtree count | it counts dirty repositories — dirt |
+/// | a repository row's **↓N** incoming badge | it counts unpulled commits — unpushed |
+/// | the **unpulled** and **dirty** smart-group dots | those two groups *are* dirt and unpushed |
+///
+/// Everything else that is a number is a count chip, which is neutral by
+/// construction. The test walks the painted output and reports any orange that
+/// is not one of the three.
+#[test]
+fn the_reserved_counter_orange_on_the_sidebar_is_only_dirt_or_unpulled() {
+    use turbogit_ui::theme::RepoState;
+    let (project, alpha, ui, cli, lib) = two_by_two_project("orange");
+    // `alpha` goes behind its upstream (the unpulled case, the `↓N` badge) and
+    // `ui` gets an untracked file (the dirty case, the folder's dirty count and
+    // the dirty smart-group dot).
+    let parent = alpha.parent().unwrap().to_path_buf();
+    let bare = parent.join("alpha.origin");
+    let other = parent.join("alpha-other");
+    git(
+        &parent,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["config", "user.email", "test@example.com"]);
+    git(&other, &["config", "user.name", "Test"]);
+    git(&other, &["checkout", "-q", "main"]);
+    std::fs::write(other.join("remote.txt"), "remote\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "remote only"]);
+    git(&other, &["push", "-q", "origin", "main"]);
+    git(&alpha, &["fetch", "-q"]);
+    std::fs::write(ui.join("wip.txt"), "wip\n").unwrap();
+
+    let state = app_state(&project, &[alpha, ui, cli, lib]);
+    let mut h = harness(state);
+    settle(&mut h);
+    manual_refresh(&mut h);
+
+    // The map the reservation is stated in terms of: the orange is exactly the
+    // dirty and unpulled answers, and nothing else in the map is orange.
+    assert_eq!(RepoState::Dirty.color(), Palette::COUNTER);
+    assert_eq!(RepoState::Unpulled.color(), Palette::COUNTER);
+    for state_color in [RepoState::Clean, RepoState::Unpushed] {
+        assert_ne!(
+            state_color.color(),
+            Palette::COUNTER,
+            "{state_color:?} is not a dirt or unpulled state and may not wear \\
+             the reserved counter orange"
+        );
+    }
+
+    // Walk the rail: every orange pixel is a circle (a state dot) or a
+    // text galley (a coloured count), and every one of them belongs to a
+    // dirt-or-unpulled fact. Fills are excluded by construction — the previous
+    // test already says no state fills a rect — so this is about the two
+    // remaining shapes.
+    let rail = filled_rects(&h)
+        .into_iter()
+        .find(|(rect, color)| {
+            *color == Palette::SIDEBAR
+                && (rect.width() - turbogit_ui::ui::sidebar::SIDEBAR_WIDTH).abs() < 0.5
+        })
+        .map(|(rect, _)| rect)
+        .expect("the rail's own surface");
+    let in_rail = |rect: egui::Rect| rail.intersect(rect) == rect;
+
+    let orange_text: Vec<(String, egui::Rect)> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| g.color == Palette::COUNTER && in_rail(g.rect))
+        .map(|g| (g.text.clone(), g.rect))
+        .collect();
+    for (text, _) in &orange_text {
+        assert!(
+            !text.is_empty()
+                && text
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || "\u{2193}\u{2191} ".contains(c)),
+            "the reserved counter orange is for dirt and unpushed COUNTS only, \
+             and `{text}` is not one. Orange text painted in the rail: \
+             {orange_text:?}"
+        );
+    }
+    // …and at least one of them fired, so the loop above is not passing
+    // because nothing was orange.
+    assert!(
+        !orange_text.is_empty(),
+        "the fixture must produce at least one dirt or unpushed count, or the \
+         reservation is being asserted against nothing"
+    );
+
+    // **The counter that is a number is a chip, and the chip is not orange.**
+    // This is the half that catches "let me just make this counter orange
+    // too", and it is stated per row rather than as a colour scan, because the
+    // mistake is not "somewhere in the rail" — it is "in the row where a
+    // number already says something else".
+    //
+    // A folder row carries up to two numbers: the subtree's **dirty** count,
+    // which is state and is coloured text, and its **repository total**, which
+    // is a number and is the count chip. The rule is positional, and it is the
+    // rule the sidebar's own layout already states: the dirty count is laid
+    // out first (rightmost), the chip after it. So a row that shows an orange
+    // state count must still show its total as a chip, and the chip must be
+    // *inside* of the orange text. Paint the total orange instead and the
+    // chip is gone.
+    let chip_geometry = turbogit_ui::ui::widgets::COMPACT_CHIP_GEOMETRY;
+    let chip_color = turbogit_ui::ui::widgets::COUNT_CHIP_COLORS;
+    let chips_in_rail: Vec<(Rect, Color32)> = filled_rects(&h)
+        .into_iter()
+        .filter(|(rect, color)| {
+            *color == chip_color.bg
+                && (rect.height() - chip_geometry.height).abs() < 0.01
+                && in_rail(*rect)
+        })
+        .collect();
+    for folder in ["frontend", "oss"] {
+        let row = h.get_by_label(folder).rect();
+        let orange_here: Vec<&egui::Rect> = orange_text
+            .iter()
+            .filter(|(_, r)| row.intersect(*r) == *r)
+            .map(|(_, r)| r)
+            .collect();
+        if orange_here.is_empty() {
+            continue;
+        }
+        let chip_here: Vec<&Rect> = chips_in_rail
+            .iter()
+            .filter(|(r, _)| row.intersect(*r) == *r)
+            .map(|(r, _)| r)
+            .collect();
+        assert_eq!(
+            chip_here.len(),
+            1,
+            "the `{folder}` row shows a dirty count, so it also shows its \
+             repository total — and that total is the count chip. Orange in the \
+             row: {orange_here:?}; chips in the row: {chip_here:?}; every chip in \
+             the rail: {chips_in_rail:?}"
+        );
+        for orange in &orange_here {
+            assert!(
+                chip_here[0].left() < orange.left(),
+                "in the `{folder}` row the dirty count is laid out first and the \
+                 repository total's chip inside it; the chip is at {:?} and the \
+                 orange count at {orange:?}",
+                chip_here[0]
+            );
+        }
+    }
+    // The negative, over the whole rail: a count chip is a mark, not a
+    // category, so it never takes a state colour — the orange included.
+    for (rect, color) in &chips_in_rail {
+        assert_ne!(
+            *color,
+            Palette::COUNTER,
+            "a count chip never fills the reserved counter orange: {rect:?}"
+        );
+    }
+
+    let orange_dots: Vec<(egui::Pos2, f32)> = filled_circles(&h)
+        .into_iter()
+        .filter(|(centre, _, color)| *color == Palette::COUNTER && rail.contains(*centre))
+        .map(|(centre, radius, _)| (centre, radius))
+        .collect();
+    // Every orange circle is a **state dot**, and the rail has exactly two dot
+    // columns. Which column it is decides what the dot is allowed to say, and
+    // that is the whole content of the reservation here:
+    //
+    // - the **smart-group** dot column, 24 points in: the group rows, whose two
+    //   orange groups are *unpulled* and *dirty* by name;
+    // - the **repository** status gutter, 37.5 points in: a repository whose
+    //   state is dirty or unpulled — the one map's own two orange answers.
+    //
+    // So an orange dot in the repository gutter is a repository *state* saying
+    // dirt or unpushed, which is exactly what the orange means, and one in the
+    // group column is a group saying the same. Neither is a counter borrowing a
+    // colour, which is the failure the reservation exists to prevent.
+    for (centre, _) in &orange_dots {
+        let on_a_smart_group_row = (centre.x - (rail.left() + 24.0)).abs() < 1.0;
+        let in_the_repository_gutter = (centre.x - (rail.left() + 37.5)).abs() < 1.0;
+        assert!(
+            on_a_smart_group_row || in_the_repository_gutter,
+            "an orange dot in the rail is a state dot in one of the rail's two \
+             dot columns — a smart-group row's, or a repository row's status \
+             gutter; found one at {centre:?} in a rail at {rail:?}"
+        );
+    }
+}
+
+/// The rail's two group sections wear the **shared pane header**.
+///
+/// R7 for the sidebar: a section title in the rail is the same mark as a section
+/// title in the log, the worktrees pane or the submodules pane — the shared
+/// type, the shared muted ink, one structural hairline, the shared band height.
+///
+/// Asserted as a **relationship** between the title and the rule under it,
+/// because that is what the shared header actually is: a band of
+/// `PANE_HEADER_HEIGHT` whose title sits in it and whose one hairline closes
+/// its bottom edge. Asserting either half alone would pass for a title with no
+/// rule or a rule with no title; asserting the two together is the contract,
+/// and it is what a hand-rolled section label at the wrong size cannot satisfy.
+///
+/// Before this the rail spelled both titles itself at `TYPE_CONTROL` — a
+/// body-size label rather than a section label — and gave them no rule at all.
+#[test]
+fn the_sidebar_group_sections_use_the_shared_pane_header() {
+    use turbogit_ui::ui::widgets::PANE_HEADER_HEIGHT;
+    let rule = Palette::RULE_STRUCTURAL;
+    let (project, alpha, lib) = two_group_project("pane");
+    let state = app_state(&project, &[alpha, lib]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    let rail = filled_rects(&h)
+        .into_iter()
+        .find(|(rect, color)| {
+            *color == Palette::SIDEBAR
+                && (rect.width() - turbogit_ui::ui::sidebar::SIDEBAR_WIDTH).abs() < 0.5
+        })
+        .map(|(rect, _)| rect)
+        .expect("the rail's own surface");
+    // Every structural hairline in the rail: one pixel, the shared hairline
+    // tone, spanning the rail's width. Reading them as a set first is what lets
+    // the per-title assertion be about "the one below *this* title" rather than
+    // about a global count.
+    let rail_rules: Vec<Rect> = filled_rects(&h)
+        .into_iter()
+        .filter(|(rect, color)| {
+            *color == rule
+                && (rect.height() - 1.0).abs() < 0.01
+                && (rect.left() - rail.left()).abs() < 1.0
+                && (rect.right() - rail.right()).abs() < 1.0
+        })
+        .map(|(rect, _)| rect)
+        .collect();
+
+    for title in ["SMART GROUPS", "PROJECTS"] {
+        let galley = painted_galleys(&h)
+            .into_iter()
+            .find(|g| g.text == title)
+            .unwrap_or_else(|| panic!("`{title}` paints in the rail"));
+        // The shared pane-title ink: the muted step, which is legal on the
+        // sidebar surface — the one audited surface it reaches by arithmetic
+        // rather than by a fourth decision.
+        assert_eq!(
+            galley.color,
+            Palette::INK_3,
+            "`{title}` wears the shared pane-title ink"
+        );
+        // Exactly one rule closes the band this title sits in.
+        let under: Vec<Rect> = rail_rules
+            .iter()
+            .copied()
+            .filter(|r| {
+                r.top() >= galley.rect.bottom() - 1.0
+                    && r.top() <= galley.rect.bottom() + PANE_HEADER_HEIGHT
+            })
+            .collect();
+        assert_eq!(
+            under.len(),
+            1,
+            "`{title}` is closed by exactly one structural hairline, the shared \
+             pane header's own rule; found {under:?} among the rail's rules \
+             {rail_rules:?}"
+        );
+        let rule_rect = under[0];
+        // And the title is centred in the band above it — which is the *shared*
+        // band's height, so a title set at a different size, or a rule at the
+        // wrong distance, fails here.
+        let band_top = rule_rect.top() - PANE_HEADER_HEIGHT;
+        let band = Rect::from_min_max(
+            egui::pos2(rail.left(), band_top),
+            egui::pos2(rail.right(), rule_rect.top()),
+        );
+        assert!(
+            band.contains_rect(galley.rect),
+            "`{title}` sits inside the shared band its rule closes: title {:?}, \
+             band {band:?}",
+            galley.rect
+        );
+        assert!(
+            (galley.rect.center().y - band.center().y).abs() <= 1.0,
+            "`{title}` is centred in the shared band: title centre {}, band \
+             centre {}",
+            galley.rect.center().y,
+            band.center().y
+        );
+    }
+    // Two sections, two rules — and no more. A third rule anywhere in the rail
+    // under these two titles is the nested-boxes failure the shared header
+    // exists to prevent, and the count is what says so.
+    assert_eq!(
+        rail_rules.len(),
+        2,
+        "the rail's two group sections wear one rule each and nothing else \
+         paints a structural hairline in the rail: {rail_rules:?}"
+    );
 }

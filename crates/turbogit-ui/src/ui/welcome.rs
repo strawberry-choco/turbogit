@@ -16,8 +16,8 @@
 
 use crate::theme::Palette;
 use egui::{
-    Align, Align2, Color32, CornerRadius, Id, Layout, Order, Pos2, Rect, RichText, Sense, Stroke,
-    StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Align2, Color32, CornerRadius, Id, Layout, Order, Pos2, Rect, RichText, Sense, Ui,
+    UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::time::{Duration, Instant};
 use turbogit_app::state::{AppState, Toast};
@@ -50,6 +50,30 @@ const GRADIENT_ALPHA: f32 = 0.22;
 /// Branch indicators recompute at most this often (ADR-0005: computed live
 /// at render with in-memory caching — never stored).
 const BRANCH_TTL: Duration = Duration::from_secs(5);
+
+/// The one pane-title face in the app: the token layer's
+/// [`TYPE_PANE_TITLE`](crate::theme::TYPE_PANE_TITLE) in the chrome face.
+///
+/// **One constructor, two callers** — the changelog dialog's title and the
+/// wordmark below both build their heading through it, and a third surface
+/// adopting the role gets the same face by calling the same function. A
+/// caller that wrote the size out instead has restated the role, and the two
+/// spellings are the only way "the pane-title role" can quietly become two
+/// roles that happen to share a number.
+///
+/// The wordmark is a *display* role (`TYPE_WORDMARK`), not a pane title — it
+/// is 42px, and shrinking it to 16px to make the sentence true would be
+/// vandalism. What the two share is the property the sentence is really
+/// about: neither keeps a local copy of its type. Both read the token layer,
+/// and the changelog's title is the one that is a pane title proper.
+fn pane_title_font() -> egui::FontId {
+    crate::theme::chrome_font(crate::theme::TYPE_PANE_TITLE)
+}
+
+/// The wordmark's face — the display role the hero's headline is set in.
+fn wordmark_font() -> egui::FontId {
+    crate::theme::chrome_font(crate::theme::TYPE_WORDMARK)
+}
 
 /// Render the Welcome page inside the shell's central panel.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
@@ -97,7 +121,7 @@ fn hero(ui: &mut Ui, state: &mut AppState) {
     // let the text overflow the gradient vertically and touch its top edge.
     // Measure both lines, then pad every side so the headline keeps clearance.
     let painter = ui.painter().clone();
-    let wm_font = crate::theme::chrome_font(crate::theme::TYPE_WORDMARK);
+    let wm_font = wordmark_font();
     let wm = painter.layout_no_wrap("TurboGit".to_owned(), wm_font.clone(), Palette::INK);
     let inner_w = (avail - 2.0 * pad).max(HERO_TILE + 2.0 * gap + 80.0);
     let text_w = (inner_w - HERO_TILE - gap).max(80.0);
@@ -253,11 +277,23 @@ fn action_card_title(ui: &mut Ui, state: &mut AppState, action: CardAction, widt
     action_card(ui, state, icon, title, body, width, action);
 }
 
-/// One quick-action card (spec §5.3): a `CONTENT_BG` fill, `LINE` border and
-/// `CARD_RADIUS`, content-hugging — its height derives from its own galleys
-/// rather than a fixed box. A 30px `SURFACE_3` tile (`CONTROL_RADIUS`) carries a
-/// 15px `ACCENT_TEXT` icon; title `TYPE_DETAIL_TITLE` `INK`, description
-/// `TYPE_BODY` `INK_2`. Hover brightens the fill and border.
+/// One quick-action card (spec §5.3): a `CONTENT_BG` fill at `CARD_RADIUS`,
+/// content-hugging — its height derives from its own galleys rather than a
+/// fixed box. A 30px `SURFACE_3` tile (`CONTROL_RADIUS`) carries a 15px
+/// `ACCENT_TEXT` icon; title `TYPE_DETAIL_TITLE` `INK`, description `TYPE_BODY`
+/// `INK_2`. Hover brightens the fill.
+///
+/// **It paints no stroke, and that is the point (R2).** These are content
+/// regions: they sit in the middle of a pane, not above one. A hairline around
+/// a content region is redundant with the padding it already carries and is the
+/// one thing `CardFrame::default()` exists to stop — a card is a surface, and a
+/// stroke means the surface floats. The three cards used to draw a 1px `LINE`
+/// ring (`BRAND` on hover), which made the app's one bordered *content* region
+/// and put it in the same visual class as the changelog dialog, the one card
+/// that genuinely floats. Hover now reads through the fill alone, and it reads
+/// through the right rung: `SURFACE_2` is `RAISED_ON_CARD`, the raised value for
+/// a control sitting on a content-surface card, where the plain `SURFACE` would
+/// be the wrong step (R5).
 fn action_card(
     ui: &mut Ui,
     state: &mut AppState,
@@ -290,23 +326,10 @@ fn action_card(
         rect,
         radius,
         if hovered {
-            Palette::SURFACE_2
+            Palette::RAISED_ON_CARD
         } else {
             Palette::CONTENT_BG
         },
-    );
-    painter.rect_stroke(
-        rect,
-        radius,
-        Stroke::new(
-            1.0,
-            if hovered {
-                Palette::BRAND
-            } else {
-                Palette::LINE
-            },
-        ),
-        StrokeKind::Outside,
     );
 
     let tile = Rect::from_min_size(
@@ -735,8 +758,19 @@ const CHANGELOG: &[(&str, &str)] = &[
 /// content while [`UiState::show_changelog`] is set.
 ///
 /// It floats rather than filling a pane, so it is the shared [`widgets::card`]
-/// in its pinned form — [`widgets::CardFrame::raised`] tone, 20 px of padding,
-/// and a 420 px minimum width — inside the centering [`egui::Area`].
+/// in its pinned form — [`widgets::CardFrame::raised`] tone,
+/// [`widgets::CardFrame::bordered`], 20 px of padding, and a 420 px minimum
+/// width — inside the centering [`egui::Area`]. It is the app's one bordered
+/// card: a stroke on a card means the surface floats (see
+/// [`widgets::CardFrame::default`]), and this is a surface that floats.
+///
+/// Its title is [`PANE_TITLE`], the token layer's one pane-title role, through
+/// [`pane_title_font`]. The Welcome screen is exempt from nothing: the first
+/// screen anyone sees reads its heading type from the same role the settings
+/// page header and the multi-selection summary do, rather than from a size
+/// spelled beside it. A literal here is how two screens end up disagreeing
+/// about what a title is, and the fix is to reach the token, not to match the
+/// number.
 fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
     if !state.ui.show_changelog {
         return;
@@ -749,6 +783,7 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
                 ui,
                 widgets::CardFrame::default()
                     .raised()
+                    .bordered()
                     .padded(20)
                     .min_width(420.0),
                 |ui| {
@@ -756,7 +791,7 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
                         ui.label(
                             RichText::new("What's New")
                                 .strong()
-                                .size(crate::theme::TYPE_PANE_TITLE)
+                                .font(pane_title_font())
                                 .color(Palette::INK),
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

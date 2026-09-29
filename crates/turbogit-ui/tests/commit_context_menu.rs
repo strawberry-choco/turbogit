@@ -373,6 +373,18 @@ fn the_menu_renders_the_eleven_items_in_the_designed_order() {
 /// A row's label and its data segment are two galleys painted a few pixels
 /// apart vertically, so the row is "the galleys that share the label's line" —
 /// the shape the primitive itself paints, read back from the frame.
+///
+/// **The probe is bounded to the open menu, and it has to be.** "Shares the
+/// label's line" is otherwise a statement about the whole window: a menu floats
+/// over the log body, and anything the log happens to paint on the same baseline
+/// behind it would be reported as one of the row's segments. That is not a
+/// hypothetical — the log's ten-point inter-column gutters moved the commit table
+/// down by one card padding, which moved the popup, which landed a `Cherry-pick to…`
+/// item on the same line as the branches pane's `TAGS` band, and this probe
+/// answered `["TAGS", "Cherry-pick to…", "clean"]` for a menu that reads
+/// `["Cherry-pick to…", "clean"]`. The assertion is unchanged; only the question
+/// got asked properly. The bound is the menu's own left edge, taken from the
+/// `Copy hash` node the rest of this suite already anchors on.
 #[track_caller]
 fn row_segments<S>(harness: &Harness<'_, S>, label: &str) -> Vec<String> {
     let galleys = painted_galleys(harness);
@@ -382,9 +394,19 @@ fn row_segments<S>(harness: &Harness<'_, S>, label: &str) -> Vec<String> {
         .unwrap_or_else(|| panic!("the {label:?} row paints"))
         .pos
         .y;
+    // The menu's left edge, from the item every menu in this suite has. Read
+    // before the label is looked up so a missing menu fails on the menu, not on
+    // a label that happened to be painted by the window underneath it.
+    let menu_left = harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .find(|n| n.accesskit_node().label() == Some("Copy hash".to_string()))
+        .map(|n| n.rect().min.x)
+        .unwrap_or_else(|| {
+            panic!("the commit menu is open (Copy hash item), so {label:?} is in it")
+        });
     let mut segments: Vec<(f32, String)> = galleys
         .iter()
-        .filter(|g| (g.pos.y - y).abs() < 2.0)
+        .filter(|g| (g.pos.y - y).abs() < 2.0 && g.pos.x >= menu_left - 2.0)
         .map(|g| (g.pos.x, g.text.clone()))
         .collect();
     segments.sort_by(|a, b| a.0.total_cmp(&b.0));
