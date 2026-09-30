@@ -23,7 +23,10 @@ use std::time::{Duration, Instant};
 use egui_kittest::kittest::Queryable as _;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
-use test_support::harness::{assert_not_painted, assert_painted};
+use test_support::git_seed::{commit as git_seed_commit, git};
+use test_support::harness::{
+    KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, shell_harness_over_unstyled,
+};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{MergeOpts, MergeStrategy, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -31,36 +34,20 @@ use turbogit_services::bulk_ops::BulkOp;
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Append `text` to `<dir>/<name>`, stage, commit.
+///
+/// Built on `git_seed::commit`, which overwrites where this appended: the accumulated
+/// body is read back and rewritten whole, as that helper's own doc prescribes.
 fn commit(dir: &Path, name: &str, text: &str) {
     let file = dir.join(name);
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file)
-        .expect("opening work file");
-    use std::io::Write;
-    writeln!(f, "{text}").expect("appending work file");
-    drop(f);
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", text]);
+    let mut body = std::fs::read_to_string(&file).unwrap_or_default();
+    body.push_str(text);
+    body.push('\n');
+    git_seed_commit(dir, name, &body, text);
 }
 
+/// Kept local rather than `git_seed::repo_with_one_commit`: the divergence
+/// `merge_repo` builds names these commits, so their subject and path are fixed.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -100,14 +87,12 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Deliberately unstyled: the production tokens and the embedded font would change
+/// what this frame paints. `max_steps` is 1024 rather than kittest's default of 4,
+/// and `Harness::run` panics once a run exceeds its budget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    )
+    shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
 /// Open the Merge dialog on the given root.

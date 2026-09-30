@@ -13,6 +13,9 @@ turbogit-domain = { workspace = true }
 turbogit-engine-api = { workspace = true }
 
 [dev-dependencies]
+# `srcscan` is ungated, so this costs no egui stack — it pulls only domain and
+# engine-api, which this crate already depends on.
+test-support = { workspace = true }
 turbogit-engine = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 

@@ -284,9 +284,6 @@ pub trait GitExecutor: Send + Sync {
     /// Stage specific paths (`git add <paths>`).
     fn add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()>;
 
-    /// Stage everything (`git add -A`).
-    fn add_all(&self, root: &Path) -> TgResult<()>;
-
     /// Unstage paths (`git restore --staged <paths>`).
     fn unstage(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()>;
 

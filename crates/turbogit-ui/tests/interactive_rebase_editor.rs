@@ -28,7 +28,10 @@ use egui::{Color32, Rect};
 use egui_kittest::kittest::Queryable as _;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
-use test_support::harness::{assert_not_painted, assert_painted, galley_origin};
+use test_support::git_seed::{commit as git_seed_commit, git};
+use test_support::harness::{
+    assert_not_painted, assert_painted, galley_origin, shell_harness_over_unstyled,
+};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -36,36 +39,17 @@ use turbogit_ui::theme::Palette;
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Append `text` to `<dir>/<name>`, stage, commit.
 fn commit(dir: &Path, name: &str, text: &str) {
     let file = dir.join(name);
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file)
-        .expect("opening work file");
-    use std::io::Write;
-    writeln!(f, "{text}").expect("appending work file");
-    drop(f);
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", text]);
+    let mut body = std::fs::read_to_string(&file).unwrap_or_default();
+    body.push_str(text);
+    body.push('\n');
+    git_seed_commit(dir, name, &body, text);
 }
 
+/// Kept local rather than `git_seed::repo_with_one_commit`: the seeded commit is
+/// `base.txt`, and `plan_repo` names those commits when it opens the editor.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -99,18 +83,17 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Unstyled, and all three differences are load-bearing: `max_steps` is 1024
+/// because `open_editor` drives the suite through `Harness::run()`, which PANICS
+/// past the budget kittest defaults to 4; no `configure_style`, because `rule_tone`
+/// documents the egui default `noninteractive.bg_stroke` this frame shows instead
+/// of the production token set; and no `install_fonts`, because the embedded font
+/// changes the glyph metrics the geometry assertions measure.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
     // The editor window is wider than kittest's 800×600 default; the
     // right-aligned footer button needs the viewport to contain it.
-    h.set_size(egui::vec2(1400.0, 900.0));
-    h
+    shell_harness_over_unstyled(state, egui::vec2(1400.0, 900.0), 1024)
 }
 
 /// Open the interactive rebase editor on the oldest commit past `main` —

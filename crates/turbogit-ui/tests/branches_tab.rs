@@ -18,8 +18,9 @@ use egui_kittest::{Harness, Node, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
 use test_support::harness::{
     PaintedGalley, assert_not_painted, assert_painted, filled_circles, filled_rects, galley_origin,
-    painted_galleys, painted_text,
+    painted_galleys, painted_text, settle_quiet,
 };
+use test_support::srcscan;
 use turbogit_app::state::{AppState, Tab};
 
 // --- git fixture -------------------------------------------------------------
@@ -114,39 +115,43 @@ fn open_branches_tab(harness: &mut Harness<'_, AppState>) {
     settle_quiet(harness);
 }
 
+/// **The invariant prefix, with the fixture as a parameter.** These render tests are not
+/// all about the same repository — badges, conflicts, no branches, two sections — so
+/// hard-coding `single_repo_project` would either not fit or fit by changing what they
+/// exercise. The `TempDir` is returned beside the harness and must outlive it (drop it
+/// and every later read fails).
+fn open_branches_over(
+    project: (TempDir, PathBuf),
+    harness_of: fn(PathBuf) -> Harness<'static, AppState>,
+) -> (TempDir, PathBuf, Harness<'static, AppState>) {
+    open_branches_over_with(project, harness_of, |_| {})
+}
+
+/// The same prefix, with `edit` run in the slot between the harness loading the
+/// repository and the tab's first paint.
+fn open_branches_over_with(
+    project: (TempDir, PathBuf),
+    harness_of: fn(PathBuf) -> Harness<'static, AppState>,
+    edit: impl FnOnce(&mut Harness<'static, AppState>),
+) -> (TempDir, PathBuf, Harness<'static, AppState>) {
+    let (project, dir) = project;
+    let mut harness = harness_of(dir.clone());
+    edit(&mut harness);
+    open_branches_tab(&mut harness);
+    (project, dir, harness)
+}
+
 /// Reveal remotes through the tree's collapsed Remote rollup.
 fn show_remotes(harness: &mut Harness<'_, AppState>) {
     row_node(harness, "Remote").click();
     settle_quiet(harness);
 }
 
-fn settle_quiet(harness: &mut Harness<'_, AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let fp = format!("{:?}", painted_text(harness));
-        if fp == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = fp;
-        }
-    }
-    panic!("branches layout did not settle within 300 frames");
-}
-
 // --- Cycle 1: groups with live counts ------------------------------------------
 
 #[test]
 fn tab_opens_with_groups_counts_and_nothing_selected() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Group headers carry live counts: 4 locals, the Remote area collapsed
     // into a per-repo rollup (remotes are hidden by default, issue 03), 1 tag.
@@ -181,9 +186,7 @@ fn tab_opens_with_groups_counts_and_nothing_selected() {
 
 #[test]
 fn current_branch_is_first_row_and_visible_without_scrolling() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(single_repo_project(), branches_harness);
 
     let current = galley_origin(&harness, "main").expect("current row painted");
     // Only local rows are visible while remotes are off (issue 03), so the
@@ -208,9 +211,7 @@ fn current_branch_is_first_row_and_visible_without_scrolling() {
 
 #[test]
 fn tags_group_starts_collapsed_and_headers_keep_counts() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Local paints; the Remote area paints its collapsed rollup (remotes are
     // hidden by default), so the remote member does not.
@@ -231,9 +232,7 @@ fn tags_group_starts_collapsed_and_headers_keep_counts() {
 
 #[test]
 fn fresh_repo_shows_one_sentence_and_create_action_not_headers() {
-    let (_project, dir) = fresh_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(fresh_repo_project(), branches_harness);
 
     // One explanatory sentence + a single create action; no empty group
     // headers and no blank panel.
@@ -248,9 +247,7 @@ fn fresh_repo_shows_one_sentence_and_create_action_not_headers() {
 
 #[test]
 fn the_branch_list_fills_the_width_the_detail_panel_used_to_take() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // The 280px panel is gone: a row reaches into the strip it reserved.
     let row = row_node(&harness, "feature-a");
@@ -289,31 +286,30 @@ fn reading_state_replaces_a_blank_panel() {
 
 #[test]
 fn long_branch_names_truncate_in_the_middle_on_the_row() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-
-    // Add a branch with a long distinguishing name, then open the tab.
-    {
-        let st = harness.state_mut();
-        let id = st.selected_root.clone().expect("selected root");
-        if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
-            r.branches.push(turbogit_domain::model::Branch {
-                name: "feature/multi-root-executor-rewrite".into(),
-                kind: turbogit_domain::model::BranchKind::Local,
-                tracking: None,
-                favorite: false,
-                protected: false,
-                exists: true,
-                ahead: 0,
-                behind: 0,
-                gone: false,
-                last_touched: None,
-                tip: None,
-                remote: None,
-            });
-        }
-    }
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) =
+        open_branches_over_with(single_repo_project(), branches_harness, |harness| {
+            // A deliberately over-long name, so the row has something to elide.
+            {
+                let st = harness.state_mut();
+                let id = st.selected_root.clone().expect("selected root");
+                if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
+                    r.branches.push(turbogit_domain::model::Branch {
+                        name: "feature/multi-root-executor-rewrite".into(),
+                        kind: turbogit_domain::model::BranchKind::Local,
+                        tracking: None,
+                        favorite: false,
+                        protected: false,
+                        exists: true,
+                        ahead: 0,
+                        behind: 0,
+                        gone: false,
+                        last_touched: None,
+                        tip: None,
+                        remote: None,
+                    });
+                }
+            }
+        });
 
     // The shared "feature/" prefix groups into its own directory header; the
     // leaf keeps its own name, middle-truncated so both identifying ends
@@ -418,9 +414,7 @@ fn assert_section(harness: &Harness<'_, AppState>, label: &str, count: usize) {
 
 #[test]
 fn rows_render_icon_count_pairs_in_sync_gone_and_upstream() {
-    let (_project, dir) = sync_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(sync_repo_project(), branches_harness);
 
     // feat: diverged from origin/main → one badge per direction, each with its
     // own arrow icon and its words.
@@ -440,9 +434,7 @@ fn rows_render_icon_count_pairs_in_sync_gone_and_upstream() {
 /// thing the same way — `sync_badge` is the only place the words are built.
 #[test]
 fn rows_never_paint_absolute_dates() {
-    let (_project, dir) = sync_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(sync_repo_project(), branches_harness);
 
     let year = format!("{}", chrono::Utc::now().year());
     let texts: Vec<String> = painted_text(&harness);
@@ -456,9 +448,7 @@ fn rows_never_paint_absolute_dates() {
 
 #[test]
 fn click_selects_the_row_visibly_and_never_checks_out() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // An unselected row carries no selection fill at all.
     assert!(
@@ -572,50 +562,59 @@ fn row_node<'t>(harness: &'t Harness<'_, AppState>, name: &str) -> egui_kittest:
         .unwrap_or_else(|| panic!("row button for {name}"))
 }
 
-#[test]
-fn enter_on_selected_row_checks_it_out() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-
+/// The keyboard path: click the row, then Enter.
+fn click_then_enter(harness: &mut Harness<'static, AppState>, branch: &str) {
     harness
-        .get_all_by_label("feature-b")
+        .get_all_by_label(branch)
         .next()
-        .expect("local feature-b row")
+        .unwrap_or_else(|| panic!("local {branch} row"))
         .click();
-    settle_quiet(&mut harness);
+    settle_quiet(harness);
     harness.key_press(egui::Key::Enter);
-    pump_until(&mut harness, "Enter checks out the selected row", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
-            .and_then(|r| r.current_branch.clone())
-            .as_deref()
-            == Some("feature-b")
-    });
 }
 
-#[test]
-fn double_click_on_row_checks_it_out() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-
-    let node = row_node(&harness, "zebra");
+/// The mouse path: two clicks inside egui's double-click window, which
+/// `branches_harness`'s 1/60s frame step keeps reachable.
+fn double_click(harness: &mut Harness<'static, AppState>, branch: &str) {
+    let node = row_node(harness, branch);
     node.click();
     let _ = node;
     harness.step();
-    let node = row_node(&harness, "zebra");
+    let node = row_node(harness, branch);
     node.click();
     let _ = node;
-    pump_until(&mut harness, "double-click checks out the row", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
-            .and_then(|r| r.current_branch.clone())
-            .as_deref()
-            == Some("zebra")
-    });
+}
+
+/// One gesture for checking a list row out, aimed at `branch`.
+type CheckoutGesture = fn(&mut Harness<'static, AppState>, &str);
+
+/// Every way the list says "check this one out": the gesture, its branch, and the
+/// name the failure quotes. Each row keeps its own gesture so a red row names the
+/// input that broke.
+const CHECKOUT_GESTURES: &[(&str, CheckoutGesture, &str)] = &[
+    (
+        "Enter checks out the selected row",
+        click_then_enter,
+        "feature-b",
+    ),
+    ("double-click checks out the row", double_click, "zebra"),
+];
+
+#[test]
+fn every_checkout_gesture_switches_branches() {
+    for &(what, gesture, branch) in CHECKOUT_GESTURES {
+        let (_project, _dir, mut harness) =
+            open_branches_over(single_repo_project(), branches_harness);
+        gesture(&mut harness, branch);
+        pump_until(&mut harness, what, |s| {
+            s.selected_root
+                .as_ref()
+                .and_then(|id| s.multi.by_id(id))
+                .and_then(|r| r.current_branch.clone())
+                .as_deref()
+                == Some(branch)
+        });
+    }
 }
 
 // --- Cycle 10: search & jump (issue 06) -------------------------------------------
@@ -629,9 +628,7 @@ fn type_search(harness: &mut Harness<'_, AppState>, text: &str) {
 
 #[test]
 fn typing_filters_live_and_counts_update() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     type_search(&mut harness, "feat");
     assert_section(&harness, "LOCAL", 2);
@@ -645,30 +642,27 @@ fn typing_filters_live_and_counts_update() {
 
 #[test]
 fn fuzzy_query_matches_prefix_dots_and_multiword() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-
-    {
-        let st = harness.state_mut();
-        let id = st.selected_root.clone().expect("selected root");
-        if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
-            r.branches.push(turbogit_domain::model::Branch {
-                name: "feature/multi-root-executor".into(),
-                kind: turbogit_domain::model::BranchKind::Local,
-                tracking: None,
-                favorite: false,
-                protected: false,
-                exists: true,
-                ahead: 0,
-                behind: 0,
-                gone: false,
-                last_touched: None,
-                tip: None,
-                remote: None,
-            });
-        }
-    }
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) =
+        open_branches_over_with(single_repo_project(), branches_harness, |harness| {
+            let st = harness.state_mut();
+            let id = st.selected_root.clone().expect("selected root");
+            if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
+                r.branches.push(turbogit_domain::model::Branch {
+                    name: "feature/multi-root-executor".into(),
+                    kind: turbogit_domain::model::BranchKind::Local,
+                    tracking: None,
+                    favorite: false,
+                    protected: false,
+                    exists: true,
+                    ahead: 0,
+                    behind: 0,
+                    gone: false,
+                    last_touched: None,
+                    tip: None,
+                    remote: None,
+                });
+            }
+        });
 
     // `mre` surfaces feature/multi-root-executor (subsequence match): the
     // shared "feature/" prefix groups into its directory header and the leaf
@@ -684,35 +678,32 @@ fn fuzzy_query_matches_prefix_dots_and_multiword() {
 
 #[test]
 fn query_matches_the_tip_commit_message() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-
-    {
-        let st = harness.state_mut();
-        let id = st.selected_root.clone().expect("selected root");
-        if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
-            r.branches.push(turbogit_domain::model::Branch {
-                name: "fix/dirty-worktree".into(),
-                kind: turbogit_domain::model::BranchKind::Local,
-                tracking: None,
-                favorite: false,
-                protected: false,
-                exists: true,
-                ahead: 0,
-                behind: 0,
-                gone: false,
-                last_touched: None,
-                tip: Some(turbogit_domain::model::BranchTip {
-                    short_hash: "abcd123".into(),
-                    message: "fix the dirty worktree detection".into(),
-                    author: "t".into(),
-                    time: chrono::Utc::now(),
-                }),
-                remote: None,
-            });
-        }
-    }
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) =
+        open_branches_over_with(single_repo_project(), branches_harness, |harness| {
+            let st = harness.state_mut();
+            let id = st.selected_root.clone().expect("selected root");
+            if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
+                r.branches.push(turbogit_domain::model::Branch {
+                    name: "fix/dirty-worktree".into(),
+                    kind: turbogit_domain::model::BranchKind::Local,
+                    tracking: None,
+                    favorite: false,
+                    protected: false,
+                    exists: true,
+                    ahead: 0,
+                    behind: 0,
+                    gone: false,
+                    last_touched: None,
+                    tip: Some(turbogit_domain::model::BranchTip {
+                        short_hash: "abcd123".into(),
+                        message: "fix the dirty worktree detection".into(),
+                        author: "t".into(),
+                        time: chrono::Utc::now(),
+                    }),
+                    remote: None,
+                });
+            }
+        });
 
     // Remembering what a branch contains, not its name. The shared "fix/"
     // prefix groups into its directory header; the leaf keeps the stripped
@@ -725,9 +716,7 @@ fn query_matches_the_tip_commit_message() {
 
 #[test]
 fn no_match_says_create_it_inside_the_list() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     type_search(&mut harness, "zzz-no-branch");
     assert_painted(&harness, "no branch called zzz-no-branch. Create it?");
@@ -735,9 +724,7 @@ fn no_match_says_create_it_inside_the_list() {
 
 #[test]
 fn clearing_restores_selection_and_the_full_list() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Select a branch first, then filter the list to zebra. The selection
     // persists (the detail panel keeps the selected branch — search is for
@@ -811,9 +798,7 @@ fn current_branch(harness: &Harness<'_, AppState>) -> Option<String> {
 
 #[test]
 fn dirty_tree_checkout_offers_plain_choices_and_cancel_leaves_everything() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
     dirty_root(&mut harness);
 
     // Checkout (Enter on the selected row) hits the care dialog, never a
@@ -894,9 +879,7 @@ fn set_aside_stashes_changes_and_returns_them_intact() {
 
 #[test]
 fn clean_checkout_switches_and_notes_the_switch_quietly() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Clean tree: Enter on the selected row switches directly, with no dialog.
     row_node(&harness, "feature-a").click();
@@ -923,22 +906,20 @@ fn clean_checkout_switches_and_notes_the_switch_quietly() {
 
 #[test]
 fn branch_checked_out_in_another_worktree_is_flagged_up_front() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    {
-        let st = harness.state_mut();
-        let id = st.selected_root.clone().unwrap();
-        st.caches.store_worktrees(
-            id.clone(),
-            vec![turbogit_domain::model::Worktree {
-                path: PathBuf::from("C:\\wt\\feature-a"),
-                branch: "feature-a".into(),
-                dirty: None,
-                root: id,
-            }],
-        );
-    }
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) =
+        open_branches_over_with(single_repo_project(), branches_harness, |harness| {
+            let st = harness.state_mut();
+            let id = st.selected_root.clone().unwrap();
+            st.caches.store_worktrees(
+                id.clone(),
+                vec![turbogit_domain::model::Worktree {
+                    path: PathBuf::from("C:\\wt\\feature-a"),
+                    branch: "feature-a".into(),
+                    dirty: None,
+                    root: id,
+                }],
+            );
+        });
 
     row_node(&harness, "feature-a").click();
     settle_quiet(&mut harness);
@@ -961,9 +942,7 @@ fn branch_checked_out_in_another_worktree_is_flagged_up_front() {
 
 #[test]
 fn new_branch_dialog_footer_preserves_order_minimum_targets_and_divider() {
-    let (_project, dir) = single_repo_project();
-    let mut h = branches_harness(dir);
-    open_branches_tab(&mut h);
+    let (_project, _dir, mut h) = open_branches_over(single_repo_project(), branches_harness);
     h.get_by_label("New Branch").click();
     settle_quiet(&mut h);
 
@@ -982,9 +961,7 @@ fn new_branch_dialog_footer_preserves_order_minimum_targets_and_divider() {
 
 #[test]
 fn new_branch_is_prominent_and_defaults_base_to_current_with_switch_on() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // The primary toolbar button opens the flow.
     assert_painted(&harness, "New Branch");
@@ -1008,83 +985,77 @@ fn new_branch_is_prominent_and_defaults_base_to_current_with_switch_on() {
     assert_painted(&harness, "Switch to the new branch now");
 }
 
-#[test]
-fn create_and_switch_appears_marked_current_and_scrolled() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-
-    harness.get_by_label("New Branch").click();
-    settle_quiet(&mut harness);
-    {
-        let field = harness
-            .get_all_by_role(egui::accesskit::Role::TextInput)
-            .find(|n| n.accesskit_node().label().is_none())
-            .expect("dialog Name input queryable");
-        field.focus();
-        field.type_text("issue08-x");
-    }
-    settle_quiet(&mut harness);
-    harness.get_by_label("Create").click();
-
-    // After create-and-switch: the branch appears, is current, and the
-    // scroll-to intent was consumed (it was near the top already — the new
-    // current branch orders first).
-    pump_until(&mut harness, "branch created and checked out", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
-            .map(|r| {
-                r.current_branch.as_deref() == Some("issue08-x")
-                    && r.branches.iter().any(|b| b.name == "issue08-x")
-            })
-            .unwrap_or(false)
-    });
-    assert!(harness.state().ui.branches_tree.scroll_to.is_none());
-    assert_painted(&harness, "issue08-x");
+/// One "Create" run through the New Branch dialog; `what` is the string `pump_until`
+/// quotes when the row times out.
+struct CreateCase {
+    what: &'static str,
+    /// Whether the row leaves the switch decision alone (`true`) or turns it off first.
+    switch_now: bool,
+    name: &'static str,
+    expect_current: &'static str,
 }
 
+const CREATE_CASES: &[CreateCase] = &[
+    CreateCase {
+        what: "branch created and checked out",
+        switch_now: true,
+        name: "issue08-x",
+        expect_current: "issue08-x",
+    },
+    CreateCase {
+        what: "branch created without switching",
+        switch_now: false,
+        name: "issue08-no-switch",
+        expect_current: "main",
+    },
+];
+
 #[test]
-fn create_without_switch_keeps_the_current_branch() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+fn creating_a_branch_honours_the_switch_decision_it_was_given() {
+    for case in CREATE_CASES {
+        let (_project, _dir, mut harness) =
+            open_branches_over(single_repo_project(), branches_harness);
+        harness.get_by_label("New Branch").click();
+        settle_quiet(&mut harness);
+        if !case.switch_now {
+            harness.get_by_label("Switch to the new branch now").click();
+            settle_quiet(&mut harness);
+        }
+        {
+            let field = harness
+                .get_all_by_role(egui::accesskit::Role::TextInput)
+                .find(|n| n.accesskit_node().label().is_none())
+                .expect("dialog Name input queryable");
+            field.focus();
+            field.type_text(case.name);
+        }
+        settle_quiet(&mut harness);
+        harness.get_by_label("Create").click();
 
-    harness.get_by_label("New Branch").click();
-    settle_quiet(&mut harness);
-    // Turn the explicit switch decision off.
-    harness.get_by_label("Switch to the new branch now").click();
-    settle_quiet(&mut harness);
-    {
-        let field = harness
-            .get_all_by_role(egui::accesskit::Role::TextInput)
-            .find(|n| n.accesskit_node().label().is_none())
-            .expect("dialog Name input queryable");
-        field.focus();
-        field.type_text("issue08-no-switch");
+        // The branch lands either way; the decision decides whether it is current.
+        pump_until(&mut harness, case.what, |s| {
+            s.selected_root
+                .as_ref()
+                .and_then(|id| s.multi.by_id(id))
+                .map(|r| {
+                    r.current_branch.as_deref() == Some(case.expect_current)
+                        && r.branches.iter().any(|b| b.name == case.name)
+                })
+                .unwrap_or(false)
+        });
+        if case.switch_now {
+            // The scroll-to intent was consumed (the new current branch orders first).
+            assert!(harness.state().ui.branches_tree.scroll_to.is_none());
+        }
+        assert_painted(&harness, case.name);
     }
-    settle_quiet(&mut harness);
-    harness.get_by_label("Create").click();
-
-    pump_until(&mut harness, "branch created without switching", |s| {
-        s.selected_root
-            .as_ref()
-            .and_then(|id| s.multi.by_id(id))
-            .map(|r| {
-                r.current_branch.as_deref() == Some("main")
-                    && r.branches.iter().any(|b| b.name == "issue08-no-switch")
-            })
-            .unwrap_or(false)
-    });
 }
 
 // --- Cycle 13: merge / rebase from the detail (issue 09) ----------------------------
 
 #[test]
 fn merge_from_detail_opens_the_preflighted_dialog() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     menu_action(&mut harness, "feature-a", "Merge into main");
 
@@ -1103,9 +1074,7 @@ fn merge_from_detail_opens_the_preflighted_dialog() {
 
 #[test]
 fn rebase_from_detail_states_direction_and_runs() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     open_row_menu(&mut harness, "feature-b");
     harness.get_by_label("Rebase onto main").click();
@@ -1127,23 +1096,6 @@ fn rebase_from_detail_states_direction_and_runs() {
         "direction is stated in the report, got {:?}",
         last.message
     );
-}
-
-#[test]
-fn mid_operation_state_shows_on_the_row_and_survives_tab_switches() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    harness.state_mut().ui.merge_in_progress = true;
-    open_branches_tab(&mut harness);
-
-    assert_painted(&harness, "merging…");
-    // Switch away and back: the mid-operation state is first-class and
-    // survives (issue 09, §10).
-    harness.state_mut().ui.tab = Tab::Commit;
-    settle_quiet(&mut harness);
-    harness.state_mut().ui.tab = Tab::Branches;
-    settle_quiet(&mut harness);
-    assert_painted(&harness, "merging…");
 }
 
 /// A repo where merging `conflict-a` into `main` must conflict (both changed
@@ -1173,9 +1125,8 @@ fn conflict_repo_project() -> (TempDir, PathBuf) {
 
 #[test]
 fn conflicted_merge_hands_off_to_the_conflict_experience() {
-    let (_project, dir) = conflict_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) =
+        open_branches_over(conflict_repo_project(), branches_harness);
 
     menu_action(&mut harness, "conflict-a", "Merge into main");
     harness.get_by_label("Merge").click();
@@ -1202,9 +1153,7 @@ fn conflicted_merge_hands_off_to_the_conflict_experience() {
 
 #[test]
 fn compare_from_detail_opens_read_only_and_closes_back_to_the_same_place() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Select a branch and note the scroll position.
     row_node(&harness, "feature-a").click();
@@ -1248,9 +1197,7 @@ fn compare_from_detail_opens_read_only_and_closes_back_to_the_same_place() {
 
 #[test]
 fn rename_is_inline_on_the_row_and_resorts_correctly() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     menu_action(&mut harness, "feature-a", "Rename branch");
 
@@ -1284,19 +1231,19 @@ fn rename_is_inline_on_the_row_and_resorts_correctly() {
 
 #[test]
 fn rename_discloses_that_tracking_does_not_follow() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    // Give feature-a a tracked upstream so the disclosure has something to say.
-    {
-        let st = harness.state_mut();
-        let id = st.selected_root.clone().unwrap();
-        if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id)
-            && let Some(b) = r.branches.iter_mut().find(|b| b.name == "feature-a")
-        {
-            b.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/feature-a");
-        }
-    }
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) =
+        open_branches_over_with(single_repo_project(), branches_harness, |harness| {
+            // feature-a needs a tracked upstream for the disclosure to have something to say.
+            {
+                let st = harness.state_mut();
+                let id = st.selected_root.clone().unwrap();
+                if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id)
+                    && let Some(b) = r.branches.iter_mut().find(|b| b.name == "feature-a")
+                {
+                    b.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/feature-a");
+                }
+            }
+        });
 
     menu_action(&mut harness, "feature-a", "Rename branch");
 
@@ -1309,9 +1256,7 @@ fn rename_discloses_that_tracking_does_not_follow() {
 
 #[test]
 fn rename_current_branch_keeps_the_marker_and_leaves_the_tree_untouched() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     let tree_changes_before = harness.state().multi.roots[0].status.changes.len();
     menu_action(&mut harness, "main", "Rename branch");
@@ -1339,9 +1284,8 @@ fn rename_current_branch_keeps_the_marker_and_leaves_the_tree_untouched() {
 
 #[test]
 fn delete_names_the_consequence_and_undo_restores() {
-    let (_project, dir) = conflict_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) =
+        open_branches_over(conflict_repo_project(), branches_harness);
 
     // conflict-a carries a commit not on main: the confirmation says what
     // would become unreachable, in human terms.
@@ -1373,9 +1317,7 @@ fn delete_names_the_consequence_and_undo_restores() {
 
 #[test]
 fn safe_to_delete_is_said_in_human_terms() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // feature-a shares main's commit: safe to delete, and the confirmation
     // says so.
@@ -1388,22 +1330,20 @@ fn safe_to_delete_is_said_in_human_terms() {
 
 #[test]
 fn delete_refuses_a_branch_checked_out_elsewhere() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    {
-        let st = harness.state_mut();
-        let id = st.selected_root.clone().unwrap();
-        st.caches.store_worktrees(
-            id.clone(),
-            vec![turbogit_domain::model::Worktree {
-                path: PathBuf::from("C:\\wt\\feature-a"),
-                branch: "feature-a".into(),
-                dirty: None,
-                root: id,
-            }],
-        );
-    }
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) =
+        open_branches_over_with(single_repo_project(), branches_harness, |harness| {
+            let st = harness.state_mut();
+            let id = st.selected_root.clone().unwrap();
+            st.caches.store_worktrees(
+                id.clone(),
+                vec![turbogit_domain::model::Worktree {
+                    path: PathBuf::from("C:\\wt\\feature-a"),
+                    branch: "feature-a".into(),
+                    dirty: None,
+                    root: id,
+                }],
+            );
+        });
 
     menu_action(&mut harness, "feature-a", "Delete branch");
     assert_painted(&harness, "already checked out in another worktree");
@@ -1421,9 +1361,7 @@ fn delete_refuses_a_branch_checked_out_elsewhere() {
 
 #[test]
 fn remote_rows_group_under_their_remote_and_are_quiet() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Remotes are hidden by default; the tree rollup reveals them for the
     // whole view (issue 03). Before expanding it no remote branches paint.
@@ -1508,9 +1446,7 @@ fn click_repo_fetches(harness: &mut Harness<'_, AppState>) {
 
 #[test]
 fn fetch_reports_nothing_changed_or_new_remote_branches() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir.clone());
-    open_branches_tab(&mut harness);
+    let (_project, dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Fetch with nothing new: plainly "nothing changed".
     click_fetch(&mut harness);
@@ -1544,9 +1480,7 @@ fn fetch_reports_nothing_changed_or_new_remote_branches() {
 
 #[test]
 fn switching_to_a_remote_branch_creates_a_tracking_local_in_one_intent() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
     // Remote rows are hidden by default (issue 03): reveal them first.
     show_remotes(&mut harness);
 
@@ -1586,6 +1520,7 @@ mod pure {
     use turbogit_ui::ui::branches::{
         branch_matches, fuzzy_word, is_stale, ordered_locals, row_meta,
     };
+    use turbogit_ui::ui::components::SyncKind;
 
     fn b(name: &str, touched: Option<i64>) -> Branch {
         Branch {
@@ -1637,52 +1572,95 @@ mod pure {
 
     // --- Issue 04: row metadata ----------------------------------------------
 
-    #[test]
-    fn row_meta_carries_upstream_and_sync_badges() {
-        use turbogit_ui::ui::components::SyncKind;
-        let now = Utc::now();
-        let mut br = b("feat", Some(now.timestamp()));
-        br.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/main");
-        br.ahead = 2;
-        br.behind = 1;
-        let meta = row_meta(&br, now);
-        assert_eq!(
-            meta.upstream,
-            turbogit_domain::model::Upstream::from_git_ref("origin/main")
-        );
-        assert_eq!(
-            meta.badge,
-            vec![
-                (SyncKind::Ahead, "2 ahead".to_string()),
-                (SyncKind::Behind, "1 behind".to_string()),
-            ]
-        );
-
-        // Untracked branches carry no upstream and no badge.
-        let plain = b("zebra", Some(now.timestamp()));
-        let meta = row_meta(&plain, now);
-        assert_eq!(meta.upstream, None);
-        assert!(meta.badge.is_empty());
+    /// One branch shape asked of `row_meta`, and what the row must then carry. Every
+    /// row is a literal, not a computation over the row above it; an empty
+    /// `expect_badge` is how a row says "nothing to report".
+    struct RowMetaCase {
+        what: &'static str,
+        name: &'static str,
+        tracking: Option<&'static str>,
+        ahead: usize,
+        behind: usize,
+        gone: bool,
+        expect_upstream: Option<&'static str>,
+        expect_badge: &'static [(SyncKind, &'static str)],
     }
 
-    #[test]
-    fn row_meta_leaves_in_sync_unmarked() {
-        let now = Utc::now();
-        let mut br = b("main", Some(now.timestamp()));
-        br.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/main");
-        let meta = row_meta(&br, now);
-        assert!(meta.badge.is_empty());
-    }
+    const ROW_META_CASES: &[RowMetaCase] = &[
+        // Diverged: one badge per *direction*.
+        RowMetaCase {
+            what: "diverged",
+            name: "feat",
+            tracking: Some("origin/main"),
+            ahead: 2,
+            behind: 1,
+            gone: false,
+            expect_upstream: Some("origin/main"),
+            expect_badge: &[(SyncKind::Ahead, "2 ahead"), (SyncKind::Behind, "1 behind")],
+        },
+        // Untracked: no upstream, no badge.
+        RowMetaCase {
+            what: "untracked",
+            name: "zebra",
+            tracking: None,
+            ahead: 0,
+            behind: 0,
+            gone: false,
+            expect_upstream: None,
+            expect_badge: &[],
+        },
+        // In sync: silence is the answer.
+        RowMetaCase {
+            what: "in sync",
+            name: "main",
+            tracking: Some("origin/main"),
+            ahead: 0,
+            behind: 0,
+            gone: false,
+            expect_upstream: Some("origin/main"),
+            expect_badge: &[],
+        },
+        // Upstream deleted on the remote.
+        RowMetaCase {
+            what: "gone upstream",
+            name: "ghost",
+            tracking: Some("origin/ghost"),
+            ahead: 0,
+            behind: 0,
+            gone: true,
+            expect_upstream: Some("origin/ghost"),
+            expect_badge: &[(SyncKind::Gone, "gone")],
+        },
+    ];
 
     #[test]
-    fn row_meta_marks_gone_upstream() {
-        use turbogit_ui::ui::components::SyncKind;
+    fn row_meta_carries_the_upstream_and_exactly_the_badges_the_state_earns() {
         let now = Utc::now();
-        let mut br = b("ghost", Some(now.timestamp()));
-        br.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/ghost");
-        br.gone = true;
-        let meta = row_meta(&br, now);
-        assert_eq!(meta.badge, vec![(SyncKind::Gone, "gone".to_string())]);
+        for case in ROW_META_CASES {
+            let mut br = b(case.name, Some(now.timestamp()));
+            br.tracking =
+                turbogit_domain::model::Upstream::from_git_ref(case.tracking.unwrap_or(""));
+            br.ahead = case.ahead;
+            br.behind = case.behind;
+            br.gone = case.gone;
+            let meta = row_meta(&br, now);
+            assert_eq!(
+                meta.upstream,
+                turbogit_domain::model::Upstream::from_git_ref(case.expect_upstream.unwrap_or("")),
+                "the {} row carries its upstream verbatim",
+                case.what
+            );
+            let expect: Vec<(SyncKind, String)> = case
+                .expect_badge
+                .iter()
+                .map(|(kind, words)| (*kind, words.to_string()))
+                .collect();
+            assert_eq!(
+                meta.badge, expect,
+                "the {} row badges exactly what its state earns",
+                case.what
+            );
+        }
     }
 
     // --- Issue 06: fuzzy search ---------------------------------------------
@@ -1798,9 +1776,7 @@ fn row_nodes<'h>(harness: &'h Harness<'_, AppState>, name: &str) -> Vec<egui_kit
 
 #[test]
 fn two_current_branches_are_distinct_rows_owned_by_their_repo() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     // Both repos contribute their own grouped section; the two `main`s are
     // separate rows, never one anonymous row. Each section carries its own
@@ -1866,9 +1842,7 @@ fn two_current_branches_are_distinct_rows_owned_by_their_repo() {
 
 #[test]
 fn rows_never_repeat_the_repo_name_their_section_already_states() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     // The section header names the repo, so every row beneath it would be
     // repeating it. Scoped to each row's own surface: the header (and the app
@@ -1888,9 +1862,7 @@ fn rows_never_repeat_the_repo_name_their_section_already_states() {
 
 #[test]
 fn repo_filter_narrows_the_list_and_the_header_says_so() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     // Unfiltered: the header names the whole scope.
     assert_painted(&harness, "all 2 repos");
@@ -1935,9 +1907,7 @@ fn repo_filter_narrows_the_list_and_the_header_says_so() {
 
 #[test]
 fn fetch_across_all_repos_reports_each_repo_separately() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir.clone());
-    open_branches_tab(&mut harness);
+    let (_project, dir, mut harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     // A new branch appears only on alpha's remote.
     git(&dir.join("origin.git"), &["branch", "fresh-remote"]);
@@ -1990,9 +1960,7 @@ fn fetch_across_all_repos_reports_each_repo_separately() {
 /// every repo in the project.
 #[test]
 fn a_headers_fetch_fetches_only_its_own_repository() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     let list_x = LIST_RIGHT;
     let mut fetches: Vec<_> = harness
@@ -2024,9 +1992,7 @@ fn a_headers_fetch_fetches_only_its_own_repository() {
 /// A quiet read reports on the list; it never moves it.
 #[test]
 fn a_quiet_read_never_shifts_the_list() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
     let before = row_node(&harness, "feature-a").rect().top();
 
     harness.state_mut().ui.busy = true;
@@ -2049,9 +2015,7 @@ fn a_quiet_read_never_shifts_the_list() {
 
 #[test]
 fn keyboard_path_filter_arrow_enter_checks_out() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // The keyboard path (§15): focus lands in the filter box on open, typing
     // narrows, an arrow selects the surviving row, and Enter checks it out —
@@ -2076,9 +2040,7 @@ fn keyboard_path_filter_arrow_enter_checks_out() {
 
 #[test]
 fn arrow_keys_move_the_selection_through_branches() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Nothing selected: the first Down lands on the current branch (it sits
     // first in the list), then each Down moves one row further.
@@ -2106,9 +2068,7 @@ fn arrow_keys_move_the_selection_through_branches() {
 
 #[test]
 fn delete_key_asks_for_the_selected_branch() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Select a branch and press Delete: the ask appears with the human-terms
     // consequence — never a silent or instant deletion.
@@ -2125,9 +2085,7 @@ fn delete_key_asks_for_the_selected_branch() {
 
 #[test]
 fn delete_key_never_targets_the_current_branch() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     row_node(&harness, "main").click();
     settle_quiet(&mut harness);
@@ -2139,31 +2097,42 @@ fn delete_key_never_targets_the_current_branch() {
     );
 }
 
+/// Puts the app into one in-flight state.
+type StartOperation = fn(&mut AppState);
+
+/// Each in-flight operation: the flag that starts it, the muted marker it paints,
+/// and the tool window the view hides behind it. The marker is the row's identity.
+const MID_OPERATION: &[(&str, StartOperation, Tab)] = &[
+    ("merging…", |s| s.ui.merge_in_progress = true, Tab::Commit),
+    ("working…", |s| s.ui.busy = true, Tab::Log),
+];
+
 #[test]
-fn mid_operation_marker_shows_in_place_and_survives_tab_switches() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+fn a_mid_operation_marks_the_list_in_place_and_survives_tab_switches() {
+    for &(marker, start, away) in MID_OPERATION {
+        let (_project, _dir, mut harness) =
+            open_branches_over(single_repo_project(), branches_harness);
 
-    // An operation in flight paints a muted in-place marker over the list —
-    // never silence.
-    harness.state_mut().ui.busy = true;
-    harness.step();
-    settle_quiet(&mut harness);
-    assert_painted(&harness, "working…");
+        // A marker over the list, never silence.
+        start(harness.state_mut());
+        harness.step();
+        settle_quiet(&mut harness);
+        assert_painted(&harness, marker);
 
-    // The mid-operation state survives switching away and back.
-    harness.state_mut().ui.tab = Tab::Log;
-    harness.step();
-    harness.state_mut().ui.tab = Tab::Branches;
-    harness.step();
-    settle_quiet(&mut harness);
-    assert_painted(&harness, "working…");
+        // First-class: it survives switching away and back.
+        harness.state_mut().ui.tab = away;
+        settle_quiet(&mut harness);
+        harness.state_mut().ui.tab = Tab::Branches;
+        settle_quiet(&mut harness);
+        assert_painted(&harness, marker);
 
-    harness.state_mut().ui.busy = false;
-    harness.step();
-    settle_quiet(&mut harness);
-    assert_not_painted(&harness, "working…");
+        // And it goes when the operation ends, so it cannot go stale.
+        harness.state_mut().ui.busy = false;
+        harness.state_mut().ui.merge_in_progress = false;
+        harness.step();
+        settle_quiet(&mut harness);
+        assert_not_painted(&harness, marker);
+    }
 }
 
 // --- Cycle 20: remotes toggle, expanded groups & freshness (issue 03) --------------
@@ -2192,9 +2161,7 @@ fn row_name_color(harness: &Harness<'_, AppState>, name: &str) -> Option<egui::C
 
 #[test]
 fn tree_remote_rollup_reveals_remote_groups_without_a_toolbar_toggle() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     assert!(!harness.state().ui.branches_tree.show_remotes);
     assert_painted(&harness, "1 remote · 2 branches");
@@ -2232,9 +2199,7 @@ fn tree_remote_rollup_reveals_remote_groups_without_a_toolbar_toggle() {
 
 #[test]
 fn expanded_remote_group_header_shows_its_count_and_freshness_hint() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // Nothing has been fetched yet, so there is no freshness to report.
     show_remotes(&mut harness);
@@ -2268,9 +2233,7 @@ fn expanded_remote_group_header_shows_its_count_and_freshness_hint() {
 
 #[test]
 fn fetch_sits_at_the_repo_level_while_remotes_are_hidden() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     // Remotes are off, so no Remote group header exists to hang Fetch on — yet
     // every repo's section still offers it, one control per repo.
@@ -2294,9 +2257,7 @@ fn fetch_sits_at_the_repo_level_while_remotes_are_hidden() {
 fn repo_section_headers_name_their_repo_inside_the_list() {
     use turbogit_ui::theme::Palette;
 
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     // **What moved, and why.** This suite used to anchor the bands on a 4px
     // heading status dot on their left. Ticket 16 removed that dot: the band's
@@ -2357,9 +2318,7 @@ fn repo_section_headers_name_their_repo_inside_the_list() {
 fn names_are_monospace_and_labels_and_counts_are_sans() {
     use egui::FontFamily;
 
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
     let galleys = painted_galleys(&harness);
     let family_of = |text: &str| {
         galleys
@@ -2453,9 +2412,7 @@ fn names_are_monospace_and_labels_and_counts_are_sans() {
 
 #[test]
 fn toolbar_composes_scope_and_new_branch_without_remotes_toggle() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     // The toolbar keeps the scope chip before New Branch, with no remotes toggle.
     // The chip's label is its state, so the query names the state.
@@ -2488,9 +2445,7 @@ fn toolbar_composes_scope_and_new_branch_without_remotes_toggle() {
 /// empty above the tree.
 #[test]
 fn toolbar_search_shares_the_row_and_stays_in_the_window() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     let win = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1024.0, 768.0));
     let search = harness.get_by_label("Search branches").rect();
@@ -2517,9 +2472,7 @@ fn toolbar_search_shares_the_row_and_stays_in_the_window() {
 
 #[test]
 fn pull_and_push_stay_one_click_away_on_the_branches_tab() {
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 
     // The redesign is a view-level change: the app-level sync actions are
     // unchanged and still one click away while Branches is the active tab.
@@ -2562,9 +2515,7 @@ fn a_branch_name_is_a_ref_chip_and_its_state_is_coloured_text_beside_it() {
 
     // The current branch and a plain local branch read at the same ink: the band,
     // the rail and the marker carry "where am I", not the name.
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(single_repo_project(), branches_harness);
     assert_eq!(
         row_name_color(&harness, "main"),
         Some(Palette::T_PRIMARY),
@@ -2579,9 +2530,7 @@ fn a_branch_name_is_a_ref_chip_and_its_state_is_coloured_text_beside_it() {
 
     // Diverged (ahead *and* behind its upstream): the **name** is unmoved, and
     // the words beside it wear the diverged red.
-    let (_project, dir) = sync_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(sync_repo_project(), branches_harness);
     assert_eq!(
         row_name_color(&harness, "feat"),
         Some(Palette::T_PRIMARY),
@@ -2696,7 +2645,7 @@ fn all_repo_states() -> Vec<turbogit_ui::theme::RepoState> {
     // Comments blanked, so a doc comment on a variant is not read as one.
     let mut declared: Vec<String> = Vec::new();
     let mut inside = false;
-    for line in blank_comments(&src).lines() {
+    for line in srcscan::code_with_literals(&src).lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("pub enum RepoState") {
             inside = true;
@@ -2730,86 +2679,31 @@ fn all_repo_states() -> Vec<turbogit_ui::theme::RepoState> {
     LISTED.to_vec()
 }
 
-/// `src` with every comment replaced by spaces, line structure intact.
-fn blank_comments(src: &str) -> String {
-    let chars: Vec<char> = src.chars().collect();
-    let mut out = String::with_capacity(src.len());
-    let (mut i, mut block, mut line, mut string) = (0usize, false, false, false);
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied().unwrap_or('\0');
-        if block {
-            if c == '*' && next == '/' {
-                block = false;
-                out.push_str("  ");
-                i += 1;
-            } else {
-                out.push(if c == '\n' { '\n' } else { ' ' });
-            }
-        } else if line {
-            if c == '\n' {
-                line = false;
-                out.push('\n');
-            } else {
-                out.push(' ');
-            }
-        } else if string {
-            out.push(c);
-            if c == '\\' {
-                if let Some(escaped) = chars.get(i + 1) {
-                    out.push(*escaped);
-                }
-                i += 1;
-            } else if c == '"' {
-                string = false;
-            }
-        } else if c == '/' && next == '/' {
-            line = true;
-            out.push_str("  ");
-            i += 1;
-        } else if c == '/' && next == '*' {
-            block = true;
-            out.push_str("  ");
-            i += 1;
-        } else {
-            if c == '"' {
-                string = true;
-            }
-            out.push(c);
-        }
-        i += 1;
-    }
-    out
-}
-
 #[test]
 fn an_unpulled_branch_states_its_state_beside_the_name_not_on_it() {
     use turbogit_ui::theme::Palette;
 
-    let (_project, dir) = single_repo_project();
-    let mut harness = branches_harness(dir);
-    open_branches_tab(&mut harness);
-    {
-        let st = harness.state_mut();
-        let id = st.selected_root.clone().expect("selected root");
-        if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
-            r.branches.push(turbogit_domain::model::Branch {
-                name: "unpulled".into(),
-                kind: turbogit_domain::model::BranchKind::Local,
-                tracking: turbogit_domain::model::Upstream::from_git_ref("origin/main"),
-                favorite: false,
-                protected: false,
-                exists: true,
-                ahead: 0,
-                behind: 3,
-                gone: false,
-                last_touched: None,
-                tip: None,
-                remote: None,
-            });
-        }
-    }
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) =
+        open_branches_over_with(single_repo_project(), branches_harness, |harness| {
+            let st = harness.state_mut();
+            let id = st.selected_root.clone().expect("selected root");
+            if let Some(r) = st.multi.roots.iter_mut().find(|r| r.id == id) {
+                r.branches.push(turbogit_domain::model::Branch {
+                    name: "unpulled".into(),
+                    kind: turbogit_domain::model::BranchKind::Local,
+                    tracking: turbogit_domain::model::Upstream::from_git_ref("origin/main"),
+                    favorite: false,
+                    protected: false,
+                    exists: true,
+                    ahead: 0,
+                    behind: 3,
+                    gone: false,
+                    last_touched: None,
+                    tip: None,
+                    remote: None,
+                });
+            }
+        });
 
     // Behind-only is "unpulled": the counter orange, in the words beside the
     // name. Red is reserved for a branch that has genuinely diverged (ahead
@@ -2831,28 +2725,30 @@ fn an_unpulled_branch_states_its_state_beside_the_name_not_on_it() {
 fn repo_status_marks_paint_their_status_color() {
     use turbogit_ui::theme::Palette;
 
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    // beta's current branch is 3 commits behind its upstream → the repo reads
-    // "unpulled", while alpha stays clean.
-    {
-        let st = harness.state_mut();
-        let beta = st
-            .multi
-            .roots
-            .iter_mut()
-            .find(|r| r.id.name() == "beta")
-            .expect("beta root");
-        let main = beta
-            .branches
-            .iter_mut()
-            .find(|b| b.kind == turbogit_domain::model::BranchKind::Local && b.name == "main")
-            .expect("beta main");
-        main.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/main");
-        main.ahead = 0;
-        main.behind = 3;
-    }
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) =
+        open_branches_over_with(two_repo_project(), two_repo_harness, |harness| {
+            // beta's current branch is 3 commits behind its upstream → the repo reads
+            // "unpulled", while alpha stays clean.
+            {
+                let st = harness.state_mut();
+                let beta = st
+                    .multi
+                    .roots
+                    .iter_mut()
+                    .find(|r| r.id.name() == "beta")
+                    .expect("beta root");
+                let main = beta
+                    .branches
+                    .iter_mut()
+                    .find(|b| {
+                        b.kind == turbogit_domain::model::BranchKind::Local && b.name == "main"
+                    })
+                    .expect("beta main");
+                main.tracking = turbogit_domain::model::Upstream::from_git_ref("origin/main");
+                main.ahead = 0;
+                main.behind = 3;
+            }
+        });
 
     // **What moved, and why.** The bands' 4px heading status dot is gone; the
     // band's state is the mark pair's leading dot beside its state summary, at
@@ -2924,9 +2820,7 @@ fn scope_chip<'h>(harness: &'h Harness<'_, AppState>) -> egui_kittest::Node<'h> 
 
 #[test]
 fn the_scope_chip_is_the_control_that_narrows_the_list() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
     // Unnarrowed: the chip states the scope, and both repositories' rows paint.
     assert_eq!(
@@ -2988,9 +2882,7 @@ fn the_scope_chip_is_the_control_that_narrows_the_list() {
 /// each half is about.
 #[test]
 fn no_chip_in_the_branches_pane_fills_the_brand_token() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, harness) = open_branches_over(two_repo_project(), two_repo_harness);
     // Multi-repo, so the scope chip is painted, and a current row is painted, so
     // every chip the pane can produce is on screen at once.
     assert_painted(&harness, "all 2 repos");
@@ -3050,9 +2942,7 @@ fn no_chip_in_the_branches_pane_fills_the_brand_token() {
 /// own to carry a repository-scoped action.
 #[test]
 fn a_repository_bands_fetch_fetches_that_repository_only() {
-    let (_project, dir) = two_repo_project();
-    let mut harness = two_repo_harness(dir);
-    open_branches_tab(&mut harness);
+    let (_project, _dir, mut harness) = open_branches_over(two_repo_project(), two_repo_harness);
     harness.state_mut().ui.branches_fetch_before.clear();
 
     // Both bands paint a Fetch; `row_nodes`-style ordering puts beta's second.

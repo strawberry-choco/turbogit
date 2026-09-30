@@ -41,43 +41,35 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use egui::{Color32, Pos2, Rect, Shape, Vec2};
+use egui::{Pos2, Rect, Vec2};
 use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
-use test_support::harness::{painted_galleys, stroked_rects};
+use test_support::git_seed::git;
+use test_support::harness::{
+    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_text,
+    shell_harness_over, stroked_rects, widget_harness,
+};
 use turbogit_app::events::AppEvent;
 use turbogit_app::keyed_read::{DiffTarget, Keyed};
 use turbogit_app::state::{AppState, DiffComparison};
 use turbogit_domain::error::TgError;
-use turbogit_ui::theme::{Palette, configure_style, install_fonts};
+use turbogit_ui::theme::Palette;
 
 // --- git seeding -------------------------------------------------------------
-
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
 
 fn write_file(repo: &Path, name: &str, content: &str) {
     std::fs::write(repo.join(name), content).expect("writing file");
 }
 
+/// An initialized repository on `main` with **no commit at all** — the floor every
+/// builder writes its own first commit into. Not a `git_seed` recipe: its committed
+/// file would be swept into each builder's `git add .` and these assert on file sets.
 fn init_repo() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).expect("repo dir");
-    run_git(&repo, &["init", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["init", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     (tmp, repo)
 }
 
@@ -96,15 +88,15 @@ fn repo_mixed() -> (tempfile::TempDir, PathBuf) {
         "file.txt",
         "alpha\nbeta\ndelta\nepsilon\nzeta\neta\ntheta\ngamma\niota\n",
     );
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
     // Staged edit: beta → BETA.
     write_file(
         &repo,
         "file.txt",
         "alpha\nBETA\ndelta\nepsilon\nzeta\neta\ntheta\ngamma\niota\n",
     );
-    run_git(&repo, &["add", "file.txt"]);
+    git(&repo, &["add", "file.txt"]);
     // Unstaged edit on top: gamma → GAMMA.
     write_file(
         &repo,
@@ -119,10 +111,10 @@ fn repo_mixed() -> (tempfile::TempDir, PathBuf) {
 fn repo_staged_only() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "one.txt", "one\ntwo\n");
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
     write_file(&repo, "one.txt", "one\nTWO\n");
-    run_git(&repo, &["add", "one.txt"]);
+    git(&repo, &["add", "one.txt"]);
     (tmp, repo)
 }
 
@@ -131,8 +123,8 @@ fn repo_staged_only() -> (tempfile::TempDir, PathBuf) {
 fn repo_whitespace() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "ws.txt", "alpha\nbeta\ngamma\n");
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
     write_file(&repo, "ws.txt", "alpha\nbeta\ng amma\n");
     (tmp, repo)
 }
@@ -143,8 +135,8 @@ fn repo_two_hunks() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     let base: Vec<String> = (1..=16).map(|i| format!("l{i:02}")).collect();
     write_file(&repo, "nav.txt", &format!("{}\n", base.join("\n")));
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
     let mut edited = base;
     edited[1] = "X2".to_string();
     edited[11] = "X12".to_string();
@@ -159,13 +151,13 @@ fn repo_two_commits() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     let base: Vec<String> = (1..=10).map(|i| format!("l{i:02}")).collect();
     write_file(&repo, "hist.txt", &format!("{}\n", base.join("\n")));
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
     let mut edited = base;
     edited[2] = "SECOND".to_string();
     write_file(&repo, "hist.txt", &format!("{}\n", edited.join("\n")));
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c2"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c2"]);
     (tmp, repo)
 }
 
@@ -181,20 +173,21 @@ fn repo_renamed_with_edit() -> (tempfile::TempDir, PathBuf) {
     let body: Vec<String> = (1..=12).map(|i| format!("line{i:02}")).collect();
     write_file(&repo, "old.txt", &format!("{}\n", body.join("\n")));
     write_file(&repo, "keep.txt", "untouched\n");
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
-    run_git(&repo, &["mv", "old.txt", "new.txt"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["mv", "old.txt", "new.txt"]);
     let mut moved = body;
     moved[3] = "line04 edited".to_string();
     write_file(&repo, "new.txt", &format!("{}\n", moved.join("\n")));
-    run_git(&repo, &["add", "-A"]);
-    run_git(&repo, &["commit", "-m", "c2"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-m", "c2"]);
     (tmp, repo)
 }
 
 /// Run `git <args>` in `dir` without asserting success — a merge that
-/// conflicts exits non-zero, which is exactly the state under test.
-fn git_unchecked(dir: &Path, args: &[&str]) {
+/// conflicts exits non-zero, which is exactly the state under test. Kept local
+/// because it is the opposite contract from `git_seed::git`.
+fn git_expect_failure(dir: &Path, args: &[&str]) {
     let _ = Command::new("git").args(args).current_dir(dir).output();
 }
 
@@ -204,17 +197,17 @@ fn git_unchecked(dir: &Path, args: &[&str]) {
 fn repo_conflicted() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "conf.txt", "one\ntwo\n");
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
-    run_git(&repo, &["checkout", "-q", "-b", "side"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["checkout", "-q", "-b", "side"]);
     write_file(&repo, "conf.txt", "one\nside\n");
-    run_git(&repo, &["add", "conf.txt"]);
-    run_git(&repo, &["commit", "-m", "side"]);
-    run_git(&repo, &["checkout", "-q", "main"]);
+    git(&repo, &["add", "conf.txt"]);
+    git(&repo, &["commit", "-m", "side"]);
+    git(&repo, &["checkout", "-q", "main"]);
     write_file(&repo, "conf.txt", "one\nmain line\n");
-    run_git(&repo, &["add", "conf.txt"]);
-    run_git(&repo, &["commit", "-m", "main line"]);
-    git_unchecked(&repo, &["merge", "--no-edit", "side"]);
+    git(&repo, &["add", "conf.txt"]);
+    git(&repo, &["commit", "-m", "main line"]);
+    git_expect_failure(&repo, &["merge", "--no-edit", "side"]);
     (tmp, repo)
 }
 
@@ -229,24 +222,10 @@ fn diff_harness(repo: &Path) -> Harness<'static, AppState> {
         !state.multi.roots.is_empty(),
         "repo root must be discovered"
     );
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events(); // production parity with app.rs
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
     // Tall enough that the shell frame (issue #03: center tabs + status bar —
     // nothing claims the top edge) leaves the preview column room for the
     // tallest comparison diff plus the message editor below it.
-    harness.set_size(egui::vec2(1024.0, 900.0));
-    harness
+    shell_harness_over(state, egui::vec2(1024.0, 900.0))
 }
 
 #[test]
@@ -284,71 +263,15 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
     assert_painted(&harness, "diff read failed");
 }
 
-/// All text painted by the last completed frame.
-pub fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Assert `needle` appears in some painted text galley.
-#[track_caller]
-pub fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
-}
-
-/// Assert `needle` appears in no painted text galley.
-#[track_caller]
-pub fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        !texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was unexpectedly painted; painted text:\n{texts:#?}"
-    );
-}
-
-/// Paint-time origin of the first text galley painting exactly `text`.
-pub fn galley_origin(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            Shape::Text(shape) if shape.galley.text() == text => Some(shape.pos),
-            _ => None,
-        })
-}
-
-/// Every filled rectangle painted by the last frame as `(rect, fill)`.
-pub fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Rect(rect_shape) if rect_shape.fill != Color32::TRANSPARENT => {
-                Some((rect_shape.rect, rect_shape.fill))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Step frames until painted output AND the diff read's activity stabilize
 /// (the fingerprint includes the read's verdict so a late `DiffReady` can never
 /// be mistaken for a settled frame). Budgeted by wall-clock time — not frame
 /// count — so a contended `git` subprocess cannot starve it.
-pub fn settle(harness: &mut Harness<'_, AppState>) {
+/// A **third** settle family: neither shared settle looks at `read_pending`, and
+/// a frame whose text is byte-identical while a `DiffReady` is in flight would
+/// report the loading chrome as a settled diff. Folding this in turns the
+/// assertions into races.
+fn settle(harness: &mut Harness<'_, AppState>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut prev = String::new();
     while std::time::Instant::now() < deadline {
@@ -407,10 +330,10 @@ fn relative_row_preview_uses_index_not_worktree_for_staged_changes() {
     for original in ["", "HEAD ONLY\n"] {
         let (_tmp, repo) = init_repo();
         write_file(&repo, "file.txt", original);
-        run_git(&repo, &["add", "."]);
-        run_git(&repo, &["commit", "-m", "base"]);
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "base"]);
         write_file(&repo, "file.txt", "INDEX ONLY\n");
-        run_git(&repo, &["add", "file.txt"]);
+        git(&repo, &["add", "file.txt"]);
         write_file(&repo, "file.txt", "WORKTREE ONLY\n");
 
         let mut h = diff_harness(&repo);
@@ -594,45 +517,34 @@ fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
 fn ghost_primitive_harness() -> Harness<'static, ()> {
     use turbogit_ui::ui::icons::{self, Icon};
     use turbogit_ui::ui::widgets::{self, ButtonVariant};
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(24.0), egui::Sense::hover());
-                widgets::ghost_icon_button(
-                    ui,
-                    rect,
-                    ui.id().with("Nav ghost"),
-                    "Nav ghost",
-                    true,
-                    |ui, rect, state| {
-                        let ink = ButtonVariant::Ghost.text(state);
-                        icons::centered_icon(ui, Icon::CHECK, rect.center(), 14.0, ink);
-                    },
-                );
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::hover());
-                widgets::ghost_icon_button(
-                    ui,
-                    rect,
-                    ui.id().with("Gutter ghost"),
-                    "Gutter ghost",
-                    false,
-                    |ui, _rect, state| {
-                        let ink = ButtonVariant::Ghost.text(state);
-                        icons::icon(ui, Icon::CHECK, 12.0, ink);
-                    },
-                );
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(240.0, 80.0));
-    harness
+    widget_harness(egui::vec2(240.0, 80.0), move |ui| {
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(24.0), egui::Sense::hover());
+            widgets::ghost_icon_button(
+                ui,
+                rect,
+                ui.id().with("Nav ghost"),
+                "Nav ghost",
+                true,
+                |ui, rect, state| {
+                    let ink = ButtonVariant::Ghost.text(state);
+                    icons::centered_icon(ui, Icon::CHECK, rect.center(), 14.0, ink);
+                },
+            );
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(18.0), egui::Sense::hover());
+            widgets::ghost_icon_button(
+                ui,
+                rect,
+                ui.id().with("Gutter ghost"),
+                "Gutter ghost",
+                false,
+                |ui, _rect, state| {
+                    let ink = ButtonVariant::Ghost.text(state);
+                    icons::icon(ui, Icon::CHECK, 12.0, ink);
+                },
+            );
+        });
+    })
 }
 
 /// Contract: the diff's ghost icon controls — the hunk-nav pair and the
@@ -718,8 +630,8 @@ fn repo_deep_diff(hunks: usize, changed: usize, gap: usize) -> (tempfile::TempDi
         base.push(format!("l{i:04}"));
     }
     write_file(&repo, "deep.txt", &format!("{}\n", base.join("\n")));
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
     let mut edited = base.clone();
     for k in 0..hunks {
         for j in 0..changed {
@@ -733,7 +645,7 @@ fn repo_deep_diff(hunks: usize, changed: usize, gap: usize) -> (tempfile::TempDi
 /// The hunk header bands `git` itself reports for `deep.txt`, newest first, so
 /// a test can name ONE hunk's header exactly as the pane paints it.
 fn diff_hunk_headers(repo: &Path) -> Vec<String> {
-    run_git(repo, &["diff", "-U3", "--", "deep.txt"])
+    git(repo, &["diff", "-U3", "--", "deep.txt"])
         .lines()
         .filter(|l| l.starts_with("@@"))
         .map(str::to_owned)
@@ -1043,14 +955,18 @@ fn axis_groups(harness: &Harness<'_, AppState>) -> Vec<(Rect, bool)> {
 
 /// Harness rendering ONLY the diff pane, over a commit-to-commit target — the
 /// comparison the working-tree-only controls have nothing to say about.
+///
+/// Kept local as a recorded difference from `shell_harness_over`: it calls
+/// `ui::diff::render_diff` directly, so the shell's other regions are not in the
+/// frame — these assertions are about the diff pane alone.
 fn commit_diff_harness(repo: &Path) -> Harness<'static, AppState> {
     let state = AppState::new(repo.to_path_buf());
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, state| {
-            configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             if !fonts_installed {
-                install_fonts(ui.ctx());
+                turbogit_ui::theme::install_fonts(ui.ctx());
                 fonts_installed = true;
             }
             state.drain_events();

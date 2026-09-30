@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
@@ -26,19 +27,25 @@ fn engine_git2() -> Git2Executor {
     Git2Executor::new(engine_cli())
 }
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+// `temp_repo` stays local, not `repo_with_one_commit`: every case here writes
+// to `base.txt` and then probes the linked worktree for it, so the tracked path
+// is load-bearing and the recipe's `README.md` is not. `temp_repo_ignored`
+// stays local because it commits a `.gitignore` excluding `build/`.
+
+/// `git <args>` expected to CONFLICT: the non-zero exit IS the state under
+/// test, so this inverts `git_seed::git`, which asserts success. It surfaces
+/// stderr because here the failure is silent unless asked for.
+fn git_merge_that_must_conflict(worktree: &Path, args: &[&str]) {
+    let merged = Command::new("git")
         .args(args)
-        .current_dir(dir)
+        .current_dir(worktree)
         .output()
-        .expect("git should be on PATH");
+        .expect("git in worktree");
     assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        !merged.status.success(),
+        "the divergent merge should conflict: {}",
+        String::from_utf8_lossy(&merged.stderr)
     );
-    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 /// An initialized temp repository with one base commit on `main`. The
@@ -48,12 +55,12 @@ fn temp_repo(tag: &str) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join(tag);
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     std::fs::write(repo.join("base.txt"), "base\n").unwrap();
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "init"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "init"]);
     (tmp, repo.canonicalize().unwrap())
 }
 
@@ -63,17 +70,17 @@ fn temp_repo(tag: &str) -> (tempfile::TempDir, PathBuf) {
 fn temp_repo_ignored(tag: &str) -> (tempfile::TempDir, PathBuf) {
     let (_tmp, repo) = temp_repo(tag);
     std::fs::write(repo.join(".gitignore"), "build/\n").unwrap();
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "add gitignore"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "add gitignore"]);
     (_tmp, repo)
 }
 
 /// A linked worktree of `repo` on an existing branch, canonicalized like the
 /// root; returns its directory.
 fn add_worktree(repo: &Path, parent: &Path, name: &str, branch: &str) -> PathBuf {
-    run_git(repo, &["branch", branch]);
+    git(repo, &["branch", branch]);
     let wt = parent.join(name);
-    run_git(repo, &["worktree", "add", wt.to_str().unwrap(), branch]);
+    git(repo, &["worktree", "add", wt.to_str().unwrap(), branch]);
     wt.canonicalize().unwrap()
 }
 
@@ -155,26 +162,17 @@ fn assert_dirty_probe_semantics(engine: &dyn GitExecutor) {
     // same line of base.txt, so merging main into the worktree's feature
     // conflicts (the merge exits non-zero and leaves unmerged entries).
     let (_tmp, repo) = temp_repo("probe-conflict");
-    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
     std::fs::write(repo.join("base.txt"), "feature change\n").unwrap();
-    run_git(&repo, &["commit", "-q", "-am", "feature edit"]);
+    git(&repo, &["commit", "-q", "-am", "feature edit"]);
     // Release `feature` from the main tree so the worktree can check it out.
-    run_git(&repo, &["checkout", "-q", "main"]);
+    git(&repo, &["checkout", "-q", "main"]);
     let wt = _tmp.path().join("wt-conflict");
-    run_git(&repo, &["worktree", "add", wt.to_str().unwrap(), "feature"]);
+    git(&repo, &["worktree", "add", wt.to_str().unwrap(), "feature"]);
     let wt = wt.canonicalize().unwrap();
     std::fs::write(repo.join("base.txt"), "main change\n").unwrap();
-    run_git(&repo, &["commit", "-q", "-am", "main edit"]);
-    let merged = Command::new("git")
-        .args(["merge", "--no-edit", "main"])
-        .current_dir(&wt)
-        .output()
-        .expect("git in worktree");
-    assert!(
-        !merged.status.success(),
-        "the divergent merge should conflict: {}",
-        String::from_utf8_lossy(&merged.stderr)
-    );
+    git(&repo, &["commit", "-q", "-am", "main edit"]);
+    git_merge_that_must_conflict(&wt, &["merge", "--no-edit", "main"]);
     assert!(
         engine.worktree_dirty(&wt).expect("probe conflict"),
         "a conflicted worktree is dirty"
@@ -270,9 +268,9 @@ fn prunable_worktrees_stay_listed_and_read_clean() {
 #[test]
 fn detached_head_worktrees_list_branchless_and_probe() {
     let (_tmp, repo) = temp_repo("detached");
-    let head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
     let wt = _tmp.path().join("wt-detached");
-    run_git(
+    git(
         &repo,
         &["worktree", "add", "--detach", wt.to_str().unwrap(), &head],
     );

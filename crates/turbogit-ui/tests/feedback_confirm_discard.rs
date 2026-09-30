@@ -15,12 +15,18 @@ use std::time::Duration;
 
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
-use test_support::harness::{assert_not_painted, assert_painted, painted_text};
+use test_support::harness::{assert_not_painted, assert_painted, settle_quiet, shell_harness_over};
 use turbogit_app::state::{AppState, PendingConfirm};
 use turbogit_domain::model::{Change, ChangeStatus};
 
 // --- git fixture ---------------------------------------------------------------
 
+/// Run `git <args>` in `dir`, panicking on failure.
+///
+/// Stays local for the `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` it sets on every
+/// `Command`: `git_seed::git` cannot express per-call env, and
+/// `repo_with_modified_files` configures no `user.*`, so those are the only
+/// author identity its `init` commit has.
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -66,43 +72,9 @@ fn repo_with_modified_files() -> (TempDir, std::path::PathBuf) {
 
 // --- harness -------------------------------------------------------------------
 
+/// The shared `shell_harness_over`, at the same 1024×768 box.
 fn feedback_harness(project_dir: std::path::PathBuf) -> Harness<'static, AppState> {
-    let state = AppState::new(project_dir);
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            state.drain_events();
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    harness
-}
-
-fn settle_quiet(harness: &mut Harness<'_, AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let cur = format!("{:?}", painted_text(harness));
-        if cur == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = cur;
-        }
-    }
-    panic!("feedback layout did not settle within 300 frames");
+    shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
 // --- helpers -------------------------------------------------------------------

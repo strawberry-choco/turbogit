@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{Commit, LogOpts, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::git2_exec::Git2Executor;
@@ -19,24 +20,26 @@ const PAGE: usize = 50;
 /// Commits in the shared linear fixture: two full pages plus a short tail.
 const TOTAL: usize = 2 * PAGE + 3;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    git_at(dir, args, None)
-}
-
-/// `git` with an optional author/committer epoch pinned, so a fixture can
-/// control commit order (see [`commit_at`]).
-fn git_at(dir: &Path, args: &[&str], epoch: Option<u64>) -> String {
+/// `git` with an author/committer epoch pinned PER CALL, so a fixture can give
+/// every commit its own timestamp (see [`commit_at`]).
+///
+/// Kept local because `test_support::git_seed::git` takes no per-call
+/// environment. The env is load-bearing, not redundant: `merge_repo`'s topology
+/// (an octopus merge over a criss-cross, i.e. two merge bases) is only comparable
+/// between the CLI walk and libgit2's revwalk if every commit carries an
+/// unambiguous newest-first timestamp. Without the pin, same-second commits tie
+/// and the order under test becomes the order of two different tie-breaks. No
+/// `git config` can stand in: `user.*` is identity, not time.
+fn git_at_epoch(dir: &Path, args: &[&str], epoch: u64) -> String {
     let mut cmd = std::process::Command::new("git");
     cmd.args(args)
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@t")
         .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t");
-    if let Some(epoch) = epoch {
-        cmd.env("GIT_AUTHOR_DATE", format!("@{epoch}"))
-            .env("GIT_COMMITTER_DATE", format!("@{epoch}"));
-    }
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .env("GIT_AUTHOR_DATE", format!("@{epoch}"))
+        .env("GIT_COMMITTER_DATE", format!("@{epoch}"));
     let out = cmd.output().expect("git must be on PATH");
     assert!(
         out.status.success(),
@@ -61,13 +64,9 @@ fn commit(dir: &Path, msg: &str) -> String {
 /// A commit whose author AND committer epochs are pinned to `epoch`.
 /// Same-second commits are ordered differently by `git log` and by libgit2's
 /// revwalk, so any fixture that claims the two backends agree on ORDER has to
-/// give every commit its own timestamp.
+/// Hence [`git_at_epoch`], which the shared runner cannot stand in for.
 fn commit_at(dir: &Path, msg: &str, epoch: u64) {
-    git_at(
-        dir,
-        &["commit", "-q", "--allow-empty", "-m", msg],
-        Some(epoch),
-    );
+    git_at_epoch(dir, &["commit", "-q", "--allow-empty", "-m", msg], epoch);
 }
 
 fn cli() -> CliExecutor {
@@ -183,10 +182,10 @@ fn merge_repo() -> &'static PathBuf {
             commit_at(&repo, &format!("main{i}"), clock);
         }
         clock += 1;
-        git_at(
+        git_at_epoch(
             &repo,
             &["merge", "--no-ff", "-m", "merge feature", "feature"],
-            Some(clock),
+            clock,
         );
         git(&repo, &["checkout", "-q", "-b", "octo1"]);
         for i in 0..6 {
@@ -201,10 +200,10 @@ fn merge_repo() -> &'static PathBuf {
         }
         git(&repo, &["checkout", "-q", "main"]);
         clock += 1;
-        git_at(
+        git_at_epoch(
             &repo,
             &["merge", "--no-ff", "-m", "octopus", "octo1", "octo2"],
-            Some(clock),
+            clock,
         );
 
         // Criss-cross on top: two branches that each merge the other's tip,
@@ -220,21 +219,13 @@ fn merge_repo() -> &'static PathBuf {
         commit_at(&repo, "b1", clock);
         let b1 = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
         clock += 1;
-        git_at(
-            &repo,
-            &["merge", "--no-ff", "-m", "b merges a", &a1],
-            Some(clock),
-        );
+        git_at_epoch(&repo, &["merge", "--no-ff", "-m", "b merges a", &a1], clock);
         git(&repo, &["checkout", "-q", "cross-a"]);
         clock += 1;
-        git_at(
-            &repo,
-            &["merge", "--no-ff", "-m", "a merges b", &b1],
-            Some(clock),
-        );
+        git_at_epoch(&repo, &["merge", "--no-ff", "-m", "a merges b", &b1], clock);
         git(&repo, &["checkout", "-q", "main"]);
         clock += 1;
-        git_at(
+        git_at_epoch(
             &repo,
             &[
                 "merge",
@@ -244,7 +235,7 @@ fn merge_repo() -> &'static PathBuf {
                 "cross-a",
                 "cross-b",
             ],
-            Some(clock),
+            clock,
         );
         std::mem::forget(dir);
         repo

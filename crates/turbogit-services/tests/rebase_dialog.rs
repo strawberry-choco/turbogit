@@ -8,8 +8,8 @@
 #![allow(dead_code)]
 
 use std::path::Path;
-use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{MultiRootManager, RebaseMode, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::integrate_service;
@@ -17,20 +17,12 @@ use turbogit_services::multi_root::{build_root, register};
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git").args(args).current_dir(dir).output();
-    let output = output.expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
 /// Append `text` to `<dir>/<name>`, stage, commit, return HEAD SHA.
-fn commit(dir: &Path, name: &str, text: &str) -> String {
+///
+/// **Not `git_seed::commit`, and deliberately so.** The shared primitive *overwrites*
+/// `path`; this one appends a line, so the day a call site reuses a path the
+/// overwriting primitive would silently drop the earlier line.
+fn append_commit(dir: &Path, name: &str, text: &str) -> String {
     let file = dir.join(name);
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -40,9 +32,9 @@ fn commit(dir: &Path, name: &str, text: &str) -> String {
     use std::io::Write;
     writeln!(f, "{text}").expect("appending work file");
     drop(f);
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-m", text]);
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", text]);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 fn engine() -> CliExecutor {
@@ -53,16 +45,19 @@ fn engine() -> CliExecutor {
 
 /// Repo on `main` (one base commit) with a `feature` branch two commits
 /// ahead, checked out — the rebase subject.
+///
+/// **Kept local, not `repo_with_history`:** that one is three commits deep and carries a
+/// bare `origin`, and the test below measures `HEAD~2` landing on `main`'s tip.
 fn rebase_repo(tmp: &Path, name: &str) -> std::path::PathBuf {
     let repo = tmp.join(name);
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
-    commit(&repo, "base.txt", "base");
-    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
-    commit(&repo, "a.txt", "feature-1");
-    commit(&repo, "b.txt", "feature-2");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    append_commit(&repo, "base.txt", "base");
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
+    append_commit(&repo, "a.txt", "feature-1");
+    append_commit(&repo, "b.txt", "feature-2");
     repo
 }
 
@@ -104,7 +99,7 @@ fn options_pass_through_on_top_of_the_standard_mode() {
 fn affected_fixtures(tmp: &Path) -> (Vec<turbogit_domain::model::Root>, RootId, [RootId; 3]) {
     let bare = tmp.join("origin.git");
     std::fs::create_dir_all(&bare).unwrap();
-    run_git(&bare, &["init", "-q", "--bare", "-b", "main"]);
+    git(&bare, &["init", "-q", "--bare", "-b", "main"]);
 
     // Each repo gets its own unrelated base commit; only the focused repo
     // pushes main (the bare's main is irrelevant — the fixtures share the
@@ -112,35 +107,35 @@ fn affected_fixtures(tmp: &Path) -> (Vec<turbogit_domain::model::Root>, RootId, 
     let mk = |name: &str, push: bool| -> std::path::PathBuf {
         let repo = tmp.join(name);
         std::fs::create_dir_all(&repo).unwrap();
-        run_git(&repo, &["init", "-q", "-b", "main"]);
-        run_git(&repo, &["config", "user.email", "test@example.com"]);
-        run_git(&repo, &["config", "user.name", "Test"]);
-        run_git(&repo, &["remote", "add", "origin", bare.to_str().unwrap()]);
-        commit(&repo, "base.txt", "base");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.email", "test@example.com"]);
+        git(&repo, &["config", "user.name", "Test"]);
+        git(&repo, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        append_commit(&repo, "base.txt", "base");
         if push {
-            run_git(&repo, &["push", "-q", "-u", "origin", "main"]);
+            git(&repo, &["push", "-q", "-u", "origin", "main"]);
         } else {
-            run_git(&repo, &["fetch", "-q", "origin"]);
+            git(&repo, &["fetch", "-q", "origin"]);
         }
         repo
     };
 
     // Focused: feature branch pushed with upstream tracking, checked out.
     let focused = mk("focused", true);
-    run_git(&focused, &["checkout", "-q", "-b", "feature"]);
-    commit(&focused, "a.txt", "feature-1");
-    run_git(&focused, &["push", "-q", "-u", "origin", "feature"]);
+    git(&focused, &["checkout", "-q", "-b", "feature"]);
+    append_commit(&focused, "a.txt", "feature-1");
+    git(&focused, &["push", "-q", "-u", "origin", "feature"]);
 
     // Sibling 1: feature checked out too.
     let checked_out = mk("checked-out", false);
-    run_git(
+    git(
         &checked_out,
         &["checkout", "-q", "-b", "feature", "origin/feature"],
     );
 
     // Sibling 2: on main, but a local feature tracks the same upstream.
     let tracking_shared = mk("tracking-shared", false);
-    run_git(&tracking_shared, &["branch", "feature", "origin/feature"]);
+    git(&tracking_shared, &["branch", "feature", "origin/feature"]);
 
     // Sibling 3: no feature branch at all.
     let unrelated = mk("unrelated", false);
@@ -223,9 +218,9 @@ fn unprotected_current_branch_rebases() {
     let repo = rebase_repo(tmp.path(), "repo");
     // main moves on after feature branched, so replaying feature onto main
     // changes HEAD's parent to main's tip.
-    run_git(&repo, &["checkout", "-q", "main"]);
-    let main_tip = commit(&repo, "main.txt", "main-1");
-    run_git(&repo, &["checkout", "-q", "feature"]);
+    git(&repo, &["checkout", "-q", "main"]);
+    let main_tip = append_commit(&repo, "main.txt", "main-1");
+    git(&repo, &["checkout", "-q", "feature"]);
     let settings = settings_protecting("release/*");
 
     integrate_service::rebase_current(
@@ -240,6 +235,6 @@ fn unprotected_current_branch_rebases() {
 
     // feature carried two commits, so after the replay main's tip sits two
     // commits below HEAD.
-    let new_parent = run_git(&repo, &["rev-parse", "HEAD~2"]).trim().to_string();
+    let new_parent = git(&repo, &["rev-parse", "HEAD~2"]).trim().to_string();
     assert_eq!(new_parent, main_tip, "feature was replayed onto main's tip");
 }

@@ -12,6 +12,10 @@ turbogit-engine-api = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# The shared `git()` runner and repo recipes. Cargo permits this dev-dependency
+# cycle because `test-support` depends on this crate only as a dev-dependency,
+# which is never built for a downstream consumer.
+test-support = { workspace = true }
 # A self-dev-dependency so the engine's own suites can drive the fake — the
 # substitutable adapter is feature-gated, and the question "can a fixture answer
 # this read without a git binary?" is an engine question.

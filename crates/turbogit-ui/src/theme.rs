@@ -513,6 +513,12 @@ pub const WINDOW_MARGIN: i8 = 10;
 pub const BUTTON_PADDING: Vec2 = Vec2::new(10.0, 5.0);
 /// Default list/tree indent (14 px) — installed by [`configure_style`].
 pub const INDENT: f32 = 14.0;
+/// Air between two adjacent cells' columns in a column-oriented tool pane, so a
+/// long cell in one column does not read as belonging to the next.
+///
+/// **A gap, not a column offset:** a `PaneColumn`'s `x` places a cell; this is
+/// the clearance left after one, so it never moves a column.
+pub const CELL_GAP: f32 = 8.0;
 
 // Density variants (S2): named exceptions to the defaults above, so compact
 // and dense regions stop carrying regional literals.

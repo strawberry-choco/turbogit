@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
+use test_support::git_seed::git;
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::operation::OpKind;
 use turbogit_app::root_caches::{Affected, LogScope, RootCaches};
@@ -30,33 +31,26 @@ use turbogit_engine::cli::CliExecutor;
 
 // --- Seeded fixtures (mirrors the other redesign suites) ----------------------
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
 /// Seed a minimal repo at `dir`: one branch, one commit touching file.txt.
+///
+/// **Kept local, not `git_seed::repo_with_one_commit`**: three assertions here name
+/// `file.txt` by path, and a recipe committing a different path would make the
+/// path-scoped log empty and the hunk-span assertions vacuous.
 fn seed_repo(dir: &Path, name: &str) {
     std::fs::create_dir_all(dir).expect("repo dir");
-    run_git(dir, &["init", "-q", "-b", "main"]);
-    run_git(dir, &["config", "user.email", "test@example.com"]);
-    run_git(dir, &["config", "user.name", "Test"]);
-    std::fs::write(dir.join("file.txt"), format!("{name}: v1\n")).expect("work file");
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-q", "-m", &format!("{name}: initial")]);
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "Test"]);
+    test_support::git_seed::commit(
+        dir,
+        "file.txt",
+        &format!("{name}: v1\n"),
+        &format!("{name}: initial"),
+    );
 }
 
 fn head_commit(dir: &Path) -> String {
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 /// A recognizable fake entry so untouched caches can be told apart from
@@ -598,7 +592,7 @@ fn dropping_a_root_log_drops_its_has_more_flag_too() {
 fn seed_staged_and_unstaged_edits(dir: &Path) {
     std::fs::write(dir.join("file.txt"), "file: v1\nfile: v2\n").expect("unstaged edit");
     std::fs::write(dir.join("other.txt"), "other: v1\nother: v2\n").expect("staged edit");
-    run_git(dir, &["add", "other.txt"]);
+    git(dir, &["add", "other.txt"]);
 }
 
 #[test]

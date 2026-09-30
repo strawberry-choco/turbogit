@@ -4,8 +4,7 @@
 //! opens the command palette: a fuzzy-searchable list of every action, the
 //! IntelliJ "Find Action" hallmark.
 
-use crate::theme::Palette;
-use egui::{Pos2, RichText, Ui};
+use egui::{Pos2, Ui};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use turbogit_app::granular;
@@ -13,6 +12,8 @@ use turbogit_app::operation::Operation;
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, Tab, Toast};
+
+use crate::ui::widgets;
 
 /// Every globally-invokable action, reused by both the VCS popup and the
 /// command palette — and by the shell's Git menu (issue #9).
@@ -305,7 +306,7 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
                                 }
                             }
                             if matches.is_empty() {
-                                ui.label("No matching actions.");
+                                widgets::empty_state(ui, "No matching actions.");
                             }
                         });
                 },
@@ -408,7 +409,7 @@ pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
         .min_width(260.0)
         .show(&ctx, |ui| {
             if rows.is_empty() {
-                ui.label(RichText::new("No recent workspaces").color(Palette::INK_3));
+                widgets::empty_state(ui, "No recent workspaces");
             }
             ui.spacing_mut().item_spacing.y = 2.0;
             for row in &rows {

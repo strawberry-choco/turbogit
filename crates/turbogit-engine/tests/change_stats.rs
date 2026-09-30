@@ -9,27 +9,19 @@
 //! against what git itself reports, because that half's acceptance *is* the
 //! numbers matching git.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use tempfile::TempDir;
+use test_support::git_seed::git;
 use turbogit_domain::model::{ChangeQuestion, ChangeStats, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::git2_exec::Git2Executor;
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// `seeded_repo` stays local, deliberately NOT a `git_seed` recipe: its second
+// commit has to carry an edit, a deletion, a pure rename AND a non-UTF-8 blob
+// in one go, because the four numstat row shapes are exactly what the
+// assertions below pin. It is built on the `repo_with_one_commit` floor, though:
+// explicit `-b main`, repo-local identity before the first commit, no remote.
 
 /// A repository whose second commit exercises every numstat row shape at once:
 /// an edit (`notes.txt`), a deletion (`gone.txt`), a pure rename
@@ -38,27 +30,27 @@ fn seeded_repo() -> (TempDir, CliExecutor, PathBuf, String, String) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("stats");
     std::fs::create_dir_all(&repo).expect("repo dir");
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "stats@example.com"]);
-    run_git(&repo, &["config", "user.name", "Stats Author"]);
-    run_git(&repo, &["config", "core.autocrlf", "false"]);
-    run_git(&repo, &["config", "diff.noprefix", "false"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "stats@example.com"]);
+    git(&repo, &["config", "user.name", "Stats Author"]);
+    git(&repo, &["config", "core.autocrlf", "false"]);
+    git(&repo, &["config", "diff.noprefix", "false"]);
 
     std::fs::write(repo.join("notes.txt"), "a\nb\nc\n").expect("write notes");
     std::fs::write(repo.join("gone.txt"), "temp\n").expect("write gone");
     std::fs::write(repo.join("keep.txt"), "stable\ncontent\n").expect("write keep");
     // Not valid UTF-8: git classifies this as binary and reports `-` `-`.
     std::fs::write(repo.join("logo.png"), [0x89, b'P', 0x00, 0xFF, 0xFE]).expect("write logo");
-    run_git(&repo, &["add", "--", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "root commit"]);
-    let root = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    git(&repo, &["add", "--", "."]);
+    git(&repo, &["commit", "-q", "-m", "root commit"]);
+    let root = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
 
     std::fs::write(repo.join("notes.txt"), "a\nX\nc\nd\n").expect("edit notes");
     std::fs::remove_file(repo.join("gone.txt")).expect("remove gone");
-    run_git(&repo, &["mv", "keep.txt", "kept.txt"]);
-    run_git(&repo, &["add", "--", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "edit, delete and rename"]);
-    let head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    git(&repo, &["mv", "keep.txt", "kept.txt"]);
+    git(&repo, &["add", "--", "."]);
+    git(&repo, &["commit", "-q", "-m", "edit, delete and rename"]);
+    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
 
     let engine = CliExecutor {
         settings: VcsSettings::default(),
@@ -188,13 +180,13 @@ fn git2_reports_the_same_counts_as_the_cli() {
 #[test]
 fn the_merge_question_counts_what_the_merge_would_bring_in() {
     let (_tmp, engine, repo, _root, _head) = seeded_repo();
-    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
     std::fs::write(repo.join("feature.txt"), "one\ntwo\n").expect("write feature");
-    run_git(&repo, &["add", "feature.txt"]);
-    run_git(&repo, &["commit", "-q", "-m", "feature work"]);
-    run_git(&repo, &["checkout", "-q", "main"]);
+    git(&repo, &["add", "feature.txt"]);
+    git(&repo, &["commit", "-q", "-m", "feature work"]);
+    git(&repo, &["checkout", "-q", "main"]);
     std::fs::write(repo.join("notes.txt"), "a\nX\nc\nd\nmain moved on\n").expect("edit main");
-    run_git(&repo, &["commit", "-q", "-am", "main moved on"]);
+    git(&repo, &["commit", "-q", "-am", "main moved on"]);
 
     let stats = engine
         .change_stats(
@@ -211,7 +203,7 @@ fn the_merge_question_counts_what_the_merge_would_bring_in() {
     );
 
     // Independent of the adapter: git's own three-dot numstat, unparsed here.
-    let git_report = run_git(&repo, &["diff", "--numstat", "HEAD...feature"]);
+    let git_report = git(&repo, &["diff", "--numstat", "HEAD...feature"]);
     assert_eq!(
         git_report.trim(),
         "2\t0\tfeature.txt",

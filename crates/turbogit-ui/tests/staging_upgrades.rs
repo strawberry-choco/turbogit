@@ -12,26 +12,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use egui_kittest::{Harness, kittest::Queryable};
-use test_support::harness::{assert_painted, galley_origin, painted_text};
+use test_support::git_seed::git;
+use test_support::harness::{
+    assert_painted, galley_origin, painted_text, shell_harness_over_unstyled,
+};
 use turbogit_app::state::AppState;
 
 // ---------------------------------------------------------------- helpers --
-
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
 
 struct Repo {
     path: PathBuf,
@@ -40,6 +27,12 @@ struct Repo {
 /// Create an initialized temp repository with one base commit on the default
 /// branch and repo-local user config so commits work headlessly. The caller
 /// keeps `parent` (a `TempDir`) alive for the duration of the test.
+///
+/// Kept local, NOT `git_seed::repo_with_one_commit`: the seeded file's NAME is
+/// load-bearing. `file_list_paints_flat_rows_without_section_headers_or_hunk_counts`
+/// asserts the untracked group reads "Unversioned Files (1)" — the recipe seeds
+/// `README.md`, so `base.txt` would arrive as a second untracked file and the count
+/// would read "(2)".
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -53,6 +46,10 @@ fn temp_repo(parent: &Path, name: &str) -> Repo {
 }
 
 /// Headless harness over the given repository roots (see CONTEXT.md).
+///
+/// Kept as [`shell_harness_over_unstyled`]: the hunk-header geometry below is measured
+/// against this unstyled frame, and `max_steps` is stated at 1024 because
+/// `Harness::run` panics once a run exceeds kittest's 4.
 fn harness(roots: &[PathBuf]) -> Harness<'static, AppState> {
     let dir = roots
         .first()
@@ -60,14 +57,7 @@ fn harness(roots: &[PathBuf]) -> Harness<'static, AppState> {
         .map(Path::to_path_buf)
         .unwrap_or_default();
     let state = AppState::for_roots(&dir, roots);
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(egui::vec2(1280.0, 800.0));
+    let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
     h
 }

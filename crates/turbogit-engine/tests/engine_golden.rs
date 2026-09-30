@@ -24,6 +24,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use test_support::git_seed::git;
 use turbogit_domain::model::{
     ChangeStatus, Commit, DiffOpts, LogOpts, Patch, PatchHeaderLine, PatchLineKind, RootId,
     VcsSettings,
@@ -48,23 +49,14 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// Two runners survive, and their names say which contract each one holds:
+//
+//   * [`run_git_dates`] / [`run_git_at`] — per-call `GIT_*_DATE`, load-bearing: the
+//     times are asserted field by field, and no `git config` carries a date, so
+//     `git_seed::git` cannot express this even in principle.
+//   * [`run_git_failing`] — the opposite contract: the non-zero exit is asserted.
 
-/// Like [`run_git`] but pins author AND committer dates separately, so
-/// fixture commits carry deterministic, assertion-friendly epochs.
+/// [`run_git_at`] with author and committer dates pinned separately.
 fn run_git_dates(dir: &Path, args: &[&str], author_date: &str, committer_date: &str) -> String {
     let out = Command::new("git")
         .args(args)
@@ -81,7 +73,8 @@ fn run_git_dates(dir: &Path, args: &[&str], author_date: &str, committer_date: &
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// [`run_git_dates`] with author == committer date.
+/// Like [`git`] but pins author AND committer date to the same `date`, so
+/// fixture commits carry deterministic, assertion-friendly epochs.
 fn run_git_at(dir: &Path, args: &[&str], date: &str) -> String {
     run_git_dates(dir, args, date, date)
 }
@@ -89,6 +82,10 @@ fn run_git_at(dir: &Path, args: &[&str], date: &str) -> String {
 /// Run `git <args>` expecting FAILURE (e.g. a conflicting merge); returns
 /// stdout + stderr combined so the caller can sanity-check why it failed.
 /// (`git merge` reports its CONFLICT lines on stdout.)
+///
+/// Not `test_support::git_seed::git`, which asserts success: here the refusal is the
+/// fixture, so the `assert!(!out.status.success())` must not be folded into a helper
+/// that would throw the status away.
 fn run_git_failing(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(args)
@@ -106,29 +103,33 @@ fn run_git_failing(dir: &Path, args: &[&str]) -> String {
 /// Repo-local config that makes fixtures deterministic regardless of the
 /// developer's global git config (identity, EOL translation, diff prefixes).
 fn configure_identity(repo: &Path) {
-    run_git(repo, &["config", "user.email", "golden@example.com"]);
-    run_git(repo, &["config", "user.name", "Golden Author"]);
-    run_git(repo, &["config", "core.autocrlf", "false"]);
-    run_git(repo, &["config", "diff.noprefix", "false"]);
+    git(repo, &["config", "user.email", "golden@example.com"]);
+    git(repo, &["config", "user.name", "Golden Author"]);
+    git(repo, &["config", "core.autocrlf", "false"]);
+    git(repo, &["config", "diff.noprefix", "false"]);
 }
 
 /// Write `content` to `<repo>/<name>`, stage and commit it at `date`;
 /// returns the new HEAD SHA.
 fn commit_file(repo: &Path, name: &str, content: &str, msg: &str, date: &str) -> String {
     std::fs::write(repo.join(name), content).expect("write fixture file");
-    run_git(repo, &["add", "--", name]);
+    git(repo, &["add", "--", name]);
     run_git_at(repo, &["commit", "-q", "-m", msg], date);
-    run_git(repo, &["rev-parse", "HEAD"]).trim().to_string()
+    git(repo, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 /// Fresh repository on `main` with one base commit (`base.txt = "base\n"` at
 /// [`DATE_1`]). The caller keeps the returned [`tempfile::TempDir`] alive for
 /// the duration of the test.
+///
+/// Not `repo_with_one_commit`: that recipe's single commit lands on the wall clock,
+/// where this one must land on [`DATE_1`], and it tracks `README.md` where this one
+/// tracks `base.txt`.
 fn temp_repo(name: &str) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join(name);
     std::fs::create_dir_all(&repo).expect("repo dir");
-    run_git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
     configure_identity(&repo);
     commit_file(&repo, "base.txt", "base\n", "base commit", DATE_1);
     (tmp, repo)
@@ -214,7 +215,7 @@ fn engine_golden_status_clean_repo_is_empty() {
 fn engine_golden_status_parses_staged_add() {
     let (_tmp, repo) = temp_repo("staged-add");
     std::fs::write(repo.join("fresh.txt"), "fresh\n").expect("write");
-    run_git(&repo, &["add", "fresh.txt"]);
+    git(&repo, &["add", "fresh.txt"]);
 
     let st = engine().status(&repo).expect("status");
     assert_eq!(st.changes.len(), 1, "got: {:?}", st.changes);
@@ -279,7 +280,7 @@ fn engine_golden_status_parses_deleted_file() {
 #[test]
 fn engine_golden_status_parses_renamed_file_with_orig_path() {
     let (_tmp, repo) = temp_repo("renamed");
-    run_git(&repo, &["mv", "base.txt", "renamed.txt"]);
+    git(&repo, &["mv", "base.txt", "renamed.txt"]);
 
     let st = engine().status(&repo).expect("status");
     assert_eq!(st.changes.len(), 1, "got: {:?}", st.changes);
@@ -296,18 +297,18 @@ fn engine_golden_status_parses_renamed_file_with_orig_path() {
 fn engine_golden_status_maps_merge_conflict_to_conflicted() {
     let (_tmp, repo) = temp_repo("conflict");
     // Both branches edit the same line of the same file.
-    run_git(&repo, &["branch", "feature"]);
+    git(&repo, &["branch", "feature"]);
 
     std::fs::write(repo.join("clash.txt"), "main side\n").expect("write main side");
-    run_git(&repo, &["add", "clash.txt"]);
+    git(&repo, &["add", "clash.txt"]);
     run_git_at(&repo, &["commit", "-q", "-m", "main change"], DATE_2);
 
-    run_git(&repo, &["switch", "feature"]);
+    git(&repo, &["switch", "feature"]);
     std::fs::write(repo.join("clash.txt"), "feature side\n").expect("write feature side");
-    run_git(&repo, &["add", "clash.txt"]);
+    git(&repo, &["add", "clash.txt"]);
     run_git_at(&repo, &["commit", "-q", "-m", "feature change"], DATE_3);
 
-    run_git(&repo, &["switch", "main"]);
+    git(&repo, &["switch", "main"]);
     let err = run_git_failing(&repo, &["merge", "feature"]);
     assert!(
         err.contains("CONFLICT"),
@@ -333,7 +334,7 @@ fn engine_golden_status_maps_merge_conflict_to_conflicted() {
 #[test]
 fn engine_golden_log_pins_linear_history_fields() {
     let (_tmp, repo) = temp_repo("log-linear");
-    let c1 = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let c1 = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
     let c2 = commit_file(&repo, "two.txt", "two\n", "second subject", DATE_2);
     let c3 = commit_file(
         &repo,
@@ -382,7 +383,7 @@ fn engine_golden_log_pins_linear_history_fields() {
 #[test]
 fn engine_golden_log_branch_filter_max_count_and_skip() {
     let (_tmp, repo) = temp_repo("log-filter");
-    let c1 = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let c1 = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
     let c2 = commit_file(&repo, "two.txt", "two\n", "second", DATE_2);
     let c3 = commit_file(&repo, "three.txt", "three\n", "third", DATE_3);
 
@@ -401,7 +402,7 @@ fn engine_golden_log_branch_filter_max_count_and_skip() {
     assert_eq!(ids(&tail), vec![c2.clone(), c1.clone()]);
 
     // Branch filter walks ONLY the named ref's history.
-    run_git(&repo, &["branch", "topic", &c1]);
+    git(&repo, &["branch", "topic", &c1]);
     let topic = engine()
         .log(
             &repo,
@@ -478,7 +479,7 @@ fn engine_golden_log_committer_time_mirrors_author_time() {
     let (_tmp, repo) = temp_repo("log-committer-time");
     // A commit whose author and committer epochs deliberately diverge.
     std::fs::write(repo.join("split.txt"), "split\n").expect("write");
-    run_git(&repo, &["add", "split.txt"]);
+    git(&repo, &["add", "split.txt"]);
     run_git_dates(
         &repo,
         &["commit", "-q", "-m", "split dates"],
@@ -505,7 +506,7 @@ fn engine_golden_diff_unstaged_modification_exact_text() {
     let (_tmp, repo) = temp_repo("diff-modify");
     const BASE: &str = "alpha\nbravo\ncharlie\ndelta\necho\n";
     std::fs::write(repo.join("words.txt"), BASE).expect("write");
-    run_git(&repo, &["add", "words.txt"]);
+    git(&repo, &["add", "words.txt"]);
     run_git_at(&repo, &["commit", "-q", "-m", "words"], DATE_1);
 
     // Controlled single-line edit in the middle of the file.
@@ -526,13 +527,13 @@ fn engine_golden_diff_unstaged_modification_exact_text() {
 fn engine_golden_diff_staged_vs_worktree_semantics() {
     let (_tmp, repo) = temp_repo("diff-staged");
     std::fs::write(repo.join("words.txt"), "one\ntwo\nthree\n").expect("write");
-    run_git(&repo, &["add", "words.txt"]);
+    git(&repo, &["add", "words.txt"]);
     run_git_at(&repo, &["commit", "-q", "-m", "words"], DATE_1);
 
     // Stage v2, then diverge the worktree to v3: index holds "TWO", the
     // worktree holds "TWO!".
     std::fs::write(repo.join("words.txt"), "one\nTWO\nthree\n").expect("stage v2");
-    run_git(&repo, &["add", "words.txt"]);
+    git(&repo, &["add", "words.txt"]);
     std::fs::write(repo.join("words.txt"), "one\nTWO!\nthree\n").expect("worktree v3");
 
     // Default opts → `git diff` (worktree vs INDEX).
@@ -568,7 +569,7 @@ fn engine_golden_diff_staged_vs_worktree_semantics() {
 fn engine_golden_diff_ignore_whitespace_flag_mapping() {
     let (_tmp, repo) = temp_repo("diff-ws");
     std::fs::write(repo.join("words.txt"), "alpha\nbravo\ncharlie\n").expect("write");
-    run_git(&repo, &["add", "words.txt"]);
+    git(&repo, &["add", "words.txt"]);
     run_git_at(&repo, &["commit", "-q", "-m", "words"], DATE_1);
 
     // Whitespace-only edit: visible by default, invisible under the flag
@@ -619,13 +620,13 @@ fn engine_golden_ahead_behind_counts_on_clone() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let src = tmp.path().join("origin-src");
     std::fs::create_dir_all(&src).expect("src dir");
-    run_git(&src, &["init", "-q", "-b", "main"]);
+    git(&src, &["init", "-q", "-b", "main"]);
     configure_identity(&src);
     commit_file(&src, "base.txt", "base\n", "base", DATE_1);
 
     // Clone the fixture repo to a second path; the clone tracks origin/main.
     let clone = tmp.path().join("clone");
-    run_git(
+    git(
         tmp.path(),
         &["clone", "-q", src.to_str().expect("utf8 src"), "clone"],
     );
@@ -651,7 +652,7 @@ fn engine_golden_ahead_behind_counts_on_clone() {
     // The upstream moves independently; after fetching, the clone is both
     // ahead and behind by one.
     let _c3 = commit_file(&src, "upstream.txt", "upstream\n", "upstream move", DATE_3);
-    run_git(&clone, &["fetch", "-q", "origin"]);
+    git(&clone, &["fetch", "-q", "origin"]);
     assert_eq!(
         ex.ahead_behind(&clone, "main", "origin/main")
             .expect("ahead/behind diverged both"),
@@ -672,7 +673,7 @@ fn git2_backend_current_branch_matches_cli_on_unborn_head() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("fresh");
     std::fs::create_dir_all(&repo).expect("repo dir");
-    run_git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
 
     let cli = engine();
     let git2 = turbogit_engine::git2_exec::Git2Executor::new(CliExecutor {

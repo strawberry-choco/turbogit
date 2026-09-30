@@ -8,104 +8,40 @@
 //! that once triggered it is gone). Assertions are on painted text and
 //! public state transitions — never on internals.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use egui_kittest::{Harness, kittest::Queryable as _};
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable as _;
 use tempfile::TempDir;
-use test_support::harness::{assert_not_painted, assert_painted, painted_galleys, painted_text};
+use test_support::git_seed::repo_with_origin;
+use test_support::harness::{
+    assert_not_painted, assert_painted, painted_galleys, settle_quiet, shell_harness_over,
+};
 use turbogit_app::activity::{ActivityEntry, ActivityKind, TimeWindow};
 use turbogit_app::state::AppState;
 
 // --- git fixture ---------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_AUTHOR_COMMITTER_NAME", "t")
-        .env("GIT_AUTHOR_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-fn commit_readme(repo: &Path) {
-    std::fs::write(repo.join("README.md"), "x\n").unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-m", "init"]);
-}
-
 /// One bare local remote (`origin`) plus one local repo `alpha` on `main`
 /// with `origin` configured, so a palette Fetch is a real, valid operation.
+///
+/// Verbatim `repo_with_origin`'s shape, so the shared recipe owns it. The bare's path
+/// is a filesystem detail, not a remote name; the only name either version knows is
+/// `origin`, which is what the palette Fetch reads.
 fn repo_project() -> (TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    let remote = project.join("origin.git");
-    git(
-        &project,
-        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
-    );
-    git(
-        &project,
-        &["-c", "init.defaultBranch=main", "init", "alpha"],
-    );
-    let alpha = project.join("alpha");
-    commit_readme(&alpha);
-    git(
-        &alpha,
-        &["remote", "add", "origin", remote.to_str().unwrap()],
-    );
-    git(&alpha, &["push", "-u", "origin", "main"]);
+    let alpha = repo_with_origin(&project, "alpha");
     (tmp, project, alpha)
 }
 
 // --- harness -------------------------------------------------------------------
 
+/// The shared `shell_harness_over`: dark tokens every frame, embedded fonts once,
+/// worker events drained every frame exactly as `src/app.rs` does.
 fn activity_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
-    let state = turbogit_app::state::AppState::new(project_dir);
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            state.drain_events();
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    harness
-}
-
-fn settle_quiet(harness: &mut Harness<'_, turbogit_app::state::AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let cur = format!("{:?}", painted_text(harness));
-        if cur == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = cur;
-        }
-    }
-    panic!("activity layout did not settle within 300 frames; last painted:\n{prev}");
+    shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
 fn entry(minutes_ago: i64, repo: Option<&str>, message: &str, kind: ActivityKind) -> ActivityEntry {

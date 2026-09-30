@@ -9,8 +9,10 @@
 use egui::{Color32, Pos2, Rect};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use test_support::harness::{filled_rects, painted_galleys, painted_paths, stroked_rects};
-use turbogit_ui::theme::{GROUP_ROW_HEIGHT, MENU_RADIUS, Palette, configure_style, install_fonts};
+use test_support::harness::{
+    filled_rects, painted_galleys, painted_paths, stroked_rects, widget_harness,
+};
+use turbogit_ui::theme::{GROUP_ROW_HEIGHT, MENU_RADIUS, Palette};
 use turbogit_ui::ui::icons::Icon;
 use turbogit_ui::ui::widgets::{MenuItemKind, MenuItemProps, menu_item, menu_rule, menu_surface};
 
@@ -23,24 +25,15 @@ fn item_harness_at(
     props: fn() -> MenuItemProps<'static>,
     clicked: std::rc::Rc<std::cell::Cell<bool>>,
 ) -> Harness<'static, ()> {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                let response = menu_item(ui, props());
-                if response.clicked() {
-                    clicked.set(true);
-                }
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(width, 240.0));
+    // `widget_harness` takes `Fn`, not `FnMut`: `props()` is a plain call and
+    // `Cell::set` takes `&self`, so the body stays `Fn`-compatible without a
+    // `RefCell`.
+    let mut harness = widget_harness(egui::vec2(width, 240.0), move |ui| {
+        let response = menu_item(ui, props());
+        if response.clicked() {
+            clicked.set(true);
+        }
+    });
     harness.step();
     harness
 }
@@ -450,20 +443,7 @@ fn a_narrow_row_truncates_the_label_before_the_shortcut_moves() {
 
 /// Render an arbitrary composition through the primitive's seam.
 fn frame_harness(render: impl Fn(&mut egui::Ui) + 'static) -> Harness<'static, ()> {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| render(ui));
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(320.0, 240.0));
-    harness
+    widget_harness(egui::vec2(320.0, 240.0), render)
 }
 
 /// The rule is a real decision, not `ui.separator()`: a 1 px

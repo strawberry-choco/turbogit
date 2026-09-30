@@ -17,11 +17,13 @@
 
 use crate::theme::Palette;
 use crate::ui::kit::conflict_pane::{self, Side};
-use egui::{Key, Modifiers, RichText, ScrollArea, TextEdit, Ui};
+use egui::{Key, Modifiers, RichText, TextEdit, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Toast};
-use turbogit_domain::model::RootId;
+use turbogit_domain::model::{
+    CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, RootId,
+};
 use turbogit_services::conflict;
 
 use std::path::{Path, PathBuf};
@@ -116,11 +118,13 @@ fn conflict_block(
     let res_i = ci;
     let active = state.ui.conflict_resolver_active_idx == res_i;
 
-    // Marker strips frame the discrete conflict block.
+    // Marker strips frame the discrete conflict block. The three literals come
+    // from `turbogit_domain` — the crate that also parses them — so the painter
+    // cannot name a different marker than the parser does.
     conflict_pane::equal_panes(ui, |cols| {
-        conflict_pane::marker_strip(&mut cols[0], "<<<<<<<");
-        conflict_pane::marker_strip(&mut cols[1], "=======");
-        conflict_pane::marker_strip(&mut cols[2], ">>>>>>>");
+        conflict_pane::marker_strip(&mut cols[0], CONFLICT_MARKER_OURS);
+        conflict_pane::marker_strip(&mut cols[1], CONFLICT_MARKER_SEPARATOR);
+        conflict_pane::marker_strip(&mut cols[2], CONFLICT_MARKER_THEIRS);
     });
     // Tinted yours/theirs + editable Result.
     let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
@@ -553,11 +557,4 @@ fn continue_merge(state: &mut AppState) {
         ));
     }
     state.ui.conflict_resolver_open = false;
-}
-
-// Touch ScrollArea import so the helper signature stays available for the
-// redesigned resolver's optional future scrolling panes.
-#[allow(dead_code)]
-fn _scroll_used() {
-    let _ = ScrollArea::vertical;
 }

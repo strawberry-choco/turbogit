@@ -10,11 +10,22 @@
 //! `egui_kittest`. It is gated behind the `harness` feature so consumers
 //! that only need the recording executor never compile the egui stack; the
 //! UI crate activates it through its own dev-dependencies.
+//!
+//! Anything not needing egui stays OUTSIDE the gate: `turbogit-app` and
+//! `turbogit-services` consume this crate with default features.
 
 #[cfg(feature = "harness")]
 pub mod harness;
 
+// Gated with `harness`: the WCAG helpers measure `egui::Color32`.
+#[cfg(feature = "harness")]
+pub mod wcag;
+
 pub mod git_seed;
+
+// Ungated with `git_seed`: the structural ratchets in the services' and app's
+// own suites read production source and cannot reach a feature-gated module.
+pub mod srcscan;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -613,10 +624,6 @@ impl GitExecutor for RecordingExecutor {
             .expect("calls mutex")
             .push(RecordedCall::Add(paths.to_vec()));
         self.inner.add(root, paths)
-    }
-
-    fn add_all(&self, root: &Path) -> TgResult<()> {
-        self.inner.add_all(root)
     }
 
     fn unstage(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {

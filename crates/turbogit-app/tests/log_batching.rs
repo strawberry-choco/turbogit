@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use test_support::RecordingExecutor;
+use test_support::git_seed::git;
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::operation::OpKind;
 use turbogit_app::root_caches::{Affected, LogScope};
@@ -17,23 +18,14 @@ use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::fake::FakeExecutor;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// All three builders stay local, for shapes no recipe is:
+// - `seeded_repo` makes `n` EMPTY commits; the pagination assertions count log
+//   entries, not files.
+// - `seeded_file_repo` rewrites ONE growing file per commit, so a path scope spans
+//   the whole listing.
+// - `seeded_interleaved_repo` writes a `git fast-import` stream, the only way to seed
+//   `2 * 2 * LOG_BATCH_SIZE` commits without a subprocess each. Its bare `Command`
+//   below is that stream, not a runner: it streams stdin rather than taking args.
 
 /// A repo with `n` commits (empty commits are enough — pagination only
 /// counts log entries).

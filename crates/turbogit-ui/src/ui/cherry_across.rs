@@ -37,7 +37,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     let candidates = state.ui.dlg.cherry_candidates.clone();
     let selected: Vec<String> = state.ui.dlg.cherry_commits.clone();
     let Some(source) = source else {
-        ui.label("No source repository selected.");
+        widgets::empty_state(ui, "No source repository selected.");
         if ui.button("Cancel").clicked() {
             state.ui.dialog = None;
         }
@@ -119,26 +119,21 @@ fn commits_pane(ui: &mut Ui, state: &mut AppState, candidates: &[Commit], select
     ScrollArea::vertical().max_height(190.0).show(ui, |ui| {
         for commit in candidates {
             let matches = query.is_empty()
-                || commit.message.to_lowercase().contains(&query)
-                || commit.author.name.to_lowercase().contains(&query)
+                || widgets::filter_matches(&commit.message, &query)
+                || widgets::filter_matches(&commit.author.name, &query)
+                // A hash, matched as a PREFIX — a search box that accepted the
+                // middle of a sha is a search box nobody can use.
                 || commit.id.starts_with(&query);
             if !matches {
                 continue;
             }
             let mut checked = selected.contains(&commit.id);
-            if ui
-                .checkbox(&mut checked, subject(&commit.message))
-                .clicked()
-            {
+            if ui.checkbox(&mut checked, commit.subject()).clicked() {
                 state.cherry_toggle_commit(commit.id.clone());
                 state.cherry_focus_commit(commit.id.clone());
             }
         }
     });
-}
-
-fn subject(message: &str) -> String {
-    message.lines().next().unwrap_or_default().to_string()
 }
 
 // --------------------------------------------------------------- preview ---

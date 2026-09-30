@@ -9,60 +9,32 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use test_support::git_seed::{commit, git, repo_with_one_commit};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{MergeStrategy, RootId};
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan};
 use turbogit_services::bulk_run::RowState;
 
-/// Run `git <args>` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-fn commit(repo: &Path, name: &str, text: &str) {
-    let file = repo.join(name);
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file)
-        .expect("opening work file");
-    use std::io::Write;
-    writeln!(f, "{text}").expect("appending work file");
-    drop(f);
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-q", "-m", text]);
-}
-
-fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q", "-b", "main"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    commit(&path, "base.txt", "base");
-    path
-}
-
 /// A two-repo project where both repos are on `main` and both carry a
 /// `feature` branch one commit ahead (the same change, per repo).
+///
+/// The per-repo floor is [`repo_with_one_commit`]; the committed path differs and
+/// nothing in this suite reads it.
+///
+/// The project composer is kept local, deliberately NOT
+/// `git_seed::repo_with_feature_branch`: that recipe adds a bare `origin` and pushes
+/// `main` to it, so ahead/behind stops being "no upstream at all" and the two
+/// repositories stop being symmetric. The preflight here is scoped by *branch*.
 fn sibling_project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join(tag);
-    let focused = temp_repo(&project, "focused");
-    let sibling = temp_repo(&project, "sibling");
+    // The recipe `git init`s *into* `project` rather than creating it.
+    std::fs::create_dir_all(&project).unwrap();
+    let focused = repo_with_one_commit(&project, "focused");
+    let sibling = repo_with_one_commit(&project, "sibling");
     for repo in [&focused, &sibling] {
         git(repo, &["checkout", "-q", "-b", "feature"]);
-        commit(repo, "feature.txt", "feature-1");
+        commit(repo, "feature.txt", "feature-1\n", "feature-1");
         git(repo, &["checkout", "-q", "main"]);
     }
     (tmp, project, focused, sibling)
@@ -74,6 +46,10 @@ fn rid(path: &Path) -> RootId {
 
 /// Step the event pump until every monitor row is terminal or the deadline
 /// passes.
+///
+/// Not a `test_support::harness` settle: those settle a *painted frame* by fingerprinting
+/// `painted_text`, and this crate does not depend on `egui_kittest`. This pumps the
+/// event pump and exits on a *state* predicate.
 fn wait_for_run_end(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {

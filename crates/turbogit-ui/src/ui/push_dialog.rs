@@ -523,7 +523,7 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
         .max_height(220.0)
         .show(ui, |ui| {
             if snapshot.is_empty() {
-                ui.label("No repositories to push.");
+                widgets::empty_state(ui, "No repositories to push.");
                 return;
             }
             let project = state
@@ -540,7 +540,7 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
             }
 
             if total == 0 {
-                ui.label("No outgoing commits.");
+                widgets::empty_state(ui, "No outgoing commits.");
             }
 
             for entry in &snapshot {
@@ -572,7 +572,7 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
 
 fn commit_row(ui: &mut Ui, state: &mut AppState, c: &Commit) {
     let short = widgets::short_commit_ref(&c.id);
-    let subject = c.message.lines().next().unwrap_or("");
+    let subject = c.subject();
     let mut checked = state.ui.dlg.push_selected_commits.contains(&c.id);
     ui.horizontal(|ui| {
         if ui.checkbox(&mut checked, subject).changed() {
@@ -644,7 +644,7 @@ fn changed_files_preview(ui: &mut Ui, state: &mut AppState) {
                 }
             }
             if !any {
-                ui.label(RichText::new("No changed files.").weak());
+                widgets::empty_state(ui, "No changed files.");
             }
         });
 }

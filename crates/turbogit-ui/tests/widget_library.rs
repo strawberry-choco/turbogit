@@ -20,10 +20,20 @@ use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
-use test_support::harness::painted_galleys;
+use test_support::git_seed::git;
+use test_support::harness::{
+    assert_painted, painted_galleys, painted_text, settle, widget_harness,
+};
+use test_support::srcscan;
 use turbogit_ui::theme::{PILL_RADIUS, Palette, RAIL_WIDTH};
 use turbogit_ui::ui::icons::Icon;
 use turbogit_ui::ui::widgets::*;
+
+/// The UI layer's own `src/ui` tree, so the structural ratchets below read the
+/// real files rather than a list frozen when each ratchet was written.
+fn ui_src_root() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui")
+}
 
 // ---------------------------------------------------------------------------
 // 1. Palette-token completeness (spec §2)
@@ -242,23 +252,11 @@ fn a_compact_primary_shares_the_primary_colour_ladder_and_fits_the_pane_header_b
 
     // The height, from paint: one compact primary inside a real pane-header band,
     // measured against the band the shared header put down.
-    let mut fonts_installed = false;
-    let mut band = Harness::new_ui_state(
-        move |ui, _| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                pane_header(ui, "BAND", None, |ui| {
-                    compact_primary_button(ui, "Do the thing");
-                });
-            });
-        },
-        (),
-    );
-    band.set_size(egui::vec2(560.0, 200.0));
+    let mut band = widget_harness(egui::vec2(560.0, 200.0), move |ui| {
+        pane_header(ui, "BAND", None, |ui| {
+            compact_primary_button(ui, "Do the thing");
+        });
+    });
     settle(&mut band);
 
     let primary = band.get_by_label("Do the thing").rect();
@@ -292,90 +290,50 @@ fn widgets_harness(
     ghost_clicked: ClickFlag,
     compact_clicked: ClickFlag,
 ) -> (Harness<'static, ()>, tempfile::TempDir) {
-    let mut search_buf = String::new();
-    let mut name_buf = String::new();
+    // `widget_harness` takes an `Fn`, so these two buffers written from inside
+    // the frame body carry their own interior mutability.
+    let search_buf = std::cell::RefCell::new(String::new());
+    let name_buf = std::cell::RefCell::new(String::new());
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                // Section chrome.
-                group_title(ui, "Recent");
-                pane_header(ui, "CHANGED FILES", None, |_ui| {});
+    let harness = widget_harness(egui::vec2(800.0, 600.0), move |ui| {
+        group_title(ui, "Recent");
+        pane_header(ui, "CHANGED FILES", None, |_ui| {});
 
-                // Buttons.
-                if ghost_button(ui, None, "Ghost action").clicked() {
-                    ghost_clicked.set(true);
-                }
-                if primary_button(ui, Some(Icon::CHECK), "Primary action").clicked() {
-                    // Counted via painted assertion only.
-                }
-                if compact_button(ui, "Compact action").clicked() {
-                    compact_clicked.set(true);
-                }
-                icon_button(ui, Icon::X);
+        if ghost_button(ui, None, "Ghost action").clicked() {
+            ghost_clicked.set(true);
+        }
+        if primary_button(ui, Some(Icon::CHECK), "Primary action").clicked() {
+            // Counted via painted assertion only.
+        }
+        if compact_button(ui, "Compact action").clicked() {
+            compact_clicked.set(true);
+        }
+        icon_button(ui, Icon::X);
 
-                // Chips. The ref-label render function and the fixed-height
-                // tree-row wrapper were retired from the façade, so the gallery
-                // is the badge family plus the inputs; ref *colour* still has a
-                // live consumer in `ui::log_window` and is pinned by
-                // `ref_kind_accent_maps_to_brand_success_warning`.
-                badge(ui, "+3", BadgeKind::Added);
-                badge(ui, "M", BadgeKind::Modified);
-                badge(ui, "D", BadgeKind::Deleted);
+        // Chips: the ref-label render function and the fixed-height tree-row
+        // wrapper are retired, so the gallery is the badge family; ref *colour*
+        // still has a live consumer in `ui::log_window`.
+        badge(ui, "+3", BadgeKind::Added);
+        badge(ui, "M", BadgeKind::Modified);
+        badge(ui, "D", BadgeKind::Deleted);
 
-                // Inputs.
-                search_input(ui, "Search commits", &mut search_buf);
-                text_input(ui, "Branch name", &mut name_buf);
+        search_input(ui, "Search commits", &mut search_buf.borrow_mut());
+        text_input(ui, "Branch name", &mut name_buf.borrow_mut());
 
-                // Dialog chrome.
-                dialog_footer(ui, |ui| {
-                    primary_button(ui, None, "Footer OK");
-                });
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(800.0, 600.0));
+        // Dialog chrome.
+        dialog_footer(ui, |ui| {
+            primary_button(ui, None, "Footer OK");
+        });
+    });
     (harness, tempfile::tempdir().expect("tempdir"))
-}
-
-/// All text painted by the last completed frame.
-fn painted_text<S>(harness: &Harness<'_, S>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
 }
 
 #[test]
 fn inline_error_composes_visible_text_with_semantic_error_ink() {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                ui.label("page context");
-                inline_error(ui, "the operation could not finish");
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(480.0, 120.0));
+    let mut harness = widget_harness(egui::vec2(480.0, 120.0), move |ui| {
+        ui.label("page context");
+        inline_error(ui, "the operation could not finish");
+    });
 
     settle(&mut harness);
     assert_painted(&harness, "the operation could not finish");
@@ -390,25 +348,13 @@ fn inline_error_composes_visible_text_with_semantic_error_ink() {
 
 #[test]
 fn keyed_read_presenter_renders_waiting_and_failure_from_display_inputs() {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                keyed_read_presentation(ui, KeyedReadPresentation::Waiting("Computing preview…"));
-                keyed_read_presentation(
-                    ui,
-                    KeyedReadPresentation::Failed("Could not read the preview"),
-                );
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(480.0, 120.0));
+    let mut harness = widget_harness(egui::vec2(480.0, 120.0), move |ui| {
+        keyed_read_presentation(ui, KeyedReadPresentation::Waiting("Computing preview…"));
+        keyed_read_presentation(
+            ui,
+            KeyedReadPresentation::Failed("Could not read the preview"),
+        );
+    });
 
     settle(&mut harness);
     assert_painted(&harness, "Computing preview…");
@@ -424,24 +370,12 @@ fn keyed_read_presenter_renders_waiting_and_failure_from_display_inputs() {
 
 #[test]
 fn shared_note_and_alert_feedback_keep_distinct_rendered_roles() {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                note(ui, None, |ui| {
-                    ui.label("context note");
-                });
-                alert_box(ui, "contained alert");
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(360.0, 180.0));
+    let mut harness = widget_harness(egui::vec2(360.0, 180.0), move |ui| {
+        note(ui, None, |ui| {
+            ui.label("context note");
+        });
+        alert_box(ui, "contained alert");
+    });
     settle(&mut harness);
     assert_painted(&harness, "context note");
     assert_painted(&harness, "contained alert");
@@ -456,21 +390,9 @@ fn chip_geometry_owns_radius_padding_measurement_and_text_placement() {
     assert_eq!(CHIP_GEOMETRY.radius, f32::from(PILL_RADIUS));
     assert_eq!(chip_radius(), egui::CornerRadius::same(PILL_RADIUS));
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                badge(ui, "main", BadgeKind::Neutral);
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(240.0, 80.0));
+    let mut harness = widget_harness(egui::vec2(240.0, 80.0), move |ui| {
+        badge(ui, "main", BadgeKind::Neutral);
+    });
     harness.step();
     let galley = harness
         .output()
@@ -500,27 +422,15 @@ fn chip_geometry_owns_radius_padding_measurement_and_text_placement() {
 fn paint_centered_text_centres_one_galley_on_both_axes() {
     const INK: Color32 = Color32::from_rgb(0x11, 0x22, 0x33);
     let rect = egui::Rect::from_min_size(egui::pos2(12.0, 30.0), egui::vec2(240.0, 72.0));
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                paint_centered_text(
-                    ui.painter(),
-                    rect,
-                    "centered",
-                    turbogit_ui::theme::chrome_font(turbogit_ui::theme::TYPE_BODY),
-                    INK,
-                );
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(360.0, 180.0));
+    let mut harness = widget_harness(egui::vec2(360.0, 180.0), move |ui| {
+        paint_centered_text(
+            ui.painter(),
+            rect,
+            "centered",
+            turbogit_ui::theme::chrome_font(turbogit_ui::theme::TYPE_BODY),
+            INK,
+        );
+    });
     settle(&mut harness);
 
     let painted = painted_galleys(&harness);
@@ -562,28 +472,15 @@ fn paint_centered_text_centres_one_galley_on_both_axes() {
 
 #[test]
 fn multiple_shared_chips_coexist_without_overlap_or_geometry_regression() {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    badge(ui, "added", BadgeKind::Added);
-                    badge(ui, "main", BadgeKind::Neutral);
-                    // The third chip used to be a `ref_label`; that render
-                    // function is retired, so the overlap check runs on the
-                    // badge family alone.
-                    badge(ui, "gone", BadgeKind::Deleted);
-                });
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(400.0, 80.0));
+    let mut harness = widget_harness(egui::vec2(400.0, 80.0), move |ui| {
+        ui.horizontal(|ui| {
+            badge(ui, "added", BadgeKind::Added);
+            badge(ui, "main", BadgeKind::Neutral);
+            // The third chip used to be a `ref_label`; that render function is
+            // retired, so the overlap check runs on the badge family alone.
+            badge(ui, "gone", BadgeKind::Deleted);
+        });
+    });
     settle(&mut harness);
 
     let added = harness.get_by_label("added").rect();
@@ -596,29 +493,6 @@ fn multiple_shared_chips_coexist_without_overlap_or_geometry_regression() {
     assert!(neutral.right() <= third.left());
     assert_eq!(added.top(), neutral.top());
     assert_eq!(neutral.top(), third.top());
-}
-
-/// Step frames until the painted output stabilizes.
-fn settle<S>(harness: &mut Harness<'_, S>) {
-    let mut prev = String::new();
-    for _ in 0..10 {
-        harness.step();
-        let fingerprint = format!("{:?}", painted_text(harness));
-        if fingerprint == prev {
-            return;
-        }
-        prev = fingerprint;
-    }
-    panic!("widget layout did not settle within 10 frames");
-}
-
-#[track_caller]
-fn assert_painted(harness: &Harness<'_, ()>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
 }
 
 #[test]
@@ -669,35 +543,16 @@ fn ghost_and_compact_buttons_click_through_the_accessibility_tree() {
 /// Harness rendering a shared segmented control (issue #01): three options,
 /// second pre-selected.
 fn segmented_harness() -> (Harness<'static, ()>, tempfile::TempDir) {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                segmented_control(ui, &["One", "Two", "Three"], 1);
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(400.0, 80.0));
+    let harness = widget_harness(egui::vec2(400.0, 80.0), move |ui| {
+        segmented_control(ui, &["One", "Two", "Three"], 1);
+    });
     (harness, tempfile::tempdir().expect("tempdir"))
 }
 
 fn short_commit_ref_harness(reference: &'static str) -> (Harness<'static, ()>, tempfile::TempDir) {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui(move |ui| {
-        turbogit_ui::theme::configure_style(ui.ctx());
-        if !fonts_installed {
-            turbogit_ui::theme::install_fonts(ui.ctx());
-            fonts_installed = true;
-        }
+    let harness = widget_harness(egui::vec2(240.0, 40.0), move |ui| {
         ui.label(short_commit_ref(reference));
     });
-    harness.set_size(egui::vec2(240.0, 40.0));
     (harness, tempfile::tempdir().expect("tempdir"))
 }
 
@@ -833,45 +688,32 @@ fn disabled_child_scope_dim_inside_and_leaves_the_caller_intact() {
     let probe = Rc::new(std::cell::RefCell::new(ScopeProbe::default()));
     let probe_ui = probe.clone();
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                for (enabled, label) in [(false, "Dimmed"), (true, "Lit")] {
-                    let mut p = probe_ui.borrow_mut();
-                    p.width_before.push(ui.available_width());
-                    p.max_rect_before.push(ui.max_rect());
-                    p.top_before.push(ui.available_rect_before_wrap().top());
+    let mut harness = widget_harness(egui::vec2(420.0, 320.0), move |ui| {
+        for (enabled, label) in [(false, "Dimmed"), (true, "Lit")] {
+            let mut p = probe_ui.borrow_mut();
+            p.width_before.push(ui.available_width());
+            p.max_rect_before.push(ui.max_rect());
+            p.top_before.push(ui.available_rect_before_wrap().top());
 
-                    let seq = p.returned.len() as u32 + 1;
-                    let mut inside = None;
-                    let value = disabled_child_scope(ui, enabled, |child| {
-                        inside = Some(child.is_enabled());
-                        primary_button(child, None, label);
-                        seq
-                    });
-
-                    p.inside_enabled
-                        .push(inside.expect("the closure must run in either state"));
-                    p.returned.push(value);
-                    p.caller_enabled.push(ui.is_enabled());
-                    p.width_after.push(ui.available_width());
-                    p.max_rect_after.push(ui.max_rect());
-                    p.top_after.push(ui.available_rect_before_wrap().top());
-                }
-                // No-leak: the control drawn straight after the disabled scope
-                // must keep its enabled fill and ink.
-                primary_button(ui, None, "After");
+            let seq = p.returned.len() as u32 + 1;
+            let mut inside = None;
+            let value = disabled_child_scope(ui, enabled, |child| {
+                inside = Some(child.is_enabled());
+                primary_button(child, None, label);
+                seq
             });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(420.0, 320.0));
+
+            p.inside_enabled
+                .push(inside.expect("the closure must run in either state"));
+            p.returned.push(value);
+            p.caller_enabled.push(ui.is_enabled());
+            p.width_after.push(ui.available_width());
+            p.max_rect_after.push(ui.max_rect());
+            p.top_after.push(ui.available_rect_before_wrap().top());
+        }
+        // No-leak: the control after the disabled scope keeps its enabled fill.
+        primary_button(ui, None, "After");
+    });
     harness.step();
 
     let p = probe.borrow();
@@ -983,24 +825,11 @@ fn painted_rects<S>(
 /// at the same 360×400 window every card test below uses. The card's geometry
 /// is then read straight off painted output.
 fn default_card_harness() -> Harness<'static, ()> {
-    let mut fonts_installed = false;
-    Harness::builder()
-        .with_size(egui::vec2(360.0, 400.0))
-        .build_ui_state(
-            move |ui, _state| {
-                turbogit_ui::theme::configure_style(ui.ctx());
-                if !fonts_installed {
-                    turbogit_ui::theme::install_fonts(ui.ctx());
-                    fonts_installed = true;
-                }
-                egui::CentralPanel::default().show(ui, |ui| {
-                    card(ui, CardFrame::default(), |ui| {
-                        ui.label("default body");
-                    });
-                });
-            },
-            (),
-        )
+    widget_harness(egui::vec2(360.0, 400.0), move |ui| {
+        card(ui, CardFrame::default(), |ui| {
+            ui.label("default body");
+        });
+    })
 }
 
 /// Paint-time x of the one galley painting exactly `text`.
@@ -1041,44 +870,29 @@ fn card_frame_owns_its_shape_and_honours_pad_surface_and_width() {
     let panel_width = Rc::new(Cell::new(0.0_f32));
     let panel_width_ui = panel_width.clone();
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(360.0, 400.0))
-        .build_ui_state(
-            move |ui, _state| {
-                turbogit_ui::theme::configure_style(ui.ctx());
-                if !fonts_installed {
-                    turbogit_ui::theme::install_fonts(ui.ctx());
-                    fonts_installed = true;
-                }
-                egui::CentralPanel::default().show(ui, |ui| {
-                    panel_width_ui.set(ui.available_width());
-                    card(ui, CardFrame::default(), |ui| {
-                        ui.label("default body");
-                    });
-                    card(ui, CardFrame::default().raised().padded(24), |ui| {
-                        ui.label("raised body");
-                    });
-                    // The Welcome clone/recents cards' shape, so every
-                    // configuration the app's seven call sites use is covered.
-                    card(ui, CardFrame::default().padded(16), |ui| {
-                        ui.label("padded body");
-                    });
-                    // The Welcome changelog overlay's shape: raised, 20 px,
-                    // pinned to 420. Unbordered here so this test pins the
-                    // geometry contract; the border's own 2pt of cost is
-                    // `the_bordered_card_is_the_one_surface_allowed_to_stroke`'s.
-                    card(
-                        ui,
-                        CardFrame::default().raised().padded(20).min_width(420.0),
-                        |ui| {
-                            ui.label("pinned body");
-                        },
-                    );
-                });
+    let mut harness = widget_harness(egui::vec2(360.0, 400.0), move |ui| {
+        panel_width_ui.set(ui.available_width());
+        card(ui, CardFrame::default(), |ui| {
+            ui.label("default body");
+        });
+        card(ui, CardFrame::default().raised().padded(24), |ui| {
+            ui.label("raised body");
+        });
+        // The Welcome clone/recents cards' shape.
+        card(ui, CardFrame::default().padded(16), |ui| {
+            ui.label("padded body");
+        });
+        // The Welcome changelog overlay's shape: raised, 20 px, pinned to 420.
+        // Unbordered here, so the border's own 2pt of cost belongs to
+        // `the_bordered_card_is_the_one_surface_allowed_to_stroke`.
+        card(
+            ui,
+            CardFrame::default().raised().padded(20).min_width(420.0),
+            |ui| {
+                ui.label("pinned body");
             },
-            (),
         );
+    });
     settle(&mut harness);
 
     let rects = painted_rects(&harness);
@@ -1187,30 +1001,17 @@ fn card_frame_owns_its_shape_and_honours_pad_surface_and_width() {
 /// not any type mentions it.
 #[test]
 fn card_paints_no_stroke_where_a_default_card_is() {
-    let mut fonts_installed = false;
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(360.0, 400.0))
-        .build_ui_state(
-            move |ui, _state| {
-                turbogit_ui::theme::configure_style(ui.ctx());
-                if !fonts_installed {
-                    turbogit_ui::theme::install_fonts(ui.ctx());
-                    fonts_installed = true;
-                }
-                egui::CentralPanel::default().show(ui, |ui| {
-                    card(ui, CardFrame::default(), |ui| {
-                        ui.label("default body");
-                    });
-                    card(ui, CardFrame::default().padded(16), |ui| {
-                        ui.label("padded body");
-                    });
-                    card(ui, CardFrame::default().raised().padded(16), |ui| {
-                        ui.label("raised body");
-                    });
-                });
-            },
-            (),
-        );
+    let mut harness = widget_harness(egui::vec2(360.0, 400.0), move |ui| {
+        card(ui, CardFrame::default(), |ui| {
+            ui.label("default body");
+        });
+        card(ui, CardFrame::default().padded(16), |ui| {
+            ui.label("padded body");
+        });
+        card(ui, CardFrame::default().raised().padded(16), |ui| {
+            ui.label("raised body");
+        });
+    });
     settle(&mut harness);
 
     let rects = painted_rects(&harness);
@@ -1266,35 +1067,22 @@ fn card_paints_no_stroke_where_a_default_card_is() {
 /// not a variant.
 #[test]
 fn the_bordered_card_is_the_one_surface_allowed_to_stroke() {
-    let mut fonts_installed = false;
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(360.0, 400.0))
-        .build_ui_state(
-            move |ui, _state| {
-                turbogit_ui::theme::configure_style(ui.ctx());
-                if !fonts_installed {
-                    turbogit_ui::theme::install_fonts(ui.ctx());
-                    fonts_installed = true;
-                }
-                egui::CentralPanel::default().show(ui, |ui| {
-                    card(ui, CardFrame::default(), |ui| {
-                        ui.label("default body");
-                    });
-                    card(
-                        ui,
-                        CardFrame::default()
-                            .raised()
-                            .bordered()
-                            .padded(20)
-                            .min_width(420.0),
-                        |ui| {
-                            ui.label("pinned body");
-                        },
-                    );
-                });
+    let mut harness = widget_harness(egui::vec2(360.0, 400.0), move |ui| {
+        card(ui, CardFrame::default(), |ui| {
+            ui.label("default body");
+        });
+        card(
+            ui,
+            CardFrame::default()
+                .raised()
+                .bordered()
+                .padded(20)
+                .min_width(420.0),
+            |ui| {
+                ui.label("pinned body");
             },
-            (),
         );
+    });
     settle(&mut harness);
 
     let rects = painted_rects(&harness);
@@ -1455,139 +1243,6 @@ const CONFLICT_PANE_SRC: &str = include_str!("../src/ui/kit/conflict_pane.rs");
 /// shared widget module's public surface.
 const WIDGETS_MOD_SRC: &str = include_str!("../src/ui/widgets/mod.rs");
 
-/// One top-level item of a module: its name, its own text (doc comments
-/// excluded — the claim is about code, not about what a comment says), and
-/// whether it is a function.
-struct ModuleItem {
-    name: String,
-    text: String,
-    is_fn: bool,
-}
-
-/// The name an item head declares, with the generic parameter list, the
-/// argument list and a `const`'s type annotation dropped: `pane_header<R>`
-/// declares `pane_header`, and `pub const PANE_HEADER_HEIGHT: f32 = 28.0;`
-/// declares `PANE_HEADER_HEIGHT`.
-fn declared_name(rest: &str) -> String {
-    rest.split(['(', '<', ':'])
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_owned()
-}
-
-/// Every top-level item of `src`, in source order.
-fn top_level_items(src: &str) -> Vec<ModuleItem> {
-    let lines: Vec<&str> = src.lines().collect();
-    // The declared name of a column-0 `pub fn` / `fn` / `pub const` / `const`
-    // head, or `None` for any other line.
-    let head_name = |line: &str| -> Option<(String, bool)> {
-        let trimmed = line.trim_start();
-        for prefix in ["pub fn ", "fn "] {
-            if let Some(rest) = trimmed.strip_prefix(prefix) {
-                return Some((declared_name(rest), true));
-            }
-        }
-        for prefix in ["pub const ", "const "] {
-            if let Some(rest) = trimmed.strip_prefix(prefix) {
-                return Some((declared_name(rest), false));
-            }
-        }
-        None
-    };
-
-    let mut items = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let line = lines[i];
-        // Column 0 only: an indented head belongs to the enclosing `impl`, and
-        // an `impl` member is not a module-level item.
-        let head = if line.starts_with(' ') || line.starts_with('\t') {
-            None
-        } else {
-            head_name(line)
-        };
-        let Some((name, is_fn)) = head else {
-            i += 1;
-            continue;
-        };
-        // A one-line `const` ends with its own `;`; a `fn` or a block-bodied
-        // `const` ends at the column-0 `}` (or `};`) that closes it.
-        let end = if line.trim_end().ends_with(';') {
-            Some(i)
-        } else {
-            lines
-                .iter()
-                .enumerate()
-                .skip(i + 1)
-                .find(|(_, tail)| matches!(tail.trim_end(), "}" | "};"))
-                .map(|(j, _)| j)
-        };
-        let end = end.unwrap_or_else(|| {
-            panic!(
-                "module item `{name}` has no column-0 terminator; the structural \
-                 ratchets assume the rustfmt layout, so they refuse to pass on a \
-                 hand-rolled one"
-            )
-        });
-        items.push(ModuleItem {
-            name,
-            text: lines[i..=end].join("\n"),
-            is_fn,
-        });
-        i = end + 1;
-    }
-    items
-}
-
-/// Byte offsets at which `needle` occurs in `text` as a whole identifier, so a
-/// search for `Palette::RAISED` does not also match `Palette::RAISED_ON_CARD`.
-fn word_offsets(text: &str, needle: &str) -> Vec<usize> {
-    let bytes = text.as_bytes();
-    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut hits = Vec::new();
-    let mut from = 0;
-    while let Some(rel) = text[from..].find(needle) {
-        let at = from + rel;
-        let after = at + needle.len();
-        let bounded_before = at == 0 || !is_ident(bytes[at - 1]);
-        let bounded_after = after >= bytes.len() || !is_ident(bytes[after]);
-        if bounded_before && bounded_after {
-            hits.push(at);
-        }
-        from = at + needle.len();
-    }
-    hits
-}
-
-/// The names of every top-level item of `src` that names `needle` in its own
-/// text, sorted so the ratchets read as sets rather than as an incidental
-/// source order.
-fn items_naming(src: &str, needle: &str) -> Vec<String> {
-    let mut names: Vec<String> = top_level_items(src)
-        .into_iter()
-        .filter(|item| !word_offsets(&item.text, needle).is_empty())
-        .map(|item| item.name)
-        .collect();
-    names.sort();
-    names
-}
-
-/// The names of every **function** in `src` that *uses* `ident`.
-///
-/// The item that declares `ident` is excluded, so asking "who calls
-/// `chip_with`" answers with the callers rather than with `chip_with` itself.
-fn fns_using(src: &str, ident: &str) -> Vec<String> {
-    let mut names: Vec<String> = top_level_items(src)
-        .into_iter()
-        .filter(|item| item.is_fn && item.name != ident)
-        .filter(|item| !word_offsets(&item.text, ident).is_empty())
-        .map(|item| item.name)
-        .collect();
-    names.sort();
-    names
-}
-
 /// The ref name the fixture chip holds, the current ref, and an ad-hoc count.
 /// Distinct strings, because a shared one would make "which chip painted this"
 /// unanswerable.
@@ -1599,26 +1254,13 @@ const COUNT_TEXT: &str = "12";
 /// every fill in the output is a chip fill and "no fourth chip" is a statement
 /// about the whole frame rather than about a search result.
 fn three_chips_harness() -> Harness<'static, ()> {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ref_chip(ui, REF_NAME);
-                    current_chip(ui, CURRENT_NAME);
-                    count_chip(ui, COUNT_TEXT);
-                });
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(460.0, 80.0));
-    harness
+    widget_harness(egui::vec2(460.0, 80.0), move |ui| {
+        ui.horizontal(|ui| {
+            ref_chip(ui, REF_NAME);
+            current_chip(ui, CURRENT_NAME);
+            count_chip(ui, COUNT_TEXT);
+        });
+    })
 }
 
 /// Every rect the frame painted at the shared chip height, as
@@ -1717,34 +1359,40 @@ fn the_only_galley(
 fn exactly_one_function_produces_each_of_the_three_chips() {
     // One item defines each pair…
     assert_eq!(
-        items_naming(CHIPS_SRC, "Palette::RAISED_ON_CARD"),
+        srcscan::items_naming(CHIPS_SRC, "Palette::RAISED_ON_CARD"),
         ["REF_CHIP_COLORS"],
         "the ref chip's fill is defined in exactly one place"
     );
     assert_eq!(
-        items_naming(CHIPS_SRC, "Palette::ROW_SELECTED"),
+        srcscan::items_naming(CHIPS_SRC, "Palette::ROW_SELECTED"),
         ["CURRENT_CHIP_COLORS"],
         "the current chip's fill is defined in exactly one place"
     );
     assert_eq!(
-        items_naming(CHIPS_SRC, "Palette::RAISED"),
+        srcscan::items_naming(CHIPS_SRC, "Palette::RAISED"),
         ["COUNT_CHIP_COLORS"],
         "the count chip's fill is defined in exactly one place"
     );
     // …and exactly one function renders each.
-    assert_eq!(fns_using(CHIPS_SRC, "REF_CHIP_COLORS"), ["ref_chip"]);
     assert_eq!(
-        fns_using(CHIPS_SRC, "CURRENT_CHIP_COLORS"),
+        srcscan::fns_using(CHIPS_SRC, "REF_CHIP_COLORS"),
+        ["ref_chip"]
+    );
+    assert_eq!(
+        srcscan::fns_using(CHIPS_SRC, "CURRENT_CHIP_COLORS"),
         ["current_chip"]
     );
-    assert_eq!(fns_using(CHIPS_SRC, "COUNT_CHIP_COLORS"), ["count_chip"]);
+    assert_eq!(
+        srcscan::fns_using(CHIPS_SRC, "COUNT_CHIP_COLORS"),
+        ["count_chip"]
+    );
 
     // The closed set, from the other end. `chip_with` is the one body painter
     // in the module, so the functions that reach it *are* the chips — plus the
     // badge, which is the pill slot and is named here so it stays visibly
     // outside the chip set rather than quietly inside it.
     assert_eq!(
-        fns_using(CHIPS_SRC, "chip_with"),
+        srcscan::fns_using(CHIPS_SRC, "chip_with"),
         ["badge", "count_chip", "current_chip", "ref_chip"],
         "`chip_with` is the only thing that paints a chip body: a fifth caller is \
          a fourth chip, or a second badge, and it has to be named here first"
@@ -1753,7 +1401,7 @@ fn exactly_one_function_produces_each_of_the_three_chips() {
     // takes the pill slot. So a chip is a function that paints with
     // `COMPACT_CHIP_GEOMETRY`, and that set is closed at three.
     assert_eq!(
-        fns_using(CHIPS_SRC, "COMPACT_CHIP_GEOMETRY"),
+        srcscan::fns_using(CHIPS_SRC, "COMPACT_CHIP_GEOMETRY"),
         [
             "compact_chip_radius",
             "count_chip",
@@ -1764,7 +1412,7 @@ fn exactly_one_function_produces_each_of_the_three_chips() {
          accessor beside them — nobody else, so the chip set stays closed"
     );
     assert_eq!(
-        fns_using(CHIPS_SRC, "CHIP_GEOMETRY"),
+        srcscan::fns_using(CHIPS_SRC, "CHIP_GEOMETRY"),
         [
             "badge",
             "chip_radius",
@@ -1781,7 +1429,7 @@ fn exactly_one_function_produces_each_of_the_three_chips() {
     // `ref_chip` inherits it, so a `Sense::click` here would hand every ref name
     // in the app a dead press target and an accessibility node answering Click.
     assert!(
-        items_naming(CHIPS_SRC, "Sense::click").is_empty(),
+        srcscan::items_naming(CHIPS_SRC, "Sense::click").is_empty(),
         "no chip may gain a click plane: a chip that is a label inherits \
          `hash_chip`'s hover-only sense, and one that is a control carries its \
          own node"
@@ -1804,7 +1452,7 @@ fn no_chip_names_the_reserved_counter_or_a_repository_state_colour() {
         "Palette::STATUS_DIVERGED",
     ] {
         assert_eq!(
-            items_naming(CHIPS_SRC, reserved),
+            srcscan::items_naming(CHIPS_SRC, reserved),
             Vec::<String>::new(),
             "`{reserved}` means dirt / unpushed / diverged and is a mark, never \
              a chip fill: a state behind a fill stops reading as state"
@@ -1828,20 +1476,9 @@ fn no_chip_names_the_reserved_counter_or_a_repository_state_colour() {
 #[test]
 fn the_hash_chip_paints_the_hash_token_and_not_the_action_accent() {
     const HASH: &str = "a1b2c3d";
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                hash_chip(ui, HASH, "");
-            });
-        },
-        (),
-    );
+    let mut harness = widget_harness(egui::vec2(800.0, 600.0), move |ui| {
+        hash_chip(ui, HASH, "");
+    });
     settle(&mut harness);
 
     assert_eq!(
@@ -2137,26 +1774,14 @@ fn the_status_badge_keeps_the_pill_radius_and_the_two_radii_stay_distinct() {
     // …and as paint. One frame with the badge beside the three chips: the badge
     // is the only pill, the chips are the only compact ones, and a slot that
     // borrowed the other's radius fails on its own rect.
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    badge(ui, "A", BadgeKind::Added);
-                    ref_chip(ui, REF_NAME);
-                    current_chip(ui, CURRENT_NAME);
-                    count_chip(ui, COUNT_TEXT);
-                });
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(520.0, 80.0));
+    let mut harness = widget_harness(egui::vec2(520.0, 80.0), move |ui| {
+        ui.horizontal(|ui| {
+            badge(ui, "A", BadgeKind::Added);
+            ref_chip(ui, REF_NAME);
+            current_chip(ui, CURRENT_NAME);
+            count_chip(ui, COUNT_TEXT);
+        });
+    });
     settle(&mut harness);
 
     let badge_rect = painted_rects(&harness)
@@ -2217,46 +1842,6 @@ fn the_status_badge_keeps_the_pill_radius_and_the_two_radii_stay_distinct() {
 // layout colour answers `WHITE` and the column-header ink test would pass
 // whatever was chosen.
 
-/// Every `.rs` file under `crates/turbogit-ui/src/ui`, recursively, as
-/// `(path relative to `src/ui`, source)`.
-///
-/// Read at *run* time rather than `include_str!`'d one file at a time, because
-/// the claim being made is "no second pane header exists **anywhere**", and a
-/// hand-maintained list of the files that were checked when the ratchet was
-/// written is a list that silently stops covering new panes. A file appearing
-/// later is covered the next time the suite runs, with no edit to the test.
-fn ui_source_files() -> Vec<(String, String)> {
-    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<(String, String)>) {
-        let entries =
-            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
-        let mut paths: Vec<_> = entries.map(|e| e.expect("dir entry").path()).collect();
-        paths.sort();
-        for path in paths {
-            if path.is_dir() {
-                walk(&path, base, out);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                let rel = path
-                    .strip_prefix(base)
-                    .expect("under base")
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                let src = std::fs::read_to_string(&path)
-                    .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-                out.push((rel, src));
-            }
-        }
-    }
-    let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui");
-    let mut out = Vec::new();
-    walk(&base, &base, &mut out);
-    assert!(
-        !out.is_empty(),
-        "the ui source walk found nothing under {}",
-        base.display()
-    );
-    out
-}
-
 /// **Structural: exactly one pane-header implementation exists, and the
 /// tool-window header is gone from the shared widget module's public surface.**
 ///
@@ -2277,10 +1862,10 @@ fn ui_source_files() -> Vec<(String, String)> {
 fn the_tool_window_header_is_retired_from_the_shared_widget_surface() {
     // 1. The symbol is not declared anywhere in the UI layer, and specifically
     //    not in the module that used to own it.
-    let retired: Vec<String> = ui_source_files()
+    let retired: Vec<String> = srcscan::sources_under(ui_src_root())
         .iter()
         .filter(|(_, src)| {
-            items_naming(src, "toolwindow_header")
+            srcscan::items_naming(src, "toolwindow_header")
                 .iter()
                 .any(|n| n == "toolwindow_header")
         })
@@ -2297,7 +1882,7 @@ fn the_tool_window_header_is_retired_from_the_shared_widget_surface() {
     //    height the old header carried.
     for name in ["toolwindow_header", "TOOLWINDOW_HEADER_HEIGHT"] {
         assert!(
-            word_offsets(WIDGETS_MOD_SRC, name).is_empty(),
+            srcscan::word_offsets(WIDGETS_MOD_SRC, name).is_empty(),
             "`{name}` is back on the shared widget module's public surface; the \
              retirement is a removal from `widgets::mod.rs`, not a rename"
         );
@@ -2306,7 +1891,7 @@ fn the_tool_window_header_is_retired_from_the_shared_widget_surface() {
     // 3. The conflict grammar's private header is absorbed, not left behind. It
     //    would not warn if it survived — nothing calls it once the kit delegates —
     //    so its absence is asserted here at the declaration instead.
-    let kit: Vec<String> = top_level_items(CONFLICT_PANE_SRC)
+    let kit: Vec<String> = srcscan::top_level_items(CONFLICT_PANE_SRC)
         .into_iter()
         .filter(|item| item.name == "pane_header")
         .map(|item| item.name)
@@ -2318,7 +1903,7 @@ fn the_tool_window_header_is_retired_from_the_shared_widget_surface() {
          as every tool pane (a second implementation is precisely what R7 forbids)"
     );
     assert!(
-        !word_offsets(CONFLICT_PANE_SRC, "widgets::pane_header").is_empty(),
+        !srcscan::word_offsets(CONFLICT_PANE_SRC, "widgets::pane_header").is_empty(),
         "the conflict kit must reach the shared pane header, not merely have deleted \
          its own"
     );
@@ -2334,18 +1919,18 @@ fn the_tool_window_header_is_retired_from_the_shared_widget_surface() {
 #[test]
 fn one_band_height_and_one_title_treatment_own_every_pane_header() {
     assert_eq!(
-        items_naming(CONTAINERS_SRC, "PANE_HEADER_HEIGHT"),
+        srcscan::items_naming(CONTAINERS_SRC, "PANE_HEADER_HEIGHT"),
         ["PANE_HEADER_HEIGHT", "pane_header"],
         "the pane header's band height is declared once and read by the one function \
          that paints a band; a second reader is a second header"
     );
     assert_eq!(
-        fns_using(CONTAINERS_SRC, "PANE_HEADER_HEIGHT"),
+        srcscan::fns_using(CONTAINERS_SRC, "PANE_HEADER_HEIGHT"),
         ["pane_header"],
         "only the one pane header may size a band"
     );
     assert_eq!(
-        fns_using(CONTAINERS_SRC, "pane_title"),
+        srcscan::fns_using(CONTAINERS_SRC, "pane_title"),
         ["column_header", "pane_header"],
         "a pane title and a column label are the same tracked mark: the one \
          `pane_title()` decides the face and the ink, exactly these two read it, \
@@ -2360,7 +1945,7 @@ fn one_band_height_and_one_title_treatment_own_every_pane_header() {
     // assertion below the allowlist is the part that matters: no *function*
     // outside the chrome module may read the band height, so the equality is a
     // property of the crate rather than a decision a button makes per frame.
-    let elsewhere: Vec<String> = ui_source_files()
+    let elsewhere: Vec<String> = srcscan::sources_under(ui_src_root())
         .iter()
         .filter(|(rel, _)| {
             !matches!(
@@ -2369,8 +1954,8 @@ fn one_band_height_and_one_title_treatment_own_every_pane_header() {
             )
         })
         .filter(|(_, src)| {
-            !word_offsets(src, "PANE_HEADER_HEIGHT").is_empty()
-                || !word_offsets(src, "pane_title").is_empty()
+            !srcscan::word_offsets(src, "PANE_HEADER_HEIGHT").is_empty()
+                || !srcscan::word_offsets(src, "pane_title").is_empty()
         })
         .map(|(rel, _)| rel.clone())
         .collect();
@@ -2382,12 +1967,12 @@ fn one_band_height_and_one_title_treatment_own_every_pane_header() {
     // The one other reader is the compact primary's height, and it reads it in a
     // static assertion — never inside a function, where a caller could have
     // sized a control to the band on purpose.
-    for (rel, src) in ui_source_files() {
+    for (rel, src) in srcscan::sources_under(ui_src_root()) {
         if rel == "widgets/containers.rs" {
             continue;
         }
         assert_eq!(
-            fns_using(&src, "PANE_HEADER_HEIGHT"),
+            srcscan::fns_using(&src, "PANE_HEADER_HEIGHT"),
             Vec::<String>::new(),
             "`{rel}` reads the pane header's band height inside a function: the \
              band is one number owned by `widgets/containers`, and a control may \
@@ -2399,7 +1984,7 @@ fn one_band_height_and_one_title_treatment_own_every_pane_header() {
     // …and the façade's one mention is the re-export itself, not a second
     // decision about the number.
     assert_eq!(
-        items_naming(WIDGETS_MOD_SRC, "PANE_HEADER_HEIGHT"),
+        srcscan::items_naming(WIDGETS_MOD_SRC, "PANE_HEADER_HEIGHT"),
         Vec::<String>::new(),
         "the façade re-exports the band height; a second mention would be a second \
          place deciding what a header is"
@@ -2460,25 +2045,13 @@ fn the_pane_title_galley<S>(harness: &Harness<'_, S>) -> test_support::harness::
 fn pane_header_harness(count: Option<&'static str>) -> (Harness<'static, ()>, Rc<Cell<f32>>) {
     let content_top = Rc::new(Cell::new(0.0));
     let content_top_ui = content_top.clone();
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                content_top_ui.set(ui.available_rect_before_wrap().top());
-                pane_header(ui, "PANES", count, |ui| {
-                    compact_button(ui, "Do the thing");
-                });
-                ui.label("pane body");
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(560.0, 200.0));
+    let harness = widget_harness(egui::vec2(560.0, 200.0), move |ui| {
+        content_top_ui.set(ui.available_rect_before_wrap().top());
+        pane_header(ui, "PANES", count, |ui| {
+            compact_button(ui, "Do the thing");
+        });
+        ui.label("pane body");
+    });
     (harness, content_top)
 }
 
@@ -2540,7 +2113,6 @@ fn the_pane_header_paints_title_count_actions_one_hairline_then_content() {
          reappears quietly — a caller wanting air adds `ui.add_space`, not a rule. \
          Found {rules:?}"
     );
-    assert_eq!(rule.width(), rule.width());
     assert!(
         (rule.left() - title.rect.left()).abs() < 0.01,
         "the hairline spans the header's own width, starting where the title starts: \
@@ -2630,22 +2202,9 @@ impl ChromePane {
         let dir = tempfile::tempdir().expect("tempdir");
         let repo = dir.path().join("repo");
         std::fs::create_dir_all(&repo).expect("repo dir");
-        for args in [
-            vec!["init", "-q", "-b", "main"],
-            vec!["config", "user.email", "test@example.com"],
-            vec!["config", "user.name", "Test"],
-        ] {
-            let out = std::process::Command::new("git")
-                .args(&args)
-                .current_dir(&repo)
-                .output()
-                .expect("git invocation");
-            assert!(
-                out.status.success(),
-                "git {args:?} failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.email", "test@example.com"]);
+        git(&repo, &["config", "user.name", "Test"]);
         let repo = repo.canonicalize().expect("canonical repo");
         let state = turbogit_app::state::AppState::for_roots(dir.path(), &[repo]);
         let mut fonts_installed = false;
@@ -2923,46 +2482,32 @@ const TEST_COLUMNS: [PaneColumn; 4] = [
 
 /// One column-header row over one data row, both measured from the same rect.
 fn column_chrome_harness() -> Harness<'static, ()> {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                let row = ui.available_rect_before_wrap();
-                column_header(ui, row, &TEST_COLUMNS);
-                ui.horizontal(|ui| {
-                    for (i, cell) in ["a1b2c3d", "Ada", "subject"].into_iter().enumerate() {
-                        column_cell(ui, &TEST_COLUMNS, i, |ui| {
-                            ui.label(cell);
-                        });
-                    }
-                    // A trailing column is a right-aligned cell, so its row
-                    // paints it where the log paints its date: ending on the
-                    // trailing edge that the header's label for it also ends on.
-                    let galley = ui.painter().layout_no_wrap(
-                        "2026-01-01".to_owned(),
-                        egui::FontId::proportional(12.0),
-                        Palette::INK,
-                    );
-                    ui.painter().galley(
-                        egui::pos2(
-                            TEST_COLUMNS[3].origin(row) - galley.size().x,
-                            ui.cursor().top(),
-                        ),
-                        galley,
-                        Palette::INK,
-                    );
+    widget_harness(egui::vec2(700.0, 160.0), move |ui| {
+        let row = ui.available_rect_before_wrap();
+        column_header(ui, row, &TEST_COLUMNS);
+        ui.horizontal(|ui| {
+            for (i, cell) in ["a1b2c3d", "Ada", "subject"].into_iter().enumerate() {
+                column_cell(ui, &TEST_COLUMNS, i, |ui| {
+                    ui.label(cell);
                 });
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(700.0, 160.0));
-    harness
+            }
+            // A trailing column is a right-aligned cell, so its row paints it
+            // ending on the trailing edge its header label also ends on.
+            let galley = ui.painter().layout_no_wrap(
+                "2026-01-01".to_owned(),
+                egui::FontId::proportional(12.0),
+                Palette::INK,
+            );
+            ui.painter().galley(
+                egui::pos2(
+                    TEST_COLUMNS[3].origin(row) - galley.size().x,
+                    ui.cursor().top(),
+                ),
+                galley,
+                Palette::INK,
+            );
+        });
+    })
 }
 
 /// **Column offsets in the header and in the data rows come from the same
@@ -3066,24 +2611,12 @@ fn a_column_header_is_ink_3_and_never_the_dim_ink() {
 fn the_column_header_row_underlines_itself_once_in_the_structural_tone() {
     let table_width = Rc::new(Cell::new(0.0));
     let table_width_ui = table_width.clone();
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                let row = ui.available_rect_before_wrap();
-                table_width_ui.set(row.width());
-                column_header(ui, row, &TEST_COLUMNS);
-                ui.label("the first data row");
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(700.0, 160.0));
+    let mut harness = widget_harness(egui::vec2(700.0, 160.0), move |ui| {
+        let row = ui.available_rect_before_wrap();
+        table_width_ui.set(row.width());
+        column_header(ui, row, &TEST_COLUMNS);
+        ui.label("the first data row");
+    });
     settle(&mut harness);
 
     let rules = structural_rules(&harness);
@@ -3362,7 +2895,7 @@ fn every_stroke_in_the_ui_layer_is_a_floating_surface_a_focus_ring_or_a_rule() {
     // its `;`/`}`, so a stroke written across three lines is one site rather than
     // three and a comment is not a site.
     let mut found: Vec<(String, usize)> = Vec::new();
-    for (rel, src) in ui_source_files() {
+    for (rel, src) in srcscan::sources_under(ui_src_root()) {
         let mut statement = String::new();
         let mut count = 0usize;
         for line in src.lines() {
@@ -3421,19 +2954,19 @@ fn every_stroke_in_the_ui_layer_is_a_floating_surface_a_focus_ring_or_a_rule() {
     // `card_paints_no_stroke_where_a_default_card_is`; this is the same rule read
     // from the frame body, so a card that grew a stroke behind a config flag
     // would be a shape in that suite *and* a name here.)
-    let containers = ui_source_files()
+    let containers = srcscan::sources_under(ui_src_root())
         .into_iter()
         .find(|(rel, _)| rel == "widgets/containers.rs")
         .map(|(_, src)| src)
         .expect("the container module is under src/ui");
     assert_eq!(
-        items_naming(&containers, "BORDER_HAIRLINE_WIDTH"),
+        srcscan::items_naming(&containers, "BORDER_HAIRLINE_WIDTH"),
         vec!["BORDER_HAIRLINE_WIDTH".to_owned(), "card".to_owned()],
         "the card's hairline is one opt-in read inside the one card function: a \
          second reader is a second surface deciding to box itself"
     );
     assert!(
-        !items_naming(&containers, "RULE_CONTENT")
+        !srcscan::items_naming(&containers, "RULE_CONTENT")
             .iter()
             .any(|name| name == "card"),
         "a card separates its regions with surface tone and at most one hairline, \
@@ -3469,83 +3002,6 @@ fn every_stroke_in_the_ui_layer_is_a_floating_surface_a_focus_ring_or_a_rule() {
 /// the radius accessor are the chip module's alone, so a second function that
 /// builds a ref chip from them would have to name the geometry, and this fails
 /// naming the module.
-/// The source with every comment blanked, so a decision *written down* about a
-/// symbol is not the same thing as a *use* of it.
-///
-/// The log's `paint_label_pill` records in its own doc comment that the collapsed
-/// ref marker is deliberately the neutral badge "rather than a second ref-chip
-/// painter" — and naming that rule is exactly what a reader needs. A scan that
-/// counted comments would force the reasoning to be deleted rather than written,
-/// which is the wrong trade for a rule this subtle. String literals are kept: a
-/// label or a table name is content, not commentary.
-///
-/// The same reasoning, and the same helper, as `tests/git_log.rs`, which needs it
-/// for the log's own half of the ref-chip claim.
-fn code_only(src: &str) -> String {
-    let chars: Vec<char> = src.chars().collect();
-    let mut out: Vec<char> = Vec::with_capacity(chars.len());
-    let (mut i, mut block, mut line, mut string) = (0usize, false, false, false);
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied().unwrap_or('\0');
-        if block {
-            if c == '*' && next == '/' {
-                block = false;
-                i += 2;
-                continue;
-            }
-            if c == '\n' {
-                out.push('\n');
-            }
-            i += 1;
-            continue;
-        }
-        if line {
-            if c == '\n' {
-                line = false;
-                out.push('\n');
-            }
-            i += 1;
-            continue;
-        }
-        if string {
-            out.push(c);
-            if c == '\\' {
-                if let Some(escaped) = chars.get(i + 1) {
-                    out.push(*escaped);
-                }
-                i += 2;
-                continue;
-            }
-            if c == '"' {
-                string = false;
-            }
-            i += 1;
-            continue;
-        }
-        match (c, next) {
-            ('/', '*') => {
-                block = true;
-                i += 2;
-            }
-            ('/', '/') => {
-                line = true;
-                i += 2;
-            }
-            ('"', _) => {
-                string = true;
-                out.push(c);
-                i += 1;
-            }
-            _ => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    out.into_iter().collect()
-}
-
 #[test]
 fn the_ref_chip_is_produced_by_one_function_in_one_file_and_no_screen_paints_one() {
     /// The two **values** that make a chip a ref chip, and the radius accessor
@@ -3609,9 +3065,9 @@ fn the_ref_chip_is_produced_by_one_function_in_one_file_and_no_screen_paints_one
         ),
     ];
 
-    let files: Vec<(String, String)> = ui_source_files()
+    let files: Vec<(String, String)> = srcscan::sources_under(ui_src_root())
         .into_iter()
-        .map(|(rel, src)| (rel, code_only(&src)))
+        .map(|(rel, src)| (rel, srcscan::code_only(&src)))
         .collect();
     let chips = files
         .iter()
@@ -3724,7 +3180,7 @@ fn the_ref_chip_is_produced_by_one_function_in_one_file_and_no_screen_paints_one
         }
         for declared in ["fn ref_chip(", "fn ref_chip_with_ink("] {
             assert!(
-                word_offsets(src, declared).is_empty(),
+                srcscan::word_offsets(src, declared).is_empty(),
                 "`{rel}` declares `{declared}`: exactly one function produces a \
                  ref chip, and a second declaration of the name — however it \
                  colours itself — is a second producer, not a second caller."

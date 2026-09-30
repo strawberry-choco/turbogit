@@ -11,47 +11,19 @@
 //! painted labels, accessible widget labels, and `AppState` transitions.
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
-use test_support::harness::{assert_not_painted, assert_painted, painted_text, settle};
+use test_support::git_seed::repo_with_origin;
+use test_support::harness::{
+    assert_not_painted, assert_painted, painted_text, settle, shell_harness_over_unstyled,
+};
 use turbogit_app::state::AppState;
-
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git invocation");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf-8 stdout")
-}
 
 /// Create an initialized temp repository with one base commit on `main`
 /// plus an `origin` remote so upstream reads can be exercised.
+///
+/// Same shape as `git_seed::repo_with_origin`, so that recipe owns it; only the
+/// remote *name* is read, and that is `origin` either way.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q", "-b", "main"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("base.txt"), "base\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "init"]);
-    let bare = parent.join(format!("{name}.origin"));
-    let _ = std::fs::remove_dir_all(&bare);
-    git(
-        parent,
-        &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
-    );
-    git(&path, &["remote", "add", "origin", bare.to_str().unwrap()]);
-    git(&path, &["push", "-q", "origin", "main"]);
-    git(&path, &["branch", "--set-upstream-to=origin/main", "main"]);
-    path
+    repo_with_origin(parent, name)
 }
 
 /// A two-group project (`frontend`/alpha, `oss`/lib) under
@@ -95,21 +67,12 @@ fn four_repo_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
     (project, vec![alpha, ui, cli, lib])
 }
 
-/// Headless harness driving the full app UI (mirrors `workspace_sidebar`).
-fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(egui::vec2(1280.0, 800.0));
-    h
-}
-
 /// Assert some painted galley is exactly `text` (counts paint as their own
 /// galleys, so exact matching keeps "2" distinct from "2 selected / 2").
+///
+/// Kept local because it is stricter than the shared paint queries: it asks
+/// whether the string was its OWN galley, and `1 selected / 2` and `2` are
+/// different rows.
 #[track_caller]
 fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
     let texts = painted_text(harness);
@@ -118,6 +81,18 @@ fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
         texts.iter().any(|t| t == text),
         "`{text}` was not painted as an exact galley; painted text:\n{texts:#?}"
     );
+}
+
+/// Headless harness driving the full app UI (mirrors `workspace_sidebar`).
+///
+/// Unstyled: the assertions are painted *strings*, and a different font would
+/// re-measure the truncation and ellipsis behaviour they are about. The
+/// per-frame worker drain is kept, so a toast can land before `wait_painted`.
+///
+/// `max_steps` is 1024, not kittest's default of 4, which `Harness::run`
+/// panics past.
+fn harness(state: AppState) -> Harness<'static, AppState> {
+    shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
 
 /// Step frames, yielding to the worker thread a quick action dispatches,

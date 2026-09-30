@@ -12,32 +12,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use test_support::harness::painted_text;
+use test_support::harness::{painted_text, shell_harness_over_unstyled};
 use test_support::{RecordedCall, RecordingExecutor};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use test_support::git_seed::git;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
 
 // ---------------------------------------------------------------- helpers --
-
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
 
 struct Repo {
     path: PathBuf,
@@ -46,6 +31,10 @@ struct Repo {
 /// Create an initialized temp repository with one base commit on the default
 /// branch and repo-local user config so commits work headlessly. The caller
 /// keeps `parent` (a `TempDir`) alive for the duration of the test.
+/// Local repo builder, deliberately NOT a `test_support::git_seed` recipe: it runs
+/// `init -q` with no `-b main` (so the default branch is whatever
+/// `init.defaultBranch` says, which every recipe pins to `main`) and commits
+/// `base.txt` not `README.md`.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -108,20 +97,17 @@ fn app_state_with_recorder(
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Kept as [`shell_harness_over_unstyled`]: the changelist column's geometry is read
+/// off the frame, and the dark tokens plus the embedded JetBrains Mono stack would
+/// re-measure it. Measured — [`shell_harness_over`] turns **9 of 12 tests red**.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
     // Sized like the commit_window suite: the changelist column needs the
     // full two-pane width once the workspace sidebar (issue #05) claims
     // the left edge. The first frames also relayout (embedded fonts take
     // effect at pass 2), so settle before any clicks (test-support
     // `settle`'s rationale).
-    h.set_size(egui::vec2(1280.0, 800.0));
+    let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
     h
 }
@@ -464,6 +450,9 @@ fn gutter_stage_on_untracked_file_intents_to_add_then_applies_forward() {
 // ---------------------------------------------------- conflicted blocking --
 
 /// Run `git` without asserting success (a merge that conflicts).
+/// Run `git` WITHOUT asserting success, and deliberately NOT
+/// `test_support::git_seed::git`, which asserts it: `seed_conflict` ends in an
+/// expected merge failure, and the unresolved state is the precondition.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)

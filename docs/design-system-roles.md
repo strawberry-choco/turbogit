@@ -471,7 +471,7 @@ design losses, not refactoring debt.
 
 | Site | Where | Verdict | Reasoning |
 | --- | --- | --- | --- |
-| Branch-tree sync chip | `ui::branch_tree_view::sync_chip` | keep with a named token; the role also differs | It carries a 10px status icon and monospaced `TYPE_CHIP` type inside its fill, which is the branch tree's sync-relationship vocabulary. The shared chip geometry has no icon slot and no mono variant, so adopting it would mean either dropping the icon or growing a config flag on the shared primitive — both of which breach non-negotiable boundary 5. Its radius is already the named `theme::CHIP_RADIUS`, and its fill already resolves through the shared `components::sync_bg` (which is itself now written as `tint_over_bg(sync_ink(kind), BADGE_TINT)` rather than a repeated `0.18`). |
+| Branch-tree sync chip | `ui::branch_tree_view::sync_chip` | keep with a named token; the role also differs | It carries a 10px status icon and monospaced `TYPE_CHIP` type inside its fill, which is the branch tree's sync-relationship vocabulary. The shared chip geometry has no icon slot and no mono variant, so adopting it would mean either dropping the icon or growing a config flag on the shared primitive — both of which breach non-negotiable boundary 5. Its radius is already the named `theme::CHIP_RADIUS`, and its fill already resolves through the shared `components::sync_bg` (which is itself now written as `tint_over_bg(sync_ink(kind), BADGE_TINT)` rather than a repeated `0.18`). *Update:* `components::sync_bg` was deleted as provably unreachable during the codebase-trimming pass, and `sync_chip` no longer paints a fill at all — the surface is `state_mark(label, sync_ink(kind))` at `ui/branch_tree_view.rs:1009`. The reasoning above is retained as the record of the v1 decision. |
 | Welcome step indicator | `ui::welcome::step_pill` | keep with a named token; the role also differs | A fixed 20×20 `SURFACE_3` numeral roundel, not a variable-width fact marker: its width is its height because the content is a single digit, and it is numbered 1–5 by position in a list. It already takes its radius from the named `theme::PILL_RADIUS` (which is itself defined as the welcome roundel's half-height, so the two can never disagree) and its centring from the shared two-axis text helper. The roundel's 20px edge is screen-specific geometry and stays a local `STEP_PILL` constant. |
 | Branches scope indicator | `ui::branches::scope_label` | **reversed by `ADR-0027`: becomes a chip** | The v1 verdict was "not a chip — coloured text with no background, no fill, no radius and no padding, renamed from `scope_chip` to say what it is". R7 overrides that, and the argument it overrides is answered rather than overruled. See *Two decisions v2 reverses, and one it ratifies* below; landed by ticket 16, which also rewrites the comment this row vouches for. |
 | Submodules status indicator | `ui::submodules::status_label` | keep because the role differs — **and R6 ratifies it** | **Still not a chip.** It paints coloured text with no background, no fill, no radius, and no padding. Renamed from `status_chip` to say what it is. The leading state dot ticket 18 adds to that row is a *mark*, not a chip, so the comment stays true of the code it describes. See the same subsection below. |
@@ -876,9 +876,11 @@ token-only rule:
 ### General primitives added by the consolidation
 
 These are part of the boundary now and are recorded here so the document stays
-authoritative. All are exported from the `ui::widgets` façade except
-`footer_rule`, which is deliberately crate-private (see below) and therefore
-never part of the public compatibility surface.
+authoritative. All are exported from the `ui::widgets` façade except two:
+`footer_rule`, which is deliberately crate-private (see below), and
+`ui::column_table`, which is a crate-private `ui::` module rather than a
+`widgets` one — it is a *pane* skeleton, not a primitive, and it is not part of
+the public compatibility surface at all.
 
 - `accent_bar` is the narrow tinted strip that leads a feedback container down
   its leading edge. It is the *general* form: it takes a colour the caller has
@@ -905,10 +907,62 @@ never part of the public compatibility surface.
 - `CardFrame` / `CardSurface` / `CardSizing` are how `card` is parameterised.
   `CardSurface` chooses the content or raised tone (a card on a `CONTENT_BG`
   surface asks for `.raised()`, because a `CONTENT_BG` fill there would be
-  invisible); `CardSizing::Stretch` versus `CardSizing::MinWidth(w)` is the one
-  thing a call site genuinely varies, so a card either spans its pane or floats
-  above it. A call site that needs a different fill or a different corner radius
-  has a different role and keeps its own frame.
+  invisible); `CardSizing::Stretch` (width) versus `CardSizing::StretchHeight`
+  versus `CardSizing::MinWidth(w)` is the one thing a call site genuinely varies,
+  so a card either spans its pane's width, spans its pane's *height*, or floats
+  above it. Height-stretch is a sizing decision like width-stretch, which is why
+  it is a variant and not a closure parameter: a closure would have been a
+  general escape hatch out of the one thing `CardSizing` exists to vary. A call
+  site that needs a different fill or a different corner radius has a different
+  role and keeps its own frame.
+- `empty_state(ui, text)` is the one "there is nothing here" sentence, at `INK_3`
+  and `TYPE_BODY`. Consolidating it also *settled* the ink: the tree carried
+  **seven** conventions for this one role, measured from the lines the change
+  removed — 19 bare `ui.label` calls, 4 `RichText` + `MICRO_TEXT`, 4 `ui.weak`,
+  2 `colored_label(INK_3)`, and one each of `colored_label(INK_2)`,
+  `RichText::…weak()` and a raw `Color32::GRAY` that sat at **3.50:1 on
+  `SURFACE` — below the AA floor** and is fixed by this choice. The rationale is
+  that an empty state is never what the reader opened the pane for, and `INK_3`
+  is the step their neighbouring column headers already use.
+
+  **The ratified tradeoff, with its measured cost.** `INK_3` is **5.01:1 on
+  `BG`** but **4.20:1 on `SURFACE`** — and empty states inside panes sit on
+  `SURFACE`, so the role is *marginally under* the 4.5:1 AA floor there. This was
+  reviewed and accepted deliberately (the alternative, `INK_2`, is 7.86:1 on `BG`
+  and 6.58:1 on `SURFACE` and reads louder). **Do not "correct" this to `INK_2`
+  or back to `INK` without raising it as a design decision** — the numbers above
+  are the reason, and the nine sites that were previously `INK` at 10.55:1 are
+  the visible consequence. If a contrast audit flags `empty_state` as sub-AA,
+  that is this entry, already considered.
+
+  Two sites are deliberately outside the helper. `commit_window.rs` stays a
+  *string producer* — the empty-state text is built by one surface and painted
+  by another there, and moving both at once would change which module owns the
+  string. `branch_tree_view::no_branches_state` is a different role (a call to
+  action: a primary-ink sentence *plus* a primary button), not a report that
+  there is nothing.
+- `edge_rule(painter, rect, edge, ink)` owns the one-pixel hairline, with
+  `Edge::{Bottom, Top, Right}` and the ink as a parameter, so a structural rule
+  and a selection rule can share the calculation without sharing a tone. It
+  absorbed four hand-rolled copies. One of them — the branch-multi-selection bar
+  at `multi_selection.rs` — had **no** half-pixel offset where every other copy
+  strokes at `.5` from the edge; folding it in moved that hairline by half a
+  pixel, which was the one pixel change this extraction made and it is called
+  out here rather than left to a reviewer to find.
+- `button_enabled(ui, enabled, build)` is the one enabled-flag primitive: it
+  short-circuits on the disabled path and otherwise builds inside
+  `disabled_child_scope`. `compact_button_enabled` and `icon_button_enabled` are
+  both one-line wrappers over it — the latter was promoted out of
+  `commit_window.rs`, whose own doc comment already said it duplicated this
+  shape. Whether a control delegates at all stays the caller's decision.
+- `ui::column_table` (crate-private, **not** on the façade) is the shared skeleton
+  for a count-headed, column-tabled, scrollable list pane. It exists because two
+  panes were the same pane with different nouns, and because `CELL_GAP` was
+  declared twice — a geometry constant belongs in `theme.rs` with the rest, not in
+  whichever pane happens to be open. Its `path_cell` reads `CHIP_HEIGHT` and
+  `CELL_GAP` itself rather than taking them as parameters, because neither belongs
+  to the pane: a caller that could pass them could make its path cell taller than
+  the rest of its own row.
 - The `RULE_CONTENT` / `RULE_FOOTER` / `RULE_STRUCTURAL` hairline roles and the
   crate-private `widgets::footer_rule` painter that owns the modal footer rule —
   see *Hairline roles* above.

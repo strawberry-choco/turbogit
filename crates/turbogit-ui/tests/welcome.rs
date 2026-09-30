@@ -32,55 +32,13 @@
 use egui::{Color32, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use test_support::git_seed::git;
+use test_support::harness::{
+    assert_not_painted, assert_painted, painted_text, settle, shell_harness_over,
+};
+use test_support::wcag::contrast;
 use turbogit_app::recents::{RecentProject, Recents, load, recents_file, record, save};
 use turbogit_app::state::AppState;
-
-// --- Locally-defined harness helpers -----------------------------------------
-
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[track_caller]
-fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
-}
-
-#[track_caller]
-fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        !texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was unexpectedly painted; painted text:\n{texts:#?}"
-    );
-}
-
-/// Step frames until the painted output stabilizes.
-fn settle(harness: &mut Harness<'_, AppState>) {
-    let mut prev = String::new();
-    for _ in 0..10 {
-        harness.step();
-        let fingerprint = format!("{:?}", painted_text(harness));
-        if fingerprint == prev {
-            return;
-        }
-        prev = fingerprint;
-    }
-    panic!("welcome layout did not settle within 10 frames");
-}
 
 /// Step frames until `needle` is painted or the wall-clock budget runs out
 /// (async worker results — status scans, recents branches — repaint later
@@ -98,60 +56,40 @@ fn wait_painted(harness: &mut Harness<'_, AppState>, needle: &str, what: &str) {
     }
 }
 
-/// Run `git <args>` in `cwd`, panicking on failure (tests need real repos).
-#[track_caller]
-fn git(args: &[&str], cwd: &Path) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
-/// Create a real repository with a deterministic initial branch (`main`).
+/// Create a real repository with a deterministic initial branch (`main`) and
+/// **no commits at all**.
+///
+/// **Deliberately NOT `git_seed::repo_with_one_commit`**: several tests here assert the
+/// *unborn* state, and a recipe that commits `README.md` would put a commit where these
+/// tests need none. Only the runner is shared.
 fn seed_repo(base: &Path, name: &str) -> PathBuf {
     let dir = base.join(name);
     std::fs::create_dir_all(&dir).expect("create repo dir");
-    git(&["init", "-b", "main"], &dir);
+    git(&dir, &["init", "-b", "main"]);
     dir
 }
 
 /// Run `git <args>` in `cwd`, returning trimmed stdout (tests read history).
 #[track_caller]
 fn git_out(args: &[&str], cwd: &Path) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
+    git(cwd, args).trim().to_string()
 }
 
 /// A real bare "remote" with three commits on `main` (issue #17).
 fn seed_bare_remote(base: &Path, name: &str) -> PathBuf {
     let work = seed_repo(base, &format!("{name}-work"));
-    git(&["config", "user.email", "test@example.com"], &work);
-    git(&["config", "user.name", "Test"], &work);
+    git(&work, &["config", "user.email", "test@example.com"]);
+    git(&work, &["config", "user.name", "Test"]);
     for i in 1..=3 {
         std::fs::write(work.join(format!("f{i}.txt")), format!("commit {i}"))
             .expect("write tracked file");
-        git(&["add", "."], &work);
-        git(&["commit", "-q", "-m", &format!("c{i}")], &work);
+        git(&work, &["add", "."]);
+        git(&work, &["commit", "-q", "-m", &format!("c{i}")]);
     }
     let bare = base.join(format!("{name}.git"));
     let work_s = work.to_string_lossy().to_string();
     let bare_s = bare.to_string_lossy().to_string();
-    git(&["clone", "--bare", "-q", &work_s, &bare_s], base);
+    git(base, &["clone", "--bare", "-q", &work_s, &bare_s]);
     bare
 }
 
@@ -209,19 +147,7 @@ fn fixture_inner(picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>)
     let mut state = AppState::launch_in(None, Some(config.path().to_path_buf()));
     state.dir_picker = picker;
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
+    let harness = shell_harness_over(state, egui::vec2(1024.0, 768.0));
     Fixture {
         harness,
         _project: project,
@@ -380,19 +306,7 @@ fn seeded_recents_render_name_path_last_opened_and_live_branch() {
 
     let cfg = config.path().to_path_buf();
     let state = AppState::launch_in(None, Some(cfg));
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
+    let mut harness = shell_harness_over(state, egui::vec2(1024.0, 768.0));
     settle(&mut harness);
 
     assert_painted(&harness, "alpha");
@@ -411,20 +325,6 @@ fn seeded_recents_render_name_path_last_opened_and_live_branch() {
     // Branch indicator computed live at render time (ADR-0005): the repo's
     // current branch is painted next to the recent row.
     assert_painted(&harness, "main");
-}
-
-/// sRGB relative luminance (WCAG); the same linearization the existing
-/// contrast suite (design_tokens.rs) uses.
-fn luminance(color: Color32) -> f64 {
-    let linear = |v: u8| {
-        let s = f64::from(v) / 255.0;
-        if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
 }
 
 /// The actual foreground/background pair under the branch text of a recent
@@ -484,23 +384,15 @@ fn recent_branch_text_is_readable_on_its_painted_chip() {
     );
 
     let cfg = config.path().to_path_buf();
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
     wait_painted(&mut harness, "main", "current branch");
 
     let (foreground, background) = painted_fg_bg_pair(&harness, "main");
-    let light = luminance(foreground).max(luminance(background));
-    let dark = luminance(foreground).min(luminance(background));
-    let ratio = (light + 0.05) / (dark + 0.05);
+    let ratio = contrast(foreground, background);
     // The branch text is normal text (11px) on the recent-row chip; it must
     // reach the 4.5:1 normal-text benchmark against the actual chip fill.
     assert!(
@@ -529,16 +421,10 @@ fn recent_branch_chip_paints_the_selection_fill() {
     );
 
     let cfg = config.path().to_path_buf();
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
     wait_painted(&mut harness, "main", "current branch");
 
@@ -576,16 +462,10 @@ fn recents_card_is_enclosed_and_footers_show_all_projects() {
     );
 
     let cfg = config.path().to_path_buf();
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
 
     // Enclosed card: header, a seeded row, and the footer all paint together.
@@ -626,16 +506,10 @@ fn lower_puts_recents_left_and_getting_started_right() {
     );
 
     let cfg = config.path().to_path_buf();
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
 
     let recents = painted_text_centers(&harness, "RECENT PROJECTS")
@@ -885,16 +759,10 @@ fn clicking_a_recent_reopens_the_project() {
     );
 
     let cfg = config.path().to_path_buf();
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
 
     harness.get_by_label("alpha").click();
@@ -929,21 +797,15 @@ fn branch_indicator_is_cached_then_updates_after_invalidation() {
     );
 
     let cfg = config.path().to_path_buf();
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
     assert_painted(&harness, "main");
 
     // Mutate the repo OUTSIDE TurboGit: switch to another branch.
-    git(&["checkout", "-b", "feature/next"], &repo);
+    git(&repo, &["checkout", "-b", "feature/next"]);
     settle(&mut harness);
     assert_painted(&harness, "main"); /* still cached — indicators are never re-shelled every frame */
     assert_not_painted(&harness, "feature/next");
@@ -962,16 +824,10 @@ fn file_menu_welcome_closes_projects_and_returns_to_welcome() {
     let project = tempfile::tempdir().expect("temp project dir");
     let repo = seed_repo(project.path(), "alpha");
 
-    let mut harness = Harness::new_ui_state(
-        |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch(Some(repo.clone())),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
     assert!(
         !harness.state().show_welcome(),
@@ -1253,10 +1109,10 @@ fn seed_workspace(base: &Path) -> PathBuf {
     std::fs::create_dir_all(&ws).unwrap();
     let shallow = ws.join("alpha");
     std::fs::create_dir_all(&shallow).unwrap();
-    git(&["init", "-q", "-b", "main"], &shallow);
+    git(&shallow, &["init", "-q", "-b", "main"]);
     let deep = ws.join("a").join("b").join("c").join("d");
     std::fs::create_dir_all(&deep).unwrap();
-    git(&["init", "-q", "-b", "main"], &deep);
+    git(&deep, &["init", "-q", "-b", "main"]);
     ws
 }
 
@@ -1317,16 +1173,10 @@ fn workspace_recent_renders_repo_count_and_clicking_restores_it() {
     );
 
     let cfg = config.path().to_path_buf();
-    let mut harness = Harness::new_ui_state(
-        |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
 
     // The workspace row paints its indexed repo count.
@@ -1406,16 +1256,10 @@ fn welcome_locks_the_redesigned_structure() {
     );
 
     let cfg = config.path().to_path_buf();
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            static ONCE: std::sync::Once = std::sync::Once::new();
-            ONCE.call_once(|| turbogit_ui::theme::install_fonts(ui.ctx()));
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     settle(&mut harness);
 
     // Hero: wordmark + tagline + "What's new" trigger all paint.

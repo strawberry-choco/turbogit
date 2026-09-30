@@ -8,14 +8,13 @@
 //! `CHERRY_PICK_HEAD` — which the run monitor's Resolve deep link opens;
 //! nothing is ever auto-resolved.
 
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::{
-    Commit, DiffOpts, LogOpts, Patch, PatchFile, PatchHeaderLine, RootId,
+    Commit, DiffOpts, LogOpts, Patch, PatchFile, PatchHeaderLine, RootId, short_commit_ref,
+    subject_of_message,
 };
 use turbogit_engine_api::GitExecutor;
 
@@ -228,7 +227,7 @@ pub fn failed_hunks(exec: &dyn GitExecutor, root: &Path, patch: &Patch) -> usize
 /// The subject (first message line) of a commit — the identity used for
 /// already-present detection across repositories, where SHAs always differ.
 pub fn subject(message: &str) -> String {
-    message.lines().next().unwrap_or_default().to_string()
+    subject_of_message(message).to_string()
 }
 
 /// The subjects of `root`'s recent history, for already-present detection.
@@ -302,7 +301,7 @@ pub fn apply_to_root(
                     // remaining commits are not attempted.
                     return Err(e);
                 }
-                failures.push(format!("{}: {}", short(commit), first_line(&e)));
+                failures.push(format!("{}: {}", short_commit_ref(commit), first_line(&e)));
             }
         }
     }
@@ -317,10 +316,8 @@ pub fn apply_to_root(
     }
 }
 
-fn short(sha: &str) -> String {
-    sha.chars().take(7).collect()
-}
-
+/// First line of a failure — same primitive as a subject, deliberately not
+/// named as one, because an error's first line is failure prose.
 fn first_line(e: &TgError) -> String {
-    e.to_string().lines().next().unwrap_or_default().to_string()
+    subject_of_message(&e.to_string()).to_string()
 }

@@ -4,8 +4,8 @@
 //! system `git`); the created tag objects are read back with git plumbing.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{TagSpec, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
@@ -16,20 +16,10 @@ fn exec() -> CliExecutor {
     }
 }
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// `repo_two_commits` stays local, not a `git_seed` recipe: it is `main` plus
+// exactly two commits appending a line each to the SAME `file.txt`, and the
+// recipes commit to distinct paths. Identity stays repo-local (`Test` /
+// `test@example.com`) because one test asserts the tagger is exactly that pair.
 
 /// Append a line to `file.txt`, stage, commit; returns the new HEAD SHA.
 fn commit(dir: &Path, msg: &str) -> String {

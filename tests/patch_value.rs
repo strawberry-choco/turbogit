@@ -433,32 +433,21 @@ fn the_value_stays_unified_diff_shaped_not_display_shaped() {
 #[test]
 fn git_s_own_output_round_trips_through_the_value() {
     use std::path::Path;
-    use std::process::Command;
+    use test_support::git_seed::git;
     use turbogit_domain::model::{DiffOpts, VcsSettings};
     use turbogit_engine::cli::CliExecutor;
 
-    let run = |dir: &Path, args: &[&str]| {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
-            .expect("git must be on PATH");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    };
+    let run = |dir: &Path, args: &[&str]| git(dir, args);
 
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     run(&repo, &["init", "-q", "-b", "main"]);
+    // Repo-local identity, because `git_seed::git` cannot express per-call env;
+    // author and committer are the same person here, so two `user.*` config calls
+    // reproduce the previous `GIT_AUTHOR_*`/`GIT_COMMITTER_*` injection exactly.
+    run(&repo, &["config", "user.name", "t"]);
+    run(&repo, &["config", "user.email", "t@t"]);
     std::fs::write(repo.join("notes.txt"), "one\ntwo\n").unwrap();
     std::fs::write(repo.join("keep me.txt"), "stable\n").unwrap();
     std::fs::write(repo.join("logo.png"), [0x89u8, b'P', 0x00, 0xFF, 0xFE]).unwrap();

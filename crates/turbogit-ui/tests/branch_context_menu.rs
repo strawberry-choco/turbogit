@@ -234,35 +234,27 @@ use std::rc::Rc;
 use egui::Color32;
 use egui_kittest::Harness;
 use test_support::harness::{filled_rects, painted_galleys};
-use turbogit_ui::theme::{Palette, configure_style, install_fonts};
+use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::branch_menu::{BranchMenuProps, branch_menu};
 
 /// Render `branch_menu` for `target` inside a popup frame, recording the
 /// action the component returns each frame.
+///
+/// The 420×400 size is stated rather than inherited from kittest's 800×600
+/// default. The recording cell is an `Rc<RefCell<_>>` because `widget_harness`
+/// takes an `Fn`, not an `FnMut`.
 fn menu_harness(
     target: Branch,
     props: fn() -> BranchMenuProps<'static>,
 ) -> (Harness<'static, ()>, Rc<RefCell<Option<BranchMenuAction>>>) {
     let returned = Rc::new(RefCell::new(None));
     let returned_ui = returned.clone();
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                let action = branch_menu(ui, &props(), &target);
-                if action.is_some() {
-                    *returned_ui.borrow_mut() = action;
-                }
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(420.0, 400.0));
+    let mut harness = test_support::harness::widget_harness(egui::vec2(420.0, 400.0), move |ui| {
+        let action = branch_menu(ui, &props(), &target);
+        if action.is_some() {
+            *returned_ui.borrow_mut() = action;
+        }
+    });
     harness.step();
     (harness, returned)
 }
@@ -434,9 +426,12 @@ pub(crate) mod surface {
 
     use egui_kittest::Harness;
     use egui_kittest::kittest::{NodeT, Queryable};
-    use test_support::harness::{assert_painted, painted_galleys, painted_text};
+    use test_support::harness::{assert_painted, click_menu_item, painted_galleys, settle_quiet};
     use turbogit_app::state::{AppState, Tab};
 
+    /// Stays local: it sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*` on every
+    /// `Command`, which `git_seed::git` cannot express, and that env overrides
+    /// the repo's own `user.email`. No assertion here reads an author.
     pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
         let out = Command::new("git")
             .args(args)
@@ -487,6 +482,13 @@ pub(crate) mod surface {
         base
     }
 
+    /// Kept local for `with_step_dt(1.0 / 60.0)`, which is load-bearing:
+    /// `step_dt` becomes the frame's `predicted_dt`, i.e. what egui integrates
+    /// animations against, not a speed knob. The shared `shell_harness_over`
+    /// takes kittest's 1/4 s default, at which the menu's fade-in has already
+    /// completed and `the_branch_context_menu_keeps_the_float_stroke` sees
+    /// `alpha == 1.0` instead of a value in `(0.0..1.0)`. The shared helper
+    /// exposes no `step_dt`.
     pub(crate) fn branches_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
         let state = AppState::new(project_dir);
         let mut fonts_installed = false;
@@ -506,63 +508,25 @@ pub(crate) mod surface {
         harness
     }
 
-    /// Step until the painted text holds still — the branches data arrives
-    /// through the real event pump, so the list settles a few frames in.
-    fn settle_quiet(harness: &mut Harness<'_, AppState>) {
-        let mut stable = 0;
-        let mut prev = String::new();
-        for _ in 0..300 {
-            harness.step();
-            std::thread::sleep(Duration::from_millis(10));
-            let fp = format!("{:?}", painted_text(harness));
-            if fp == prev {
-                stable += 1;
-                if stable >= 3 {
-                    return;
-                }
-            } else {
-                stable = 0;
-                prev = fp;
-            }
-        }
-        panic!("shell layout did not settle within 300 frames");
-    }
-
     pub(crate) fn open_branches(harness: &mut Harness<'_, AppState>) {
         harness.state_mut().ui.tab = Tab::Branches;
         settle_quiet(harness);
         assert_painted(harness, "feature-a");
     }
 
+    /// Right-click the row whose accessible label is EXACTLY `branch`, not
+    /// `harness::right_click_row`'s first label *containing* it: a sidebar row
+    /// or repo header can contain that string, and the looser matcher would not
+    /// fail any test below — it would just right-click the wrong node.
     fn right_click_row(harness: &mut Harness<'_, AppState>, branch: &str) {
         row_node(harness, branch).click_secondary();
         harness.step();
         harness.step();
     }
 
-    /// Click one item of the open menu. The pointer first leaves the row so
-    /// its hover Checkout cannot be confused with the menu's own item, and
-    /// the search is scoped to the menu's own column: "Pull" and "Push…"
-    /// also label the command palette's action rows, and the menu is the only
-    /// surface whose rows all share the "New branch from" item's left edge.
-    fn click_menu_item(harness: &mut Harness<'_, AppState>, label: &str) {
-        harness.remove_cursor();
-        harness.step();
-        let column = harness
-            .get_all_by_role(egui::accesskit::Role::Button)
-            .find(|n| n.accesskit_node().label() == Some("New branch from".to_string()))
-            .expect("the menu is open (New branch from item)")
-            .rect();
-        harness
-            .get_all_by_role(egui::accesskit::Role::Button)
-            .find(|n| {
-                n.accesskit_node().label() == Some(label.to_string())
-                    && (n.rect().min.x - column.min.x).abs() < 2.0
-            })
-            .unwrap_or_else(|| panic!("menu item {label} inside the open menu"))
-            .click();
-        harness.step();
-    }
+    /// The one menu item every branch-row context menu carries. Named per call
+    /// site because "Pull" and "Push…" also label the command palette's rows.
+    const MENU_SENTINEL: &str = "New branch from";
 
     fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {
         for _ in 0..600 {
@@ -755,7 +719,7 @@ pub(crate) mod surface {
         assert_eq!(current_branch(&harness).as_deref(), Some("main"));
 
         right_click_row(&mut harness, "plain-b");
-        click_menu_item(&mut harness, "Checkout");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Checkout");
         wait_for(&mut harness, |st| {
             st.multi
                 .roots
@@ -775,7 +739,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, "Checkout");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Checkout");
         harness.step();
         assert!(
             matches!(
@@ -796,7 +760,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, "New branch from");
+        click_menu_item(&mut harness, MENU_SENTINEL, "New branch from");
         let st = harness.state();
         assert_eq!(st.ui.dialog, Some(turbogit_app::state::Dialog::NewBranch));
         assert_eq!(
@@ -817,7 +781,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "main");
-        click_menu_item(&mut harness, "Pull");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Pull");
         wait_for(&mut harness, |st| activity_has(st, "Pull"));
     }
 
@@ -830,7 +794,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
         // Even with the worktree clean, the composite must not confirm.
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, "Checkout and pull");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Checkout and pull");
         wait_for(&mut harness, |st| {
             st.multi
                 .roots
@@ -851,7 +815,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "plain-b");
-        click_menu_item(&mut harness, "Push");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Push");
         let st = harness.state();
         assert_eq!(st.ui.dialog, Some(turbogit_app::state::Dialog::Push));
         assert_eq!(st.ui.dlg.push_branch, "plain-b");
@@ -990,7 +954,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "plain-b");
-        click_menu_item(&mut harness, "Rename branch");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Rename branch");
         let tree = &harness.state().ui.branches_tree;
         assert_eq!(tree.renaming.as_deref(), Some("plain-b"));
         assert_eq!(tree.rename_draft, "plain-b");
@@ -1012,7 +976,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, "Merge into main");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Merge into main");
         let st = harness.state();
         assert_eq!(st.ui.dialog, Some(turbogit_app::state::Dialog::Merge));
         assert_eq!(st.ui.dlg.merge_target, "feature-a");
@@ -1031,7 +995,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, "Rebase onto main");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Rebase onto main");
         wait_for(&mut harness, |st| {
             activity_has(st, "Rebase feature-a onto main")
         });
@@ -1051,7 +1015,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, "Compare with main");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Compare with main");
         let st = harness.state();
         assert_eq!(
             st.ui.dialog,
@@ -1069,7 +1033,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, "Delete branch");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Delete branch");
         wait_for(&mut harness, |st| st.ui.confirm.is_some());
         assert!(matches!(
             harness.state().ui.confirm,
@@ -1097,7 +1061,7 @@ pub(crate) mod surface {
         settle_quiet(&mut harness);
 
         right_click_row(&mut harness, "remote-only");
-        click_menu_item(&mut harness, "Delete branch");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Delete branch");
         let st = harness.state();
         assert!(
             matches!(
@@ -1128,7 +1092,7 @@ pub(crate) mod surface {
         open_branches(&mut harness);
 
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, "Delete branch");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Delete branch");
         let st = harness.state();
         assert!(
             matches!(

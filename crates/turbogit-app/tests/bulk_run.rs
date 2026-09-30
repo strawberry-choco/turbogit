@@ -8,28 +8,19 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use test_support::git_seed::git;
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan};
 use turbogit_services::bulk_run::RowState;
 
-/// Run `git <args>` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Create an initialized temp repository with one base commit on `main`
 /// plus an `origin` remote so upstream reads can be exercised.
+///
+/// Kept local, not `git_seed::repo_with_origin`: the committed path is
+/// load-bearing. `StashAll` runs `git stash push` without `-u`, which stashes a
+/// *modified tracked* file but leaves an *untracked* one — and the shared recipe
+/// commits `README.md`, so under it `base.txt` would be untracked and nothing
+/// would be stashed.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -80,6 +71,10 @@ fn rid(path: &Path) -> turbogit_domain::model::RootId {
 /// Step the event pump until every monitor row is in a terminal state
 /// (Done / Failed / Skipped) and BulkCompleted has cleared the busy flag,
 /// publishing the aggregate toast and history, or the deadline passes.
+///
+/// Kept local, and it is not a `test_support::harness` settle: those settle a
+/// *painted frame*, and this one pumps `AppState::drain_events` with no egui
+/// harness in the picture and exits on a *state* predicate.
 fn wait_for_run_end(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {

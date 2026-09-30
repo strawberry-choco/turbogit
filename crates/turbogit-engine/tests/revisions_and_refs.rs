@@ -10,29 +10,16 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{GitBackend, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::fake::FakeExecutor;
 use turbogit_engine::git2_exec::Git2Executor;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// `ahead_repo` stays local, deliberately NOT `repo_with_origin`: the recipe publishes
+// `main` once, while this fixture's whole subject is `origin/main` left two commits
+// behind. No recipe produces a known non-zero divergence.
 
 fn cli() -> CliExecutor {
     CliExecutor {
@@ -109,6 +96,23 @@ fn the_substitutable_adapter_names_its_own_backup_ref() {
 
 // ---- against real git: the numbers are git's and the ref really moves --------
 
+/// `git rev-parse --verify --quiet <rev>`, asserting the ref is ABSENT.
+///
+/// Not `test_support::git_seed::git`, which asserts success: here the non-zero exit is
+/// the answer — git reports a missing ref by failing quietly — so a success-asserting
+/// helper would panic on the very thing being tested.
+fn git_rev_must_be_absent(repo: &Path, rev: &str) {
+    let gone = Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", rev])
+        .current_dir(repo)
+        .output()
+        .expect("git must be on PATH");
+    assert!(
+        !gone.status.success(),
+        "the spent backup ref genuinely disappears"
+    );
+}
+
 #[test]
 fn the_count_question_answers_what_git_counts_and_carries_no_range_string() {
     let (_tmp, repo) = ahead_repo();
@@ -176,20 +180,7 @@ fn the_backup_ref_is_written_moved_to_and_discarded_without_anyone_naming_it() {
     );
 
     exec.discard_rewrite_backup(&repo).expect("discard");
-    let gone = Command::new("git")
-        .args([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            exec.rewrite_backup_ref(),
-        ])
-        .current_dir(&repo)
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        !gone.status.success(),
-        "the spent backup ref genuinely disappears"
-    );
+    git_rev_must_be_absent(&repo, exec.rewrite_backup_ref());
 }
 
 #[test]

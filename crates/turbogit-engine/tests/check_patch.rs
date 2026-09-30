@@ -3,39 +3,29 @@
 //! cherry-pick-across targets table is built on this; the repo is never
 //! touched by a check.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 
+use test_support::git_seed::git;
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
+// `repo_with_file` stays local, deliberately NOT `repo_with_one_commit`: the
+// recipe tracks `README.md`, this fixture must track `file.txt` at "one\n",
+// because both tests hand `check_patch` a patch written against `a/file.txt`.
 
 /// Fresh repo on `main` with `file.txt` at "one\n". Returns (guard, path).
 fn repo_with_file() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).expect("repo dir");
-    run_git(&repo, &["init", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "t@t"]);
-    run_git(&repo, &["config", "user.name", "t"]);
+    git(&repo, &["init", "-b", "main"]);
+    git(&repo, &["config", "user.email", "t@t"]);
+    git(&repo, &["config", "user.name", "t"]);
     std::fs::write(repo.join("file.txt"), "one\n").expect("write");
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-m", "c1"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
     (tmp, repo)
 }
 

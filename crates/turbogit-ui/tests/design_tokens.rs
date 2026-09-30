@@ -71,7 +71,7 @@ fn p0_shell_defaults_use_the_branch_type_ramp() {
 // There used to be three copies of the WCAG luminance maths in this file (a
 // nested `fn`, a nested closure and the module-level `fn` further down); the
 // two nested copies are gone, so there is exactly one place a contrast number
-// in this suite is computed.
+// in this suite is computed — that place is now `test_support::wcag`.
 
 /// The surfaces the palette audits, in ladder order. This list *is* the decision
 /// record's surface axis, and every contrast claim in this file is measured
@@ -1516,6 +1516,7 @@ fn selection_uses_one_canonical_opaque_fill() {
 
 // --- Cycle 2: dark-only Visuals derive from the central token set (spec §2.5) ---
 use egui::Color32;
+use test_support::wcag::{contrast, luminance};
 use turbogit_ui::theme::{self, Palette, configure_style};
 
 const BG: Color32 = Color32::from_rgb(0x1e, 0x1f, 0x22);
@@ -2122,29 +2123,6 @@ fn governance_consolidated_role_contract_is_internally_consistent() {
 
 // --- H1/H2/H3: the three hairline roles are named (ticket 09) ----------------
 
-/// Relative luminance (WCAG) — the measure that says which of two greys reads
-/// as the *stronger* line against a dark surface.
-fn luminance(color: Color32) -> f64 {
-    let linear = |v: u8| {
-        let s = f64::from(v) / 255.0;
-        if s <= 0.04045 {
-            s / 12.92
-        } else {
-            ((s + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b())
-}
-
-/// WCAG contrast ratio between two opaque colours. The one place this file
-/// computes contrast — the two nested copies that used to sit inside
-/// individual tests are gone, so a change to the maths lands in one place.
-fn contrast(a: Color32, b: Color32) -> f64 {
-    let (la, lb) = (luminance(a), luminance(b));
-    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
-    (hi + 0.05) / (lo + 0.05)
-}
-
 #[test]
 fn the_three_hairline_roles_are_named_and_resolve_to_their_tones() {
     // H1: a 1px line is picked by the ROLE it plays, not by whichever token
@@ -2310,6 +2288,7 @@ const TOKEN_INVENTORY: &[&str] = &[
     "WINDOW_MARGIN",
     "BUTTON_PADDING",
     "INDENT",
+    "CELL_GAP",
     "DENSITY_COMPACT_BUTTON",
     "DENSITY_DENSE_BUTTON",
     // --- Module-level: shape
@@ -2492,35 +2471,24 @@ fn diff_fixture_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).expect("repo dir");
-    let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&repo)
-            .output()
-            .expect("git invocation");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    };
-    git(&["init", "-q", "-b", "main"]);
-    git(&["config", "user.email", "test@example.com"]);
-    git(&["config", "user.name", "Test"]);
+    use test_support::git_seed::git;
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     let file = repo.join("file.txt");
     std::fs::write(
         &file,
         "alpha\nbeta\ndelta\nepsilon\nzeta\neta\ntheta\ngamma\niota\n",
     )
     .expect("seed file");
-    git(&["add", "."]);
-    git(&["commit", "-q", "-m", "c1"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "c1"]);
     std::fs::write(
         &file,
         "alpha\nBETA\ndelta\nepsilon\nzeta\neta\ntheta\ngamma\niota\n",
     )
     .expect("staged edit");
-    git(&["add", "file.txt"]);
+    git(&repo, &["add", "file.txt"]);
     std::fs::write(
         &file,
         "alpha\nBETA\ndelta\nepsilon\nzeta\neta\ntheta\nGAMMA\niota\n",
@@ -2529,8 +2497,7 @@ fn diff_fixture_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     (tmp, repo)
 }
 
-/// The shell over `repo`, configured exactly as production configures it, stepped
-/// until painted output and the diff read's verdict both stabilise.
+/// The shared launcher over `repo`, at this suite's 1024x900 box.
 fn diff_shell(
     repo: &std::path::Path,
 ) -> egui_kittest::Harness<'static, turbogit_app::state::AppState> {
@@ -2540,26 +2507,16 @@ fn diff_shell(
         !state.multi.roots.is_empty(),
         "the repository root must be discovered, or the diff pane never renders"
     );
-    let mut fonts_installed = false;
-    let mut harness = egui_kittest::Harness::new_ui_state(
-        move |ui, state: &mut AppState| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 900.0));
-    harness
+    test_support::harness::shell_harness_over(state, egui::vec2(1024.0, 900.0))
 }
 
 /// Step until two consecutive frames agree *and* no read is outstanding, budgeted
 /// by wall clock rather than by frame count so a contended `git` subprocess cannot
 /// starve it into a flake.
+///
+/// Not either shared settle, which fingerprint painted text alone: the diff pane
+/// paints its header and band before the `diff_patch` worker has answered, so a
+/// text-only fingerprint reports a settled frame over a pane about to fill in.
 fn settle_diff_shell(harness: &mut egui_kittest::Harness<'static, turbogit_app::state::AppState>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut previous = String::new();

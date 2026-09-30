@@ -9,52 +9,31 @@
 //! - The warning is omitted when the branch is fully merged (the
 //!   default safe-delete path).
 
-use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
-
 use egui_kittest::Harness;
 use tempfile::TempDir;
-use test_support::harness::{assert_not_painted, assert_painted, painted_text};
+use test_support::git_seed::{commit, git, repo_with_one_commit};
+use test_support::harness::{assert_not_painted, assert_painted, settle_quiet, shell_harness_over};
 use turbogit_app::state::{AppState, PendingConfirm};
 
 // --- git fixture ---------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
 /// A repo on `main` with a local `feature` branch that has commits
 /// ahead of `main` (i.e. the upstream is NOT an ancestor of feature).
+///
+/// The floor is `git_seed::repo_with_one_commit`. **The branch half is kept local, not
+/// `repo_with_feature_branch`**: the confirmation under test reads a *local*
+/// upstream (`--set-upstream-to=main feature`), which is the whole precondition. A
+/// remote upstream would measure `ahead` against a ref that does not exist here.
+///
 fn repo_with_unmerged_feature() -> (TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    git(
-        &project,
-        &["-c", "init.defaultBranch=main", "init", "alpha"],
-    );
-    let alpha = project.join("alpha");
-    std::fs::write(alpha.join("README.md"), "x\n").unwrap();
-    git(&alpha, &["add", "."]);
-    git(&alpha, &["commit", "-m", "init"]);
+    let alpha = repo_with_one_commit(&project, "alpha");
     // Branch from main, add a commit on top, and set main as the
     // upstream. `feature` is now ahead of main and main is not an
     // ancestor of `feature`.
     git(&alpha, &["checkout", "-b", "feature"]);
-    std::fs::write(alpha.join("feature.txt"), "y\n").unwrap();
-    git(&alpha, &["add", "."]);
-    git(&alpha, &["commit", "-m", "feature work"]);
+    commit(&alpha, "feature.txt", "y\n", "feature work");
     git(&alpha, &["branch", "--set-upstream-to=main", "feature"]);
     (tmp, project)
 }
@@ -64,14 +43,7 @@ fn repo_with_unmerged_feature() -> (TempDir, std::path::PathBuf) {
 fn repo_with_merged_feature() -> (TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    git(
-        &project,
-        &["-c", "init.defaultBranch=main", "init", "alpha"],
-    );
-    let alpha = project.join("alpha");
-    std::fs::write(alpha.join("README.md"), "x\n").unwrap();
-    git(&alpha, &["add", "."]);
-    git(&alpha, &["commit", "-m", "init"]);
+    let alpha = repo_with_one_commit(&project, "alpha");
     git(&alpha, &["checkout", "-b", "feature"]);
     // No new commit: feature points at the same commit as main.
     git(&alpha, &["checkout", "main"]);
@@ -80,43 +52,10 @@ fn repo_with_merged_feature() -> (TempDir, std::path::PathBuf) {
 
 // --- harness -------------------------------------------------------------------
 
+/// The shared `shell_harness_over`: dark tokens every frame, embedded fonts once,
+/// worker events drained every frame exactly as `src/app.rs` does.
 fn feedback_harness(project_dir: std::path::PathBuf) -> Harness<'static, AppState> {
-    let state = AppState::new(project_dir);
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            state.drain_events();
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    harness
-}
-
-fn settle_quiet(harness: &mut Harness<'_, AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let cur = format!("{:?}", painted_text(harness));
-        if cur == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = cur;
-        }
-    }
-    panic!("feedback layout did not settle within 300 frames");
+    shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
 // --- tests ---------------------------------------------------------------------

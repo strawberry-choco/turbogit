@@ -176,7 +176,7 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
         if props.busy {
             reading_state(ui);
         } else {
-            empty_state(ui, &mut events);
+            no_branches_state(ui, &mut events);
         }
         return events;
     }
@@ -1318,7 +1318,12 @@ fn no_match_state(ui: &mut Ui, query: &str, events: &mut Vec<TreeEvent>) {
 
 /// A repo with no branches at all: one sentence + one create action, and no
 /// empty group headers (design doc §2/§15).
-fn empty_state(ui: &mut Ui, events: &mut Vec<TreeEvent>) {
+///
+/// **Named `no_branches_state`, and deliberately *not* routed through
+/// [`crate::ui::widgets::empty_state`].** This is a centred sentence with a primary
+/// action button under it — a call to action — where `empty_state` is a sentence
+/// alone, at the muted step, in a list's place.
+fn no_branches_state(ui: &mut Ui, events: &mut Vec<TreeEvent>) {
     ui.vertical_centered(|ui| {
         ui.add_space(56.0);
         ui.label(

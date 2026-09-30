@@ -37,11 +37,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 /// The focused root's remotes plus the manager's controls.
 fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
     let Some(id) = state.selected_root.clone() else {
-        ui.label("No repository selected.");
+        widgets::empty_state(ui, "No repository selected.");
         return;
     };
     let Some(root) = state.multi.by_id(&id).cloned() else {
-        ui.label("Selected repository is not registered.");
+        widgets::empty_state(ui, "Selected repository is not registered.");
         return;
     };
     let root_path = root.path.clone();
@@ -50,7 +50,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
     // REMOTES — one row per remote: name, fetch/push URLs, row actions.
     group_title(ui, "REMOTES");
     if remotes.is_empty() {
-        ui.colored_label(Palette::INK_3, "No remotes configured.");
+        widgets::empty_state(ui, "No remotes configured.");
     }
     for remote in &remotes {
         let name = remote.name.clone();

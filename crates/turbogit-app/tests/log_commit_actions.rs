@@ -5,30 +5,16 @@
 
 use std::path::{Path, PathBuf};
 
+use test_support::git_seed::{commit, git};
 use turbogit_app::state::{AppState, PendingConfirm};
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// `seeded_project` stays local: `main` with two commits, a `work` branch off the
+// tip and a `feature` branch off the FIRST commit, with both SHAs handed back —
+// a topology no `git_seed` recipe is, and one that needs no upstream.
 
+/// `commit_file` is `git_seed::commit` plus the new HEAD's SHA.
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
-    std::fs::write(dir.join(name), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
+    commit(dir, name, body, msg);
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 

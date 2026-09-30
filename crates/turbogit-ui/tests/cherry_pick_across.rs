@@ -12,7 +12,9 @@ use egui::accesskit::Role;
 use egui_kittest::kittest::NodeT as _;
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
-use test_support::harness::{assert_painted, click_menu_item, painted_text, right_click_row};
+use test_support::harness::{
+    assert_painted, click_menu_item, right_click_row, settle_quiet, shell_harness_over,
+};
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{LogOpts, VcsSettings};
@@ -22,6 +24,11 @@ use turbogit_services::bulk_run::RowState;
 
 // --- git fixture ---------------------------------------------------------------
 
+/// A `git` runner that pins the commit identity on every invocation.
+///
+/// Not `test_support::git_seed::git`, which takes no per-call env: `init_repo` writes the
+/// identity into the repository too, and the dialog rows carry the author line, so
+/// the two repos have to agree on it.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)
@@ -111,45 +118,14 @@ fn harness_with_log(seed: &Seed) -> Harness<'static, AppState> {
     state.drain_events();
     state.ui.tab = Tab::Log;
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            state.drain_events();
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
+    // The shared shell launcher at this suite's box, and the shared `settle_quiet`
+    // behind it: 300 frames and three consecutive stable fingerprints.
+    let mut harness = shell_harness_over(
         state,
+        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
     );
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     harness
-}
-
-fn settle(harness: &mut Harness<'_, AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let cur = format!("{:?}", painted_text(harness));
-        if cur == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = cur;
-        }
-    }
-    panic!("layout did not settle within 300 frames");
 }
 
 fn short(id: &str) -> String {
@@ -173,7 +149,7 @@ fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> boo
 fn open_dialog(harness: &mut Harness<'_, AppState>, c2: &str) {
     right_click_row(harness, &format!("{} alpha: second commit", short(c2)));
     click_menu_item(harness, "Copy hash", "Cherry-pick across…");
-    settle(harness);
+    settle_quiet(harness);
 }
 
 // --- the dialog ----------------------------------------------------------------
@@ -202,7 +178,7 @@ fn the_dialog_lists_commits_targets_and_predictions_with_a_preview_rail() {
     harness
         .get_by_role_and_label(Role::CheckBox, "alpha: second commit")
         .click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_painted(&harness, "1/1");
     assert_painted(&harness, "PATCH PREVIEW");
     assert_painted(&harness, "b.txt");
@@ -211,7 +187,7 @@ fn the_dialog_lists_commits_targets_and_predictions_with_a_preview_rail() {
     // Both selected commits apply cleanly at low risk into an unrelated
     // repo.
     harness.get_by_label("alpha: third commit").click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_painted(&harness, "2/2");
     assert_painted(&harness, "clean apply");
     assert_painted(&harness, "Low");
@@ -229,7 +205,7 @@ fn the_dialog_search_filters_the_commit_checklist() {
     harness
         .get_by_label("Search commits by message, author, or hash")
         .type_text("second");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     // The filtered checklist keeps the matching commit's checkbox and drops
     // the others (the graph behind the dialog still paints its rows).
@@ -255,10 +231,10 @@ fn executing_queues_the_run_and_reports_through_the_monitor() {
     harness
         .get_by_role_and_label(Role::CheckBox, "alpha: second commit")
         .click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     harness.get_by_label("Cherry-pick to 1 repo").click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     // The monitor replaces the dialog and runs to completion.
     assert!(harness.state().ui.dialog.is_none(), "the dialog closed");

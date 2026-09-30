@@ -17,14 +17,14 @@
 //! that contract: the primitive's own geometry, and the banner host's
 //! severity-to-colour resolution on top of it.
 
-use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
-
 use egui::{Color32, CornerRadius, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};
+use std::time::Duration;
 use tempfile::TempDir;
-use test_support::harness::{assert_not_painted, assert_painted, painted_text};
+use test_support::git_seed::repo_with_one_commit;
+use test_support::harness::{
+    assert_not_painted, assert_painted, settle_quiet, shell_harness_over, widget_harness,
+};
 use turbogit_app::banner::{Banner, BannerAction, BannerSeverity};
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::{MARK_RADIUS, Palette};
@@ -35,75 +35,25 @@ use turbogit_ui::theme::{MARK_RADIUS, Palette};
 const BAR_WIDTH: f32 = 3.0;
 const BAR_HEIGHT: f32 = 18.0;
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
 /// One local repo on `main` (no remote — the banner tests don't push).
+///
+/// The shape is `git_seed::repo_with_one_commit`'s, so that recipe owns it. The
+/// old runner's `GIT_AUTHOR_*` env is gone and dropping it changes nothing: the
+/// recipe sets the identity on the repository, which is where it came from.
 fn repo_project() -> (TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    git(
-        &project,
-        &["-c", "init.defaultBranch=main", "init", "alpha"],
-    );
-    let alpha = project.join("alpha");
-    std::fs::write(alpha.join("README.md"), "x\n").unwrap();
-    git(&alpha, &["add", "."]);
-    git(&alpha, &["commit", "-m", "init"]);
+    repo_with_one_commit(&project, "alpha");
     (tmp, project)
 }
 
 // --- harness -------------------------------------------------------------------
 
+/// The shared `shell_harness_over`; the old local copy differed only in the
+/// order of the worker drain against the token install, and `drain_events`
+/// touches no egui state, so both paint the same frame.
 fn feedback_harness(project_dir: std::path::PathBuf) -> Harness<'static, AppState> {
-    let state = AppState::new(project_dir);
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            state.drain_events();
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    harness
-}
-
-fn settle_quiet(harness: &mut Harness<'_, AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let cur = format!("{:?}", painted_text(harness));
-        if cur == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = cur;
-        }
-    }
-    panic!("feedback layout did not settle within 300 frames; last painted:\n{prev}");
+    shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
 // --- tests ---------------------------------------------------------------------
@@ -238,26 +188,16 @@ fn accent_bars_in<S>(
 /// "exactly one bar" is a statement about the primitive and not about the
 /// shell's other chrome.
 fn accent_bar_harness(color: Color32) -> Harness<'static, ()> {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            ui.horizontal(|ui| {
-                turbogit_ui::ui::widgets::accent_bar(ui, color);
-                // A second widget in the same row, so the strip is not alone
-                // on the line and the harness's panel background cannot land
-                // on the same geometry.
-                ui.label("after");
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(240.0, 60.0));
-    harness
+    // `widget_harness`, whose size is stated here rather than left at kittest's
+    // 800×600 default.
+    widget_harness(egui::vec2(240.0, 60.0), move |ui| {
+        ui.horizontal(|ui| {
+            turbogit_ui::ui::widgets::accent_bar(ui, color);
+            // A second widget in the row, so the harness's panel background
+            // cannot land on the strip's geometry.
+            ui.label("after");
+        });
+    })
 }
 
 /// Contract: the accent bar is one shared primitive that paints exactly one

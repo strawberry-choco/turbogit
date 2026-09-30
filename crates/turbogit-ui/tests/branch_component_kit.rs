@@ -20,7 +20,12 @@ use std::sync::Arc;
 
 use egui::{Color32, Pos2, Rect};
 use egui_kittest::{Harness, kittest::Queryable as _};
-use test_support::harness::{filled_circles, filled_rects, painted_galleys, settle};
+use test_support::git_seed::{commit, git};
+use test_support::harness::{
+    filled_circles, filled_rects, painted_galleys, settle, shell_harness_over_unstyled,
+    widget_harness,
+};
+use test_support::srcscan;
 use turbogit_app::state::{AppState, TreeState};
 use turbogit_domain::model::{Branch, BranchKind, Remote, Root, RootId, RootStatus, Upstream};
 use turbogit_ui::theme::{Palette, RAIL_WIDTH};
@@ -478,6 +483,9 @@ fn dirty_repo_header_harness() -> Harness<'static, RowFixture> {
 /// One branch tree over `roots`, through the real component, with the given tree
 /// state. Shared by the row fixtures and the state fixture so they differ only
 /// in their inputs.
+///
+/// Not `harness::widget_harness`, whose state is `()`: this frame's state *is* the
+/// fixture — the roots, tags and clock the tree is built from.
 fn branch_tree_harness(
     roots: Vec<Root>,
     tree: TreeState,
@@ -900,7 +908,7 @@ const ALL_REPO_STATES: [turbogit_ui::theme::RepoState; 7] = [
 /// is not mistaken for one, and a `#[derive]`-style attribute line is skipped
 /// rather than read as a name.
 fn declared_repo_state_variants() -> Vec<String> {
-    let lines = code_lines(&crate_src().join("theme.rs"));
+    let lines = srcscan::code_lines(Path::new(CRATE_SRC).join("theme.rs"));
     let start = lines
         .iter()
         .position(|line| line.trim_start().starts_with("pub enum RepoState"))
@@ -1358,31 +1366,18 @@ type ClickFlag = Rc<Cell<bool>>;
 
 fn kit_harness(primary_clicked: ClickFlag, danger_clicked: ClickFlag) -> Harness<'static, ()> {
     use turbogit_ui::ui::components::{KitButton, kit_button, overflow_button, section_header};
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                section_header(ui, "Local", 3, true, |ui| {
-                    overflow_button(ui, "Local header action");
-                });
-                if kit_button(ui, KitButton::Primary, "New Branch").clicked() {
-                    primary_clicked.set(true);
-                }
-                if kit_button(ui, KitButton::Danger, "Delete").clicked() {
-                    danger_clicked.set(true);
-                }
-                if kit_button(ui, KitButton::Quiet, "Quiet").clicked() {}
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(600.0, 400.0));
-    harness
+    widget_harness(egui::vec2(600.0, 400.0), move |ui| {
+        section_header(ui, "Local", 3, true, |ui| {
+            overflow_button(ui, "Local header action");
+        });
+        if kit_button(ui, KitButton::Primary, "New Branch").clicked() {
+            primary_clicked.set(true);
+        }
+        if kit_button(ui, KitButton::Danger, "Delete").clicked() {
+            danger_clicked.set(true);
+        }
+        if kit_button(ui, KitButton::Quiet, "Quiet").clicked() {}
+    })
 }
 
 #[test]
@@ -1435,143 +1430,25 @@ fn kit_smoke_renders_and_targets_stay_clickable() {
 
 // --- the structural ratchets: reading the crate's own source ----------------
 
-/// The crate's `src` directory — the tree the structural ratchets read.
-fn crate_src() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
-}
-
-/// Every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            out.extend(rust_files(&path));
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    out
-}
-
-/// One source file with every comment blanked out, line structure kept so a
-/// finding can still be reported as `file:line`.
-///
-/// The comments are the point, and it is this migration's own lesson rather than
-/// a general one: the row-shell retirement left a **live** function whose name
-/// merely *contained* the retired name, alive because a comment says so
-/// (`worktrees::worktree_row`). A source ratchet that counted words would count
-/// that comment, and a human reading its output could act on it.
-fn code_lines(path: &Path) -> Vec<String> {
-    let src = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
-    let chars: Vec<char> = src.chars().collect();
-    let mut out = String::with_capacity(src.len());
-    let (mut i, mut in_block, mut in_line, mut in_string) = (0usize, false, false, false);
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied().unwrap_or('\0');
-        if in_block {
-            if c == '*' && next == '/' {
-                in_block = false;
-                out.push(' ');
-                out.push(' ');
-                i += 1;
-            } else {
-                out.push(if c == '\n' { '\n' } else { ' ' });
-            }
-        } else if in_line {
-            if c == '\n' {
-                in_line = false;
-                out.push('\n');
-            } else {
-                out.push(' ');
-            }
-        } else if in_string {
-            out.push(c);
-            if c == '\\' {
-                if let Some(escaped) = chars.get(i + 1) {
-                    out.push(*escaped);
-                    i += 1;
-                }
-            } else if c == '"' {
-                in_string = false;
-            }
-        } else if c == '/' && next == '/' {
-            in_line = true;
-            out.push(' ');
-            out.push(' ');
-            i += 1;
-        } else if c == '/' && next == '*' {
-            in_block = true;
-            out.push(' ');
-            out.push(' ');
-            i += 1;
-        } else {
-            if c == '"' {
-                in_string = true;
-            }
-            out.push(c);
-        }
-        i += 1;
-    }
-    out.lines().map(str::to_owned).collect()
-}
-
-/// Whether `line` **declares** `name` as a function, rather than calling one.
-fn declares(line: &str, name: &str) -> bool {
-    let trimmed = line.trim_start();
-    for prefix in ["pub fn ", "pub(crate) fn ", "fn "] {
-        if let Some(rest) = trimmed.strip_prefix(prefix)
-            && let Some(ident) = rest.split('(').next()
-        {
-            return ident.trim() == name;
-        }
-    }
-    false
-}
-
-/// Whether `line` **calls** `name`: the name followed by `(`, and not part of a
-/// longer identifier — `paint_rail(` and `rows::paint_rail(` are calls,
-/// `my_paint_rail(` and `paint_rail_rect(` are not.
-fn calls(line: &str, name: &str) -> bool {
-    let mut from = 0;
-    while let Some(offset) = line[from..].find(name) {
-        let at = from + offset;
-        let after = line[at + name.len()..].chars().next();
-        let before = line[..at].chars().next_back().unwrap_or(' ');
-        if after == Some('(') && !before.is_alphanumeric() && before != '_' {
-            return true;
-        }
-        from = at + name.len();
-    }
-    false
-}
+/// The crate's own `src` tree — the tree the structural ratchets below read.
+const CRATE_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
 
 /// Modules that are vocabulary rather than a screen. A call from one of these is
 /// the shared grammar reaching for its own primitive, not a second screen
 /// adopting a row, so it does not count towards "at least two screens".
 const NOT_A_SCREEN: [&str; 5] = ["components", "widgets", "kit", "icons", "theme"];
 
-/// Every call of `name` in the crate's `src` tree, as `(screen, path, line)`.
+/// The distinct screens a primitive is called from (sorted), with its call sites.
 ///
-/// `screen` is the first path component under `src/ui/`, so `diff/actions.rs` is
-/// the diff pane and `sidebar.rs` is the sidebar. That is the granularity the
-/// "at least two screens" rule is written in: three call sites inside one screen
-/// are one screen.
-fn call_sites(name: &str) -> Vec<(String, String, usize)> {
-    let src_root = crate_src();
-    let mut out = Vec::new();
-    for path in rust_files(&src_root) {
-        let rel = path
-            .strip_prefix(&src_root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        let under_ui = rel.strip_prefix("ui/").unwrap_or("");
-        let screen = under_ui
+/// **Kept, and it is a policy rather than a scanner.** What a *screen* is is this
+/// rule's own granularity; a shared parser would make every suite inherit it.
+fn screens_calling(name: &str) -> (Vec<String>, Vec<(String, usize)>) {
+    let src_root = Path::new(CRATE_SRC);
+    let mut sites: Vec<(String, String, usize)> = Vec::new();
+    for (rel, line) in srcscan::call_sites(src_root, name) {
+        let screen = rel
+            .strip_prefix("ui/")
+            .unwrap_or(&rel)
             .split('/')
             .next()
             .unwrap_or_default()
@@ -1580,19 +1457,8 @@ fn call_sites(name: &str) -> Vec<(String, String, usize)> {
         if NOT_A_SCREEN.contains(&screen.as_str()) {
             continue;
         }
-        for (index, line) in code_lines(&path).iter().enumerate() {
-            if declares(line, name) || !calls(line, name) {
-                continue;
-            }
-            out.push((screen.clone(), rel.clone(), index + 1));
-        }
+        sites.push((screen, rel, line));
     }
-    out
-}
-
-/// The distinct screens a primitive is called from (sorted), with its call sites.
-fn screens_calling(name: &str) -> (Vec<String>, Vec<(String, usize)>) {
-    let sites = call_sites(name);
     let mut screens: Vec<String> = sites.iter().map(|(screen, _, _)| screen.clone()).collect();
     screens.sort();
     screens.dedup();
@@ -1603,25 +1469,14 @@ fn screens_calling(name: &str) -> (Vec<String>, Vec<(String, usize)>) {
     (screens, where_)
 }
 
-/// The `pub fn`s a module declares, in source order — the module's public
-/// surface, read out of the module rather than restated beside it.
-fn declared_primitives(rel: &str) -> Vec<String> {
-    code_lines(&crate_src().join(rel))
-        .iter()
-        .filter_map(|line| {
-            line.trim_start()
-                .strip_prefix("pub fn ")
-                .and_then(|rest| rest.split('(').next())
-                .map(|ident| ident.trim().to_owned())
-        })
-        .collect()
-}
-
 /// The `pub fn`s in the row vocabulary that take a `Rect` — the painting
 /// primitives, as opposed to the kit's decision functions (`row_fill`,
 /// `row_ink`, `middle_truncate`, …) and its controls (`pill`, `kit_button`,
 /// `section_header`), none of which paint into a caller-allocated row rect.
 ///
+/// **Kept, and it is a classification rather than a scanner.** Which signatures
+/// count as "paints into a caller-allocated row rect" is a judgement about the row
+/// grammar, written here so the ratchet below stays total.
 /// The classification is mechanical rather than a hand list, which is what makes
 /// the ratchet total: a primitive added to either row home is either two screens'
 /// worth of use or a declared construction site, with no third option and
@@ -1630,7 +1485,7 @@ fn declared_primitives(rel: &str) -> Vec<String> {
 fn rect_primitives(rel: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut pending: Option<(String, String)> = None;
-    for line in code_lines(&crate_src().join(rel)) {
+    for line in srcscan::code_lines(Path::new(CRATE_SRC).join(rel)) {
         match pending.take() {
             Some((name, signature)) => {
                 let signature = format!("{signature} {line}");
@@ -1736,7 +1591,9 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
     // 1. The shared row module's whole public surface, read from the module, so a
     //    second `pub fn` cannot be added without this failing.
     assert_eq!(
-        declared_primitives("ui/widgets/rows.rs"),
+        srcscan::declared_fns(&srcscan::read_source(
+            Path::new(CRATE_SRC).join("ui/widgets/rows.rs"),
+        )),
         vec!["paint_row".to_owned()],
         "the shared row module's primitives are enumerated in ROW_PRIMITIVES; a \
          primitive that is not two screens' worth of use does not live here"
@@ -1749,7 +1606,9 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
     for (home, primitives) in [
         (
             "ui/widgets/rows.rs",
-            declared_primitives("ui/widgets/rows.rs"),
+            srcscan::declared_fns(&srcscan::read_source(
+                Path::new(CRATE_SRC).join("ui/widgets/rows.rs"),
+            )),
         ),
         ("ui/components.rs", rect_primitives("ui/components.rs")),
     ] {
@@ -1772,11 +1631,15 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
 
     for (name, home, screens) in ROW_PRIMITIVES {
         // 3. Exactly one declaration, in the module this table names.
-        let homes: Vec<String> = rust_files(&crate_src())
+        let homes: Vec<String> = srcscan::rust_files(Path::new(CRATE_SRC))
             .into_iter()
-            .filter(|path| code_lines(path).iter().any(|line| declares(line, name)))
+            .filter(|path| {
+                srcscan::code_lines(path)
+                    .iter()
+                    .any(|line| srcscan::declares(line, name))
+            })
             .map(|path| {
-                path.strip_prefix(crate_src())
+                path.strip_prefix(Path::new(CRATE_SRC))
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .replace('\\', "/")
@@ -1807,38 +1670,6 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
     }
 }
 
-/// The code of one `fn` in `rel`, from its declaration line to its closing brace.
-///
-/// Comment-stripped through [`code_lines`], so a claim about what a body *does*
-/// cannot be satisfied by a doc comment describing the opposite, and a `//`
-/// inside a string literal cannot hide a line from it. Brace-counted rather
-/// than matched on a column, so a wrapped signature or a nested block is read
-/// whole.
-fn fn_source(rel: &str, name: &str) -> String {
-    let lines = code_lines(&crate_src().join(rel));
-    let start = lines
-        .iter()
-        .position(|line| declares(line, name))
-        .unwrap_or_else(|| panic!("{rel} declares no `fn {name}`"));
-    let mut depth = 0i32;
-    let mut body = String::new();
-    for line in &lines[start..] {
-        for c in line.chars() {
-            match c {
-                '{' => depth += 1,
-                '}' => depth -= 1,
-                _ => {}
-            }
-        }
-        body.push_str(line);
-        body.push('\n');
-        if depth == 0 {
-            return body;
-        }
-    }
-    panic!("`fn {name}` in {rel} never closes");
-}
-
 /// **The row shell's contract: it accepts an already-allocated rect and never
 /// measures one.**
 ///
@@ -1854,7 +1685,10 @@ fn fn_source(rel: &str, name: &str) -> String {
 /// mutation it has to catch is a shell that grew *one* of them.
 #[test]
 fn the_row_shell_paints_a_caller_allocated_rect_and_never_measures_one() {
-    let src = fn_source("ui/components.rs", "row_shell");
+    let src = srcscan::fn_code(
+        &srcscan::read_source(Path::new(CRATE_SRC).join("ui/components.rs")),
+        "row_shell",
+    );
 
     assert!(
         src.contains("rect: egui::Rect"),
@@ -1916,35 +1750,23 @@ fn the_rail_marks_exactly_the_two_selection_roles() {
 /// whole frame is nothing but shell, so every fill in the output is a row's.
 fn shell_harness() -> Harness<'static, ()> {
     use turbogit_ui::ui::components::{RowShell, row_shell};
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                for (index, (state, variant)) in [
-                    (RowState::FocusSelected, RowShell::Railed),
-                    (RowState::RowSelected, RowShell::Railed),
-                    (RowState::FocusSelected, RowShell::Fill),
-                    (RowState::Hover, RowShell::Railed),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    let rect = egui::Rect::from_min_size(
-                        egui::pos2(20.0, 20.0 + index as f32 * 40.0),
-                        egui::vec2(300.0, 30.0),
-                    );
-                    row_shell(ui, rect, state, variant);
-                }
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(400.0, 400.0));
+    let mut harness = widget_harness(egui::vec2(400.0, 400.0), move |ui| {
+        for (index, (state, variant)) in [
+            (RowState::FocusSelected, RowShell::Railed),
+            (RowState::RowSelected, RowShell::Railed),
+            (RowState::FocusSelected, RowShell::Fill),
+            (RowState::Hover, RowShell::Railed),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(20.0, 20.0 + index as f32 * 40.0),
+                egui::vec2(300.0, 30.0),
+            );
+            row_shell(ui, rect, state, variant);
+        }
+    });
     harness.step();
     harness
 }
@@ -2016,7 +1838,7 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     // The value.
     assert_eq!(RAIL_WIDTH, 2.0, "the rail width dimension");
     // The definition: one `pub const`, in the token layer.
-    let theme = code_lines(&crate_src().join("theme.rs"));
+    let theme = srcscan::code_lines(Path::new(CRATE_SRC).join("theme.rs"));
     assert_eq!(
         theme
             .iter()
@@ -2054,10 +1876,10 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     //
     // A fourth file is a second opinion about how thick the accent is, which is
     // the drift the token exists to prevent.
-    let naming: Vec<String> = rust_files(&crate_src())
+    let naming: Vec<String> = srcscan::rust_files(Path::new(CRATE_SRC))
         .into_iter()
         .filter(|path| {
-            code_lines(path)
+            srcscan::code_lines(path)
                 .iter()
                 .any(|line| line.contains("RAIL_WIDTH"))
         })
@@ -2087,7 +1909,7 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     // The third reader really does read the *token*, not a literal that happens
     // to equal it: this is the distinction the comment above turns on, and it is
     // the mutation that a hand-rolled rail would introduce.
-    let shell = code_lines(&crate_src().join("ui/shell.rs"));
+    let shell = srcscan::code_lines(Path::new(CRATE_SRC).join("ui/shell.rs"));
     assert!(
         shell
             .iter()
@@ -2110,10 +1932,10 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
 #[test]
 fn no_surface_paints_an_accent_rail_at_a_hard_coded_width() {
     let mut offenders: Vec<String> = Vec::new();
-    for path in rust_files(&crate_src().join("ui")) {
-        let lines = code_lines(&path);
+    for path in srcscan::rust_files(Path::new(CRATE_SRC).join("ui")) {
+        let lines = srcscan::code_lines(&path);
         let rel = path
-            .strip_prefix(crate_src())
+            .strip_prefix(Path::new(CRATE_SRC))
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
@@ -2159,31 +1981,18 @@ fn no_surface_paints_an_accent_rail_at_a_hard_coded_width() {
 
 // --- the painted ratchets: the sidebar, which owns one of the two rails ------
 
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git invocation");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf-8 stdout")
-}
-
-/// One initialised repository with a commit, under `parent`.
+/// One initialised repository with a commit, under `parent`: `main`, one commit
+/// touching `base.txt`, no remote.
+///
+/// **Not `git_seed::repo_with_one_commit`:** same shape, but it seeds `README.md`, and
+/// a fixture that is "the same" has to be the same *file*.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).expect("repo dir");
     git(&path, &["init", "-q", "-b", "main"]);
     git(&path, &["config", "user.email", "test@example.com"]);
     git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("base.txt"), "base\n").expect("seed file");
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "init"]);
+    commit(&path, "base.txt", "base\n", "init");
     path
 }
 
@@ -2204,17 +2013,13 @@ fn two_repo_workspace() -> (tempfile::TempDir, PathBuf, PathBuf) {
 /// the left rail visible, driven exactly as `tests/workspace_sidebar.rs` drives
 /// it. The focus is made by clicking the row, so the fixture exercises the real
 /// selection path rather than poking `AppState` internals.
+///
+/// Kept as [`shell_harness_over_unstyled`] at the 1280×800 the sidebar ratchets
+/// measure: the focus bands and row fills are read off painted rects.
 fn focused_sidebar() -> (Harness<'static, AppState>, tempfile::TempDir) {
     let (dir, alpha, beta) = two_repo_workspace();
     let state = AppState::for_roots(dir.path(), &[alpha, beta]);
-    let mut harness = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1280.0, 800.0));
+    let mut harness = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     settle(&mut harness);
     harness.get_by_label("beta").click();
     settle(&mut harness);
@@ -2729,7 +2534,10 @@ fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apar
 // and in every state it does not.
 #[test]
 fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
-    let src = fn_source("ui/components.rs", "state_mark");
+    let src = srcscan::fn_code(
+        &srcscan::read_source(Path::new(CRATE_SRC).join("ui/components.rs")),
+        "state_mark",
+    );
 
     // The mark is a circle: a filled circle, no fill rect. A state behind a rect
     // stops reading as state and starts reading as a category, which is the
@@ -2759,7 +2567,10 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
         );
     }
     // …and it really is a dot, from the helper it delegates to.
-    let dot = fn_source("ui/components.rs", "state_dot");
+    let dot = srcscan::fn_code(
+        &srcscan::read_source(Path::new(CRATE_SRC).join("ui/components.rs")),
+        "state_dot",
+    );
     assert!(
         dot.contains("circle_filled"),
         "the mark's leading dot is a filled circle and nothing else: {dot}"
@@ -2819,7 +2630,7 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
 // goes through it), so the claim and its user live in the same file.
 #[test]
 fn the_branch_view_builder_is_git_free_styling_free_and_egui_free() {
-    let src = code_lines(&crate_src().join("ui/branches_tree.rs"));
+    let src = srcscan::code_lines(Path::new(CRATE_SRC).join("ui/branches_tree.rs"));
 
     // No egui: not a type, not a path, not an import. `egui` as a whole word, so
     // a use of any part of the framework is caught.

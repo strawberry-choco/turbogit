@@ -21,16 +21,17 @@
 use egui::{Key, Modifiers, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
 use tempfile::TempDir;
+use test_support::git_seed::{self, git, repo_with_one_commit};
 use test_support::harness::{
     assert_painted, filled_rects, galley_origin, painted_galleys, painted_text, settle,
-    shell_harness,
+    shell_harness, shell_harness_over,
 };
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
 use turbogit_domain::model::{LogOpts, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
-use turbogit_ui::theme::{Palette, configure_style, install_fonts};
+use turbogit_ui::theme::Palette;
 
 // --- Shared helpers -----------------------------------------------------------
 
@@ -105,6 +106,7 @@ fn assert_visible(harness: &Harness<'_, AppState>, label: &str, vp: Rect, what: 
 /// hunk-nav buttons are still disabled (zero parsed hunks), which silently
 /// breaks focus-dependent assertions (flaky on slow CI runners).
 fn settle_long(harness: &mut Harness<'_, AppState>) {
+    // Kept local: the shared settles neither read `ui.busy` nor `read_pending`.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut prev = String::new();
     while std::time::Instant::now() < deadline {
@@ -146,36 +148,25 @@ struct Seed {
 
 use std::path::{Path, PathBuf};
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
 fn commit_file(dir: &Path, name: &str, msg: &str) -> String {
-    std::fs::write(dir.join(name), msg).expect("writing work file");
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-m", msg]);
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git_seed::commit(dir, name, msg, msg);
+    git_seed::git(dir, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string()
 }
 
+/// `main`: two commits, then an unstaged working-tree edit so the diff preview
+/// has content. Kept local: the dirty worktree is the precondition, and no
+/// shared recipe seeds one.
 fn seeded_project() -> Seed {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
     let alpha = project.join("alpha");
     std::fs::create_dir_all(&alpha).expect("alpha dir");
 
-    run_git(&alpha, &["init", "-b", "main"]);
-    run_git(&alpha, &["config", "user.email", "test@example.com"]);
-    run_git(&alpha, &["config", "user.name", "Test"]);
+    git(&alpha, &["init", "-b", "main"]);
+    git(&alpha, &["config", "user.email", "test@example.com"]);
+    git(&alpha, &["config", "user.name", "Test"]);
     let c1 = commit_file(&alpha, "file.txt", "alpha: initial commit");
     let c2 = commit_file(&alpha, "file.txt", "alpha: second commit");
 
@@ -237,20 +228,7 @@ fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, A
     }
     state.ui.tab = tab;
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events(); // production parity with app.rs
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(size.0, size.1));
+    let mut harness = shell_harness_over(state, egui::vec2(size.0, size.1));
     settle_long(&mut harness);
     harness
 }
@@ -259,41 +237,288 @@ fn polish_harness(seed: &Seed, size: (f32, f32), tab: Tab) -> Harness<'static, A
 // PASS 1 — FOCUS: visible BRAND rings per token spec §7.2
 // ===========================================================================
 
-// --- Vocabulary widgets (already compliant — regression guardrails) --------
+// --- The focus-ring sweep ------------------------------------------------------
 
-#[test]
-fn vocabulary_button_paints_brand_focus_ring_when_focused() {
-    // The repo header — the shell's old vocabulary-button row — is gone, so the
-    // Changes card's `Refresh changes` icon button is the surviving carrier of
-    // that contract. It needs a project open (the Welcome page shows the shell
-    // chrome no more).
-    let seed = seeded_project();
-    let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Commit);
-
-    harness.get_by_label("Refresh changes").focus();
-    settle(&mut harness);
-
-    let center = harness.get_by_label("Refresh changes").rect().center();
-    assert_ring_covers(&harness, center, "focused commit-window refresh button");
+/// The shell a row focuses into, with the setup it needs first.
+#[derive(Clone, Copy)]
+enum Shell {
+    /// The Welcome page's chrome, no project open.
+    Welcome,
+    /// Welcome shell with the settings modal open.
+    WelcomeWithSettings,
+    /// `polish_harness(seed, (1024, 768), tab)`; the tab strip needs a project.
+    Seeded { tab: Tab },
+    /// The seeded shell with the inline diff preview open.
+    SeededWithPreview { tab: Tab },
 }
 
+impl Shell {
+    /// Whether this shell reads a repository, and so whether its row seeds one.
+    fn seeds_a_repo(self) -> bool {
+        !matches!(self, Shell::Welcome | Shell::WelcomeWithSettings)
+    }
+}
+
+/// Which of the seeded project's two commits a row focuses.
+#[derive(Clone, Copy)]
+enum Commit {
+    /// HEAD~1 — `alpha: initial commit` (`Seed::c1`).
+    Older,
+    /// HEAD — `alpha: second commit` (`Seed::c2`).
+    Head,
+}
+
+#[derive(Clone, Copy)]
+enum Node {
+    Label(&'static str),
+    /// A commit-table row, by commit and subject.
+    CommitRow {
+        which: Commit,
+        subject: &'static str,
+    },
+    /// The settings category *button* `General`; the page heading paints the
+    /// same word as a plain label, so the role is what tells them apart.
+    SettingsCategoryButton,
+}
+
+impl Node {
+    fn seed<'s>(&self, seed: Option<&'s Seed>) -> &'s Seed {
+        seed.expect("a commit row's shell seeds a repository")
+    }
+
+    fn focus(&self, harness: &mut Harness<'static, AppState>, seed: Option<&Seed>) {
+        use egui::accesskit::Role;
+        match self {
+            Node::Label(label) => harness.get_by_label(label).focus(),
+            Node::CommitRow { which, subject } => harness
+                .get_by_label(&commit_row_label(self.seed(seed), *which, subject))
+                .focus(),
+            Node::SettingsCategoryButton => harness
+                .get_all_by_label("General")
+                .find(|n| n.accesskit_node().role() == Role::Button)
+                .unwrap()
+                .focus(),
+        }
+    }
+
+    #[track_caller]
+    fn center(&self, harness: &Harness<'static, AppState>, seed: Option<&Seed>) -> Pos2 {
+        use egui::accesskit::Role;
+        match self {
+            Node::Label(label) => harness.get_by_label(label).rect().center(),
+            Node::CommitRow { which, subject } => harness
+                .get_by_label(&commit_row_label(self.seed(seed), *which, subject))
+                .rect()
+                .center(),
+            Node::SettingsCategoryButton => harness
+                .get_all_by_label("General")
+                .find(|n| n.accesskit_node().role() == Role::Button)
+                .unwrap()
+                .rect()
+                .center(),
+        }
+    }
+}
+
+/// The commit table's label for a seeded commit: `<short sha> <subject>`.
+fn commit_row_label(seed: &Seed, which: Commit, subject: &str) -> String {
+    let sha = match which {
+        Commit::Older => &seed.c1,
+        Commit::Head => &seed.c2,
+    };
+    format!("{} {subject}", short(sha))
+}
+
+/// The settle a row runs after each `focus()`. `Stable` also waits on
+/// `ui.busy`/`read_pending()`, which a seeded commit-table row needs: the diff
+/// preview computes on a background thread.
+#[derive(Clone, Copy)]
+enum Settle {
+    Frames,
+    Stable,
+}
+
+struct FocusRing<'a> {
+    /// The originating test's name, so a failure names its case.
+    case: &'a str,
+    shell: Shell,
+    settle: Settle,
+    /// The widgets to focus in order, each with its own `what`.
+    widgets: &'a [Focus],
+}
+
+struct Focus {
+    node: Node,
+    what: &'static str,
+}
+
+const FOCUS_RINGS: &[FocusRing<'static>] = &[
+    // The repo header is gone; this icon button carries the ring contract now.
+    FocusRing {
+        case: "vocabulary_button_paints_brand_focus_ring_when_focused",
+        shell: Shell::Seeded { tab: Tab::Commit },
+        settle: Settle::Frames,
+        widgets: &[Focus {
+            node: Node::Label("Refresh changes"),
+            what: "focused commit-window refresh button",
+        }],
+    },
+    FocusRing {
+        case: "text_input_paints_brand_focus_ring_when_focused",
+        shell: Shell::Welcome,
+        settle: Settle::Frames,
+        widgets: &[Focus {
+            node: Node::Label("Repository URL"),
+            what: "focused clone URL input",
+        }],
+    },
+    // The old sidebar rail retired, so the center tab strip's items carry this.
+    FocusRing {
+        case: "tab_items_paint_brand_focus_rings",
+        shell: Shell::Seeded { tab: Tab::Commit },
+        settle: Settle::Stable,
+        widgets: &[
+            Focus {
+                node: Node::Label("Log"),
+                what: "focused shell tab item",
+            },
+            Focus {
+                node: Node::Label("Changes"),
+                what: "focused shell tab item",
+            },
+        ],
+    },
+    // Any welcome quick-action card carries the ring.
+    FocusRing {
+        case: "welcome_action_card_paints_brand_focus_ring",
+        shell: Shell::Welcome,
+        settle: Settle::Frames,
+        widgets: &[Focus {
+            node: Node::Label("Open Project"),
+            what: "focused welcome action card",
+        }],
+    },
+    // Commit-table rows, the changed-file row, the roots-filter row.
+    FocusRing {
+        case: "log_rows_paint_brand_focus_rings",
+        shell: Shell::Seeded { tab: Tab::Log },
+        settle: Settle::Stable,
+        widgets: &[
+            Focus {
+                node: Node::CommitRow {
+                    which: Commit::Head,
+                    subject: "alpha: second commit",
+                },
+                what: "focused commit row",
+            },
+            Focus {
+                node: Node::CommitRow {
+                    which: Commit::Older,
+                    subject: "alpha: initial commit",
+                },
+                what: "focused older commit row",
+            },
+            Focus {
+                node: Node::Label("file.txt"),
+                what: "focused changed-file row",
+            },
+            Focus {
+                node: Node::Label("All roots"),
+                what: "focused roots-filter row",
+            },
+        ],
+    },
+    // The inline diff preview's three toolbar controls.
+    FocusRing {
+        case: "diff_toolbar_controls_paint_brand_focus_rings",
+        shell: Shell::SeededWithPreview { tab: Tab::Commit },
+        settle: Settle::Stable,
+        widgets: &[
+            Focus {
+                node: Node::Label("Unified"),
+                what: "focused diff control Unified",
+            },
+            Focus {
+                node: Node::Label("Repo"),
+                what: "focused diff control Repo",
+            },
+            Focus {
+                node: Node::Label("Next hunk"),
+                what: "focused diff control Next hunk",
+            },
+        ],
+    },
+    // The only *button* labelled "General"; the page heading is a plain label.
+    FocusRing {
+        case: "settings_category_row_paints_brand_focus_ring",
+        shell: Shell::WelcomeWithSettings,
+        settle: Settle::Frames,
+        widgets: &[Focus {
+            node: Node::SettingsCategoryButton,
+            what: "focused settings category row",
+        }],
+    },
+];
+
+/// Open the shell a row focuses into. `seed`'s temp dir keeps the repository
+/// alive as long as the harness runs.
+fn open_shell(shell: Shell, seed: Option<&Seed>) -> Harness<'static, AppState> {
+    let repo = || seed.expect("a seeded shell seeds a repository");
+    match shell {
+        Shell::Welcome => {
+            let (mut harness, _project) = shell_harness();
+            settle(&mut harness);
+            harness
+        }
+        Shell::WelcomeWithSettings => {
+            let (mut harness, _project) = shell_harness();
+            settle(&mut harness);
+            harness.state_mut().ui.settings_open = true;
+            settle(&mut harness);
+            harness
+        }
+        Shell::Seeded { tab } => polish_harness(repo(), (1024.0, 768.0), tab),
+        Shell::SeededWithPreview { tab } => {
+            let mut harness = polish_harness(repo(), (1024.0, 768.0), tab);
+            // Open the inline preview and prove it is up before the row names a
+            // control in it.
+            harness.state_mut().ui.preview_change = Some(repo().alpha.join("file.txt"));
+            settle_long(&mut harness);
+            assert_painted(&harness, "Side-by-Side");
+            harness
+        }
+    }
+}
+
+/// Every interactive surface paints a BRAND ring while focused, and the ring
+/// covers the widget it belongs to — token spec §7.2.
 #[test]
-fn text_input_paints_brand_focus_ring_when_focused() {
-    let (mut harness, _project) = shell_harness();
-    settle(&mut harness);
+fn every_focused_surface_paints_a_brand_ring_over_itself() {
+    for row in FOCUS_RINGS {
+        // libtest prints a failing test's captured stdout, so the case that
+        // broke is named above the panic that stops the sweep.
+        println!("focus-ring case: {}", row.case);
 
-    harness.get_by_label("Repository URL").focus();
-    settle(&mut harness);
+        // The repository's temp dir must outlive every frame the harness runs.
+        let seed = row.shell.seeds_a_repo().then(seeded_project);
+        let mut harness = open_shell(row.shell, seed.as_ref());
 
-    let center = harness.get_by_label("Repository URL").rect().center();
-    assert_ring_covers(&harness, center, "focused clone URL input");
+        for focus in row.widgets {
+            focus.node.focus(&mut harness, seed.as_ref());
+            match row.settle {
+                Settle::Frames => settle(&mut harness),
+                Settle::Stable => settle_long(&mut harness),
+            }
+            let center = focus.node.center(&harness, seed.as_ref());
+            assert_ring_covers(&harness, center, focus.what);
+        }
+    }
 }
 
 /// Exactly ONE ring may be visible at any time — keyboard focus must never
 /// be ambiguous about which widget it sits on (§R4.4).
 #[test]
 fn only_one_focus_ring_is_visible_at_a_time() {
-    // Same vocabulary button as the guardrail above, so the shell is up.
     let seed = seeded_project();
     let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Commit);
 
@@ -306,120 +531,6 @@ fn only_one_focus_ring_is_visible_at_a_time() {
         1,
         "exactly one focus ring may be painted; got {rings:?}"
     );
-}
-
-// --- Custom-drawn controls (this pass fixes them) ----------------------------
-
-#[test]
-fn tab_items_paint_brand_focus_rings() {
-    // The tab strip only renders with a project open (the Welcome page shows
-    // the tool tabs no more), so run over the seeded shell.
-    let seed = seeded_project();
-    let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Commit);
-
-    // The old sidebar rail retired with the IDE chrome (issue #03); the
-    // center tab strip's custom-drawn tab items are its focus-ring carriers.
-    harness.get_by_label("Log").focus();
-    settle_long(&mut harness);
-    let tab_center = harness.get_by_label("Log").rect().center();
-    assert_ring_covers(&harness, tab_center, "focused shell tab item");
-
-    harness.get_by_label("Changes").focus();
-    settle_long(&mut harness);
-    let tab_center = harness.get_by_label("Changes").rect().center();
-    assert_ring_covers(&harness, tab_center, "focused shell tab item");
-}
-
-#[test]
-fn welcome_action_card_paints_brand_focus_ring() {
-    let (mut harness, _project) = shell_harness();
-    settle(&mut harness);
-
-    // The welcome quick actions are three cards (the old fourth "Clone from
-    // URL" card merged into the clone panel); any of them carries the ring.
-    harness.get_by_label("Open Project").focus();
-    settle(&mut harness);
-
-    let center = harness.get_by_label("Open Project").rect().center();
-    assert_ring_covers(&harness, center, "focused welcome action card");
-}
-
-#[test]
-fn log_rows_paint_brand_focus_rings() {
-    let seed = seeded_project();
-    let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Log);
-
-    // Commit-table rows — newest first, then the older one.
-    let row_label = format!("{} {}", short(&seed.c2), "alpha: second commit");
-    harness.get_by_label(&row_label).focus();
-    settle_long(&mut harness);
-    let center = harness.get_by_label(&row_label).rect().center();
-    assert_ring_covers(&harness, center, "focused commit row");
-
-    let older_label = format!("{} {}", short(&seed.c1), "alpha: initial commit");
-    harness.get_by_label(&older_label).focus();
-    settle_long(&mut harness);
-    let center = harness.get_by_label(&older_label).rect().center();
-    assert_ring_covers(&harness, center, "focused older commit row");
-
-    // Changed-file row (visible because the head commit is preselected).
-    harness.get_by_label("file.txt").focus();
-    settle_long(&mut harness);
-    let center = harness.get_by_label("file.txt").rect().center();
-    assert_ring_covers(&harness, center, "focused changed-file row");
-
-    // Roots-filter row in the branches pane.
-    harness.get_by_label("All roots").focus();
-    settle_long(&mut harness);
-    let center = harness.get_by_label("All roots").rect().center();
-    assert_ring_covers(&harness, center, "focused roots-filter row");
-}
-
-#[test]
-fn diff_toolbar_controls_paint_brand_focus_rings() {
-    let seed = seeded_project();
-    let mut harness = polish_harness(&seed, (1024.0, 768.0), Tab::Commit);
-
-    // Open the inline preview (same transition clicking a change row does).
-    harness.state_mut().ui.preview_change = Some(seed.alpha.join("file.txt"));
-    settle_long(&mut harness);
-    assert_painted(&harness, "Side-by-Side");
-
-    for label in ["Unified", "Repo", "Next hunk"] {
-        harness.get_by_label(label).focus();
-        settle_long(&mut harness);
-        let center = harness.get_by_label(label).rect().center();
-        assert_ring_covers(&harness, center, &format!("focused diff control {label}"));
-    }
-}
-
-#[test]
-fn settings_category_row_paints_brand_focus_ring() {
-    let (mut harness, _project) = shell_harness();
-    settle(&mut harness);
-
-    // The gear left the chrome with the IDE toolbar (issue #03/#16); the
-    // modal opens through the settings flag (what the command palette's
-    // Settings action sets).
-    harness.state_mut().ui.settings_open = true;
-    settle(&mut harness);
-
-    // The category row is the only *button* labeled "General" — the page
-    // heading (issue #26) renders the same word as a plain label.
-    use egui::accesskit::Role;
-    harness
-        .get_all_by_label("General")
-        .find(|n| n.accesskit_node().role() == Role::Button)
-        .unwrap()
-        .focus();
-    settle(&mut harness);
-    let center = harness
-        .get_all_by_label("General")
-        .find(|n| n.accesskit_node().role() == Role::Button)
-        .unwrap()
-        .rect()
-        .center();
-    assert_ring_covers(&harness, center, "focused settings category row");
 }
 
 // ===========================================================================
@@ -770,55 +881,19 @@ fn float_chrome_at(harness: &Harness<'_, AppState>, probe: Pos2) -> Option<Rect>
 }
 
 /// A repository with one commit, for the surfaces that need a real project.
+/// Same shape as `git_seed::repo_with_one_commit`, so that recipe owns it; no
+/// assertion here reads a path.
 fn project() -> (TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().join("alpha");
-    std::fs::create_dir_all(&repo).unwrap();
-    for args in [
-        vec!["init", "-q", "-b", "main"],
-        vec!["config", "user.email", "t@t"],
-        vec!["config", "user.name", "t"],
-    ] {
-        let out = std::process::Command::new("git")
-            .args(&args)
-            .current_dir(&repo)
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}");
-    }
-    std::fs::write(repo.join("base.txt"), "base\n").unwrap();
-    for args in [vec!["add", "."], vec!["commit", "-q", "-m", "init"]] {
-        let out = std::process::Command::new("git")
-            .args(&args)
-            .current_dir(&repo)
-            .output()
-            .expect("git");
-        assert!(out.status.success(), "git {args:?}");
-    }
+    let repo = repo_with_one_commit(tmp.path(), "alpha");
     (tmp, repo)
 }
 
+/// The shell over a caller-built `state`, at 1024×768, settled. Without the
+/// dark tokens and embedded fonts the floating-surface table measures egui's
+/// stock window stroke, not `Palette::LINE`.
 fn project_harness(state: AppState) -> Harness<'static, AppState> {
-    let mut fonts = false;
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        move |ui, state| {
-            // The token layer, exactly as `app.rs` installs it. Without this
-            // a harness renders egui's stock visuals, whose window stroke is
-            // `from_gray(60)` rather than the design system's `LINE` — so a
-            // floating-surface assertion here would be measuring egui, not the
-            // app. `test_support::harness::shell_harness` does the same thing
-            // and says why.
-            configure_style(ui.ctx());
-            if !fonts {
-                install_fonts(ui.ctx());
-                fonts = true;
-            }
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(Vec2::new(1024.0, 768.0));
+    let mut h = shell_harness_over(state, Vec2::new(1024.0, 768.0));
     settle(&mut h);
     h
 }

@@ -61,25 +61,26 @@ pub use chips::{
     current_chip, hash_chip, paint_chip, ref_chip,
 };
 pub use containers::{
-    AVATAR_SIZE, COLUMN_HEADER_HEIGHT, CardFrame, CardSizing, CardSurface, ColumnAlign,
+    AVATAR_SIZE, COLUMN_HEADER_HEIGHT, CardFrame, CardSizing, CardSurface, ColumnAlign, Edge,
     PANE_HEADER_HEIGHT, PaneColumn, alert_box, avatar_initials, card, card_header, cautions_rail,
-    churn_bar, column_cell, column_header, dialog_footer, group_title, note, pane_header,
-    recovery_note,
+    churn_bar, column_cell, column_header, dialog_footer, edge_rule, group_title, note,
+    pane_header, recovery_note,
 };
 pub use controls::{
-    ButtonVariant, WidgetState, action_button, compact_button, compact_button_enabled,
-    compact_primary_button, disabled_child_scope, focus_ring, ghost_button, ghost_icon_button,
-    icon_button, mix, primary_button, segmented_control, tint_over_bg,
+    ButtonVariant, WidgetState, action_button, button_enabled, compact_button,
+    compact_button_enabled, compact_primary_button, disabled_child_scope, focus_ring, ghost_button,
+    ghost_icon_button, icon_button, icon_button_enabled, mix, primary_button, segmented_control,
+    tint_over_bg,
 };
 pub use feedback::{KeyedReadPresentation, accent_bar, inline_error, keyed_read_presentation};
-pub use inputs::{search_input, text_input};
+pub use inputs::{filter_matches, search_input, text_input};
 pub use menu::{MenuItemKind, MenuItemProps, MenuItemState, menu_item, menu_rule, menu_surface};
 // The host's two lifecycle entry points stay module-qualified
 // (`menu_host::note_anchor`, `menu_host::host_menu`) — on this façade a bare
 // `show` or `host_menu` would name no widget.
 pub use menu_host::{MenuId, target_of};
 pub use rows::paint_row;
-pub use text::{SHORT_COMMIT_REF_CHARS, paint_centered_text, short_commit_ref};
+pub use text::{SHORT_COMMIT_REF_CHARS, empty_state, paint_centered_text, short_commit_ref};
 
 // Kept crate-private for the existing log-window caller; this is not public API.
 pub(crate) use containers::bold_font_if_available;

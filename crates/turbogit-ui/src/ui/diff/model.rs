@@ -8,7 +8,7 @@
 //! What stays here is what only painting can own: the metrics every row band is
 //! measured in, and the diff family's monospaced face.
 
-pub use turbogit_app::diff_model::{
+pub(crate) use turbogit_app::diff_model::{
     DiffModel, DisplayRow, FileMeta, PaneKind, Row, RowKind, line_counts, pane_kind,
 };
 

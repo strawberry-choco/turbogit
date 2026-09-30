@@ -2,29 +2,17 @@
 //! one derived value per change to the loaded window or the UI's inputs, and
 //! the same value across the frames in between.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
+use test_support::git_seed::git;
 use turbogit_app::root_caches::LogScope;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{Commit, CommitId, RootId, Signature, SignatureState};
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// `two_root_project` stays local rather than `git_seed::two_repos`: it seeds one
+// **empty** commit per repository (`commit --allow-empty -m seed`), where every
+// recipe writes a file, and the commit count is still the fixture's shape.
 
 /// Two one-commit repositories, seeded once for the whole test binary. The
 /// history itself is settled into the caches by hand below — what is under test

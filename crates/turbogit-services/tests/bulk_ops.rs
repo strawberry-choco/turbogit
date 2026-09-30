@@ -5,27 +5,12 @@
 //! real repository state plus the per-root results `run_bulk` reports.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use test_support::git_seed::git;
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{MultiRootManager, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan, run_bulk};
 use turbogit_services::multi_root::{build_root, register};
-
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
 
 /// Append a line to `file.txt` in `dir`, stage, commit, and return the new
 /// HEAD SHA.
@@ -40,9 +25,9 @@ fn commit(dir: &Path, msg: &str) -> String {
     writeln!(f, "{msg}").expect("appending work file");
     drop(f);
 
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-m", msg]);
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", msg]);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 /// Fresh repo on `main` with local identity, a bare remote at
@@ -53,12 +38,12 @@ fn repo_with_upstream(tmp: &Path, name: &str) -> (PathBuf, PathBuf) {
     let remote = tmp.join(format!("{name}.origin.git"));
     std::fs::create_dir_all(&repo).expect("repo dir");
 
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     commit(&repo, "c1");
 
-    run_git(
+    git(
         &repo,
         &[
             "init",
@@ -69,11 +54,11 @@ fn repo_with_upstream(tmp: &Path, name: &str) -> (PathBuf, PathBuf) {
             remote.to_str().unwrap(),
         ],
     );
-    run_git(
+    git(
         &repo,
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
-    run_git(&repo, &["push", "-q", "-u", "origin", "main"]);
+    git(&repo, &["push", "-q", "-u", "origin", "main"]);
     (repo, remote)
 }
 
@@ -104,13 +89,13 @@ fn assert_all_ok(results: &[(RootId, TgResult<()>)]) {
 
 /// The tip SHA a bare remote's `main` points at.
 fn remote_tip(remote: &Path) -> String {
-    run_git(remote, &["rev-parse", "main"]).trim().to_string()
+    git(remote, &["rev-parse", "main"]).trim().to_string()
 }
 
 /// A scratch clone of `remote` with local identity, for seeding upstream work.
 fn scratch_clone(tmp: &Path, remote: &Path) -> PathBuf {
     let scratch = tmp.join("scratch");
-    run_git(
+    git(
         tmp,
         &[
             "clone",
@@ -119,8 +104,8 @@ fn scratch_clone(tmp: &Path, remote: &Path) -> PathBuf {
             scratch.to_str().unwrap(),
         ],
     );
-    run_git(&scratch, &["config", "user.email", "test@example.com"]);
-    run_git(&scratch, &["config", "user.name", "Test"]);
+    git(&scratch, &["config", "user.email", "test@example.com"]);
+    git(&scratch, &["config", "user.name", "Test"]);
     scratch
 }
 
@@ -165,7 +150,7 @@ fn run_bulk_pushes_only_the_planned_roots_and_reports_each_outcome() {
 
     // lib stays ahead of its untouched remote.
     let lib_remote = tmp.path().join("lib.origin.git");
-    let local_tip = run_git(&lib, &["rev-parse", "HEAD"]).trim().to_string();
+    let local_tip = git(&lib, &["rev-parse", "HEAD"]).trim().to_string();
     assert_ne!(
         remote_tip(&lib_remote),
         local_tip,
@@ -186,7 +171,7 @@ fn run_bulk_fetch_all_updates_only_the_planned_roots_tracking_refs() {
     // Incoming work on alpha's remote, made through a scratch clone.
     let scratch = scratch_clone(tmp.path(), &alpha_remote);
     let incoming = commit(&scratch, "incoming");
-    run_git(&scratch, &["push", "-q", "origin", "main"]);
+    git(&scratch, &["push", "-q", "origin", "main"]);
 
     let plan = BulkPlan {
         op: BulkOp::FetchAll,
@@ -199,16 +184,14 @@ fn run_bulk_fetch_all_updates_only_the_planned_roots_tracking_refs() {
 
     assert_eq!(result_roots(&results), vec![id(&alpha)]);
     assert_all_ok(&results);
-    let alpha_tracking = run_git(&alpha, &["rev-parse", "origin/main"])
+    let alpha_tracking = git(&alpha, &["rev-parse", "origin/main"])
         .trim()
         .to_string();
     assert_eq!(
         alpha_tracking, incoming,
         "alpha's remote-tracking ref advanced"
     );
-    let ui_tracking = run_git(&ui, &["rev-parse", "origin/main"])
-        .trim()
-        .to_string();
+    let ui_tracking = git(&ui, &["rev-parse", "origin/main"]).trim().to_string();
     assert_ne!(
         ui_tracking, incoming,
         "out-of-scope root's tracking ref stayed put"
@@ -228,7 +211,7 @@ fn run_bulk_pull_all_fast_forwards_planned_roots_with_incoming_work() {
     // Incoming work on alpha's remote, made through a scratch clone.
     let scratch = scratch_clone(tmp.path(), &alpha_remote);
     let incoming = commit(&scratch, "incoming");
-    run_git(&scratch, &["push", "-q", "origin", "main"]);
+    git(&scratch, &["push", "-q", "origin", "main"]);
 
     // The plan scopes the pull to alpha; ui is out of scope.
     let plan = BulkPlan {
@@ -242,12 +225,12 @@ fn run_bulk_pull_all_fast_forwards_planned_roots_with_incoming_work() {
 
     assert_eq!(result_roots(&results), vec![id(&alpha)]);
     assert_all_ok(&results);
-    let alpha_tip = run_git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
+    let alpha_tip = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
     assert_eq!(
         alpha_tip, incoming,
         "alpha fast-forwarded onto the incoming commit"
     );
-    let ui_tip = run_git(&ui, &["rev-parse", "HEAD"]).trim().to_string();
+    let ui_tip = git(&ui, &["rev-parse", "HEAD"]).trim().to_string();
     assert_ne!(ui_tip, incoming, "out-of-scope root did not pull");
 }
 
@@ -267,9 +250,9 @@ fn run_bulk_pull_honors_the_rebase_policy() {
     commit(&alpha, "local work");
     let scratch = scratch_clone(tmp.path(), &alpha_remote);
     std::fs::write(scratch.join("other.txt"), "upstream\n").expect("upstream file");
-    run_git(&scratch, &["add", "."]);
-    run_git(&scratch, &["commit", "-m", "incoming"]);
-    run_git(&scratch, &["push", "-q", "origin", "main"]);
+    git(&scratch, &["add", "."]);
+    git(&scratch, &["commit", "-m", "incoming"]);
+    git(&scratch, &["push", "-q", "origin", "main"]);
 
     let plan = BulkPlan {
         op: BulkOp::PullAll,
@@ -282,7 +265,7 @@ fn run_bulk_pull_honors_the_rebase_policy() {
 
     assert_eq!(result_roots(&results), vec![id(&alpha)]);
     assert_all_ok(&results);
-    let log = run_git(&alpha, &["log", "--format=%s"]);
+    let log = git(&alpha, &["log", "--format=%s"]);
     assert!(log.contains("local work"), "local work survived: {log:?}");
     assert!(log.contains("incoming"), "upstream work arrived: {log:?}");
     assert!(
@@ -317,17 +300,17 @@ fn run_bulk_stash_all_parks_dirty_worktrees_in_scope() {
 
     assert_eq!(result_roots(&results), vec![id(&alpha)]);
     assert_all_ok(&results);
-    let alpha_status = run_git(&alpha, &["status", "--porcelain"]);
+    let alpha_status = git(&alpha, &["status", "--porcelain"]);
     assert!(
         alpha_status.trim().is_empty(),
         "alpha's worktree was stashed clean: {alpha_status:?}"
     );
-    let alpha_stashes = run_git(&alpha, &["stash", "list"]);
+    let alpha_stashes = git(&alpha, &["stash", "list"]);
     assert!(
         !alpha_stashes.trim().is_empty(),
         "alpha's changes landed in the stash"
     );
-    let ui_status = run_git(&ui, &["status", "--porcelain"]);
+    let ui_status = git(&ui, &["status", "--porcelain"]);
     assert!(
         !ui_status.trim().is_empty(),
         "out-of-scope root keeps its dirty worktree"
@@ -348,7 +331,7 @@ fn run_bulk_reports_a_failing_root_as_err_and_keeps_running_the_rest() {
     // structurally while ui's succeeds.
     commit(&alpha, "alpha work");
     commit(&ui, "ui work");
-    run_git(&alpha, &["remote", "remove", "origin"]);
+    git(&alpha, &["remote", "remove", "origin"]);
 
     let plan = BulkPlan {
         op: BulkOp::PushAll,
@@ -376,8 +359,8 @@ fn run_bulk_reports_a_failing_root_as_err_and_keeps_running_the_rest() {
 /// then reset the local branch back. Returns the upstream tip SHA.
 fn make_behind(repo: &Path) -> String {
     let tip = commit(repo, "incoming upstream work");
-    run_git(repo, &["push", "-q", "origin", "main"]);
-    run_git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    git(repo, &["push", "-q", "origin", "main"]);
+    git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
     tip
 }
 
@@ -392,10 +375,8 @@ fn create_branch_step_checks_out_existing_and_bases_behind_repos_on_their_upstre
     let (behind, _) = repo_with_upstream(tmp.path(), "behind");
 
     // existing already carries feature/x at its first commit; main moves on.
-    let old_tip = run_git(&existing, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
-    run_git(&existing, &["branch", "feature/x"]);
+    let old_tip = git(&existing, &["rev-parse", "HEAD"]).trim().to_string();
+    git(&existing, &["branch", "feature/x"]);
     commit(&existing, "more main work");
 
     // behind: local main is one commit behind origin/main.
@@ -425,36 +406,36 @@ fn create_branch_step_checks_out_existing_and_bases_behind_repos_on_their_upstre
     }
 
     // clean: created from HEAD and checked out.
-    let head = run_git(&clean, &["rev-parse", "HEAD"]).trim().to_string();
+    let head = git(&clean, &["rev-parse", "HEAD"]).trim().to_string();
     assert_eq!(
-        run_git(&clean, &["branch", "--show-current"]).trim(),
+        git(&clean, &["branch", "--show-current"]).trim(),
         "feature/x",
         "clean repo is on the new branch"
     );
     assert_eq!(
-        run_git(&clean, &["rev-parse", "feature/x"]).trim(),
+        git(&clean, &["rev-parse", "feature/x"]).trim(),
         head,
         "the new branch sits at the repo's HEAD"
     );
 
     // existing: checked out, never recreated — the branch keeps its old tip.
     assert_eq!(
-        run_git(&existing, &["branch", "--show-current"]).trim(),
+        git(&existing, &["branch", "--show-current"]).trim(),
         "feature/x"
     );
     assert_eq!(
-        run_git(&existing, &["rev-parse", "feature/x"]).trim(),
+        git(&existing, &["rev-parse", "feature/x"]).trim(),
         old_tip,
         "an existing match is checked out as-is, not recreated at HEAD"
     );
 
     // behind + apply broadly: based on the upstream tip, not stale HEAD.
     assert_eq!(
-        run_git(&behind, &["branch", "--show-current"]).trim(),
+        git(&behind, &["branch", "--show-current"]).trim(),
         "feature/x"
     );
     assert_eq!(
-        run_git(&behind, &["rev-parse", "feature/x"]).trim(),
+        git(&behind, &["rev-parse", "feature/x"]).trim(),
         upstream_tip,
         "a behind repo bases the new branch on its upstream"
     );
@@ -468,7 +449,7 @@ fn create_branch_step_without_apply_broadly_ignores_the_upstream_state() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let (behind, _) = repo_with_upstream(tmp.path(), "behind");
     let upstream_tip = make_behind(&behind);
-    let local_tip = run_git(&behind, &["rev-parse", "HEAD"]).trim().to_string();
+    let local_tip = git(&behind, &["rev-parse", "HEAD"]).trim().to_string();
     assert_ne!(local_tip, upstream_tip);
 
     let root = build_root(&engine, &behind).expect("root snapshot");
@@ -489,7 +470,7 @@ fn create_branch_step_without_apply_broadly_ignores_the_upstream_state() {
     .expect("the step should succeed");
 
     assert_eq!(
-        run_git(&behind, &["rev-parse", "feature/x"]).trim(),
+        git(&behind, &["rev-parse", "feature/x"]).trim(),
         local_tip,
         "policy off → the branch is cut from local HEAD even when behind"
     );
@@ -521,7 +502,7 @@ fn run_bulk_executes_a_custom_command_on_every_planned_root() {
     assert_eq!(result_roots(&results), vec![id(&alpha), id(&ui)]);
 
     for repo in [&alpha, &ui] {
-        let branches = run_git(repo, &["branch", "--list", "bulk-marker"]);
+        let branches = git(repo, &["branch", "--list", "bulk-marker"]);
         assert!(
             branches.contains("bulk-marker"),
             "{repo:?} should carry the created branch"
@@ -539,7 +520,7 @@ fn a_failing_custom_command_reports_the_git_error_per_root_without_stopping_the_
     let (ui, _ui_remote) = repo_with_upstream(tmp.path(), "ui");
     // ui already carries the branch, so `git branch` fails there with a
     // "already exists" stderr while alpha succeeds.
-    run_git(&ui, &["branch", "bulk-marker"]);
+    git(&ui, &["branch", "bulk-marker"]);
     let mgr = manager(&engine, &[alpha.clone(), ui.clone()]);
 
     let plan = BulkPlan {

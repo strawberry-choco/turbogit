@@ -32,69 +32,35 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use egui::{Color32, Rect, Shape, vec2};
+use egui::{Color32, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
-use test_support::harness::{click_menu_item, right_click_row};
+use test_support::harness::{
+    assert_not_painted, assert_painted, click_menu_item, filled_rects, painted_text,
+    right_click_row, shell_harness_over,
+};
 use turbogit_app::root_caches::LogScope;
 use turbogit_app::state::{AppState, LOG_BATCH_SIZE};
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
-use turbogit_ui::theme::{configure_style, install_fonts};
 
 /// The pickaxe term the fixture's content alternates, and which appears in no
 /// commit message, hash or author name.
 const TOKEN: &str = "needle";
 
 // --- painted-output helpers (mirrors log_ux.rs) --------------------------------
-
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[track_caller]
-fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        !texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was unexpectedly painted; painted text:\n{texts:#?}"
-    );
-}
-
-#[track_caller]
-fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
-}
-
-/// Every filled rectangle the last frame painted, as `(rect, fill)`.
-fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Rect(rect_shape) if rect_shape.fill != Color32::TRANSPARENT => {
-                Some((rect_shape.rect, rect_shape.fill))
-            }
-            _ => None,
-        })
-        .collect()
-}
+// `painted_text`, `assert_painted`, `assert_not_painted` and `filled_rects` are
+// the shared `test_support::harness` queries. `settle` and the two pumps below
+// are not.
 
 /// Step frames until the painted output stabilizes.
+///
+/// Deliberately NOT `test_support::harness::settle`, which allows **10** frames.
+/// This one allows **40**, and it is not slack: a scope's SECOND batch is a real
+/// `git` subprocess, and a frame taken before the worker posts is byte-identical
+/// to a settled frame — so ten frames would declare victory on a window that is
+/// about to change.
 fn settle(harness: &mut Harness<'_, AppState>) {
     let mut prev = String::new();
     for _ in 0..40 {
@@ -138,6 +104,10 @@ fn settle_where(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) ->
 
 // --- Fixture --------------------------------------------------------------------
 
+/// A `git` runner that pins the commit identity on every invocation, and
+/// deliberately NOT `test_support::git_seed::git`, which takes no per-call env:
+/// the scope's batches are ordered by commit time, so a wall-clock date on one
+/// repo and an imported date on the other is an ordering measured by accident.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)
@@ -413,20 +383,8 @@ fn log_harness_sized(
         })));
     let mut state = state.with_executor(recorder.clone());
     state.ui.tab = turbogit_app::state::Tab::Log;
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(size);
+    // The shared shell launcher, with the local 40-frame `settle` after it.
+    let mut harness = shell_harness_over(state, size);
     settle(&mut harness);
     (harness, recorder)
 }

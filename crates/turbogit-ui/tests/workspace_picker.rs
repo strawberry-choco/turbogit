@@ -34,78 +34,23 @@ use egui::{Color32, Shape};
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::{Harness, Node};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use test_support::git_seed::git;
+use test_support::harness::{assert_not_painted, assert_painted, settle, shell_harness_over};
 use turbogit_app::recents::{RecentKind, RecentProject, Recents, recents_file, save};
 use turbogit_app::state::{AppState, ToastKind};
 use turbogit_ui::theme::{ITEM_SPACING, Palette};
 
-// --- Locally-defined harness helpers (same pattern as welcome.rs) -------------
-
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[track_caller]
-fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
-}
-
-#[track_caller]
-fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        !texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was unexpectedly painted; painted text:\n{texts:#?}"
-    );
-}
-
-/// Step frames until the painted output stabilizes.
-fn settle(harness: &mut Harness<'_, AppState>) {
-    let mut prev = String::new();
-    for _ in 0..10 {
-        harness.step();
-        let fingerprint = format!("{:?}", painted_text(harness));
-        if fingerprint == prev {
-            return;
-        }
-        prev = fingerprint;
-    }
-    panic!("picker layout did not settle within 10 frames");
-}
-
-/// Run `git <args>` in `cwd`, panicking on failure (tests need real repos).
-#[track_caller]
-fn git(args: &[&str], cwd: &Path) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed in {}: {}",
-        cwd.display(),
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// --- Fixture seeding -----------------------------------------------------------
 
 /// Create a real repository with a deterministic initial branch (`main`).
+///
+/// Kept local, not `git_seed::repo_with_one_commit`: this seeds `git init` and
+/// nothing else, because these repos exist to be FOUND by the scanner and a
+/// commit is not part of that question.
 fn seed_repo(base: &Path, name: &str) -> PathBuf {
     let dir = base.join(name);
     std::fs::create_dir_all(&dir).expect("create repo dir");
-    git(&["init", "-q", "-b", "main"], &dir);
+    git(&dir, &["init", "-q", "-b", "main"]);
     dir
 }
 
@@ -117,7 +62,7 @@ fn seed_workspace(base: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let shallow = seed_repo(&ws, "alpha");
     let deep = ws.join("a").join("b").join("c").join("d");
     std::fs::create_dir_all(&deep).expect("create deep dir");
-    git(&["init", "-q", "-b", "main"], &deep);
+    git(&deep, &["init", "-q", "-b", "main"]);
     (ws, shallow, deep)
 }
 
@@ -152,6 +97,10 @@ struct Fixture {
 
 /// A harness over `launch` (empty → Welcome) with `picker` as the injected
 /// folder picker and `recents` seeded into a temp config dir first.
+///
+/// The shared constructor's per-frame worker drain is load-bearing here: the
+/// scanner reads go through the app's own worker, so draining is what makes
+/// their answers observable at all.
 fn fixture(
     launch: Option<PathBuf>,
     picker: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
@@ -164,21 +113,8 @@ fn fixture(
     let mut state = AppState::launch_in(launch, Some(config.path().to_path_buf()));
     state.dir_picker = picker;
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
     Fixture {
-        harness,
+        harness: shell_harness_over(state, egui::vec2(1024.0, 768.0)),
         _config: config,
     }
 }

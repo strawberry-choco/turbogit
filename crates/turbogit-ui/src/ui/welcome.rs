@@ -537,11 +537,7 @@ fn recents_column(ui: &mut Ui, state: &mut AppState) {
 
         let recents = state.ui.recent_projects.clone();
         if recents.is_empty() {
-            ui.label(
-                RichText::new("No recent projects yet.")
-                    .size(crate::theme::TYPE_BODY)
-                    .color(Palette::INK_3),
-            );
+            widgets::empty_state(ui, "No recent projects yet.");
             return;
         }
         for r in &recents {

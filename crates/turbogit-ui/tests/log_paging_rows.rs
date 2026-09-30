@@ -10,38 +10,20 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use egui::Shape;
 use egui_kittest::{Harness, kittest::Queryable};
 use test_support::RecordingExecutor;
+use test_support::harness::{assert_painted, painted_text, shell_harness_over};
 use turbogit_app::state::{AppState, LOG_BATCH_SIZE};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
-use turbogit_ui::theme::{configure_style, install_fonts};
 
 // --- painted-output helpers (mirrors log_ux.rs) -------------------------------
 
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[track_caller]
-fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
-}
-
 /// Step frames until the painted output stabilizes.
+///
+/// Not `test_support::harness::settle`'s 10 frames: the batch fetch behind the Log
+/// window is a real `git` subprocess, and a frame taken before the worker posts is
+/// byte-identical to a settled one. The shared settle has no frame-budget argument.
 fn settle(harness: &mut Harness<'_, AppState>) {
     let mut prev = String::new();
     for _ in 0..30 {
@@ -68,6 +50,11 @@ fn settle_until(harness: &mut Harness<'_, AppState>, needle: &str) {
 
 // --- Fixture: one long history, seeded once for the whole binary ---------------
 
+/// A `git` runner that pins the commit identity on every invocation.
+///
+/// Not `test_support::git_seed::git`, which takes no per-call env: the `rev-parse`
+/// calls naming the head row run through this runner too, so handing them to the
+/// shared one would commit as whatever the developer's global config names.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)
@@ -182,23 +169,12 @@ fn log_harness_over(project: &Path, repo: &Path) -> Harness<'static, AppState> {
         .with_executor(recorder);
     state.fetch_log(state.multi.roots[0].id.clone());
     state.ui.tab = turbogit_app::state::Tab::Log;
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
+    // The shared shell launcher at this suite's box; the `settle` after it is still
+    // the local 30-frame one.
+    let mut harness = shell_harness_over(
         state,
+        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
     );
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
     settle(&mut harness);
     // The head commit's short hash is one painted galley; the full row label is
     // an accessibility label, not painted text, so the wait is on the hash.

@@ -27,30 +27,18 @@ use std::time::{Duration, Instant};
 use egui_kittest::kittest::{NodeT, Queryable as _};
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
-use test_support::harness::filled_rects;
+use test_support::git_seed::{commit as seed_commit, git};
+use test_support::harness::{KITTEST_DEFAULT_BOX, filled_rects, shell_harness_over_unstyled};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, TagSpec, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Append a line to `file.txt`, stage, commit; returns the new HEAD SHA.
-fn commit(dir: &Path, msg: &str) -> String {
+///
+/// Not `git_seed::commit`, which *overwrites* the file where this appends.
+fn append_commit(dir: &Path, msg: &str) -> String {
     let file = dir.join("file.txt");
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -61,20 +49,25 @@ fn commit(dir: &Path, msg: &str) -> String {
     writeln!(f, "{msg}").expect("appending work file");
     drop(f);
     git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
+    seed_commit(dir, "file.txt", &format!("{msg}\n"), msg);
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// A repo with two commits on `main`; returns `(guard, repo, [c1, c2])`.
+/// A repo with exactly two commits on `main`; returns `(guard, repo, [c1, c2])`.
+///
+/// Kept local: the painted picker asserts the subjects `one` and `two` and that
+/// there are exactly two of them, so no shared recipe fits.
 fn repo_two_commits() -> (tempfile::TempDir, PathBuf, Vec<String>) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
-    std::fs::create_dir_all(&repo).expect("repo dir");
-    git(&repo, &["init", "-q", "-b", "main"]);
+    git(
+        tmp.path(),
+        &["init", "-q", "-b", "main", repo.to_str().unwrap()],
+    );
     git(&repo, &["config", "user.email", "test@example.com"]);
     git(&repo, &["config", "user.name", "Test"]);
-    let c1 = commit(&repo, "one");
-    let c2 = commit(&repo, "two");
+    let c1 = append_commit(&repo, "one");
+    let c2 = append_commit(&repo, "two");
     (tmp, repo, vec![c1, c2])
 }
 
@@ -90,14 +83,16 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Unstyled: the dark tokens and embedded JetBrains Mono would change the
+/// metrics the `filled_rects` divider assertion measures. The worker drain every
+/// frame is kept.
+///
+/// `max_steps` is 1024, not kittest's default of 4: `pump_until`/`wait_until`
+/// drive async tag creation through it and `Harness::run` **panics** past the
+/// budget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    )
+    shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
 /// Open the Tag dialog on the given root and let the egui window geometry
@@ -109,8 +104,13 @@ fn open_tag(h: &mut Harness<'_, AppState>, root: &Path) {
     settle(h);
 }
 
-/// Step frames until painted button geometry is stable for 3 consecutive
+/// Step frames until painted **button geometry** is stable for 3 consecutive
 /// frames.
+///
+/// Kept local, not `settle_quiet`: that fingerprints painted *text*, this
+/// fingerprints `(label, rect)` per `Role::Button`. A click's coordinates go
+/// stale while the text is unchanged, which is the only thing this suite can
+/// flake on.
 fn settle(h: &mut Harness<'_, AppState>) {
     let mut stable = 0;
     let mut prev = String::new();
@@ -334,6 +334,11 @@ fn the_target_picker_lists_recent_commits_and_tags_one() {
     );
 }
 
+/// Contract: Create dispatches, the tag lands, and the dialog closes.
+///
+/// Spec *shape* is owned by the two shape tests in this file and the port
+/// pass-through by `turbogit-services/tests/tag_dialog.rs`; what is left here,
+/// and what no other test owns, is the outcome.
 #[test]
 fn create_dispatches_the_spec_and_closes_the_dialog() {
     let (tmp, repo, _shas) = repo_two_commits();
@@ -345,24 +350,15 @@ fn create_dispatches_the_spec_and_closes_the_dialog() {
     type_into_field(&mut h, "Tag message", "Release 0.9.0");
     click_dialog_button(&mut h, "Create tag");
 
-    let want = TagSpec {
-        name: "v0.9.0".into(),
-        target: None,
-        message: Some("Release 0.9.0".into()),
-        tagger: None,
-        sign: false,
-    };
-    let dispatched = wait_until(5_000, || {
-        exec.recorded().iter().any(
-            |c| matches!(c, test_support::RecordedCall::TagCreate { spec, .. } if *spec == want),
-        )
-    });
+    // Create returns immediately and the create runs on the worker, so settle
+    // before reading the repository.
     assert!(
-        dispatched,
-        "expected TagCreate {want:?}, got {:?}; dialog={:?} toast={:?}",
-        exec.recorded(),
-        h.state().ui.dialog,
-        h.state().ui.toast
+        wait_until(5_000, || exec
+            .recorded()
+            .iter()
+            .any(|c| matches!(c, test_support::RecordedCall::TagCreate { .. }))),
+        "no TagCreate was dispatched; calls: {:?}",
+        exec.recorded()
     );
     // The tag landed and the dialog closed.
     assert_eq!(git(&repo, &["tag", "-l"]).trim(), "v0.9.0");

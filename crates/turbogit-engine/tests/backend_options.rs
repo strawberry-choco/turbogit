@@ -14,6 +14,13 @@ use turbogit_domain::model::{GitBackend, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::build_executor;
 
+/// `git` in `dir`, asserting success, and returning `()` — the one place the
+/// shared runner's `String` is not wanted.
+///
+/// Kept local because it pins `GIT_AUTHOR_*` / `GIT_COMMITTER_*` on every `Command`
+/// and `test_support::git_seed::git` takes no per-call environment. The env is
+/// load-bearing here: `repo_with_remote_branch` below writes NO `user.*` config, so
+/// these four variables are the repository's only source of identity.
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -32,7 +39,8 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// One repo with a same-content `origin`, plus `feat` pushed there and deleted
-/// locally — the state a remote branch row is clicked from.
+/// locally — the state a remote branch row is clicked from. Local, not a
+/// `git_seed` recipe: the bare lives at `origin.git`, the work tree at `work`.
 fn repo_with_remote_branch() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();

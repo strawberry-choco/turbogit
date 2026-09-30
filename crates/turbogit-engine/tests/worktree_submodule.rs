@@ -6,8 +6,8 @@
 //! state, `worktree_remove`, and the submodule read/update/deinit trio.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{SubmoduleState, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
@@ -19,20 +19,12 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// Both builders stay local, deliberately NOT `git_seed` recipes:
+// `temp_repo` must track `base.txt` at "base\n" (every worktree test writes to
+// `base.txt` and probes the result), and `temp_super_with_submodule` needs a
+// second repository as a clone source plus a `-c
+// protocol.file.allow=always` submodule add — a two-repository shape with a
+// gitlink, which no recipe produces.
 
 /// An initialized temp repository with one base commit on `main`. The
 /// returned path is canonicalized (macOS tempdirs are symlinked) so the
@@ -41,12 +33,12 @@ fn temp_repo(tag: &str) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join(tag);
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     std::fs::write(repo.join("base.txt"), "base\n").unwrap();
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "init"]);
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "init"]);
     (tmp, repo.canonicalize().unwrap())
 }
 
@@ -59,9 +51,9 @@ fn temp_repo(tag: &str) -> (tempfile::TempDir, PathBuf) {
 #[test]
 fn worktree_list_reports_branch_and_probe_free_dirty() {
     let (_tmp, repo) = temp_repo("wt-dirty");
-    run_git(&repo, &["branch", "feature"]);
+    git(&repo, &["branch", "feature"]);
     let wt_path = _tmp.path().join("wt-feature");
-    run_git(
+    git(
         &repo,
         &["worktree", "add", wt_path.to_str().unwrap(), "feature"],
     );
@@ -87,9 +79,9 @@ fn worktree_list_reports_branch_and_probe_free_dirty() {
 #[test]
 fn worktree_remove_refuses_dirty_without_force_and_removes_with_force() {
     let (_tmp, repo) = temp_repo("wt-remove");
-    run_git(&repo, &["branch", "feature"]);
+    git(&repo, &["branch", "feature"]);
     let wt_path = _tmp.path().join("wt-feature");
-    run_git(
+    git(
         &repo,
         &["worktree", "add", wt_path.to_str().unwrap(), "feature"],
     );
@@ -119,21 +111,21 @@ fn temp_super_with_submodule(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf)
     let tmp = tempfile::tempdir().expect("tempdir");
     let child = tmp.path().join("child-src");
     std::fs::create_dir_all(&child).unwrap();
-    run_git(&child, &["init", "-q", "-b", "main"]);
-    run_git(&child, &["config", "user.email", "test@example.com"]);
-    run_git(&child, &["config", "user.name", "Test"]);
+    git(&child, &["init", "-q", "-b", "main"]);
+    git(&child, &["config", "user.email", "test@example.com"]);
+    git(&child, &["config", "user.name", "Test"]);
     std::fs::write(child.join("c.txt"), "one\n").unwrap();
-    run_git(&child, &["add", "."]);
-    run_git(&child, &["commit", "-q", "-m", "c1"]);
+    git(&child, &["add", "."]);
+    git(&child, &["commit", "-q", "-m", "c1"]);
 
     let superproject = tmp.path().join(tag);
     std::fs::create_dir_all(&superproject).unwrap();
-    run_git(&superproject, &["init", "-q", "-b", "main"]);
-    run_git(&superproject, &["config", "user.email", "test@example.com"]);
-    run_git(&superproject, &["config", "user.name", "Test"]);
+    git(&superproject, &["init", "-q", "-b", "main"]);
+    git(&superproject, &["config", "user.email", "test@example.com"]);
+    git(&superproject, &["config", "user.name", "Test"]);
     // Newer git refuses the file transport for submodule clones by default;
     // `-c` travels through GIT_CONFIG_PARAMETERS to the child clone.
-    run_git(
+    git(
         &superproject,
         &[
             "-c",
@@ -145,7 +137,7 @@ fn temp_super_with_submodule(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf)
             "child",
         ],
     );
-    run_git(&superproject, &["commit", "-q", "-m", "add child"]);
+    git(&superproject, &["commit", "-q", "-m", "add child"]);
     (tmp, superproject, child)
 }
 
@@ -173,8 +165,8 @@ fn submodule_status_flags_needs_update_when_head_moves_off_record() {
     // Move the SUBMODULE's HEAD (the checked-out copy), not the source repo.
     let sub_wc = repo.join("child");
     std::fs::write(sub_wc.join("c.txt"), "two\n").unwrap();
-    run_git(&sub_wc, &["add", "."]);
-    run_git(&sub_wc, &["commit", "-q", "-m", "c2"]);
+    git(&sub_wc, &["add", "."]);
+    git(&sub_wc, &["commit", "-q", "-m", "c2"]);
 
     let subs = engine().submodule_status(&repo).expect("submodule_status");
     let sub = &subs[0];
@@ -220,8 +212,8 @@ fn submodule_update_checks_recorded_commit_back_out() {
     // Move the SUBMODULE's HEAD (the checked-out copy), not the source repo.
     let sub_wc = repo.join("child");
     std::fs::write(sub_wc.join("c.txt"), "two\n").unwrap();
-    run_git(&sub_wc, &["add", "."]);
-    run_git(&sub_wc, &["commit", "-q", "-m", "c2"]);
+    git(&sub_wc, &["add", "."]);
+    git(&sub_wc, &["commit", "-q", "-m", "c2"]);
     assert_eq!(
         engine().submodule_status(&repo).unwrap()[0].state,
         SubmoduleState::NeedsUpdate

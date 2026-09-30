@@ -11,29 +11,17 @@ use egui::Key;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use test_support::harness::{assert_painted, settle};
+use test_support::git_seed::git;
+use test_support::harness::{assert_painted, settle, shell_harness_over_unstyled};
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::BulkOp;
 use turbogit_services::bulk_run::RowState;
 
-/// Run `git <args>` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git invocation");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf-8 stdout")
-}
-
 /// Create an initialized temp repository with one base commit on `main`
 /// plus an `origin` remote so upstream reads can be exercised.
+/// Kept local, not `test_support::git_seed::repo_with_origin`: the base commit is
+/// `base.txt`, not `README.md`, and this suite's change lists and diff panes name
+/// the file they changed.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -76,16 +64,13 @@ fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 }
 
 /// Headless harness driving the full app UI (mirrors `bulk_operations`).
+///
+/// Unstyled: no `configure_style` and no `install_fonts`, because this suite
+/// asserts on the cascade modal's painted prediction rows and the shared preamble
+/// would lay them out in the embedded JetBrains Mono stack. `max_steps` is 1024
+/// rather than kittest's default of 4, which `Harness::run` PANICS past.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(egui::vec2(1280.0, 800.0));
-    h
+    shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
 
 fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {

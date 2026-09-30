@@ -14,8 +14,8 @@
 //! machinery would be the thing this change exists to prevent.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{RebaseAction, RebasePlanEntry, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
@@ -23,30 +23,16 @@ use turbogit_services::history_editor;
 
 // ---------------------------------------------------------------- helpers --
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
 /// Subject lines, newest first — the log a developer would read.
 fn subjects(dir: &Path) -> Vec<String> {
-    run_git(dir, &["log", "--format=%s"])
+    git(dir, &["log", "--format=%s"])
         .lines()
         .map(str::to_string)
         .collect()
 }
 
 fn rev(dir: &Path, r: &str) -> String {
-    run_git(dir, &["rev-parse", r]).trim().to_string()
+    git(dir, &["rev-parse", r]).trim().to_string()
 }
 
 fn engine() -> CliExecutor {
@@ -58,8 +44,8 @@ fn engine() -> CliExecutor {
 /// Commit `text` touching `name`, returning the new HEAD.
 fn commit(dir: &Path, name: &str, text: &str) -> String {
     std::fs::write(dir.join(name), format!("{text}\n")).expect("writing work file");
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-q", "-m", text]);
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", text]);
     rev(dir, "HEAD")
 }
 
@@ -68,11 +54,11 @@ fn commit(dir: &Path, name: &str, text: &str) -> String {
 fn three_deep(dir: &Path) -> PathBuf {
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     commit(&repo, "base.txt", "base");
-    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
     commit(&repo, "a.txt", "feature-1");
     commit(&repo, "b.txt", "feature-2");
     commit(&repo, "c.txt", "feature-3");

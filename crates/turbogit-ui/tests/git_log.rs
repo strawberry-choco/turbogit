@@ -19,88 +19,19 @@ use egui_kittest::{
     kittest::{NodeT, Queryable},
 };
 use tempfile::TempDir;
+use test_support::git_seed::{commit, git};
 use test_support::harness::{
-    assert_menu_item_gated, click_menu_item, filled_circles, right_click_row, stroked_rects,
+    assert_menu_item_gated, assert_not_painted, assert_painted, click_menu_item, filled_circles,
+    filled_rects, galley_origin, painted_text, right_click_row, settle, stroked_rects,
 };
+use test_support::srcscan::{self, code_only, code_with_literals};
+use test_support::wcag::contrast;
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
 use turbogit_domain::model::{LogOpts, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::{Palette, configure_style, install_fonts};
-
-// --- Locally-defined harness helpers (issue #12; mirrors tests/common) -------
-
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[track_caller]
-fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
-}
-
-#[track_caller]
-fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        !texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was unexpectedly painted; painted text:\n{texts:#?}"
-    );
-}
-
-/// Paint-time origin of the first text galley painting exactly `text`.
-fn galley_origin(harness: &Harness<'_, AppState>, text: &str) -> Option<Pos2> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .find_map(|clipped| match &clipped.shape {
-            Shape::Text(shape) if shape.galley.text() == text => Some(shape.pos),
-            _ => None,
-        })
-}
-
-/// Every filled rectangle painted by the last frame as `(rect, fill)`.
-fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Rect(rect_shape) if rect_shape.fill != Color32::TRANSPARENT => {
-                Some((rect_shape.rect, rect_shape.fill))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Step frames until the painted output stabilizes.
-pub fn settle(harness: &mut Harness<'_, AppState>) {
-    let mut prev = String::new();
-    for _ in 0..10 {
-        harness.step();
-        let fingerprint = format!("{:?}", painted_text(harness));
-        if fingerprint == prev {
-            return;
-        }
-        prev = fingerprint;
-    }
-    panic!("log layout did not settle within 10 frames");
-}
 
 // --- Seeded multi-root fixture ------------------------------------------------
 
@@ -120,26 +51,12 @@ struct Seed {
     c3: String,
 }
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
+/// Commit `msg` as both the file's whole body and the commit message, and answer the
+/// new HEAD's id — `git_seed::commit` plus the `rev-parse` it does not do. The
+/// conflation is this fixture's own: it makes `file.txt` a proxy for the history.
 fn commit_file(dir: &Path, name: &str, msg: &str) -> String {
-    let file = dir.join(name);
-    std::fs::write(&file, msg).expect("writing work file");
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-m", msg]);
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    commit(dir, name, msg, msg);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_owned()
 }
 
 fn seeded_project() -> Seed {
@@ -151,47 +68,42 @@ fn seeded_project() -> Seed {
     std::fs::create_dir_all(&beta).expect("beta dir");
 
     // --- alpha: main(c2 <- c1), tag v1.0@c1, origin/main@c1, feature@cf ---
-    run_git(&alpha, &["init", "-b", "main"]);
-    run_git(&alpha, &["config", "user.email", "test@example.com"]);
-    run_git(&alpha, &["config", "user.name", "Test"]);
+    git(&alpha, &["init", "-b", "main"]);
+    git(&alpha, &["config", "user.email", "test@example.com"]);
+    git(&alpha, &["config", "user.name", "Test"]);
     let c1 = commit_file(&alpha, "file.txt", "alpha: initial commit");
-    run_git(&alpha, &["tag", "v1.0"]);
+    git(&alpha, &["tag", "v1.0"]);
 
     let remote = tmp.path().join("origin.git");
-    run_git(
+    git(
         &alpha,
         &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
     );
-    run_git(
+    git(
         &alpha,
         &["remote", "add", "origin", remote.to_str().unwrap()],
     );
-    run_git(&alpha, &["push", "-u", "origin", "main"]);
+    git(&alpha, &["push", "-u", "origin", "main"]);
 
-    run_git(&alpha, &["checkout", "-b", "feature"]);
+    git(&alpha, &["checkout", "-b", "feature"]);
     let _cf = commit_file(&alpha, "feature.txt", "alpha: feature work");
-    run_git(&alpha, &["checkout", "main"]);
+    git(&alpha, &["checkout", "main"]);
 
     // Multiline body so the details pane paints text the row never does.
     std::fs::write(alpha.join("file.txt"), "alpha: second commit\n").expect("rewrite");
-    run_git(&alpha, &["add", "."]);
-    let c2_out = std::process::Command::new("git")
-        .args([
+    git(&alpha, &["add", "."]);
+    // Two `-m` flags, so the commit has a body the details pane can paint.
+    git(
+        &alpha,
+        &[
             "commit",
             "-m",
             "alpha: second commit",
             "-m",
             "body line for details view",
-        ])
-        .current_dir(&alpha)
-        .output()
-        .expect("second commit");
-    assert!(
-        c2_out.status.success(),
-        "second commit failed: {}",
-        String::from_utf8_lossy(&c2_out.stderr)
+        ],
     );
-    let c2 = run_git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
+    let c2 = git(&alpha, &["rev-parse", "HEAD"]).trim().to_owned();
 
     // Docs-only HEAD commit: touches neither file.txt nor feature.txt, so a
     // path-scoped history for those files has something to hide (issue #19).
@@ -208,9 +120,9 @@ fn seeded_project() -> Seed {
     let c3 = commit_file(&alpha, "README.md", "alpha: docs commit");
 
     // --- beta: an independent second root ---
-    run_git(&beta, &["init", "-b", "main"]);
-    run_git(&beta, &["config", "user.email", "test@example.com"]);
-    run_git(&beta, &["config", "user.name", "Test"]);
+    git(&beta, &["init", "-b", "main"]);
+    git(&beta, &["config", "user.email", "test@example.com"]);
+    git(&beta, &["config", "user.name", "Test"]);
     let _b1 = commit_file(&beta, "beta.txt", "beta: root commit");
 
     Seed {
@@ -265,35 +177,19 @@ fn warm_log_and_refs(state: &mut AppState) {
     state.drain_events();
 }
 
-/// The full-shell harness over an arbitrary pre-built state.
-fn harness_with(state: AppState) -> Harness<'static, AppState> {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    // 1280px of log body plus the workspace sidebar (issue #05) on
-    // the left edge — the four-pane spec widths hold at this size.
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
-    settle(&mut harness);
-    harness
-}
+/// The log's own box: 1280px of log body plus the workspace sidebar on the
+/// left edge — the four-pane spec widths hold at this size.
+const LOG_BOX: egui::Vec2 =
+    egui::Vec2::new(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0);
 
-fn short(id: &str) -> String {
-    id[..7.min(id.len())].to_string()
-}
-
-/// The same harness at an explicit window size, for the narrow/short cases.
+/// The full-shell harness over an arbitrary pre-built state, at an explicit
+/// window size.
+///
+/// Not `harness::shell_harness_over`, and the difference is load-bearing: the shared
+/// constructor drains the worker event queue every frame, this one does not. One test
+/// here is about ref decorations being *cold* when the log first paints and asserts
+/// `!refs_loaded(root)` after the frames — draining lets the worker's `RefsLoaded`
+/// land inside the settle loop and the assertion then reads the opposite.
 fn harness_sized(state: AppState, size: egui::Vec2) -> Harness<'static, AppState> {
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
@@ -310,6 +206,14 @@ fn harness_sized(state: AppState, size: egui::Vec2) -> Harness<'static, AppState
     harness.set_size(size);
     settle(&mut harness);
     harness
+}
+
+fn harness_with(state: AppState) -> Harness<'static, AppState> {
+    harness_sized(state, LOG_BOX)
+}
+
+fn short(id: &str) -> String {
+    id[..7.min(id.len())].to_string()
 }
 
 /// Issue #23's guard, re-checked against the widened 344px column and the
@@ -1019,7 +923,7 @@ fn select_docs_commit(harness: &mut Harness<'_, AppState>, seed: &Seed) {
 fn the_files_pane_names_its_three_empty_states_apart() {
     let seed = seeded_project();
     // A commit that genuinely changes nothing, so "no files" has a real owner.
-    run_git(
+    git(
         &seed.alpha,
         &["commit", "--allow-empty", "-q", "-m", "nothing changed"],
     );
@@ -1050,9 +954,7 @@ fn the_files_pane_names_its_three_empty_states_apart() {
 
 /// `alpha`'s current HEAD — the commit the fixture appends after `seeded_project`.
 fn head_of(seed: &Seed) -> String {
-    run_git(&seed.alpha, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string()
+    git(&seed.alpha, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 // --- Redesign issue 05: the commit-details pane ------------------------------
@@ -1309,23 +1211,6 @@ fn the_churn_summary_replaces_the_status_count_string() {
 
 // --- ticket 09: the changed-file rows share the one menu host -------------------
 
-/// Every `.rs` path under a directory.
-fn walk_rs(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            out.extend(walk_rs(&path));
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    out
-}
-
 /// Right-clicking a changed-file row opens the SAME shared surface every other
 /// menu in the window uses — the shared frame, the shared row primitive, and the
 /// shared rule that a blocked item states its reason — rather than a third menu
@@ -1394,7 +1279,7 @@ fn a_blocked_file_row_item_stays_visible_and_states_its_reason() {
 #[test]
 fn no_surface_builds_a_context_menu_out_of_stock_egui_anymore() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let offenders: Vec<String> = walk_rs(&src)
+    let offenders: Vec<String> = srcscan::rust_files(&src)
         .into_iter()
         .filter(|path| {
             std::fs::read_to_string(path)
@@ -2589,20 +2474,6 @@ const COLOUR_LITERALS: [&str; 8] = [
     "0x",
 ];
 
-/// One top-level `fn`'s source text, from its signature to the first column-zero
-/// `}` after it.
-fn fn_source(src: &str, name: &str) -> String {
-    let start = src
-        .find(&format!("fn {name}("))
-        .unwrap_or_else(|| panic!("no `fn {name}` in the log window"));
-    let rest = &src[start..];
-    let end = rest
-        .find("\n}\n")
-        .unwrap_or_else(|| panic!("`fn {name}` has no closing brace at column zero"))
-        + 3;
-    rest[..end].to_owned()
-}
-
 /// **The log's chrome takes its ink from the shared ramp: no local muted-ink
 /// literal remains in the header cells or the micro-text helper.**
 ///
@@ -2619,8 +2490,8 @@ fn fn_source(src: &str, name: &str) -> String {
 #[test]
 fn the_logs_chrome_names_no_ink_outside_the_shared_ramp() {
     for (name, src) in [
-        ("micro_text", fn_source(LOG_SRC, "micro_text")),
-        ("header_cells", fn_source(LOG_SRC, "header_cells")),
+        ("micro_text", srcscan::fn_text(LOG_SRC, "micro_text")),
+        ("header_cells", srcscan::fn_text(LOG_SRC, "header_cells")),
     ] {
         for literal in COLOUR_LITERALS {
             assert!(
@@ -2735,28 +2606,6 @@ fn commit_row_label(id: &str, subject: &str) -> String {
 fn commit_table_region(harness: &Harness<'_, AppState>) -> Rect {
     let card = commits_region(harness);
     Rect::from_x_y_ranges(graph_band(harness).x_range(), card.y_range())
-}
-
-/// Relative luminance and contrast, for the claims that are about legibility
-/// rather than about identity. WCAG's formula, as the token layer states it.
-fn luminance(color: Color32) -> f32 {
-    let channel = |v: u8| {
-        let c = f32::from(v) / 255.0;
-        if c <= 0.03928 {
-            c / 12.92
-        } else {
-            ((c + 0.055) / 1.055).powf(2.4)
-        }
-    };
-    0.2126 * channel(color.r()) + 0.7152 * channel(color.g()) + 0.0722 * channel(color.b())
-}
-
-/// The WCAG contrast ratio of two opaque colours, for the claims that are about
-/// legibility rather than about identity.
-fn contrast(a: Color32, b: Color32) -> f32 {
-    let (la, lb) = (luminance(a), luminance(b));
-    let (hi, lo) = (la.max(lb), la.min(lb));
-    (hi + 0.05) / (lo + 0.05)
 }
 
 /// `Palette::selection_bg()` composited over `host` — the colour a chosen row
@@ -2941,119 +2790,6 @@ fn no_commit_row_fills_with_the_current_ref_or_the_accent_token() {
         1,
         "and there is one of them, for the one chosen row: {accent_fills:?}"
     );
-}
-
-/// The log's source with every comment blanked out, one space per character so
-/// line structure survives.
-///
-/// Needed where a claim is about what the log's *code* does while the file's
-/// documentation legitimately names the same values: a scan that counted a doc
-/// comment would either fail on a well-argued comment or — worse — force the
-/// argument to be deleted instead of written.
-///
-/// String literals are blanked too, so this is the seam for claims about
-/// *identifiers* and *calls*. Where a claim is about a literal — a column's
-/// label, a table's name — use [`code_without_comments`], which keeps them.
-fn code_only(src: &str) -> String {
-    blanked(src, false)
-}
-
-/// The log's source with comments blanked and string literals **kept**.
-///
-/// The same reasoning as [`code_only`] with the other half left standing: a
-/// column's label and a table's name are string literals, so a scan that
-/// blanked them could not see that a column exists at all.
-fn code_without_comments(src: &str) -> String {
-    blanked(src, true)
-}
-
-fn blanked(src: &str, keep_strings: bool) -> String {
-    let chars: Vec<char> = src.chars().collect();
-    let mut out: Vec<char> = Vec::with_capacity(chars.len());
-    let (mut i, mut block, mut line, mut string) = (0usize, false, false, false);
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied().unwrap_or('\0');
-        // Whether this character arrives *inside* a comment — always masked — or
-        // inside a string, which `code_without_comments` keeps and `code_only`
-        // does not. Read before the transitions below, because a delimiter is
-        // the first character of what it opens, not the last of what it closes.
-        let masked = block || line || (string && !keep_strings);
-        if block {
-            if c == '*' && next == '/' {
-                block = false;
-                out.push(' ');
-                out.push(' ');
-                i += 2;
-                continue;
-            }
-        } else if line {
-            if c == '\n' {
-                line = false;
-                out.push('\n');
-                i += 1;
-                continue;
-            }
-        } else if string {
-            if c == '"' {
-                string = false;
-                out.push(if keep_strings { '"' } else { ' ' });
-                i += 1;
-                continue;
-            }
-        } else if c == '/' && next == '/' {
-            line = true;
-            out.push(' ');
-            out.push(' ');
-            i += 2;
-            continue;
-        } else if c == '/' && next == '*' {
-            block = true;
-            out.push(' ');
-            out.push(' ');
-            i += 2;
-            continue;
-        } else if c == '"' {
-            string = true;
-            out.push(if keep_strings { '"' } else { ' ' });
-            i += 1;
-            continue;
-        }
-        // A character that is not inside a comment — and, for `code_only`, not
-        // inside a string — is CODE, and is kept. Newlines always survive so line
-        // structure (and therefore line-numbered failures) does too.
-        //
-        // **This is the fix.** The helper this replaced ended on a single
-        // `push(if c == '\n' { '\n' } else { ' ' })`, which blanked the *code* as
-        // well as the comments: the result was a file of newlines and spaces, so
-        // every `!code_only(src).contains(needle)` scan over it was true for the
-        // uninteresting reason that the needle could not possibly be there. A
-        // ratchet that cannot fail is not a ratchet, and the one that exposed
-        // this is the blame view's — where the scan for `CommitTable::ROW_HEIGHT`
-        // passed on a file that had stopped calling it.
-        out.push(if c == '\n' {
-            '\n'
-        } else if masked {
-            ' '
-        } else {
-            c
-        });
-        i += 1;
-    }
-    out.into_iter().collect()
-}
-
-/// `fn_source` with the comments blanked — the seam for a claim about what a
-/// function *calls*.
-///
-/// `fn_source` on its own returns the function's raw text, doc comment included,
-/// which is the right seam for a claim about a *literal* the function must not
-/// name (a doc comment that argued the point is still a comment) and the wrong
-/// seam for a claim about a call: this file's own documentation names every
-/// constant a function reads while explaining why it reads it, so an unblanked
-/// scan for `CommitTable::ROW_HEIGHT` is satisfied forever by the prose.
-fn fn_code(src: &str, name: &str) -> String {
-    code_without_comments(&fn_source(src, name))
 }
 
 /// The commit table's column anchors, read from the **shared column-header row**
@@ -3600,11 +3336,11 @@ fn the_log_rows_take_their_ink_from_the_shared_ramp() {
          selection-independent."
     );
     for (name, source) in [
-        ("row_name_ink", fn_source(LOG_SRC, "row_name_ink")),
-        ("row_meta_ink", fn_source(LOG_SRC, "row_meta_ink")),
-        ("commit_row", fn_source(LOG_SRC, "commit_row")),
-        ("file_row", fn_source(LOG_SRC, "file_row")),
-        ("paint_log_row", fn_source(LOG_SRC, "paint_log_row")),
+        ("row_name_ink", srcscan::fn_text(LOG_SRC, "row_name_ink")),
+        ("row_meta_ink", srcscan::fn_text(LOG_SRC, "row_meta_ink")),
+        ("commit_row", srcscan::fn_text(LOG_SRC, "commit_row")),
+        ("file_row", srcscan::fn_text(LOG_SRC, "file_row")),
+        ("paint_log_row", srcscan::fn_text(LOG_SRC, "paint_log_row")),
     ] {
         for literal in COLOUR_LITERALS {
             assert!(
@@ -3783,13 +3519,13 @@ fn the_roots_column_is_a_labelled_column_of_the_commit_table() {
     // and the header row is the shared one. A free-floating label painted
     // somewhere else would carry none of the chrome's ink and would sit outside
     // the header's rule — which is precisely what a `PaneColumn` entry does not.
-    let with_strings = code_without_comments(LOG_SRC);
+    let with_strings = code_with_literals(LOG_SRC);
     assert!(
         with_strings.contains(r#"PaneColumn::start("ROOTS""#),
         "the ROOTS label must be an entry of the commit table's own column \
          table, not a label painted free-floating above the gutter"
     );
-    let header = fn_source(LOG_SRC, "header_cells");
+    let header = srcscan::fn_text(LOG_SRC, "header_cells");
     assert!(
         header.contains("COMMIT_COLUMNS") && header.contains("column_header"),
         "the header row must still be the shared `widgets::column_header` reading \
@@ -3840,7 +3576,7 @@ fn roots_swatch(harness: &Harness<'_, AppState>, row: Rect) -> Option<(Rect, Col
 #[test]
 fn the_roots_column_the_lane_and_the_legend_paint_one_colour_per_root() {
     // ---- the source seam --------------------------------------------------
-    let code = code_without_comments(LOG_SRC);
+    let code = code_with_literals(LOG_SRC);
     let table_at = code
         .find("const GRAPH_COLORS")
         .expect("the one root-colour table is in the log window");
@@ -3867,12 +3603,15 @@ fn the_roots_column_the_lane_and_the_legend_paint_one_colour_per_root() {
     );
     // …and the four markers are four *call sites* into it, not four copies of it.
     for (name, source) in [
-        ("paint_root_swatch", fn_code(LOG_SRC, "paint_root_swatch")),
-        ("commit_row", fn_code(LOG_SRC, "commit_row")),
-        ("graph_pane", fn_code(LOG_SRC, "graph_pane")),
+        (
+            "paint_root_swatch",
+            srcscan::fn_text_code(LOG_SRC, "paint_root_swatch"),
+        ),
+        ("commit_row", srcscan::fn_text_code(LOG_SRC, "commit_row")),
+        ("graph_pane", srcscan::fn_text_code(LOG_SRC, "graph_pane")),
         (
             "roots_filter_section",
-            fn_code(LOG_SRC, "roots_filter_section"),
+            srcscan::fn_text_code(LOG_SRC, "roots_filter_section"),
         ),
     ] {
         assert!(
@@ -4342,12 +4081,12 @@ fn the_details_pane_populates_on_selection_and_still_renders_its_empty_state() {
 /// `CommitFacts` is the only one left.
 #[test]
 fn the_details_pane_fact_list_is_its_own_type_and_not_the_menus_action_gates() {
-    let code = code_without_comments(LOG_SRC);
+    let code = code_with_literals(LOG_SRC);
     assert!(
         code.contains("struct DetailRow"),
         "the details pane's list is a type of its own"
     );
-    let builder = fn_code(LOG_SRC, "commit_detail_rows");
+    let builder = srcscan::fn_text_code(LOG_SRC, "commit_detail_rows");
     assert!(
         builder.contains("&Commit"),
         "the list is built over the commit the log already holds:\n{builder}"
@@ -4373,9 +4112,9 @@ fn the_details_pane_fact_list_is_its_own_type_and_not_the_menus_action_gates() {
         "the menu's own gate builder still returns the menu's own type"
     );
     assert!(
-        fn_code(LOG_SRC, "details_pane").contains("commit_detail_rows"),
+        srcscan::fn_text_code(LOG_SRC, "details_pane").contains("commit_detail_rows"),
         "the details pane reads its rows from the new builder, not from the menu's \
          gates:\n{}",
-        fn_code(LOG_SRC, "details_pane")
+        srcscan::fn_text_code(LOG_SRC, "details_pane")
     );
 }

@@ -11,54 +11,31 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use egui::Shape;
 use egui_kittest::{
     Harness,
     kittest::{NodeT as _, Queryable},
 };
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
-use test_support::harness::{click_menu_item, right_click_row};
+use test_support::harness::{
+    assert_not_painted, assert_painted, click_menu_item, painted_text, right_click_row,
+    shell_harness_over,
+};
 use turbogit_app::root_caches::LogScope;
 use turbogit_app::state::{AppState, LOG_BATCH_SIZE};
 use turbogit_domain::model::RootId;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
-use turbogit_ui::theme::{configure_style, install_fonts};
 
-// --- Painted-output helpers (mirrors git_log.rs) ------------------------------
-
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[track_caller]
-fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
-}
-
-#[track_caller]
-fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        !texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was unexpectedly painted; painted text:\n{texts:#?}"
-    );
-}
+// --- Painted-output helpers ----------------------------------------------------
+// The painted queries are the shared `test_support::harness` ones. `settle` and the
+// two pumps below are not; read the note on `settle` for why.
 
 /// Step frames until the painted output stabilizes.
+///
+/// Not the shared `settle`'s 10 frames: this suite's shell starts a real `git` batch
+/// fetch behind the Log window, and a frame where a worker has not posted looks
+/// identical to a settled one. The shared settle has no frame-budget argument.
 pub fn settle(harness: &mut Harness<'_, AppState>) {
     let mut prev = String::new();
     for _ in 0..30 {
@@ -106,6 +83,12 @@ fn settle_where(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) ->
 
 // --- Fixture -------------------------------------------------------------------
 
+/// A `git` runner that pins the commit identity on every invocation.
+///
+/// Not `test_support::git_seed::git`, which cannot express per-call env: the
+/// `fast-import` stream gives every commit an explicit `1_000_000_000 + n` epoch
+/// second, and pinning `GIT_AUTHOR_*`/`GIT_COMMITTER_*` keeps the `git commit`
+/// subprocesses (`small_project`, `ref_project`) on the same clock.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)
@@ -124,6 +107,11 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// Write `name` with `body`, stage everything, commit as `msg`, and return the
+/// new HEAD's SHA.
+///
+/// Not `test_support::git_seed::commit`, which returns `()`: the row labels these
+/// call sites look for are `"<short hash> <subject>"`, so the hash is the output.
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     std::fs::write(dir.join(name), body).unwrap();
     git(dir, &["add", "."]);
@@ -237,24 +225,13 @@ fn short(id: &str) -> String {
 /// Harness with the Log tool window active over `state`'s project. The log
 /// is primed through the production batch-sized fetch path
 /// (`AppState::fetch_log`); worker events are pumped every frame.
+/// The shared shell launcher at this suite's box; the `settle` after it is still the
+/// local 30-frame one.
 fn harness_over(state: AppState) -> Harness<'static, AppState> {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         state,
+        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
     );
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
     settle(&mut harness);
     harness
 }
@@ -689,8 +666,7 @@ struct SmallSeed {
     repo: PathBuf,
     /// The commit touching `f.txt` — the only one visible once scoped.
     c1: String,
-    /// The commit touching `g.txt`.
-    #[allow(dead_code)]
+    /// The commit touching `g.txt`, named by the row label those tests drive with.
     c2: String,
 }
 

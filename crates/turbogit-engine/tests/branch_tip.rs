@@ -17,6 +17,13 @@ use turbogit_engine_api::GitExecutor;
 
 const EPOCH: i64 = 1_700_000_000;
 
+// `git`, `commit` and `tip_repo` all stay local because `git_seed::git` takes no
+// per-call environment, and this file's runner needs it twice over: an author
+// (`ada`) that differs from the committer (`comm`) — no single `git config
+// user.*` can stand in — and a per-call `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`
+// pin, without which the asserted `old_tip.time.timestamp() == EPOCH` would be
+// asserting nothing.
+
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(args)

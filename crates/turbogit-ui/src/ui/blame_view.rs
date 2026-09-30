@@ -156,7 +156,7 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
 
     let lines = match verdict {
         Read::Fresh(lines) if lines.is_empty() => {
-            ui.label("No blame lines for this revision.");
+            widgets::empty_state(ui, "No blame lines for this revision.");
             if close {
                 state.ui.blame = None;
             }
@@ -164,7 +164,7 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
         }
         Read::Fresh(lines) => lines,
         Read::Empty => {
-            ui.label("No blame lines for this revision.");
+            widgets::empty_state(ui, "No blame lines for this revision.");
             if close {
                 state.ui.blame = None;
             }

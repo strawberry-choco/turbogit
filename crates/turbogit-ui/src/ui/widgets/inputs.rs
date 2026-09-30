@@ -22,6 +22,16 @@ pub fn search_input(ui: &mut Ui, placeholder: &str, buf: &mut String) -> Respons
     input_frame(ui, placeholder, buf, true)
 }
 
+/// Whether `haystack` contains `query`, case-insensitively — the one match
+/// rule behind every filter paired with [`search_input`].
+///
+/// The query is **already normalised** by the caller, and how far is a per-surface
+/// decision this helper must not make: three surfaces trim, two deliberately do not.
+/// Pass the query exactly as the surface built it.
+pub fn filter_matches(haystack: &str, query: &str) -> bool {
+    haystack.to_lowercase().contains(query)
+}
+
 fn input_frame(ui: &mut Ui, placeholder: &str, buf: &mut String, search_icon: bool) -> Response {
     let avail_w = ui.available_width();
     let icon_area = if search_icon {

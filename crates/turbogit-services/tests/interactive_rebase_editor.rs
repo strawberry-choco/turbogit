@@ -8,8 +8,12 @@
 #![allow(dead_code)]
 
 use std::path::Path;
+// Still needed, and deliberately: the two backup-ref assertions below assert
+// that a git invocation **fails**, the opposite contract from `git_seed::git`
+// — folding them in would panic on the success they are asking not to happen.
 use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{
     Commit, RebaseAction, RebasePlanEntry, RootId, Signature, SignatureState, VcsSettings,
@@ -21,20 +25,12 @@ use turbogit_services::reselection::{self, RewrittenAnchor};
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git").args(args).current_dir(dir).output();
-    let output = output.expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
 /// Append `text` to `<dir>/<name>`, stage, commit, return HEAD SHA.
-fn commit(dir: &Path, name: &str, text: &str) -> String {
+///
+/// **Not `git_seed::commit`, which overwrites** `path`; this appends, so
+/// `commits_touching_the_same_file_raise_the_conflict_caution` can give the second
+/// commit a sibling on the same path.
+fn append_commit(dir: &Path, name: &str, text: &str) -> String {
     let file = dir.join(name);
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -44,9 +40,9 @@ fn commit(dir: &Path, name: &str, text: &str) -> String {
     use std::io::Write;
     writeln!(f, "{text}").expect("appending work file");
     drop(f);
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-m", text]);
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", text]);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 fn engine() -> CliExecutor {
@@ -57,17 +53,21 @@ fn engine() -> CliExecutor {
 
 /// Repo on `main` (one base commit) with a `feature` branch three commits
 /// ahead, checked out — the interactive-editing subject.
+///
+/// **Kept local, not `git_seed::repo_with_history`**: this needs
+/// `a.txt`/`b.txt`/`c.txt` beside a `base.txt` and no remote, because two tests below
+/// assert *which paths* the replayed commits touch.
 fn plan_repo(tmp: &Path, name: &str) -> std::path::PathBuf {
     let repo = tmp.join(name);
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
-    commit(&repo, "base.txt", "base");
-    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
-    commit(&repo, "a.txt", "feature-1");
-    commit(&repo, "b.txt", "feature-2");
-    commit(&repo, "c.txt", "feature-3");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    append_commit(&repo, "base.txt", "base");
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
+    append_commit(&repo, "a.txt", "feature-1");
+    append_commit(&repo, "b.txt", "feature-2");
+    append_commit(&repo, "c.txt", "feature-3");
     repo
 }
 
@@ -254,7 +254,7 @@ fn commits_touching_the_same_file_raise_the_conflict_caution() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = plan_repo(tmp.path(), "conflict");
     // A fourth commit re-edits the file feature-1 touched.
-    let head = commit(&repo, "a.txt", "feature-1 again");
+    let head = append_commit(&repo, "a.txt", "feature-1 again");
 
     let plan = history_editor::build_plan(&engine(), &repo, "main").expect("plan");
     let _ = head;
@@ -283,8 +283,8 @@ fn disjoint_commits_raise_no_conflict_caution() {
 fn mixed_author_identities_raise_the_identity_caution() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = plan_repo(tmp.path(), "mixed");
-    run_git(&repo, &["config", "user.name", "Other"]);
-    commit(&repo, "d.txt", "feature-4");
+    git(&repo, &["config", "user.name", "Other"]);
+    append_commit(&repo, "d.txt", "feature-4");
 
     let plan = history_editor::build_plan(&engine(), &repo, "main").expect("plan");
     let cautions = history_editor::cautions(&engine(), &repo, &plan);
@@ -325,7 +325,7 @@ fn all_drop_plan(repo: &Path) -> Vec<RebasePlanEntry> {
 fn executing_writes_the_backup_ref_at_the_pre_rebase_head() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = plan_repo(tmp.path(), "backup");
-    let pre_head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let pre_head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
     let plan = all_drop_plan(&repo);
 
     history_editor::execute_with_backup(
@@ -337,9 +337,7 @@ fn executing_writes_the_backup_ref_at_the_pre_rebase_head() {
     )
     .expect("the guarded replay runs");
 
-    let backup = run_git(&repo, &["rev-parse", &backup_ref()])
-        .trim()
-        .to_string();
+    let backup = git(&repo, &["rev-parse", &backup_ref()]).trim().to_string();
     assert_eq!(
         backup, pre_head,
         "the backup ref names the pre-rebase state"
@@ -350,7 +348,7 @@ fn executing_writes_the_backup_ref_at_the_pre_rebase_head() {
 fn abort_to_backup_restores_the_pre_rebase_state() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = plan_repo(tmp.path(), "restore");
-    let pre_head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let pre_head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
     let plan = all_drop_plan(&repo);
     history_editor::execute_with_backup(
         &engine(),
@@ -361,14 +359,14 @@ fn abort_to_backup_restores_the_pre_rebase_state() {
     )
     .expect("the guarded replay runs");
     assert_ne!(
-        run_git(&repo, &["rev-parse", "HEAD"]).trim(),
+        git(&repo, &["rev-parse", "HEAD"]).trim(),
         pre_head,
         "the all-drop replay must actually have moved HEAD"
     );
 
     history_editor::abort_to_backup(&engine(), &repo).expect("abort restores");
     assert_eq!(
-        run_git(&repo, &["rev-parse", "HEAD"]).trim(),
+        git(&repo, &["rev-parse", "HEAD"]).trim(),
         pre_head,
         "HEAD is back at the pre-rebase tip"
     );
@@ -416,8 +414,8 @@ fn a_protected_branch_refuses_before_any_backup_ref_is_written() {
 fn base_of_is_the_selected_commit_s_first_parent() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = plan_repo(tmp.path(), "base-of");
-    let head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
-    let parent = run_git(&repo, &["rev-parse", "HEAD~1"]).trim().to_string();
+    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let parent = git(&repo, &["rev-parse", "HEAD~1"]).trim().to_string();
 
     let base = history_editor::base_of(&engine(), &repo, &head).expect("HEAD has a parent");
     assert_eq!(
@@ -445,26 +443,26 @@ fn the_estimate_counts_the_replayed_commits_at_three_seconds_each() {
 
 /// One revision's subject, as git records it.
 fn subject_of(dir: &Path, rev: &str) -> String {
-    run_git(dir, &["log", "-1", "--format=%s", rev])
+    git(dir, &["log", "-1", "--format=%s", rev])
         .trim()
         .to_string()
 }
 
 /// One revision's whole message, subject and body.
 fn message_of(dir: &Path, rev: &str) -> String {
-    run_git(dir, &["log", "-1", "--format=%B", rev])
+    git(dir, &["log", "-1", "--format=%B", rev])
 }
 
 /// One revision's author identity and author date — the two things a reword
 /// must survive untouched.
 fn author_of(dir: &Path, rev: &str) -> String {
-    run_git(dir, &["log", "-1", "--format=%an <%ae> %aI", rev])
+    git(dir, &["log", "-1", "--format=%an <%ae> %aI", rev])
         .trim()
         .to_string()
 }
 
 fn rev_parse(dir: &Path, rev: &str) -> String {
-    run_git(dir, &["rev-parse", rev]).trim().to_string()
+    git(dir, &["rev-parse", rev]).trim().to_string()
 }
 
 /// A plan row that rewords, carrying the message it will rewrite with.

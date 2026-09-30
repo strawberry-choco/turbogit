@@ -18,8 +18,9 @@
 //! same segment tuples [`turbogit_services::diff_engine::merge_segments`]
 //! builds structurally from merge regions.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
+use test_support::git_seed::git;
 use turbogit_domain::model::{DiffOpts, Patch, PatchHeaderLine, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -27,22 +28,6 @@ use turbogit_services::conflict;
 use turbogit_services::diff_engine;
 
 // ---------------------------------------------------------------- helpers --
-
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
 
 struct Repo {
     path: PathBuf,
@@ -52,6 +37,10 @@ struct Repo {
 
 /// Create an initialized temp repository with one base commit on the default
 /// branch and repo-local user config so commits work headlessly.
+/// Local builder, not a `git_seed` recipe: `init -q` with **no `-b main`**, so
+/// the default branch is whatever `init.defaultBranch` says (`master` on a
+/// stock machine) where every recipe pins `main`, and the base commit is
+/// `base.txt`, not `README.md`.
 fn temp_repo(name: &str) -> Repo {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join(name);

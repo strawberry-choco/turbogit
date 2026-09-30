@@ -11,43 +11,13 @@
 //! about code that does not exist yet: a second call site fails here, in the
 //! layer that added it, with the file and line named.
 
-use std::path::{Path, PathBuf};
-
-/// Every `crates/*/src/**/*.rs`, with the crate it belongs to.
-fn production_sources(root: &Path) -> Vec<(String, PathBuf)> {
-    let mut out = Vec::new();
-    let crates = root.join("crates");
-    for crate_dir in std::fs::read_dir(&crates)
-        .expect("crates/")
-        .flatten()
-        .filter(|e| e.path().is_dir())
-    {
-        let src = crate_dir.path().join("src");
-        if !src.is_dir() {
-            continue;
-        }
-        let krate = crate_dir.file_name().to_string_lossy().into_owned();
-        collect_rs(&src, &krate, &mut out);
-    }
-    out.sort_by(|a, b| a.1.cmp(&b.1));
-    out
-}
-
-fn collect_rs(dir: &Path, krate: &str, out: &mut Vec<(String, PathBuf)>) {
-    for entry in std::fs::read_dir(dir).expect("read_dir").flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rs(&path, krate, out);
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push((krate.to_string(), path));
-        }
-    }
-}
+use std::path::Path;
+use std::path::PathBuf;
 
 /// Call sites of the port's raw escape, as `crate/file.rs:line`.
 fn raw_call_sites(root: &Path) -> Vec<String> {
     let mut sites = Vec::new();
-    for (krate, path) in production_sources(root) {
+    for (krate, path) in test_support::srcscan::crate_sources(root) {
         // Only the crates that *use* the port. The engine crates own the two
         // implementations — the CLI adapter execs git, which is the whole point
         // of it — and `test-support`'s wrapper forwards every method it

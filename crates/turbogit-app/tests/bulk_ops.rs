@@ -8,28 +8,18 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use test_support::git_seed::git;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::UpdateMethod;
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan, SkipReason};
 
-/// Run `git <args>` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Create an initialized temp repository with one base commit on `main`
 /// plus an `origin` remote so upstream reads can be exercised.
+/// Local repo builder, deliberately NOT `test_support::git_seed::repo_with_origin`.
+///
+/// The recipe commits `README.md`; this suite's change lists and diff panes name the
+/// file they changed, so the base commit has to be `base.txt`. A `base.txt` recipe
+/// would be `test-support` work, not this lane's.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);

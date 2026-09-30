@@ -7,41 +7,16 @@
 //! rest of the cascade fleet (issue 09's `run_bulk`).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::{CommitId, MultiRootManager, RootId};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::commit_across::{PlanRow, plan, run_one};
 use turbogit_services::multi_root::{build_root, register};
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
+use test_support::git_seed::{git as run_git, repo_with_one_commit as fresh_repo};
 
-/// Fresh repo on `main` with local identity and one committed file. Returns
-/// the repo path.
-fn fresh_repo(tmp: &Path, name: &str) -> PathBuf {
-    let repo = tmp.join(name);
-    std::fs::create_dir_all(&repo).expect("repo dir");
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
-    std::fs::write(repo.join("seed.txt"), "seed\n").expect("seed");
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "seed"]);
-    repo
-}
+// `git_seed::repo_with_one_commit` is these same steps, so that recipe owns
+// them; only the seeded file and message differ, and nothing here reads either.
 
 /// Write `content` to `path` and `git add` it; leaves the file staged but
 /// uncommitted.

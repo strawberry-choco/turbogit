@@ -16,7 +16,7 @@ use std::sync::Arc;
 use egui::Galley;
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Frame, Key, Layout, Margin, Panel, Pos2,
-    Rect, RichText, Sense, Stroke, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Rect, RichText, Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 
 use super::icons::{self, Icon};
@@ -419,37 +419,15 @@ fn switch_tab(state: &mut AppState, tab: Tab) {
 
 // --- Shared painting helpers ---------------------------------------------------
 
-enum Edge {
-    Top,
-    Bottom,
-}
-
-/// 1px LINE border along one edge of a rect, without affecting layout
-/// (spec §6.2: bottom strokes on the repo header and tab strip, top
-/// stroke on the status bar, right stroke on the rail).
-fn paint_edge_line_at(ui: &Ui, rect: Rect, edge: Edge) {
-    let stroke = Stroke::new(1.0, Palette::LINE);
-    let painter = ui.painter();
-    match edge {
-        Edge::Bottom => painter.line_segment(
-            [
-                Pos2::new(rect.left(), rect.bottom() - 0.5),
-                Pos2::new(rect.right(), rect.bottom() - 0.5),
-            ],
-            stroke,
-        ),
-        Edge::Top => painter.line_segment(
-            [
-                Pos2::new(rect.left(), rect.top() + 0.5),
-                Pos2::new(rect.right(), rect.top() + 0.5),
-            ],
-            stroke,
-        ),
-    };
-}
-
-fn paint_edge_line(ui: &Ui, edge: Edge) {
-    paint_edge_line_at(ui, ui.max_rect(), edge);
+/// 1px `LINE` border along one edge of the shell's own `ui`, without affecting
+/// layout (spec §6.2: bottom stroke on the tab strip, top stroke on the status
+/// bar).
+///
+/// A thin wrapper over the shared [`widgets::edge_rule`], which owns the
+/// half-pixel offset that makes a 1px stroke land in one pixel row — the offset
+/// a shell-local copy would eventually lose.
+fn paint_edge_line(ui: &Ui, edge: widgets::Edge) {
+    widgets::edge_rule(ui.painter(), ui.max_rect(), edge, Palette::LINE);
 }
 
 // --- Tab strip ---------------------------------------------------------------------
@@ -500,7 +478,7 @@ const SHELL_TABS: [(Tab, Icon, &str); 5] = [
 fn render_tab_strip(ui: &mut Ui, state: &mut AppState) {
     let width = ui.available_width();
     let (strip, _) = ui.allocate_exact_size(Vec2::new(width, TAB_STRIP_HEIGHT), Sense::hover());
-    paint_edge_line_at(ui, strip, Edge::Bottom);
+    widgets::edge_rule(ui.painter(), strip, widgets::Edge::Bottom, Palette::LINE);
 
     let font = FontId::new(TAB_TEXT, FontFamily::Proportional);
     let mut x = strip.left() + 4.0;
@@ -691,7 +669,7 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
                     );
                 });
             });
-            paint_edge_line(ui, Edge::Top);
+            paint_edge_line(ui, widgets::Edge::Top);
         });
 }
 

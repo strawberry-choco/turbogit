@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+use test_support::git_seed::git;
 use turbogit_app::persistence::{UiPersist, load_ui_state, save_ui_state};
 use turbogit_app::pinned_views::{PinnedView, next_name, selection_from_view};
 use turbogit_app::state::AppState;
@@ -106,12 +107,9 @@ fn pinning_the_selection_saves_a_named_view_and_persists() {
         ["config", "user.name", "T"].as_slice(),
         ["commit", "-q", "--allow-empty", "-m", "init"].as_slice(),
     ] {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&repo_dir)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?} failed");
+        // An EMPTY commit with no file in it is a shape no `git_seed` recipe
+        // produces, and this suite only needs a root to select.
+        let _ = git(&repo_dir, args);
     }
 
     let mut state = AppState::for_roots(base.path(), std::slice::from_ref(&repo_dir));

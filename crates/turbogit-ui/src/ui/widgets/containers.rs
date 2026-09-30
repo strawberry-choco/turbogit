@@ -1,8 +1,8 @@
 //! Dialog, card, tool-window, feedback-container, and commit-detail composition.
 
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Frame, InnerResponse, Layout, Margin, Pos2,
-    Rect, RichText, Sense, Stroke, Ui, Vec2,
+    Align, Color32, CornerRadius, FontFamily, FontId, Frame, InnerResponse, Layout, Margin,
+    Painter, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2,
 };
 
 use super::chips::BADGE_TINT;
@@ -65,6 +65,45 @@ pub(crate) fn footer_rule(ui: &mut Ui) {
         .rect_filled(rect, CornerRadius::ZERO, Palette::RULE_FOOTER);
 }
 
+/// Which edge of a rect a hairline rule runs along. The set is closed: a division
+/// *inside* a region is a placed rule, not an edge.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Edge {
+    Bottom,
+    Top,
+    Right,
+}
+
+/// The shared hairline-edge rule: a 1px line along one edge of `rect`, in `ink`,
+/// with **no layout effect**.
+///
+/// The `±0.5` offset is the whole correctness argument, and why this is one function
+/// rather than a shape a caller copies: a 1px stroke centred on an integer coordinate
+/// straddles two device pixels and paints both at half coverage, so a rule that looks
+/// right in the geometry is blurred. The offset lands the centre on a half coordinate,
+/// which at any integer `pixels_per_point` falls inside exactly one pixel row.
+///
+/// `ink` is the caller's: the named hairline roles in `theme` decide which tone an edge
+/// wears. `docs/design-system-roles.md` records a structural edge wearing
+/// [`Palette::LINE`] as a known mismatch — do not quietly correct it here.
+pub fn edge_rule(painter: &Painter, rect: Rect, edge: Edge, ink: Color32) {
+    let (a, b) = match edge {
+        Edge::Bottom => (
+            Pos2::new(rect.left(), rect.bottom() - 0.5),
+            Pos2::new(rect.right(), rect.bottom() - 0.5),
+        ),
+        Edge::Top => (
+            Pos2::new(rect.left(), rect.top() + 0.5),
+            Pos2::new(rect.right(), rect.top() + 0.5),
+        ),
+        Edge::Right => (
+            Pos2::new(rect.right() - 0.5, rect.top()),
+            Pos2::new(rect.right() - 0.5, rect.bottom()),
+        ),
+    };
+    painter.line_segment([a, b], Stroke::new(1.0, ink));
+}
+
 /// Dialog footer: top [`Palette::RULE_FOOTER`] rule with right-aligned action
 /// buttons (§7.1). The rule itself is [`footer_rule`]'s, shared with the other
 /// modal bodies that rule themselves off from an action slot without owning a
@@ -81,7 +120,8 @@ pub fn dialog_footer<R>(ui: &mut Ui, buttons: impl FnOnce(&mut Ui) -> R) -> Inne
 /// only under [`CardFrame::bordered`]. A named constant because egui folds the
 /// stroke width into the frame's inner margin, so this number is also the
 /// number of points of padding a bordered card gains on every side.
-pub const BORDER_HAIRLINE_WIDTH: f32 = 1.0;
+/// Crate-internal: `commit_window.rs` spells its own divider width on purpose.
+const BORDER_HAIRLINE_WIDTH: f32 = 1.0;
 
 /// The two tones a card frame may wear: the fill it paints with, which a
 /// bordered and an unbordered card choose from the same two rungs.
@@ -94,13 +134,18 @@ pub enum CardSurface {
     Raised,
 }
 
-/// How a card claims its width inside its parent. `Eq` is not derivable here
+/// How a card claims its space inside its parent. `Eq` is not derivable here
 /// because the pinned width is an `f32`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum CardSizing {
     /// Span the parent's full available width, so a card reads as a region
     /// rather than hugging its content.
     Stretch,
+    /// Span the parent's full available width **and** height, for a card that *is* a
+    /// pane. The height must be reserved **before** the contents run: a min-height
+    /// claim measured afterwards comes from the content, so a tall body pushes the
+    /// surface past the region it was meant to fill.
+    StretchHeight,
     /// Pin a minimum width and let the content grow past it — for a card that
     /// floats above its parent (an overlay) rather than filling a pane.
     MinWidth(f32),
@@ -200,6 +245,13 @@ impl CardFrame {
             ..self
         }
     }
+
+    pub fn stretch_height(self) -> Self {
+        Self {
+            sizing: CardSizing::StretchHeight,
+            ..self
+        }
+    }
 }
 
 /// Card surface: the containment every region gets, so neighbouring controls
@@ -213,8 +265,9 @@ impl CardFrame {
 /// only way to get a hairline. The body lays out inside the frame's margin
 /// and, under the default [`CardSizing::Stretch`], is stretched to the
 /// caller's full available width, so a card spans its pane rather than hugging
-/// its content. The returned rect is the card's outer edge, which is what a
-/// caller capping a scroll area against its own container needs (risk R1).
+/// its content; a card that *is* a pane asks for [`CardSizing::StretchHeight`],
+/// which fills the region in both axes. The returned rect is the card's outer edge,
+/// which is what a caller capping a scroll area against its own container needs.
 pub fn card<R>(
     ui: &mut Ui,
     frame: CardFrame,
@@ -234,11 +287,28 @@ pub fn card<R>(
         card = card.stroke(Stroke::new(BORDER_HAIRLINE_WIDTH, Palette::LINE));
     }
     card.show(ui, |ui| {
+        // Width is set **before** the contents run: `set_min_width` grows the Ui's
+        // min rect, so afterwards it is a no-op. `StretchHeight`'s height is read
+        // first and applied last.
         match frame.sizing {
-            CardSizing::Stretch => ui.set_width(ui.available_width()),
-            CardSizing::MinWidth(w) => ui.set_min_width(w),
+            CardSizing::Stretch => {
+                ui.set_width(ui.available_width());
+                add_contents(ui)
+            }
+            CardSizing::StretchHeight => {
+                let height = ui.available_height();
+                ui.set_width(ui.available_width());
+                let out = add_contents(ui);
+                // `.max(0.0)`: contents taller than the region are the inner
+                // scroller's overflow to handle, not the card's to shrink.
+                ui.add_space((height - ui.min_rect().height()).max(0.0));
+                out
+            }
+            CardSizing::MinWidth(w) => {
+                ui.set_min_width(w);
+                add_contents(ui)
+            }
         }
-        add_contents(ui)
     })
 }
 

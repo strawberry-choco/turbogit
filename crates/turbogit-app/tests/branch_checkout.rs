@@ -14,6 +14,10 @@ use std::process::Command;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::BranchKind;
 
+/// A `git` runner that pins the commit identity on every invocation, and deliberately
+/// NOT `test_support::git_seed::git`, which takes no per-call env. This fixture's
+/// commits carry no repo-local `user.*` of their own, so without the pin they would
+/// commit as whatever the machine's global git config names.
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -87,6 +91,8 @@ fn checking_out_a_remote_branch_tracks_it() {
     );
 }
 
+/// `git` for the one call whose OUTPUT is the assertion: it trims stdout and makes no
+/// success check of its own, so it is deliberately not `test_support::git_seed::git`.
 fn git_stdout(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args(args)

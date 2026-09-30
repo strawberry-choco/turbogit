@@ -8,26 +8,30 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{GitBackend, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::build_executor;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
+// `conflicting_repo` stays local, deliberately NOT `repo_with_conflict`: this one is
+// parameterised over `(ours, theirs, ancestor)` and its `None` arm is an add/add
+// conflict, which the recipe cannot express — its base is a real commit.
+
+/// `git merge <args>` expected to CONFLICT: the non-zero exit is the fixture, so this
+/// is the inverse of `test_support::git_seed::git`, which asserts success. The two
+/// `GIT_AUTHOR_*` vars it sets are inert: a conflicting merge writes no commit.
+fn git_merge_that_must_conflict(repo: &Path, args: &[&str]) {
+    let status = Command::new("git")
         .args(args)
-        .current_dir(dir)
+        .current_dir(repo)
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
         .output()
         .expect("git must be on PATH");
     assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
+        !status.status.success(),
+        "the fixture merge should conflict, and it did not"
     );
-    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 fn exec() -> std::sync::Arc<dyn GitExecutor> {
@@ -75,17 +79,7 @@ fn conflicting_repo(
     git(&repo, &["commit", "-q", "-m", "ours"]);
 
     // The merge must fail — that is the state under test.
-    let status = Command::new("git")
-        .args(["merge", "theirs"])
-        .current_dir(&repo)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        !status.status.success(),
-        "the fixture merge should conflict, and it did not"
-    );
+    git_merge_that_must_conflict(&repo, &["merge", "theirs"]);
     (tmp, repo)
 }
 

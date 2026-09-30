@@ -9,40 +9,19 @@
 
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
-use test_support::harness::{assert_painted, settle};
+use test_support::git_seed::{git, repo_with_one_commit};
+use test_support::harness::{assert_painted, settle, shell_harness_over_unstyled};
 use turbogit_app::bulk_history::{BulkRunRecord, RepoOutcome, RepoRecord};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 use turbogit_services::bulk_ops::BulkOp;
 
-/// Run `git <args>` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git invocation");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf-8 stdout")
-}
-
 /// Create an initialized temp repository with one base commit on `main`.
+///
+/// These are `git_seed::repo_with_one_commit`'s steps, so that recipe owns them;
+/// only the seeded file differs and nothing in this file reads it.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q", "-b", "main"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("base.txt"), "base\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "init"]);
-    path
+    repo_with_one_commit(parent, name)
 }
 
 /// A two-repo project with both repos registered.
@@ -57,16 +36,14 @@ fn two_repo_project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
 }
 
 /// Headless harness driving the full app UI (mirrors `cascade_branch`).
+///
+/// Unstyled: the painted history labels are read at the default face, and the
+/// embedded JetBrains Mono would lay them out in a different one.
+///
+/// `max_steps` is 1024, not kittest's default of 4, which `Harness::run`
+/// panics past.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(egui::vec2(1280.0, 800.0));
-    h
+    shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
 
 fn repo_record(root: &Path, name: &str, outcome: RepoOutcome) -> RepoRecord {

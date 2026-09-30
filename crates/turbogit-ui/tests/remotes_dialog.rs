@@ -22,7 +22,8 @@ use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable as _};
-use test_support::harness::filled_rects;
+use test_support::git_seed::git;
+use test_support::harness::{KITTEST_DEFAULT_BOX, filled_rects, shell_harness_over_unstyled};
 use test_support::{RecordedCall, RecordingExecutor};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, VcsSettings};
@@ -30,38 +31,20 @@ use turbogit_engine::cli::CliExecutor;
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// Append a line to `file.txt`, stage, commit.
+/// Write `body` to `<repo>/file.txt` as a WHOLE file, stage, commit.
 fn commit(dir: &Path, msg: &str) {
     let file = dir.join("file.txt");
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file)
-        .expect("opening work file");
-    use std::io::Write;
-    writeln!(f, "{msg}").expect("appending work file");
-    drop(f);
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
+    let mut body = std::fs::read_to_string(&file).unwrap_or_default();
+    body.push_str(msg);
+    body.push('\n');
+    test_support::git_seed::commit(dir, "file.txt", &body, msg);
 }
 
 /// A repo on `main` with local identity and one committed file; returns the
 /// repo path.
+///
+/// Kept local rather than `git_seed::repo_with_one_commit`: the seeded commit is
+/// `file.txt` = "seed\n" and the tests build on that file's presence.
 fn fresh_repo(tmp: &Path, name: &str) -> PathBuf {
     let repo = tmp.join(name);
     std::fs::create_dir_all(&repo).expect("repo dir");
@@ -103,18 +86,22 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Unstyled, and that is load-bearing: the footer geometry assertions are
+/// measured against egui's default face, not the production token set. The
+/// `max_steps` argument is likewise required — kittest defaults to 4 and
+/// `Harness::run()` panics past the budget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    )
+    shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
 /// Step frames until painted button geometry is stable for 3 consecutive
 /// frames.
+///
+/// Kept local, and NOT `harness::settle_quiet`, which fingerprints the frame's
+/// *painted text*: this suite's assertions are about where buttons are, and
+/// painted-text stability says nothing about a button that has not moved. This
+/// fingerprints each Button node's `(label, rect)`.
 fn settle(h: &mut Harness<'_, AppState>) {
     let mut stable = 0;
     let mut prev = String::new();

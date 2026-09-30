@@ -13,10 +13,11 @@
 //! behaviour under a constraint the design never had.
 
 use egui_kittest::Harness;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use test_support::git_seed::git;
+use test_support::harness::shell_harness_over;
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, Submodule, SubmoduleState, Worktree};
-use turbogit_ui::theme::{configure_style, install_fonts};
 
 /// The box every page is captured at, in points: the frame size.
 ///
@@ -27,40 +28,15 @@ use turbogit_ui::theme::{configure_style, install_fonts};
 /// number in the call site and the number in the commit message agree.
 const CAPTURE_SIZE: egui::Vec2 = egui::vec2(1440.0, 900.0);
 
-/// Run `git` in `repo`, asserting success.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).to_string()
-}
-
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut fonts_installed = false;
-    let mut h = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(CAPTURE_SIZE);
-    h
+    shell_harness_over(state, CAPTURE_SIZE)
 }
 
+/// Run **exactly eight** frames.
+///
+/// Not either shared settle: a capture is a photograph of one frame, and which
+/// frame is the whole content of the artifact. `settle` would run ten steps or
+/// two, so two runs could photograph different frames and nothing would notice.
 fn settle(h: &mut Harness<'_, AppState>) {
     for _ in 0..8 {
         h.step();

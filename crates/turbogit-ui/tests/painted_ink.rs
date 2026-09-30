@@ -29,8 +29,8 @@
 use egui::epaint::TextShape;
 use egui::{Color32, RichText, Shape};
 use egui_kittest::Harness;
-use test_support::harness::{painted_galleys, painted_ink, settle};
-use turbogit_ui::theme::{self, Palette};
+use test_support::harness::{painted_galleys, painted_ink, settle, widget_harness};
+use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::widgets::{ButtonVariant, WidgetState, ghost_button, primary_button};
 
 /// A control painted through the override path, whose state-table ink is
@@ -50,33 +50,18 @@ const LAID_OUT_INK: Color32 = Palette::INK_3;
 /// A harness rendering two override-painted shared controls beside one label
 /// painted with no override.
 ///
-/// Setup mirrors production (`app.rs`): dark-only tokens every frame plus
-/// embedded JetBrains Mono installed once.
+/// The 480×220 box the pixel assertions below were measured in, stated here
+/// rather than inherited from kittest's 800×600 default.
 fn ink_harness() -> Harness<'static, ()> {
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                // Override-painted: `widgets::controls` measures the label in
-                // `Color32::WHITE`, then paints it through
-                // `galley_with_override_text_color` with the resolved state ink.
-                primary_button(ui, None, PRIMARY_LABEL);
-                ghost_button(ui, None, GHOST_LABEL);
-                // Not override-painted: `Ui::label` paints through
-                // `Painter::galley`, whose colour argument is only a fallback
-                // for `PLACEHOLDER` spans, so the ink here is the laid-out one.
-                ui.label(RichText::new(LAID_OUT_LABEL).color(LAID_OUT_INK));
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(480.0, 220.0));
-    harness
+    widget_harness(egui::vec2(480.0, 220.0), |ui| {
+        // Override-painted: `widgets::controls` measures the label in
+        // `Color32::WHITE`, then repaints it through the override helper.
+        primary_button(ui, None, PRIMARY_LABEL);
+        ghost_button(ui, None, GHOST_LABEL);
+        // Not override-painted: `Ui::label` paints through `Painter::galley`,
+        // whose colour argument is only a fallback for `PLACEHOLDER` spans.
+        ui.label(RichText::new(LAID_OUT_LABEL).color(LAID_OUT_INK));
+    })
 }
 
 /// The painted text shape whose string is exactly `needle`, so a test can

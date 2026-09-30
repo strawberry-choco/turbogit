@@ -6,26 +6,16 @@
 
 use std::path::Path;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{GitBackend, VcsSettings};
 use turbogit_engine::build_executor;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// `fixture_repo` stays local, deliberately NOT `repo_with_one_commit`: it
+// tracks `f.txt` at "one\n", and
+// `the_index_side_of_a_path_answers_its_staged_bytes_not_the_worktree` reads
+// `show_file_bytes(..., "HEAD", "f.txt")` expecting `b"one\n"` — the recipe
+// tracks `README.md`, so converting would silently repoint the assertion at a
+// file this suite never mentions.
 
 fn fixture_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();

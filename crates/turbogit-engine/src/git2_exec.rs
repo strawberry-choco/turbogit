@@ -18,8 +18,8 @@
 //! application and intent-to-add — libgit2 1.9 (as bound by git2 0.21) has no
 //! equivalent for either.
 
-use crate::cli::CliExecutor;
-use git2::{ApplyLocation, BranchType, ErrorCode, IndexAddOption, StashFlags};
+use crate::cli::{CliExecutor, short_ref};
+use git2::{ApplyLocation, BranchType, ErrorCode, StashFlags};
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
@@ -52,8 +52,9 @@ fn err(e: git2::Error) -> TgError {
 }
 
 /// Repo-relative, forward-slash path form libgit2 expects for index paths.
+/// A libgit2-named alias for [`forward_slash_path`], not a second spelling.
 fn rel(p: &Path) -> String {
-    p.to_string_lossy().replace('\\', "/")
+    forward_slash_path(p)
 }
 
 /// Is `tip` fully merged into `base`? Mirrors the reachability check behind
@@ -69,19 +70,15 @@ fn merged_into(
 
 /// The branch tip as the model carries it (issue 02): short hash, subject,
 /// author, committer time — read from a commit already peeled by the listing.
+/// Shape shared with the CLI adapter's `for-each-ref` loop.
 fn branch_tip_from_commit(c: &git2::Commit<'_>) -> BranchTip {
-    let full = c.id().to_string();
-    let short_hash = full.chars().take(7).collect();
-    let message = c.summary().ok().flatten().unwrap_or_default().to_string();
-    let author = c.author().name().unwrap_or_default().to_string();
-    let time = chrono::DateTime::from_timestamp(c.time().seconds(), 0)
-        .expect("git commits are post-epoch");
-    BranchTip {
-        short_hash,
-        message,
-        author,
-        time,
-    }
+    BranchTip::from_parts(
+        short_commit_ref(&c.id().to_string()),
+        c.summary().ok().flatten().unwrap_or_default(),
+        c.author().name().unwrap_or_default(),
+        chrono::DateTime::from_timestamp(c.time().seconds(), 0)
+            .expect("git commits are post-epoch"),
+    )
 }
 
 /// A local branch's tracking ref and whether it is gone (issue 32), read
@@ -97,10 +94,9 @@ fn tracking_state(repo: &git2::Repository, name: &str) -> Option<(Upstream, bool
     let config = repo.config().ok()?;
     let remote = config.get_string(&format!("branch.{name}.remote")).ok()?;
     let merge = config.get_string(&format!("branch.{name}.merge")).ok()?;
-    let branch = merge
-        .strip_prefix("refs/heads/")
-        .unwrap_or(&merge)
-        .to_string();
+    // This site's own call, mirroring `branch_upstream` in `cli.rs` — see
+    // `short_ref` for why the helper cannot make it.
+    let branch = short_ref(&merge).unwrap_or(&merge).to_string();
     let upstream = Upstream { remote, branch };
     let probe = if upstream.remote == "." {
         format!("refs/heads/{}", upstream.branch)
@@ -165,6 +161,13 @@ fn commit_to_commit(repo: &git2::Repository, commit: &git2::Commit<'_>, root: &R
 /// libgit2 can see a commit's signature but never verify it (issue 17):
 /// presence maps to `Unverified`, absence to `Unsigned` — never to a
 /// claimed-good state.
+///
+/// **Do not merge this with `parse_signature_state` in `cli.rs`.** Two arms here
+/// against four there is the design: this backend has no verified state to
+/// report, and `SignatureState::Good` is reachable from exactly one backend
+/// because exactly one backend can verify. Adding `Good` here would make libgit2
+/// claim a signature is good when it verified nothing; deleting `Bad` there would
+/// stop that adapter reporting a bad signature.
 fn signature_state_of(repo: &git2::Repository, oid: &git2::Oid) -> SignatureState {
     match repo.extract_signature(oid, Some("gpgsig")) {
         Ok(_) => SignatureState::Unverified,
@@ -325,7 +328,7 @@ impl GitExecutor for Git2Executor {
                 return Ok(head
                     .symbolic_target()
                     .map_err(err)?
-                    .and_then(|t| t.strip_prefix("refs/heads/"))
+                    .and_then(short_ref)
                     .map(|s| s.to_string()));
             }
             Err(e) => return Err(err(e)),
@@ -408,6 +411,11 @@ impl GitExecutor for Git2Executor {
                 // Typechange and anything libgit2 reports that has no
                 // CLI name-status letter for it surfaces as Modified to
                 // match `parse_name_status_line`'s fallthrough in `cli.rs`.
+                //
+                // Do NOT merge this with `parse_name_status_line`: this asks libgit2
+                // what it saw, that reads a string git printed. Merging would couple
+                // one backend to the other, and `change_stats.rs` drives both against
+                // the same fixtures — it is where it fails.
                 _ => (ChangeStatus::Modified, None),
             };
             changes.push(Change {
@@ -439,6 +447,10 @@ impl GitExecutor for Git2Executor {
         // two lists can never disagree about which paths a commit touched.
         // A binary delta emits no line events, so its row keeps `None` counts —
         // the same answer git's two dashes give the CLI parser.
+        //
+        // Do NOT merge this with `parse_numstat` in `cli.rs`: there is no shared code
+        // to extract, because one implementation does not exist upstream — that one
+        // parses text git printed, this one is all libgit2 leaves.
         let repo = self.open(root)?;
         let diff = commit_tree_diff(&repo, commit)?;
         let rows = std::cell::RefCell::new(Vec::<FileStat>::new());
@@ -1066,18 +1078,6 @@ impl GitExecutor for Git2Executor {
                 index.remove_path(Path::new(&spec)).map_err(err)?;
             }
         }
-        index.write().map_err(err)?;
-        Ok(())
-    }
-
-    fn add_all(&self, root: &Path) -> TgResult<()> {
-        let repo = self.open(root)?;
-        let mut index = repo.index().map_err(err)?;
-        // DEFAULT skips ignored files like `git add -A`; deletions are picked
-        // up too (the index is updated to match the working tree).
-        index
-            .add_all(["*"], IndexAddOption::DEFAULT, None)
-            .map_err(err)?;
         index.write().map_err(err)?;
         Ok(())
     }

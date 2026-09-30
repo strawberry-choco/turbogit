@@ -8,27 +8,15 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use test_support::git_seed::git;
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::{BulkOp, BulkPlan};
 use turbogit_services::bulk_run::RowState;
 
-/// Run `git <args>` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Create an initialized temp repository with one base commit on `main`.
+/// Kept local, not `test_support::git_seed::repo_with_one_commit`: the base
+/// commit is `base.txt`, not `README.md`, and the change list, diff pane and
+/// branch/HEAD rows in this suite name the file they changed.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);

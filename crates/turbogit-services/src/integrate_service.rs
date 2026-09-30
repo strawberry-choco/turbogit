@@ -1,8 +1,6 @@
 //! Integration service: high-level merge / rebase / cherry-pick orchestration
 //! plus abort/continue and a "smart merge" that stashes a dirty tree first.
 
-#![allow(dead_code)]
-
 use crate::sync_service::is_protected;
 use std::path::Path;
 use turbogit_domain::error::{TgError, TgResult};
@@ -308,11 +306,6 @@ pub fn revert_commit(
 /// Abort an in-progress `op` (merge / rebase / cherry-pick).
 pub fn abort(vcs: &dyn GitExecutor, root: &Path, op: &str) -> TgResult<()> {
     vcs.abort(root, op)
-}
-
-/// Continue an in-progress `op` after resolving conflicts.
-pub fn cont(vcs: &dyn GitExecutor, root: &Path, op: &str) -> TgResult<()> {
-    vcs.continue_op(root, op)
 }
 
 /// Merge `target` while automatically stashing a dirty tree first.

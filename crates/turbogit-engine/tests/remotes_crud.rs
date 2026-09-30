@@ -5,27 +5,24 @@
 //! `GitExecutor` port contract against the real CLI adapter over temporary
 //! repositories.
 
+use test_support::git_seed::git;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
-/// Fresh initialized repo on `main` with local identity configured.
+// `temp_repo` stays local because no `git_seed` recipe produces a commit-free
+// repository: `set_branch_upstream_sets_the_tracking_branch` makes its own first
+// commit, so `refs/heads/main` exists before anything tracks it.
+
+/// Fresh initialized repo on `main` with local identity configured, and NO
+/// commits.
 fn temp_repo(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join(tag);
     std::fs::create_dir_all(&repo).expect("repo dir");
-    for args in [
-        ["init", "-q", "-b", "main"].as_slice(),
-        ["config", "user.email", "test@example.com"].as_slice(),
-        ["config", "user.name", "Test"].as_slice(),
-    ] {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&repo)
-            .output()
-            .expect("spawning git");
-        assert!(out.status.success(), "git {args:?} failed");
-    }
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     (tmp, repo)
 }
 
@@ -33,20 +30,6 @@ fn executor() -> CliExecutor {
     CliExecutor {
         settings: VcsSettings::default(),
     }
-}
-
-/// Run `git` inside `repo` and assert success.
-fn git(repo: &std::path::Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("spawning git");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {:?}",
-        out.stderr
-    );
 }
 
 #[test]
@@ -200,19 +183,24 @@ fn set_branch_upstream_sets_the_tracking_branch() {
         .set_branch_upstream(&repo, "main", "origin/main")
         .expect("set upstream succeeds");
     assert_eq!(
-        config(&repo, "branch.main.remote").as_deref(),
+        config_or_absent(&repo, "branch.main.remote").as_deref(),
         Some("origin"),
         "remote tracked"
     );
     assert_eq!(
-        config(&repo, "branch.main.merge").as_deref(),
+        config_or_absent(&repo, "branch.main.merge").as_deref(),
         Some("refs/heads/main"),
         "merge ref tracked"
     );
 }
 
 /// Read a single git config value, or `None` when unset.
-fn config(repo: &std::path::Path, key: &str) -> Option<String> {
+///
+/// A third opposite contract, and not the same one as a failing command: here the
+/// exit status **is** the value. `git config --get` exits 1 precisely when the key is
+/// absent, which is what this suite reads back — asserting success would fail every
+/// unset key, and discarding the status would report an empty string, not `None`.
+fn config_or_absent(repo: &std::path::Path, key: &str) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["config", "--get", key])
         .current_dir(repo)

@@ -21,7 +21,10 @@ use std::time::Duration;
 use egui::Key;
 use egui_kittest::{Harness, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
-use test_support::harness::{assert_not_painted, assert_painted, galley_origin, painted_text};
+use test_support::harness::{
+    assert_not_painted, assert_painted, galley_origin, painted_text, settle_quiet,
+    shell_harness_over,
+};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::branch_widget;
@@ -30,6 +33,12 @@ use turbogit_ui::ui::branch_widget;
 
 /// Run `git <args>` in `dir`, panicking on failure. Identity comes from env so
 /// no per-repo config calls are needed.
+///
+/// This runner stays local for the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` injection:
+/// `git_seed::git` cannot express per-call env, and here the env is not
+/// belt-and-braces — no repository configures `user.*`, so these four variables are the
+/// ONLY source of identity for the seeded commits. `commit_pinned` below also pins
+/// `GIT_*_DATE` per call, and the `3w` stale badge is measured against those epochs.
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -89,47 +98,9 @@ fn two_repo_project() -> (TempDir, PathBuf) {
 
 // --- harness -----------------------------------------------------------------
 
-/// Harness over a real repo-backed project. Setup mirrors production app.rs:
-/// event pump first, then dark-only tokens + embedded fonts once, then render.
+/// The shared `shell_harness_over` at this suite's 1024×768 box.
 fn branches_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
-    let state = AppState::new(project_dir);
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            state.drain_events();
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    harness
-}
-
-/// Step frames until painted output is stable for 3 consecutive frames
-/// (tolerates slow background git subprocesses, unlike a fixed frame count).
-fn settle_quiet(harness: &mut Harness<'_, AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let fp = format!("{:?}", painted_text(harness));
-        if fp == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = fp;
-        }
-    }
-    panic!("branches layout did not settle within 300 frames");
+    shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
 /// Step frames until `pred` holds on public state (async op completion).
