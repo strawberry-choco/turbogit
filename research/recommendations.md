@@ -2,8 +2,10 @@
 
 > Translates the evidence (`storm-session.md`, `feature-matrix.csv`, `ux-patterns.md`,
 > `perf-notes.md`, `gap-analysis.md`) into a build plan grounded in TurboGit's **Rust +
-> egui** reality (`docs/diff-capabilities-research-plan.md §9`). Each recommendation cites
-> the evidence and the existing project primitive it reuses.
+> egui** reality ([ADR-0014](../docs/adr/0014-diff-virtualization-show-rows-cached-display-model.md),
+> [ADR-0015](../docs/adr/0015-non-text-diffs-outside-display-row-model.md) and
+> [ADR-0026](../docs/adr/0026-log-virtualizes-over-show-rows-and-scoped-listings-batch.md)).
+> Each recommendation cites the evidence and the existing project primitive it reuses.
 
 ## Design Principles (from research)
 1. **Don't out-GUI the GUIs — out-flow them.** Native, virtualized, keyboard-first.
@@ -91,7 +93,7 @@
 
 ---
 
-## Build Sequence (maps to plan §8 phases)
+## Build Sequence
 | Phase | Recommendations |
 | --- | --- |
 | P0 (now) | R1 Virtualized view, R2 Dual-mode staging, R3 Conflict modal, R4 Theming/a11y |
@@ -99,7 +101,7 @@
 | P2 | R6 Word/structural diff (bounded) |
 | P3 (optional) | R9 AI-assisted conflicts |
 
-## Success Criteria (plan §11, restated for TurboGit)
+## Success Criteria
 - ≥3 concrete features justified by direct evidence: **R1, R2, R3** all trace to universal-
   agreement findings + existing project primitives.
 - Accessibility (R4) claims a white space no incumbent owns.

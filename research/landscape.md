@@ -1,9 +1,10 @@
 # Landscape Map & Positioning — Diff Tools
 
-> Cohort map for every in-scope tool from `docs/diff-capabilities-research-plan.md §2`.
-> Versions/prices pinned to **2026-08-02** via vendor pages + 2026 roundups
-> (gitsquid, scmgalaxy, bestpage, cnblogs). Hands-on not performed in-sandbox; see
-> `storm-session.md` environment note.
+> Cohort map for every in-scope tool, frozen here for the rest of this research;
+> `feature-matrix.csv` scores 23 of the 29 per capability (Visual Studio, Xcode, Eclipse,
+> Zed, Fleet and Helix are unmapped). Versions/prices pinned to **2026-08-02** via vendor
+> pages + 2026 roundups (gitsquid, scmgalaxy, bestpage, cnblogs). Hands-on not performed
+> in-sandbox; see `storm-session.md` environment note.
 
 ## Cohort 1 — IDEs
 | Tool | License | Platforms | Price (2026) | Target user | Git-engine model |

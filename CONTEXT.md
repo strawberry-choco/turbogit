@@ -137,24 +137,27 @@ bottom of the central body; nothing sits above the content, so the central body
 starts at the top window edge.
 _Avoid_: chrome (too vague), app frame
 
-**Sidebar rail**:
-The 48px vertical icon strip on the left edge. Its buttons switch tool windows
-or activate inert features.
-_Avoid_: sidebar, activity bar
+**Sidebar**:
+The 280px workspace column on the left of the shell: the workspace header (the
+workspace-switch trigger), the repo/branch filter, the SMART GROUPS rules, pinned
+views, and the PROJECTS tree. It chooses which root a surface is about; the tab
+strip, not the sidebar, chooses the tool window.
+_Avoid_: sidebar rail (there is no icon strip; the only rail in the app is the
+2px accent at a selected row's leading edge), activity bar
 
 **Tab**:
 A clickable control in the shell's tab strip that activates a tool window. Not
 the content itself. The Commit tool window also has internal sub-tabs (Local
-Changes / Unversioned Files); those are "sub-tabs".
+Changes / Shelf / Stash); those are "sub-tabs".
 _Avoid_: page, view
 
 **Tool window**:
-A full page of content inside the shell, selected via the tab strip or rail.
-Exactly one is active at a time (Commit, Git Log).
+A full page of content inside the shell, selected via the tab strip. Exactly one
+is active at a time (Changes, Log, Branches, Worktrees, Submodules).
 _Avoid_: tab (reserved), panel
 
 **Tool window header**:
-The 28px uppercase title bar at the top of a tool window body ("COMMIT"), with
+The 28px uppercase title bar at the top of a tool window body ("CHANGES"), with
 action icons on the right. Distinct from dialog titles.
 _Avoid_: section header (used for smaller group titles)
 
@@ -165,7 +168,7 @@ _Avoid_: heading
 
 **Sub-tab**:
 A tab inside a tool window's body (Commit tool window: Local Changes /
-Unversioned Files / Shelf / Stash), as opposed to shell tabs in the tab strip.
+Shelf / Stash), as opposed to shell tabs in the tab strip.
 _Avoid_: inner tab, nested tab
 
 **Popup**:
@@ -196,14 +199,18 @@ _Avoid_: recent repos
 
 **Changelist**:
 A named bucket of local uncommitted changes; exactly one is active at a time,
-and new edits land in the active changelist. v1 ships only the canonical ones
-("Default Changelist", "Unversioned Files", merge conflicts); user-created
-changelists are backlog.
+and new edits land in the active changelist. The changelist model is what the
+Commit tool window's one tree **replaced**: it ships the staging sections (see
+Staging area mode) plus an "Unversioned Files" group at the bottom of the tree
+and a "Merge conflicts" group of its own. User-created changelists are backlog.
 _Avoid_: change set, change list, pending changes, group
 
 **Staging area mode**:
-The alternative organization mirroring Git's index (Unstaged/Staged) instead
-of changelists.
+The organization that ships: the Commit tool window's one tree mirrors Git's
+index, with unstaged content under UNSTAGED and fully staged files under
+STAGED, plus the "Unversioned Files" and "Merge conflicts" groups. It replaced
+the **Changelist** model, and granularly-completed paths stay visible under
+STAGED rather than leaving the list.
 _Avoid_: index view, git staging
 
 **Outgoing commits**:
@@ -319,7 +326,7 @@ line content, and never a target of partial staging.
 _Avoid_: binary file diff, non-text diff
 
 **Rename header**:
-The diff-view line naming a detected rename ("renamed from X · N% similar")
+The diff-view line naming a detected rename ("Renamed from X · N% similar")
 shown above the renamed file's content diff, paired with an arrow annotation
 on its changed-file list entry. Metadata only — never staged text. Detection
 follows git's own defaults, unpinned by TurboGit.

@@ -340,13 +340,13 @@ confusing diff, and saying which axis is stale is what makes the comparison hone
 paints the selected commit row as a **solid saturated blue band with inverted text** —
 exactly the treatment R4 removes, and the reason R4 exists (it was, with the Commit
 button, one of the loudest things in the app). The shipped render paints the
-row-selected fill `#233455` plus a 2px `BRAND` rail at the leading edge, with the row's
+row-selected fill `#243456` plus a 2px `BRAND` rail at the leading edge, with the row's
 own inks unchanged. **The frame is right about the screen and wrong about the
 selection; R4 is the decision, and the capture is the evidence.**
 
 **The one axis where the code is out of conformance, recorded rather than absorbed.**
 All five frames depict a **different shell** from the one that shipped: a 244 px sidebar
-(the code's is 295 px), tool panes drawn as separated rounded cards with 10 px gutters
+(the code's is 280 px), tool panes drawn as separated rounded cards with 10 px gutters
 (the code draws them edge to edge with 1 px rules), and a `#1E2023` page background —
 which is the `PANEL_BG` token this migration **deleted** in its dead-token sweep. That
 is a real and systematic divergence, not a nit, and it is **not** fixed here: the shell

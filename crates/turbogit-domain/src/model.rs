@@ -1,10 +1,9 @@
 //! Domain data model for TurboGit.
 //!
-//! Mirrors the concrete Rust sketch in `product-spec.md` §10. Every mutable git
-//! state is **scoped to a `Root`** — single-root code never assumes a global
-//! "the repository". All types are `Clone + Debug + Serialize/Deserialize` so
-//! the UI can store/restore them and the persistence layer can serialize
-//! settings/state under `.turbogit/`.
+//! Every mutable git state is **scoped to a `Root`** — single-root code never
+//! assumes a global "the repository". All types are `Clone + Debug +
+//! Serialize/Deserialize` so the UI can store/restore them and the persistence
+//! layer can serialize settings/state under `.turbogit/`.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

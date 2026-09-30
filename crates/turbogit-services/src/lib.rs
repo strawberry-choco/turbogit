@@ -5,8 +5,8 @@
 //! stays in the composition root until issue 08.
 //!
 //! Library-migration plan Phase L1 (CLI parity) and Phase L3 (the two-way
-//! merge rewriter) live here; see `product-spec.md` §3 and the parity
-//! suites under `tests/`.
+//! merge rewriter) live here; the parity contracts are the root `tests/`
+//! suites `diff_parity.rs`, `patch_value.rs` and `port_discipline.rs`.
 
 pub mod branch_service;
 pub mod bulk_ops;

@@ -1,6 +1,6 @@
 # Performance Probing — Notes & Benchmark Table
 
-> **Caveat up front.** The plan's §6 scripted tasks (5k-line render, 10k-commit history)
+> **Caveat up front.** The scripted tasks below (5k-line render, 10k-commit history)
 > require *hands-on* execution on each tool. That is not possible in this sandbox (no GUI
 > install/launch, no sample repos with those scales pre-staged). The table below records
 > **documented/vendor-claimed/review-reported** behavior only, with confidence marked.
@@ -47,7 +47,7 @@
    surface at trivial memory — validates TurboGit's Rust/egui choice for flow, separate from
    rendering fidelity.
 
-## Scripted-Task Status (plan §6)
+## Scripted-Task Status
 | Task | Status |
 | --- | --- |
 | T1 5k-line render + scroll | ⚠ Documented only; hands-on blocked in sandbox |
