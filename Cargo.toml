@@ -14,7 +14,6 @@ crossbeam-channel = "0.5.16"
 dirs = "6.0"
 eframe = "0.36.1"
 egui = "0.36.1"
-egui_dock = "0.21.1"
 egui_extras = "0.36.1"
 egui_kittest = { version = "0.36.1", features = ["snapshot", "wgpu"] }
 git2 = "0.21.0"
@@ -44,15 +43,21 @@ warnings = "deny"
 # Ratchets the adjacent class of dead visibility: a `pub` item trapped inside a
 # private `mod` fails the build instead of waiting for a human.
 #
+# That class is not empty. Measured here, the lint produced 19 violations — all
+# `pub` items in private `mod`s, all narrowed rather than allowed. (A run without
+# `--keep-going` aborts a crate on its first error batch, so its count is a
+# misleading subset; `--keep-going` is required to count at all.)
+#
 # It does NOT close the hole the trimming plan was written against. Every crate
 # here is a library, so a `pub` fn in a `pub mod` is genuinely reachable from
 # outside — anyone can name it. `unreachable_pub` needs an item unreachable from
 # *outside the crate*; `dead_code` needs an item unreachable at all; the
 # widely-named-but-uncalled `pub fn` this workspace is full of is neither, so no
-# per-crate lint can see it. Measured here: this lint produces ZERO findings on
-# this tree, while a planted `pub fn` in a private `mod` fails immediately.
-# "No other crate calls this" is a whole-workspace property; only a text sweep
-# computes it. Do not read the clean run as "no dead pub items remain".
+# per-crate lint can see it. The ~203 such items are structurally invisible here,
+# not merely unfixed. "No other crate calls this" is a whole-workspace property;
+# only a text sweep computes it, and `crates/test-support/src/srcscan.rs` is that
+# instrument. A clean run means the private-`mod` class is empty, not that no
+# dead pub items remain.
 #
 # This is a rustc lint, NOT `clippy::unreachable_pub` — the clippy-namespaced
 # form is an unknown lint on this toolchain and fails the build with E0602

@@ -1,12 +1,14 @@
-//! Commit tool window redesigned onto canonical changelist buckets (issue #11).
+//! The Commit tool window: one tree that mirrors Git's index, beside two
+//! placeholder sub-tabs.
 //!
-//! Layout: a sub-tab strip (Local Changes / Unversioned Files / Shelf / Stash,
-//! issue #18) above two zones (redesign 03) — a fixed-width Commit panel of
-//! collapsible canonical groups with count badges on the left, and a
-//! permanent diff-preview pane (above the message editor and the Amend /
-//! Commit / Commit-and-Push action row) on the right. Local Changes shows
-//! the "Default Changelist" and "Merge conflicts" groups; Unversioned Files
-//! lists untracked files includable in commits.
+//! Layout: a sub-tab strip (Local Changes / Shelf / Stash) above two zones — a
+//! fixed-width Commit panel of collapsible groups with count badges on the
+//! left, and a permanent diff-preview pane (above the message editor and the
+//! Amend / Commit / Commit-and-Push action row) on the right. Local Changes is
+//! the one tree: files with unstaged content under UNSTAGED, fully staged files
+//! under STAGED, plus a Merge conflicts group and a bottom Unversioned Files
+//! group listing untracked files includable in commits. Empty buckets are
+//! dropped, and a granularly-completed path stays visible under STAGED.
 //! For multi-root projects each group nests per-root sub-groups with count
 //! badges and a select-all checkbox; single-root projects list files flat.
 //! Commit stays disabled until a non-empty message AND at least one included

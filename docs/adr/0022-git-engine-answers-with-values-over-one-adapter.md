@@ -36,9 +36,11 @@ Numbers are a snapshot; the conclusions below are the durable part.
   spaces, so the duplication is a latent bug, not merely a smell.
 
 Tickets `00` through `12` moved the figures again, and the measurements above are
-the 2026-09-23 snapshot they were written from. The port is now **76 methods**:
-69 at the branch's start, 67 after `00` deleted the two dead ones, and seven
-raised reads since. Of the nine raw sites, `00` raised one — the signing-key
+the 2026-09-23 snapshot they were written from. The port is now **75 methods**:
+69 at the branch's start, 67 after `00` deleted the two dead ones, and eight
+raised reads since — the eight enumerated below. That is one fewer than the 76
+this record first reported, because the `add_all` staging read has since been
+deleted. Of the nine raw sites, `00` raised one — the signing-key
 `git config --get`, which the port already answered — `06` raised the numstat
 compare, and `07` raised six more: the app layer's two (`rev-list --count` behind
 a delete confirmation, `rev-parse` for its undo sha) and services' four

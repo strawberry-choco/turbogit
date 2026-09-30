@@ -118,8 +118,9 @@ flowchart TB
 ### One sanctioned impurity
 
 `AppState` constructs its own engine: `launch_in` and `rebuild_executor`
-(`turbogit-app/src/state.rs:402,466,517`) call `turbogit_engine::build_executor`,
-so `turbogit-app → turbogit-engine` is a real edge rather than the clean
+(`turbogit-app/src/state.rs:1376,1478`), which reach
+`turbogit_engine::build_executor` at `state.rs:1335` and `state.rs:1479`, so
+`turbogit-app → turbogit-engine` is a real edge rather than the clean
 `app → port` flow the rest of the graph follows.
 
 The textbook fix is injecting `Arc<dyn GitExecutor>` from the composition root.
@@ -135,6 +136,11 @@ prerequisite for anything else.
 
 ## Layer Responsibilities
 
+The diagram above draws **edges only**; what each layer is responsible for is
+the prose below. Neither half is a summary of the other, so an edge missing
+from the diagram is not a claim that the dependency does not exist, and a
+responsibility described here does not imply a new edge.
+
 ### 1. Entry (root: `src/main.rs`, `src/app.rs`)
 - `TurbogitApp` implements `eframe::App`. Each frame it:
   1. Applies dark-only theme tokens (`theme::configure_style`, ADR-0003).
@@ -149,8 +155,9 @@ prerequisite for anything else.
   the bottom of the central body. There is no topbar — the central body starts
   at the top window edge. Global shortcut dispatch lives here (five frozen
   shortcuts, ADR-0009).
-- Central body routes between Welcome placeholder and active tool windows
-  (Commit, Log). Floating surfaces render on top each frame: Branches popup,
+- Central body routes between Welcome placeholder and the five tool windows
+  the tab strip offers (Changes, Log, Branches, Worktrees, Submodules).
+  Floating surfaces render on top each frame: Branches popup,
   VCS operations popup, command palette, dialogs, push dialog, confirm prompts,
   Settings modal, and toast.
 - Reads from `AppState`; never calls git directly.
@@ -230,7 +237,7 @@ Pure-ish services over the engine seam; no egui, no `AppState`:
 
 ### 6. Engine
 - **`turbogit-engine-api`** — `GitExecutor` is the **only** thing that talks to
-  git, plus `ApplyDirection`. ~60 methods, all synchronous; callers run them on
+  git, plus `ApplyDirection`. 75 methods, all synchronous; callers run them on
   worker threads so the UI never blocks.
 - **`turbogit-engine`** — the adapters and the factory:
   - `cli::CliExecutor` — shells out to system `git`; handles **all mutating ops**.
@@ -287,7 +294,7 @@ sequenceDiagram
 | ADR-0014 | Diff rendering virtualizes over `ScrollArea::show_rows`, not `egui_extras::Table` |
 | ADR-0015 | Non-text diffs render outside the display-row model |
 | ADR-0016 | Mockups are the single source of truth for the UI redesign |
-| ADR-0017 | Switching workspaces happens from the topbar picker, reachable from the palette |
+| ADR-0017 | Switching workspaces happens from the sidebar's workspace header, reachable from the palette |
 | ADR-0018 | The sidebar PROJECTS tree nests folders and collapses single-repo chains into path labels |
 | ADR-0019 | Worktree lifecycle owns worktree-list freshness policy |
 | ADR-0020 | `Operation` is the dispatch unit; label text is display-only |
@@ -297,9 +304,11 @@ sequenceDiagram
 | ADR-0024 | Commit actions live in the log context menu, and nowhere else |
 | ADR-0025 | A reworded commit carries its message through the rebase plan |
 | ADR-0026 | The commit list virtualizes over `ScrollArea::show_rows`, and its listings grow by batches |
+| ADR-0027 | Design system v2: one accent, one ink ramp, one card — R1–R7 in the token and widget layer |
 
 The crate-per-layer split, the sanctioned edge, and the deferred options are
-specified in `docs/ddd-subcrate-proposal.md`.
+specified in `AGENTS.md` ("Project Structure and Module Organization", "One
+sanctioned impurity", "Deferred options").
 
 ## Testing Architecture
 
@@ -311,9 +320,14 @@ Tests live in the crate they exercise, and span crates only when they must:
 - `crates/turbogit-app/tests/` — stateful staging protocol and cache invalidation.
 - `crates/turbogit-ui/tests/` — the egui/kittest surface suites plus the
   screenshot-acceptance suite.
-- root `tests/diff_parity.rs` — the one suite that legitimately needs every
-  crate: it compares engine diff text against `turbogit_ui::ui::diff::parsed_rows`.
-  Only the root has the dependency set to reach both sides.
+- root `tests/` — the three suites that legitimately need every crate, because
+  only the root has the dependency set to reach both sides of each contract:
+  - `diff_parity.rs` — compares engine diff text against
+    `turbogit_ui::ui::diff::parsed_rows`.
+  - `patch_value.rs` — pins ADR-0022's patch-value conventions (quoting, the
+    no-newline property, mode-only change, a rename with no content change).
+  - `port_discipline.rs` — pins ADR-0022's one-raw-escape rule: it fails when a
+    second production `run_raw` call site appears.
 
 All of them create temporary repositories with `tempfile`, require `git` on
 `PATH`, and drive the real `AppState` plus a fake or CLI engine — the same event

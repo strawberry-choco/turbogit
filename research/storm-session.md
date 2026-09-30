@@ -1,11 +1,11 @@
 # Storm Research Session — Diff Viewing & Editing Capabilities
 
 > **Method.** This artifact was produced by adapting the **STORM** research method
-> (Stanford OVAL, NAACL 2024) to the kickoff described in
-> `docs/diff-capabilities-research-plan.md §2.5`. STORM compresses broad research by
-> simulating expert perspectives, mapping contradictions, synthesizing, and self-critiquing.
-> Every structured test task (§6 of the plan) and every feature-matrix column traces back
-> to at least one item below, per the plan's "no orphan" rule.
+> (Stanford OVAL, NAACL 2024) to a diff-viewing kickoff; the four outputs that kickoff
+> required are §E below. STORM compresses broad research by simulating expert perspectives,
+> mapping contradictions, synthesizing, and self-critiquing. Every structured test task
+> (tracked in `perf-notes.md`) and every feature-matrix column traces back to at least one
+> item below — the no-orphan rule.
 >
 > **Environment note.** This research was executed with *secondary sources only*
 > (official docs, changelogs, GitHub issues/PRs, HN/Reddit, G2/Slant reviews, vendor
@@ -85,7 +85,7 @@ ignoring that trend means building a 2018-era tool."
 5. **Universal agreement:** Partial-staging granularity (file/hunk/line) and conflict
    resolution are the two highest-leverage diff capabilities. Everyone converges here.
 6. **Blind spot (none addressed):** *Accessibility.* No perspective raised screen-reader /
-   contrast / font-scaling diff UX — yet the rubric §5.7 lists it. This is the most
+   contrast / font-scaling diff UX — yet rubric dimension 7 (E.4) lists it. This is the most
    under-served dimension across incumbents and a cheap differentiator for TurboGit.
 
 ---
@@ -144,7 +144,7 @@ stay memory-bounded on 5k-line refactors so it can be the default, not an opt-in
 
 ---
 
-## E. Storm Deliverables (required by plan §2.5)
+## E. Storm Deliverables
 
 ### E.1 Ranked Research-Question Backlog
 1. Which tools make partial line-staging *discoverable without docs*? (Magit/lazygit vs GUI)
@@ -172,7 +172,7 @@ stay memory-bounded on 5k-line refactors so it can be the default, not an opt-in
 - **A3 "Syntax highlighting requires an IDE."** → *Kill*: bat/git-delta + difftastic prove standalone syntax-aware diff.
 - **A4 "Conflict resolution needs a GUI."** → *Qualify*: 3-way works in TUI (smerge/lazygit); GUI adds guided ergonomics.
 
-### E.4 "Good" Definitions per Rubric Dimension (plan §5)
+### E.4 "Good" Definitions per Rubric Dimension
 1. **Rendering fidelity** — word/char changes are highlighted *within* a line, syntax is colored, and side-by-side panes scroll in lockstep.
 2. **Conflict-resolution UX** — a 3-way view shows base/ours/theirs, lets you accept per-hunk, and recovers gracefully from a bad edit (undo).
 3. **Partial-staging granularity** — you can stage/unstage at file, hunk, *and* arbitrary line level, and the action is discoverable without docs.

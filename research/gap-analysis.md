@@ -2,8 +2,11 @@
 
 > Where incumbents fall short, derived from `feature-matrix.csv`, `ux-patterns.md`, and
 > `perf-notes.md`. Each gap is scored for **impact** (how much users care) and **TurboGit
-> feasibility** (given Rust/egui, from `docs/diff-capabilities-research-plan.md §9`). White
-> space = gaps with high impact + high feasibility = build targets.
+> feasibility** (given Rust/egui, the load-bearing calls are
+> [ADR-0014](../docs/adr/0014-diff-virtualization-show-rows-cached-display-model.md),
+> [ADR-0015](../docs/adr/0015-non-text-diffs-outside-display-row-model.md) and
+> [ADR-0026](../docs/adr/0026-log-virtualizes-over-show-rows-and-scoped-listings-batch.md)).
+> White space = gaps with high impact + high feasibility = build targets.
 
 ## Gap 1 — Accessibility is universally weak
 - **Evidence.** No perspective in the storm session raised a11y; feature-matrix shows most

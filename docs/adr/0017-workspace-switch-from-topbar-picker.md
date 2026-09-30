@@ -38,7 +38,7 @@ precedent `SwitchWorkspace` copies verbatim).
 
 Two session-only `UiState` fields (`workspace_picker_open`,
 `workspace_picker_anchor`) sit beside `vcs_popup` / `command_palette` /
-`branches_popup`, and neither enters `persistence::UiStateData`. The anchor
+`branches_popup`, and neither enters `persistence::UiPersist`. The anchor
 is the trigger's bottom-left captured at click time so the dropdown sits
 under the row without hardcoding a trigger x-offset; `None` (palette route)
 falls back to a fixed position. It is stored as a plain `(f32, f32)`

@@ -63,8 +63,14 @@ All are choices to make once the layer boundaries exist; none is a prerequisite.
 
 - `cargo fmt -- --check` — verify formatting without modifying files.
 - `cargo check --workspace --all-targets` — type/borrow checking across all targets.
-- `cargo clippy --workspace --all-targets -- -D warnings` — lint with warnings as errors.
-- `cargo test --workspace --all-targets` — run all unit and integration tests.
+- `cargo clippy --workspace --all-targets -- -D warnings` — lint with warnings as
+  errors. Add `--keep-going` to count violations; it aborts a crate on its first
+  error batch, so a partial run undercounts.
+- `cargo test --workspace --all-targets --no-fail-fast` — run all unit and
+  integration tests. Redirect output to a file; never pipe it into `head`/`tail`,
+  because SIGPIPE kills git mid-write and leaves a `config.lock` that makes every
+  later run fail. `interactive_rebase_editor.rs` fails ~3 of 5 parallel runs from a
+  temp-filename race — not your change.
 
 All four gates must pass; a failure in any one blocks the change.
 
@@ -81,6 +87,20 @@ functions with `snake_case`, types with `UpperCamelCase`, constants with
 call git only through the `GitExecutor` trait; UI code never calls the CLI. Keep
 git mutations in the engine layer. Preserve the `TgError` / `TgResult` error
 patterns defined in `crates/turbogit-domain/src/error.rs`.
+
+### Comments
+
+Production code is ~24% comment lines, so the three genres are policed rather
+than tolerated:
+
+- **Write in full** — a hazard the code cannot show: a behavioural difference
+  between two call sites, a field order that compiles and passes either way, a
+  library default that bites.
+- **Compress to one line** — "why I didn't extract this" / "why I didn't merge
+  these". The load-bearing fact is one sentence.
+- **Delete** — narration of the refactor itself ("the rows are literals", "the
+  six tests reduced to this"), changelogs enumerating which suite now owns which
+  dropped assertion, and ticket references. Git has the history.
 
 ## Design system
 
