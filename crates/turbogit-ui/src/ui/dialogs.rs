@@ -87,7 +87,7 @@ fn close(state: &mut AppState) {
 fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
     ui.label("Apply the selected commit onto which branch?");
     if state.ui.dlg.cherry_pick_commit.is_none() {
-        ui.label("No commit selected.");
+        widgets::empty_state(ui, "No commit selected.");
         // Even the empty state gets the shared footer: the action slot is a
         // place in every one of this module's dialogs, and a Cancel that hangs
         // off the body is exactly the shape the footer rule exists to stop.
@@ -112,7 +112,7 @@ fn cherry_pick_target(ui: &mut Ui, state: &mut AppState) {
         })
         .unwrap_or_default();
     if local.is_empty() {
-        ui.label("No local branches.");
+        widgets::empty_state(ui, "No local branches.");
     }
     let current = current_branch_name(state);
     for name in local {
@@ -313,7 +313,7 @@ fn commit_subject(state: &AppState, cid: &str) -> Option<String> {
     commits
         .iter()
         .find(|c| c.id == cid)
-        .map(|c| c.message.lines().next().unwrap_or_default().to_owned())
+        .map(|c| c.subject().to_owned())
 }
 
 /// The focused root's current branch name, for the dialog title.
@@ -999,11 +999,7 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
 /// The target picker row (and TARGET display) for a commit:
 /// "<short-sha>  <subject>".
 fn commit_row_label(c: &turbogit_domain::model::Commit) -> String {
-    format!(
-        "{}  {}",
-        widgets::short_commit_ref(&c.id),
-        c.message.lines().next().unwrap_or_default()
-    )
+    format!("{}  {}", widgets::short_commit_ref(&c.id), c.subject())
 }
 
 /// The commit-ish dispatched for a picked target row: the short sha prefix.
@@ -1158,7 +1154,7 @@ fn compare_branches(ui: &mut Ui, state: &mut AppState) {
                 ui.label(line);
             }
             if commits.is_empty() {
-                ui.colored_label(Palette::INK_3, "No commits — branches are in sync.");
+                widgets::empty_state(ui, "No commits — branches are in sync.");
             }
         });
     // The shared footer, preserving the painted order `Swap Branches` ·

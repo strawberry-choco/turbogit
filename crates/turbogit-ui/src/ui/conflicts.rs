@@ -12,7 +12,9 @@ use egui::{RichText, ScrollArea, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Toast};
-use turbogit_domain::model::RootId;
+use turbogit_domain::model::{
+    CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, RootId,
+};
 use turbogit_services::conflict;
 use turbogit_services::diff_engine;
 
@@ -262,18 +264,21 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             ci += 1;
                             let block = res_i + 1;
                             // Marker strips frame the discrete conflict block.
+                            // The three literals come from `turbogit_domain` —
+                            // the crate that also parses them — so this painter
+                            // cannot name a different marker than the parser.
                             crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
                                 crate::ui::kit::conflict_pane::marker_strip(
                                     &mut cols[0],
-                                    "<<<<<<<",
+                                    CONFLICT_MARKER_OURS,
                                 );
                                 crate::ui::kit::conflict_pane::marker_strip(
                                     &mut cols[1],
-                                    "=======",
+                                    CONFLICT_MARKER_SEPARATOR,
                                 );
                                 crate::ui::kit::conflict_pane::marker_strip(
                                     &mut cols[2],
-                                    ">>>>>>>",
+                                    CONFLICT_MARKER_THEIRS,
                                 );
                             });
                             // Tinted yours/theirs sections + read-only result.

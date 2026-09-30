@@ -28,33 +28,22 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use test_support::harness::{assert_painted, filled_rects, galley_origin};
+use test_support::harness::{
+    KITTEST_DEFAULT_BOX, assert_painted, filled_rects, galley_origin, shell_harness_over_unstyled,
+};
 
 use egui::{Color32, Pos2, Rect, Shape, accesskit::Role};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use turbogit_app::state::AppState;
 
+use test_support::git_seed::git;
 use turbogit_ui::theme::Palette;
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// Run `git` without asserting success (a merge that conflicts exits non-zero).
+/// Run `git` WITHOUT asserting success, and deliberately NOT
+/// `test_support::git_seed::git`: the seeds below end in a `git merge` expected
+/// to exit non-zero, and that refusal is what leaves the conflict state.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)
@@ -68,6 +57,8 @@ struct Repo {
 
 /// Create an initialized temp repository with one base commit on the default
 /// branch and repo-local user config so commits work headlessly.
+/// Local builder, not a `git_seed` recipe: `init -q` with **no `-b main`**, so
+/// the default branch is the machine's, and the base commit is `base.txt`.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -168,14 +159,14 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// `4096` is required, not tuned: this suite calls `Harness::run()` eighteen
+/// times and `run()` is the path that enforces the step budget, which kittest
+/// defaults to 4 — the styled constructor takes no budget. Unstyled also means
+/// no `configure_style`/`install_fonts`, and the pane widths and marker tints
+/// here are measured against egui's default face.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(4096).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    )
+    shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 4096)
 }
 
 /// Poll `f` until it returns true or the deadline elapses (worker threads run
@@ -216,6 +207,11 @@ fn theirs_bg() -> Color32 {
 fn marker_bg() -> Color32 {
     tint_over_bg(Palette::STATE_WARNING, 0.15)
 }
+/// Stroked rectangles the last frame painted, as `(rect, stroke colour)`.
+///
+/// Deliberately NOT `test_support::harness::stroked_rects`, a *different* query:
+/// it returns a three-tuple carrying the width and filters on `width > 0.0`, so
+/// a zero-width stroke passes here and is excluded there.
 fn stroked_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
     harness
         .output()

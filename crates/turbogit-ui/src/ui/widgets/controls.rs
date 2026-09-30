@@ -206,25 +206,34 @@ pub fn compact_button(ui: &mut Ui, label: &str) -> Response {
     button_response(ui, ButtonVariant::Compact, None, Some(label))
 }
 
+/// The one enabled-flag primitive both button families gate through. The
+/// disabled path is built inside a [`disabled_child_scope`] so its styling
+/// cannot leak into the widgets beside it; the enabled path calls `build`.
+pub fn button_enabled(ui: &mut Ui, enabled: bool, build: impl Fn(&mut Ui) -> Response) -> Response {
+    if enabled {
+        return build(ui);
+    }
+    disabled_child_scope(ui, enabled, |child| build(child))
+}
+
 /// [`compact_button`] with an explicit `enabled` flag (issue 32 popup row
 /// actions): disabled dims the button and turns clicks into no-ops, painted
-/// through [`disabled_child_scope`] so the disabled state never leaks into the
-/// caller's remaining widgets. An enabled flag short-circuits straight to
-/// [`compact_button`], so only the disabled path is built in a child scope.
-/// Pair it with `on_disabled_hover_text` so the gating reason stays
-/// discoverable.
+/// through [`button_enabled`], which contains the disabled state. Pair it with
+/// `on_disabled_hover_text` so the gating reason stays discoverable.
 pub fn compact_button_enabled(ui: &mut Ui, label: &str, enabled: bool) -> Response {
-    if enabled {
-        return compact_button(ui, label);
-    }
-    disabled_child_scope(ui, enabled, |child| {
-        button_response(child, ButtonVariant::Compact, None, Some(label))
-    })
+    button_enabled(ui, enabled, |ui| compact_button(ui, label))
 }
 
 /// Square ghost button holding only an icon (e.g. dialog close X).
 pub fn icon_button(ui: &mut Ui, icon: Icon) -> Response {
     button_response(ui, ButtonVariant::Icon, Some(icon), None)
+}
+
+/// [`icon_button`] with an explicit `enabled` flag (issue 32 commit-window
+/// chevrons). A flag, not a hidden control: a chevron that vanished would reflow
+/// its own meta row. Disabled state is contained by [`button_enabled`].
+pub fn icon_button_enabled(ui: &mut Ui, icon: Icon, enabled: bool) -> Response {
+    button_enabled(ui, enabled, |ui| icon_button(ui, icon))
 }
 
 /// The ghost icon-button state ladder — one definition of how a borderless

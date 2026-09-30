@@ -4,8 +4,6 @@
 //! Provides protected-branch gating for force-pushes and batch operations that
 //! iterate every registered root, recording one result per root.
 
-#![allow(dead_code)]
-
 use std::collections::HashSet;
 use std::path::Path;
 use turbogit_domain::error::{TgError, TgResult};
@@ -393,22 +391,6 @@ pub fn outgoing_per_root(
                 }
                 None => Ok(Vec::new()),
             };
-            (root.id.clone(), result)
-        })
-        .collect()
-}
-
-/// Update (fetch + pull) every root using each root's configured update method.
-pub fn update_all(
-    vcs: &dyn GitExecutor,
-    mgr: &MultiRootManager,
-    settings: &VcsSettings,
-) -> Vec<(RootId, TgResult<()>)> {
-    let method = settings.update_method;
-    mgr.roots
-        .iter()
-        .map(|root| {
-            let result = update_project(vcs, &root.path, method);
             (root.id.clone(), result)
         })
         .collect()

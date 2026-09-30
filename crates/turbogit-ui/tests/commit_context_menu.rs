@@ -126,8 +126,6 @@ fn a_merge_commit_states_why_it_can_be_neither_dropped_nor_reworded() {
         state(CLEAN, &merge, CommitMenuAction::RewordCommit),
         MenuItemState::disabled("a merge commit cannot be reworded")
     );
-    // The merge is still a commit: everything else about it is readable, and
-    // the plan-the-tip guard is a different reason, so it does not speak here.
     assert_eq!(
         state(CLEAN, &merge, CommitMenuAction::CopyHash),
         MenuItemState::enabled()
@@ -153,8 +151,7 @@ fn a_root_commit_states_why_it_can_be_neither_dropped_nor_reworded() {
         state(CLEAN, &root, CommitMenuAction::RewordCommit),
         MenuItemState::disabled("a root commit cannot be reworded")
     );
-    // Its lack of a parent is a fact about the rewrite, not about the commit:
-    // reading it, copying it, branching from it and reverting it all still work.
+    // Reading, copying, branching and reverting a root commit all still work.
     for action in [
         CommitMenuAction::CopyHash,
         CommitMenuAction::CopyMessage,
@@ -277,8 +274,8 @@ use std::rc::Rc;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use test_support::harness::{filled_rects, painted_galleys};
-use turbogit_ui::theme::{Palette, configure_style, install_fonts};
+use test_support::harness::{filled_rects, painted_galleys, widget_harness};
+use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::commit_menu::commit_menu;
 
 /// Render `commit_menu` for `target` inside a popup frame, recording the action
@@ -289,24 +286,15 @@ fn menu_harness(
 ) -> (Harness<'static, ()>, Rc<RefCell<Option<CommitMenuAction>>>) {
     let returned = Rc::new(RefCell::new(None));
     let returned_ui = returned.clone();
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, _state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            egui::CentralPanel::default().show(ui, |ui| {
-                let action = commit_menu(ui, &target, &facts);
-                if action.is_some() {
-                    *returned_ui.borrow_mut() = action;
-                }
-            });
-        },
-        (),
-    );
-    harness.set_size(egui::vec2(420.0, 460.0));
+    // Kept local for its `step_dt`: the menu floats over a *selected* log row
+    // with an animated toast, and the shared 1.0/4.0 default moves its rect
+    // against the row it is measured against.
+    let mut harness = widget_harness(egui::vec2(420.0, 460.0), move |ui| {
+        let action = commit_menu(ui, &target, &facts);
+        if action.is_some() {
+            *returned_ui.borrow_mut() = action;
+        }
+    });
     harness.step();
     (harness, returned)
 }
@@ -664,7 +652,6 @@ mod surface {
     use tempfile::TempDir;
     use test_support::harness::{
         assert_menu_item_gated, assert_not_painted, assert_painted, filled_rects, painted_galleys,
-        painted_text,
     };
     use turbogit_app::events::{AppEvent, LogBatchMode};
     use turbogit_app::state::{AppState, Tab};
@@ -673,7 +660,7 @@ mod surface {
     use turbogit_engine_api::GitExecutor;
     use turbogit_ui::theme::Palette;
 
-    pub struct Seed {
+    pub(crate) struct Seed {
         _tmp: TempDir,
         pub project: PathBuf,
         pub alpha: PathBuf,
@@ -757,7 +744,7 @@ mod surface {
 
     /// `main`: base ← c1 ← c2, with `feature` forked at c1. The seeded history
     /// the menu's own bounds are measured against.
-    pub fn seeded_repo(tag: &str) -> Seed {
+    pub(crate) fn seeded_repo(tag: &str) -> Seed {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join(tag);
         let alpha = project.join("alpha");
@@ -787,7 +774,7 @@ mod surface {
     }
 
     /// The shell on the Git Log tab, with the log warm from the real repository.
-    pub fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
+    pub(crate) fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
         let mut state = AppState::new(seed.project.clone());
         let engine = CliExecutor {
             settings: VcsSettings::default(),
@@ -810,7 +797,7 @@ mod surface {
 
     /// Re-answer every registered root's log through the production event path.
     /// A `refresh` drops the cache, so a test that refreshes warms again.
-    pub fn warm_logs(harness: &mut Harness<'_, AppState>) {
+    pub(crate) fn warm_logs(harness: &mut Harness<'_, AppState>) {
         let engine = CliExecutor {
             settings: VcsSettings::default(),
         };
@@ -831,6 +818,9 @@ mod surface {
     }
 
     fn harness_over_state(state: AppState) -> Harness<'static, AppState> {
+        // Kept local for its `step_dt`: the menu floats over a *selected* log
+        // row with an animated toast, and the shared 1.0/4.0 default moves its
+        // rect against the row it is measured against.
         let mut fonts_installed = false;
         let mut harness = Harness::builder().with_step_dt(1.0 / 60.0).build_ui_state(
             move |ui, state| {
@@ -852,31 +842,15 @@ mod surface {
         harness
     }
 
-    pub fn settle(harness: &mut Harness<'_, AppState>) {
-        let mut stable = 0;
-        let mut prev = String::new();
-        for _ in 0..300 {
-            harness.step();
-            std::thread::sleep(Duration::from_millis(10));
-            let cur = format!("{:?}", painted_text(harness));
-            if cur == prev {
-                stable += 1;
-                if stable >= 3 {
-                    return;
-                }
-            } else {
-                stable = 0;
-                prev = cur;
-            }
-        }
-        panic!("log layout did not settle within 300 frames");
-    }
+    /// 300 frames and three consecutive byte-identical painted-text
+    /// fingerprints.
+    pub(crate) use test_support::harness::settle_quiet as settle;
 
-    pub fn short(id: &str) -> String {
+    pub(crate) fn short(id: &str) -> String {
         id[..7.min(id.len())].to_string()
     }
 
-    pub fn row_node<'t>(
+    pub(crate) fn row_node<'t>(
         harness: &'t Harness<'_, AppState>,
         subject: &str,
     ) -> egui_kittest::Node<'t> {
@@ -890,14 +864,12 @@ mod surface {
             .unwrap_or_else(|| panic!("commit row for {subject}"))
     }
 
-    pub fn right_click_row(harness: &mut Harness<'_, AppState>, subject: &str) {
-        row_node(harness, subject).click_secondary();
-        harness.step();
-        harness.step();
-    }
+    /// Right-click the commit row whose label contains `subject`; the shared
+    /// helper matches on the same containment rule.
+    pub(crate) use test_support::harness::right_click_row;
 
     /// Which commit the open menu is aimed at.
-    pub fn menu_target(harness: &Harness<'_, AppState>) -> Option<String> {
+    pub(crate) fn menu_target(harness: &Harness<'_, AppState>) -> Option<String> {
         harness
             .state()
             .ui
@@ -906,29 +878,16 @@ mod surface {
             .map(|(_, id)| id.clone())
     }
 
-    pub fn click_menu_item(harness: &mut Harness<'_, AppState>, label: &str) {
-        harness.remove_cursor();
-        harness.step();
-        let column = harness
-            .get_all_by_role(egui::accesskit::Role::Button)
-            .find(|n| n.accesskit_node().label() == Some("Copy hash".to_string()))
-            .expect("the commit menu is open (Copy hash item)")
-            .rect();
-        harness
-            .get_all_by_role(egui::accesskit::Role::Button)
-            .find(|n| {
-                n.accesskit_node().label() == Some(label.to_string())
-                    && (n.rect().min.x - column.min.x).abs() < 2.0
-            })
-            .unwrap_or_else(|| panic!("menu item {label} inside the open menu"))
-            .click();
-        harness.step();
+    /// Click `label` in the open commit menu. The sentinel is the caller's:
+    /// this file passes `"Copy hash"`, this menu's own first row.
+    pub(crate) fn click_menu_item(harness: &mut Harness<'_, AppState>, label: &str) {
+        test_support::harness::click_menu_item(harness, "Copy hash", label);
     }
 
     /// What the last frame asked the platform to put on the clipboard. egui
     /// carries a copy as an output command rather than a field, so this reads
     /// the same gesture the window's clipboard handler would act on.
-    pub fn copied_text(harness: &Harness<'_, AppState>) -> String {
+    pub(crate) fn copied_text(harness: &Harness<'_, AppState>) -> String {
         harness
             .output()
             .platform_output
@@ -941,11 +900,11 @@ mod surface {
             .unwrap_or_default()
     }
 
-    pub fn toast(harness: &Harness<'_, AppState>) -> Option<String> {
+    pub(crate) fn toast(harness: &Harness<'_, AppState>) -> Option<String> {
         harness.state().ui.toast.as_ref().map(|t| t.message.clone())
     }
 
-    pub fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {
+    pub(crate) fn wait_for(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) -> bool) {
         for _ in 0..600 {
             harness.step();
             std::thread::sleep(Duration::from_millis(10));
@@ -1375,7 +1334,7 @@ mod surface {
 
     /// A press-ready commit row that belongs to a repository the app is not
     /// looking at.
-    pub struct CrossRoot {
+    pub(crate) struct CrossRoot {
         /// Kept alive for as long as the fixture is: dropping it deletes the
         /// repositories the assertions read.
         pub _tmp: TempDir,
@@ -1401,7 +1360,7 @@ mod surface {
     /// belonging to a repository the app is *not* looking at gets on screen: the
     /// listing is a union across every visible root, and each commit carries the
     /// root it came from. Nothing here fabricates a row.
-    pub fn cross_root_row(tag: &str) -> CrossRoot {
+    pub(crate) fn cross_root_row(tag: &str) -> CrossRoot {
         let (tmp, project, clean, dirty) = two_root_project(tag);
         // A branch of the same name in BOTH repositories, forked before each
         // one's tip, created BEFORE the app discovers the roots: a picker lists
@@ -1603,7 +1562,7 @@ mod surface {
     /// Two roots with DIFFERENT subjects, so a row names its own root: two repos
     /// committed with identical content, author and date produce identical hashes,
     /// and a menu aimed at one could not be told apart from the other.
-    pub fn two_root_project(tag: &str) -> (TempDir, PathBuf, PathBuf, PathBuf) {
+    pub(crate) fn two_root_project(tag: &str) -> (TempDir, PathBuf, PathBuf, PathBuf) {
         let tmp = tempfile::tempdir().unwrap();
         let project = tmp.path().join(tag);
         let clean = project.join("clean");
@@ -1706,7 +1665,7 @@ mod surface {
     }
 
     /// Whether the open menu's item `label` is currently disabled.
-    pub fn is_menu_item_gated(harness: &mut Harness<'_, AppState>, label: &str) -> bool {
+    pub(crate) fn is_menu_item_gated(harness: &mut Harness<'_, AppState>, label: &str) -> bool {
         harness.remove_cursor();
         harness.step();
         harness
@@ -1720,7 +1679,11 @@ mod surface {
     /// Travel a real pointer into the open menu's disabled row until its reason
     /// paints.
     #[track_caller]
-    pub fn assert_stated_on_hover(harness: &mut Harness<'_, AppState>, label: &str, reason: &str) {
+    pub(crate) fn assert_stated_on_hover(
+        harness: &mut Harness<'_, AppState>,
+        label: &str,
+        reason: &str,
+    ) {
         harness.remove_cursor();
         harness.step();
         let rect = harness
@@ -2362,121 +2325,106 @@ mod surface {
         (tmp, harness, root)
     }
 
-    /// A merge commit has no single first parent to replay from, so neither
-    /// history verb is offered — and each states its own reason on the item.
-    #[test]
-    fn drop_commit_refuses_a_merge_commit_and_says_why() {
-        let (_tmp, mut harness, _root) = menu_over("gates-merge");
-        right_click_row(&mut harness, "Merge topic into main");
-        assert_menu_item_gated(&mut harness, "Copy hash", "Drop commit");
-        assert_stated_on_hover(
-            &mut harness,
-            "Drop commit",
-            "a merge commit cannot be dropped",
-        );
+    struct GateCase {
+        /// One repository per reason, so a case's assertions cannot be true
+        /// because of another case's history.
+        tag: &'static str,
+        verb: &'static str,
+        subject: &'static str,
+        /// `Some(branch)` scopes the log to another branch first.
+        scope: Option<&'static str>,
+        stated: &'static str,
     }
 
-    /// A root commit is the other end of the same walk a merge is: it has no
-    /// first parent to replay from, so the plan cannot be built and the service
-    /// refuses the verb outright. Stated on the item, not discovered by clicking.
-    #[test]
-    fn drop_commit_refuses_a_root_commit_and_says_why() {
-        let (_tmp, mut harness, _root) = menu_over("gates-root");
-        right_click_row(&mut harness, "alpha: first commit");
-        assert_menu_item_gated(&mut harness, "Copy hash", "Drop commit");
-        assert_stated_on_hover(
-            &mut harness,
-            "Drop commit",
-            "a root commit cannot be dropped",
-        );
-    }
-
-    /// A protected current branch may not be rewritten through the log, and the
-    /// item says so on the row rather than in a box across the pane.
-    #[test]
-    fn drop_commit_refuses_a_protected_current_branch_and_says_why() {
-        let (_tmp, mut harness, _root) = menu_over("gates-protected");
+    /// The four reasons Drop commit is refused and the four that bound Reword
+    /// commit — the same rewrite path, so the same four bounds.
+    const HISTORY_GATES: &[GateCase] = &[
+        // A merge commit has no single first parent to replay from.
+        GateCase {
+            tag: "gates-merge",
+            verb: "Drop commit",
+            subject: "Merge topic into main",
+            scope: None,
+            stated: "a merge commit cannot be dropped",
+        },
+        // A root commit is the other end of the same walk: no parent to replay from.
+        GateCase {
+            tag: "gates-root",
+            verb: "Drop commit",
+            subject: "alpha: first commit",
+            scope: None,
+            stated: "a root commit cannot be dropped",
+        },
         // The default settings protect `main`, and this row is on it.
-        right_click_row(&mut harness, "alpha: second commit");
-        assert_menu_item_gated(&mut harness, "Copy hash", "Drop commit");
-        assert_stated_on_hover(
-            &mut harness,
-            "Drop commit",
-            "the current branch is protected",
-        );
-    }
+        GateCase {
+            tag: "gates-protected",
+            verb: "Drop commit",
+            subject: "alpha: second commit",
+            scope: None,
+            stated: "the current branch is protected",
+        },
+        // Off the current branch: the plan is built to this branch's tip.
+        GateCase {
+            tag: "gates-off-branch",
+            verb: "Drop commit",
+            subject: "alpha: side work",
+            scope: Some("side"),
+            stated: "not on the current branch",
+        },
+        GateCase {
+            tag: "reword-gates-merge",
+            verb: "Reword commit",
+            subject: "Merge topic into main",
+            scope: None,
+            stated: "a merge commit cannot be reworded",
+        },
+        GateCase {
+            tag: "reword-gates-protected",
+            verb: "Reword commit",
+            subject: "alpha: second commit",
+            scope: None,
+            stated: "the current branch is protected",
+        },
+        GateCase {
+            tag: "reword-gates-off-branch",
+            verb: "Reword commit",
+            subject: "alpha: side work",
+            scope: Some("side"),
+            stated: "not on the current branch",
+        },
+        GateCase {
+            tag: "reword-gates-root",
+            verb: "Reword commit",
+            subject: "alpha: first commit",
+            scope: None,
+            stated: "a root commit cannot be reworded",
+        },
+    ];
 
-    /// A commit that lives on another branch is read-only: the plan is built to
-    /// this branch's tip, so there is nothing to replay it onto. It reads as
-    /// deliberately bounded rather than broken.
+    /// Every refused history verb is gated in the open menu AND states the reason
+    /// on the item; the gate table above proves the answers, this proves they
+    /// reach the developer. The row identity is echoed because libtest prints a
+    /// failing test's captured stdout.
     #[test]
-    fn drop_commit_refuses_a_commit_off_the_current_branch_and_says_why() {
-        let (_tmp, mut harness, root) = menu_over("gates-off-branch");
-        // The graph lists another branch's history when that branch is the ref
-        // scope — the ordinary way a commit from elsewhere is reached.
-        harness.state_mut().ui.log_ref_scope = Some((root.clone(), "side".into()));
-        wait_for(&mut harness, |s| s.caches.ref_log(&root, "side").is_some());
-        settle(&mut harness);
-        right_click_row(&mut harness, "alpha: side work");
-        assert_menu_item_gated(&mut harness, "Copy hash", "Drop commit");
-        assert_stated_on_hover(&mut harness, "Drop commit", "not on the current branch");
-    }
+    fn every_refused_history_verb_is_gated_and_states_its_reason() {
+        for case in HISTORY_GATES {
+            println!(
+                "{tag} — {verb}: {stated}",
+                tag = case.tag,
+                verb = case.verb,
+                stated = case.stated
+            );
 
-    /// Reword commit is bounded exactly as Drop commit is — the same rewrite
-    /// path, so the same four bounds — and each is stated on the item rather
-    /// than discovered by clicking. Asserted through the MENU, one repository per
-    /// reason so a failure names the reason it is about: the gate table proves the
-    /// answers, and these prove the answers reach the developer.
-    #[test]
-    fn reword_commit_refuses_a_merge_commit_and_says_why() {
-        let (_tmp, mut harness, _root) = menu_over("reword-gates-merge");
-        right_click_row(&mut harness, "Merge topic into main");
-        assert_menu_item_gated(&mut harness, "Copy hash", "Reword commit");
-        assert_stated_on_hover(
-            &mut harness,
-            "Reword commit",
-            "a merge commit cannot be reworded",
-        );
-    }
-
-    /// The default settings protect `main`, and the row is on it.
-    #[test]
-    fn reword_commit_refuses_a_protected_current_branch_and_says_why() {
-        let (_tmp, mut harness, _root) = menu_over("reword-gates-protected");
-        right_click_row(&mut harness, "alpha: second commit");
-        assert_menu_item_gated(&mut harness, "Copy hash", "Reword commit");
-        assert_stated_on_hover(
-            &mut harness,
-            "Reword commit",
-            "the current branch is protected",
-        );
-    }
-
-    /// A commit that lives on another branch is read-only: the plan is built to
-    /// this branch's tip, so there is nothing to replay it onto.
-    #[test]
-    fn reword_commit_refuses_a_commit_off_the_current_branch_and_says_why() {
-        let (_tmp, mut harness, root) = menu_over("reword-gates-off-branch");
-        harness.state_mut().ui.log_ref_scope = Some((root.clone(), "side".into()));
-        wait_for(&mut harness, |s| s.caches.ref_log(&root, "side").is_some());
-        settle(&mut harness);
-        right_click_row(&mut harness, "alpha: side work");
-        assert_menu_item_gated(&mut harness, "Copy hash", "Reword commit");
-        assert_stated_on_hover(&mut harness, "Reword commit", "not on the current branch");
-    }
-
-    /// A root commit has no first parent to replay from, so the plan cannot be
-    /// built and the service refuses the verb outright.
-    #[test]
-    fn reword_commit_refuses_a_root_commit_and_says_why() {
-        let (_tmp, mut harness, _root) = menu_over("reword-gates-root");
-        right_click_row(&mut harness, "alpha: first commit");
-        assert_menu_item_gated(&mut harness, "Copy hash", "Reword commit");
-        assert_stated_on_hover(
-            &mut harness,
-            "Reword commit",
-            "a root commit cannot be reworded",
-        );
+            let (_tmp, mut harness, root) = menu_over(case.tag);
+            if let Some(branch) = case.scope {
+                harness.state_mut().ui.log_ref_scope = Some((root.clone(), branch.into()));
+                wait_for(&mut harness, |s| s.caches.ref_log(&root, branch).is_some());
+                settle(&mut harness);
+            }
+            right_click_row(&mut harness, case.subject);
+            assert_menu_item_gated(&mut harness, "Copy hash", case.verb);
+            assert_stated_on_hover(&mut harness, case.verb, case.stated);
+        }
     }
 
     /// The commit pane's branch label falls back to the same marker, so the
@@ -2590,7 +2538,7 @@ mod surface {
     }
 
     /// An `AppState` over one repository, with its log warm.
-    pub fn state_with_log_at(repo: PathBuf) -> AppState {
+    pub(crate) fn state_with_log_at(repo: PathBuf) -> AppState {
         let project = repo.parent().expect("a project dir").to_path_buf();
         let mut state = AppState::new(project);
         state.drain_events();
@@ -2602,7 +2550,7 @@ mod surface {
     /// the one part of the feature a headless test cannot reach through a native
     /// dialog, so the choice is substituted — and it is the ONLY new seam this
     /// feature introduces.
-    pub fn choose_patch_path(harness: &mut Harness<'_, AppState>, choice: Option<PathBuf>) {
+    pub(crate) fn choose_patch_path(harness: &mut Harness<'_, AppState>, choice: Option<PathBuf>) {
         harness.state_mut().patch_writer = Some(Box::new(move || choice.clone()));
     }
 

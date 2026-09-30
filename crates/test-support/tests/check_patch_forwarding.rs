@@ -3,40 +3,34 @@
 //! port's rejecting default. A CLI engine inside the wrapper can genuinely
 //! check a patch; suites that wrap one must not see "not supported".
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use test_support::RecordingExecutor;
+use test_support::git_seed::git;
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
 /// Fresh repo on `main` with `file.txt` at "one\n". Returns (guard, path).
+///
+/// The builder stays local: the patches below are written against `file.txt` at
+/// `"one\n"`, and the file is the fixture. The runner is the shared `git_seed::git`.
 fn repo_with_file() -> (tempfile::TempDir, PathBuf) {
-    let run = |dir: &Path, args: &[&str]| {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .expect("spawning git");
-        assert!(
-            output.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).expect("repo dir");
-    run(&repo, &["init", "-b", "main"]);
-    run(&repo, &["config", "user.email", "t@t"]);
-    run(&repo, &["config", "user.name", "t"]);
+    let run = |args: &[&str]| {
+        let _ = git(&repo, args);
+    };
+
+    run(&["init", "-b", "main"]);
+    run(&["config", "user.email", "t@t"]);
+    run(&["config", "user.name", "t"]);
     std::fs::write(repo.join("file.txt"), "one\n").expect("write");
-    run(&repo, &["add", "."]);
-    run(&repo, &["commit", "-m", "c1"]);
+    run(&["add", "."]);
+    run(&["commit", "-m", "c1"]);
     (tmp, repo)
 }
 

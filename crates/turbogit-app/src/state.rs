@@ -1318,18 +1318,25 @@ impl AppState {
         Self::launch_in(project_dir, None)
     }
 
-    /// Launch flow (ADR-0004): with a project directory the shell opens
-    /// straight away; without one the Welcome screen is the landing surface
-    /// and no CWD scan happens. `recents_config_dir` overrides the OS config
-    /// dir hosting the global recents file (tests inject a temp dir).
-    pub fn launch_in(project_dir: Option<PathBuf>, recents_config_dir: Option<PathBuf>) -> Self {
+    /// **`ui` is a parameter on purpose and must not be defaulted here.** The
+    /// two constructors disagree deliberately: `launch_in` passes a visible
+    /// shell and `for_roots` a bare [`UiState::default()`], because that hidden
+    /// chrome is what the headless suites assert against. Unifying it would hide
+    /// the toolbar in the real app and show it in every headless suite — and the
+    /// suites would stay green.
+    fn with_flat_state(
+        project_dir: PathBuf,
+        ui: UiState,
+        recents_config_dir: Option<PathBuf>,
+        pump: Pump,
+    ) -> Self {
         let (tx, rx) = unbounded();
         let settings = VcsSettings::default();
         let executor = build_executor(&settings);
         let git_version =
             turbogit_engine::resolve_git_version(&settings).unwrap_or_else(|_| "unknown".into());
-        let mut state = Self {
-            project_dir: project_dir.clone().unwrap_or_default(),
+        Self {
+            project_dir,
             executor,
             settings,
             multi: MultiRootManager::default(),
@@ -1339,18 +1346,13 @@ impl AppState {
             clone_url: String::new(),
             last_error: None,
             git_version,
-            // Shell regions start visible; View-menu toggles flip these.
-            ui: UiState {
-                show_toolbar: true,
-                show_status_bar: true,
-                ..UiState::default()
-            },
+            ui,
             caches: RootCaches::default(),
             log_display: None,
             recents_config_dir,
             dir_picker: None,
             patch_writer: None,
-            pump: Pump::Spawned,
+            pump,
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             reads: Default::default(),
             #[cfg(test)]
@@ -1364,7 +1366,26 @@ impl AppState {
             fetching_submodules: HashSet::new(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
-        };
+        }
+    }
+
+    /// Launch flow (ADR-0004): with a project directory the shell opens
+    /// straight away; without one the Welcome screen is the landing surface
+    /// and no CWD scan happens. `recents_config_dir` overrides the OS config
+    /// dir hosting the global recents file (tests inject a temp dir).
+    pub fn launch_in(project_dir: Option<PathBuf>, recents_config_dir: Option<PathBuf>) -> Self {
+        // Shell regions start visible; View-menu toggles flip these. This is
+        // `for_roots`'s deliberate opposite — see `with_flat_state`.
+        let mut state = Self::with_flat_state(
+            project_dir.clone().unwrap_or_default(),
+            UiState {
+                show_toolbar: true,
+                show_status_bar: true,
+                ..UiState::default()
+            },
+            recents_config_dir,
+            Pump::Spawned,
+        );
 
         // Global recents (ADR-0005) load before anything is open so the
         // Welcome screen can list them.
@@ -1415,45 +1436,14 @@ impl AppState {
     /// Panics if any root cannot be snapshotted — a broken test fixture should
     /// fail at construction.
     pub fn for_roots(project_dir: &Path, roots: &[PathBuf]) -> Self {
-        let (tx, rx) = unbounded();
-        let settings = VcsSettings::default();
-        let executor = build_executor(&settings);
-        let git_version =
-            turbogit_engine::resolve_git_version(&settings).unwrap_or_else(|_| "unknown".into());
-        let mut state = Self {
-            project_dir: project_dir.to_path_buf(),
-            executor,
-            settings,
-            multi: MultiRootManager::default(),
-            tx,
-            rx,
-            selected_root: None,
-            clone_url: String::new(),
-            last_error: None,
-            git_version,
-            // Bare UiState defaults (toolbar/status bar hidden), matching what
-            // the headless suites assert against — NOT launch_in's visible shell.
-            ui: UiState::default(),
-            caches: RootCaches::default(),
-            log_display: None,
-            recents_config_dir: None,
-            dir_picker: None,
-            patch_writer: None,
-            pump: Pump::Inline,
-            worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
-            reads: Default::default(),
-            #[cfg(test)]
-            hold_reads: false,
-            #[cfg(test)]
-            held_reads: Vec::new(),
-            log_fetch_inflight: HashSet::new(),
-            scoped_log_fetch_inflight: HashSet::new(),
-            fetching_refs: HashSet::new(),
-            fetching_stats: HashSet::new(),
-            fetching_submodules: HashSet::new(),
-            incoming_poll_last: None,
-            incoming_poll_inflight: HashSet::new(),
-        };
+        // Bare UiState defaults (toolbar/status bar hidden), matching what
+        // the headless suites assert against — NOT launch_in's visible shell.
+        let mut state = Self::with_flat_state(
+            project_dir.to_path_buf(),
+            UiState::default(),
+            None,
+            Pump::Inline,
+        );
         let results = turbogit_services::multi_root::register_all(
             state.executor.as_ref(),
             &mut state.multi,
@@ -2123,7 +2113,7 @@ impl AppState {
                 &snapshots,
                 &change,
             );
-            let _ = tx.send(AppEvent::BulkCompleted { label, results });
+            post_bulk_completed(&tx, label, results);
         });
     }
 
@@ -2676,20 +2666,9 @@ impl AppState {
             .filter(|id| !blocked.contains_key(id))
             .cloned()
             .collect();
-        let workers = bulk_run::DEFAULT_WORKERS;
         let control = bulk_run::RunControl::default();
-        self.ui.cherry_run = Some(crate::cherry_run_view::CherryRunView {
-            source_name: source.name(),
-            commit_count: commits.len(),
-            stop_on_conflict: stop,
-            rows: bulk_run::monitor_rows(&fleet, workers),
-            workers,
-            started_at: std::time::Instant::now(),
-            elapsed: std::time::Duration::ZERO,
-            eta: None,
-            control: control.clone(),
-            history_id: chrono::Utc::now().timestamp_millis() as u64,
-        });
+        self.ui.cherry_run =
+            Some(RunSeed::start(&fleet, &control).cherry(source.name(), commits.len(), stop));
         // Snapshot the dispatched roots: the worker owns the paths, `self`
         // stays behind on the UI thread.
         let snapshots: HashMap<RootId, PathBuf> = dispatch_roots
@@ -2697,40 +2676,21 @@ impl AppState {
             .filter_map(|id| self.multi.by_id(id).map(|r| (id.clone(), r.path.clone())))
             .collect();
         let executor = self.executor.clone();
-        let tx = self.tx.clone();
         let source_path = source.0.to_path_buf();
         let label = format!("cherry-pick across {} repos", targets.len());
-        std::thread::spawn(move || {
-            let step = |rid: &RootId| -> TgResult<()> {
-                let Some(path) = snapshots.get(rid) else {
-                    return Err(TgError::Other("root not registered".into()));
-                };
-                turbogit_services::cherry_across::apply_to_root(
-                    executor.as_ref(),
-                    &source_path,
-                    path,
-                    &commits,
-                    stop,
-                )
+        let step = move |rid: &RootId| -> TgResult<()> {
+            let Some(path) = snapshots.get(rid) else {
+                return Err(TgError::Other("root not registered".into()));
             };
-            let outcomes = bulk_run::run_cascade(
-                &dispatch_roots,
-                workers,
-                &step,
-                &|event| {
-                    let _ = tx.send(AppEvent::BulkRunProgress { event });
-                },
-                &control,
-            );
-            let results = outcomes
-                .into_iter()
-                .filter_map(|(root, outcome)| match outcome {
-                    bulk_run::RunOutcome::Done(result) => Some((root, result)),
-                    bulk_run::RunOutcome::Stopped => None,
-                })
-                .collect();
-            let _ = tx.send(AppEvent::BulkCompleted { label, results });
-        });
+            turbogit_services::cherry_across::apply_to_root(
+                executor.as_ref(),
+                &source_path,
+                path,
+                &commits,
+                stop,
+            )
+        };
+        self.spawn_cascade_pass(dispatch_roots, control, label, step, done_rows_only);
     }
 
     /// Resolve deep link for the cherry run monitor (issue 16): the failed
@@ -3260,7 +3220,6 @@ impl AppState {
                         view.update_progress();
                     }
                 }
-                _ => {}
             }
             drained += 1;
         }
@@ -3426,7 +3385,6 @@ impl AppState {
                 )
             })
             .collect();
-        let planned_for_pool = planned_ids.clone();
         let label = if amend {
             format!("Amend on {len} repos", len = planned_ids.len())
         } else {
@@ -3434,58 +3392,24 @@ impl AppState {
         };
         let executor = self.executor.clone();
         let message = message.to_string();
-        let tx = self.tx.clone();
-        let workers = bulk_run::DEFAULT_WORKERS;
         let control = bulk_run::RunControl::default();
-        let label_for_view = label.clone();
-        self.ui.bulk_run = Some(crate::bulk_run_view::BulkRunView {
-            op: BulkOp::Commit,
-            rebase: amend,
-            branch: String::new(),
-            command: String::new(),
-            merge_opts: MergeOpts::default(),
-            rows: bulk_run::monitor_rows(&fleet, workers),
-            workers,
-            started_at: std::time::Instant::now(),
-            elapsed: std::time::Duration::ZERO,
-            eta: None,
-            control: control.clone(),
-            history_id: chrono::Utc::now().timestamp_millis() as u64,
-            undo: Vec::new(),
-        });
-        let label_for_event = label.clone();
-        std::thread::spawn(move || {
-            let step = |rid: &RootId| -> TgResult<()> {
-                let path = roots
-                    .iter()
-                    .find(|r| r.id == *rid)
-                    .map(|r| r.path.clone())
-                    .ok_or_else(|| TgError::Other("root not registered".into()))?;
-                commit_across::run_one(executor.as_ref(), &path, &message, amend).map(|_| ())
-            };
-            let on_event = |event: bulk_run::RunEvent| {
-                let _ = tx.send(AppEvent::BulkRunProgress { event });
-            };
-            let outcomes =
-                bulk_run::run_cascade(&planned_for_pool, workers, &step, &on_event, &control);
-            let results: Vec<(RootId, TgResult<()>)> = outcomes
-                .into_iter()
-                .map(|(rid, outcome)| {
-                    let result = match outcome {
-                        bulk_run::RunOutcome::Done(r) => r,
-                        bulk_run::RunOutcome::Stopped => Err(TgError::Other("stopped".into())),
-                    };
-                    (rid, result)
-                })
-                .collect();
-            let _ = tx.send(AppEvent::BulkCompleted {
-                label: label_for_event,
-                results,
-            });
-        });
-        // Surface a small banner so the user sees the run kicked off even
-        // before the monitor paints. The monitor is the durable surface.
-        let _ = label_for_view; // silence the unused-binding lint when banner is gated below
+        self.ui.bulk_run = Some(RunSeed::start(&fleet, &control).bulk(
+            BulkOp::Commit,
+            amend,
+            String::new(),
+            String::new(),
+            MergeOpts::default(),
+            Vec::new(),
+        ));
+        let step = move |rid: &RootId| -> TgResult<()> {
+            let path = roots
+                .iter()
+                .find(|r| r.id == *rid)
+                .map(|r| r.path.clone())
+                .ok_or_else(|| TgError::Other("root not registered".into()))?;
+            commit_across::run_one(executor.as_ref(), &path, &message, amend).map(|_| ())
+        };
+        self.spawn_cascade_pass(planned_ids, control, label, step, stopped_as_failed);
     }
 
     /// Open the preflight matrix modal for `op`, seeding the pull policy
@@ -3832,6 +3756,46 @@ impl AppState {
         self.persist_ui();
     }
 
+    /// Spawn one cascade pool pass on a worker thread.
+    ///
+    /// **The send order is the contract, and nothing in the test tree checks
+    /// it.** Every [`bulk_run::RunEvent`] goes out as
+    /// [`AppEvent::BulkRunProgress`] as the pool emits it; the single
+    /// [`AppEvent::BulkCompleted`] goes out only after `run_cascade` has joined
+    /// every worker. The monitor's rows, tallies and closing moment follow from
+    /// that order.
+    ///
+    /// `fold` is the caller's, and is what this function does not unify:
+    /// [`done_rows_only`] *drops* a root a stop halted (a skipped row);
+    /// [`stopped_as_failed`] reports it as an error. Cherry and the bulk grid
+    /// take the first, commit-across the second — agreeing is a change to what
+    /// the monitor shows, not a cleanup.
+    fn spawn_cascade_pass(
+        &self,
+        roots: Vec<RootId>,
+        control: bulk_run::RunControl,
+        label: String,
+        step: impl Fn(&RootId) -> TgResult<()> + Send + Sync + 'static,
+        fold: impl FnOnce(Vec<(RootId, bulk_run::RunOutcome)>) -> Vec<(RootId, TgResult<()>)>
+        + Send
+        + 'static,
+    ) {
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let on_event = |event: bulk_run::RunEvent| {
+                let _ = tx.send(AppEvent::BulkRunProgress { event });
+            };
+            let outcomes = bulk_run::run_cascade(
+                &roots,
+                bulk_run::DEFAULT_WORKERS,
+                &step,
+                &on_event,
+                &control,
+            );
+            post_bulk_completed(&tx, label, fold(outcomes));
+        });
+    }
+
     /// Run a confirmed bulk plan (the preflight matrix's will-run rows) on a
     /// bounded worker pool (issue 10): the live monitor opens immediately —
     /// one row per selected repo, preflight skips seeded with their reason —
@@ -3898,7 +3862,6 @@ impl AppState {
                 fleet.push((root.clone(), root.name(), None));
             }
         }
-        let workers = bulk_run::DEFAULT_WORKERS;
         let control = bulk_run::RunControl::default();
         // Undo capture (issue 12): a branch cascade records each repo's
         // prior checkout and whether the run creates the branch, so
@@ -3928,21 +3891,19 @@ impl AppState {
         } else {
             MergeOpts::default()
         };
-        self.ui.bulk_run = Some(crate::bulk_run_view::BulkRunView {
-            op: plan.op,
-            rebase: plan.rebase,
-            branch: plan.branch.clone(),
-            command: plan.command.clone(),
-            merge_opts: merge_opts.clone(),
-            rows: bulk_run::monitor_rows(&fleet, workers),
-            workers,
-            started_at: std::time::Instant::now(),
-            elapsed: std::time::Duration::ZERO,
-            eta: None,
-            control: control.clone(),
-            history_id: chrono::Utc::now().timestamp_millis() as u64,
+        let op = plan.op;
+        let rebase = plan.rebase;
+        let branch = plan.branch.clone();
+        let command = plan.command.clone();
+        let merge_for_view = merge_opts.clone();
+        self.ui.bulk_run = Some(RunSeed::start(&fleet, &control).bulk(
+            op,
+            rebase,
+            branch,
+            command,
+            merge_for_view,
             undo,
-        });
+        ));
         let roots = plan.roots.clone();
         self.dispatch_bulk_pass(plan, merge_opts, roots, control);
     }
@@ -3977,43 +3938,28 @@ impl AppState {
             .collect();
         let settings = self.settings.clone();
         let executor = self.executor.clone();
-        let tx = self.tx.clone();
-        let workers = bulk_run::DEFAULT_WORKERS;
-        std::thread::spawn(move || {
-            let plan = bulk_ops::BulkPlan {
+        // The step plan carries no roots: `run_step` is handed the root directly.
+        let step_plan = bulk_ops::BulkPlan {
+            op,
+            roots: Vec::new(),
+            rebase,
+            branch,
+            command,
+        };
+        let step = move |rid: &RootId| -> TgResult<()> {
+            let Some(root) = snapshots.get(rid) else {
+                return Err(TgError::Other("root not registered".into()));
+            };
+            bulk_ops::run_step(
                 op,
-                roots: Vec::new(),
-                rebase,
-                branch,
-                command,
-            };
-            let step = |rid: &RootId| -> TgResult<()> {
-                let Some(root) = snapshots.get(rid) else {
-                    return Err(TgError::Other("root not registered".into()));
-                };
-                bulk_ops::run_step(op, executor.as_ref(), root, &plan, &settings, &merge_opts)
-            };
-            let outcomes = bulk_run::run_cascade(
-                &roots,
-                workers,
-                &step,
-                &|event| {
-                    let _ = tx.send(AppEvent::BulkRunProgress { event });
-                },
-                &control,
-            );
-            let results = outcomes
-                .into_iter()
-                .filter_map(|(root, outcome)| match outcome {
-                    bulk_run::RunOutcome::Done(result) => Some((root, result)),
-                    bulk_run::RunOutcome::Stopped => None,
-                })
-                .collect();
-            let _ = tx.send(AppEvent::BulkCompleted {
-                label: op.label().to_string(),
-                results,
-            });
-        });
+                executor.as_ref(),
+                root,
+                &step_plan,
+                &settings,
+                &merge_opts,
+            )
+        };
+        self.spawn_cascade_pass(roots, control, op.label().to_string(), step, done_rows_only);
     }
 
     /// Stop remaining (issue 10, screen 03): halt the in-flight pass's
@@ -4210,7 +4156,133 @@ fn push_report(state: &AppState, affected: &Affected, label: &str) -> String {
     }
 }
 
-/// First 7 chars of a commit id for op labels (issue 15).
+/// The fields every monitored run's view shares, built once at dispatch.
+///
+/// **The field order is load-bearing.** `started_at` and `history_id` each read
+/// a clock, and a struct literal is evaluated in source order, so
+/// [`std::time::Instant::now()`] precedes the `history_id` wall-clock read.
+/// Reordering them, or hoisting `history_id` into a `let`, changes which instant
+/// the run is recorded as having started — and nothing in the test tree sees
+/// that, so a broken order still passes.
+struct RunSeed {
+    rows: Vec<bulk_run::RunRow>,
+    workers: usize,
+    started_at: std::time::Instant,
+    elapsed: std::time::Duration,
+    eta: Option<std::time::Duration>,
+    control: bulk_run::RunControl,
+    history_id: u64,
+}
+
+impl RunSeed {
+    /// Seed a run about to dispatch over `fleet`; the view keeps its own clone
+    /// of `control` while the pool gets the original, so the monitor's stop
+    /// button and the pool share one flag.
+    fn start(fleet: &[(RootId, String, Option<String>)], control: &bulk_run::RunControl) -> Self {
+        let workers = bulk_run::DEFAULT_WORKERS;
+        Self {
+            rows: bulk_run::monitor_rows(fleet, workers),
+            workers,
+            started_at: std::time::Instant::now(),
+            elapsed: std::time::Duration::ZERO,
+            eta: None,
+            control: control.clone(),
+            history_id: chrono::Utc::now().timestamp_millis() as u64,
+        }
+    }
+
+    /// The bulk grid's monitor for this run. `undo` is captured by the caller
+    /// *before* the plan reaches the pass: a retry pass re-dispatches through
+    /// this same view, so it must merge into this same `history_id` — one
+    /// history record per run.
+    fn bulk(
+        self,
+        op: BulkOp,
+        rebase: bool,
+        branch: String,
+        command: String,
+        merge_opts: MergeOpts,
+        undo: Vec<crate::bulk_history::UndoRow>,
+    ) -> crate::bulk_run_view::BulkRunView {
+        crate::bulk_run_view::BulkRunView {
+            op,
+            rebase,
+            branch,
+            command,
+            merge_opts,
+            rows: self.rows,
+            workers: self.workers,
+            started_at: self.started_at,
+            elapsed: self.elapsed,
+            eta: self.eta,
+            control: self.control,
+            history_id: self.history_id,
+            undo,
+        }
+    }
+
+    /// The cherry-pick-across monitor for this run (issue 16).
+    fn cherry(
+        self,
+        source_name: String,
+        commit_count: usize,
+        stop_on_conflict: bool,
+    ) -> crate::cherry_run_view::CherryRunView {
+        crate::cherry_run_view::CherryRunView {
+            source_name,
+            commit_count,
+            stop_on_conflict,
+            rows: self.rows,
+            workers: self.workers,
+            started_at: self.started_at,
+            elapsed: self.elapsed,
+            eta: self.eta,
+            control: self.control,
+            history_id: self.history_id,
+        }
+    }
+}
+
+/// Outcome fold for the passes that report only what ran: a root a stop halted
+/// while queued contributes no row, so it stays a *skipped* row, not a failure.
+fn done_rows_only(outcomes: Vec<(RootId, bulk_run::RunOutcome)>) -> Vec<(RootId, TgResult<()>)> {
+    outcomes
+        .into_iter()
+        .filter_map(|(root, outcome)| match outcome {
+            bulk_run::RunOutcome::Done(result) => Some((root, result)),
+            bulk_run::RunOutcome::Stopped => None,
+        })
+        .collect()
+}
+
+/// Outcome fold for commit-across, which reports a root a stop halted as a
+/// *failed* row — a commit monitor has to say a repo did not get its commit.
+/// The deliberate counterpart to [`done_rows_only`], not an oversight.
+fn stopped_as_failed(outcomes: Vec<(RootId, bulk_run::RunOutcome)>) -> Vec<(RootId, TgResult<()>)> {
+    outcomes
+        .into_iter()
+        .map(|(root, outcome)| {
+            let result = match outcome {
+                bulk_run::RunOutcome::Done(r) => r,
+                bulk_run::RunOutcome::Stopped => Err(TgError::Other("stopped".into())),
+            };
+            (root, result)
+        })
+        .collect()
+}
+
+/// Post one multi-root run's completion — the aggregate toast, the activity
+/// entry, the recent-bulk-operations record and the full refresh all drain out
+/// of this single [`AppEvent::BulkCompleted`].
+///
+/// The remote manager's apply ends here too, and sets `self.ui.busy` itself: it
+/// is a pool spawn with no monitor, no stop handle and no progress events, so
+/// [`AppState::spawn_cascade_pass`]'s `RunSeed`/`RunControl` would go unused — and
+/// a spinner over every cascade would be a behaviour change.
+fn post_bulk_completed(tx: &Sender<AppEvent>, label: String, results: Vec<(RootId, TgResult<()>)>) {
+    let _ = tx.send(AppEvent::BulkCompleted { label, results });
+}
+
 /// Apply one cascade pool event to the run monitor's rows; `true` when a
 /// step finished (so the caller refreshes the elapsed/ETA snapshots). The
 /// same pool drives the bulk grid's runs and cherry-pick-across runs.
@@ -4249,8 +4321,9 @@ fn advance_run_rows(rows: &mut [bulk_run::RunRow], event: bulk_run::RunEvent) ->
     }
 }
 
+/// The short form of a commit id, in operation labels and toast text.
 pub(crate) fn short_sha(id: &str) -> String {
-    id.chars().take(7).collect()
+    short_commit_ref(id)
 }
 
 /// Ahead/behind of `root`'s current branch vs its upstream (Epic D3);

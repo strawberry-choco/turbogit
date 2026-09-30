@@ -15,6 +15,10 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::cherry_across;
 
+/// A `git` runner that pins the commit identity on every invocation, and
+/// deliberately NOT `test_support::git_seed::git`, which takes no per-call env:
+/// the two repos this suite compares must agree on identity for a forecast to be
+/// about content rather than authorship.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)

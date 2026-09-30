@@ -6,24 +6,12 @@
 //! `git`).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{MergeOpts, MultiRootManager, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::bulk_ops::{self, BulkOp, BulkPlan};
 use turbogit_services::multi_root::{build_root, register};
-
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git").args(args).current_dir(dir).output();
-    let output = output.expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
 
 /// Append `text` to `<dir>/<name>`, stage, commit, return HEAD SHA.
 fn commit(dir: &Path, name: &str, text: &str) -> String {
@@ -36,9 +24,9 @@ fn commit(dir: &Path, name: &str, text: &str) -> String {
     use std::io::Write;
     writeln!(f, "{text}").expect("appending work file");
     drop(f);
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-m", text]);
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", text]);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 fn engine() -> CliExecutor {
@@ -52,13 +40,13 @@ fn engine() -> CliExecutor {
 fn ff_repo(tmp: &Path, name: &str) -> PathBuf {
     let repo = tmp.join(name);
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     commit(&repo, "base.txt", "base");
-    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
     commit(&repo, "feature.txt", "feature-1");
-    run_git(&repo, &["checkout", "-q", "main"]);
+    git(&repo, &["checkout", "-q", "main"]);
     repo
 }
 
@@ -101,7 +89,7 @@ fn merge_step_merges_the_source_branch_with_the_given_options() {
     let engine = engine();
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = ff_repo(tmp.path(), "repo");
-    let before = run_git(&repo, &["rev-parse", "main"]).trim().to_string();
+    let before = git(&repo, &["rev-parse", "main"]).trim().to_string();
     let root = build_root(&engine, &repo).expect("root snapshot");
 
     // The dialog builds its options through merge_flags — use the same
@@ -132,7 +120,7 @@ fn merge_step_merges_the_source_branch_with_the_given_options() {
     // --no-commit semantics: the working tree carries the merge, staged, but
     // main itself has not moved.
     assert_eq!(
-        run_git(&repo, &["rev-parse", "main"]).trim(),
+        git(&repo, &["rev-parse", "main"]).trim(),
         before,
         "no merge commit is created under --no-commit"
     );
@@ -141,7 +129,7 @@ fn merge_step_merges_the_source_branch_with_the_given_options() {
         "the merge is left in progress for the user to commit"
     );
     assert_eq!(
-        run_git(&repo, &["status", "--short"]).trim(),
+        git(&repo, &["status", "--short"]).trim(),
         "A  feature.txt",
         "the incoming changes are staged"
     );

@@ -13,23 +13,15 @@ use std::path::{Path, PathBuf};
 use egui::Shape;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use test_support::harness::{painted_text, shell_harness_over};
 use turbogit_app::state::{AppState, LOG_BATCH_SIZE};
-use turbogit_ui::theme::{configure_style, install_fonts};
 
 // --- painted-output helpers ---------------------------------------------------
 
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
+/// Assert some painted text galley is EXACTLY `needle`. Not
+/// `test_support::harness::assert_painted`, which matches with `t.contains`:
+/// every `needle` here is a whole commit subject or a full row label, so
+/// containment would let a longer galley that merely mentions it pass.
 #[track_caller]
 fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
     let texts = painted_text(harness);
@@ -45,6 +37,11 @@ fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
 /// subprocess, so a frame-count settle returns before it lands and the blame
 /// view paints an empty shell. This is the same rule `blame_view.rs` and
 /// `diff_viewer.rs` settle by.
+///
+/// Not either shared settle: both key their fingerprint on painted text ALONE, but the
+/// `blame` and `log` reads a parent-link click triggers land their events after the
+/// pane has stopped changing — so a text-only fingerprint reports the list settled and
+/// the test measures a viewport the user never saw.
 fn settle(harness: &mut Harness<'_, AppState>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut prev = String::new();
@@ -82,8 +79,9 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-// --- Fixture: a long linear history -------------------------------------------
-
+/// A `git` runner that pins the commit identity on every invocation, and deliberately
+/// NOT `test_support::git_seed::git`, which takes no per-call env: these rows are
+/// matched by subject and hash, so a machine-dependent identity moves the labels.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)
@@ -216,23 +214,10 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
     let root = state.multi.roots[0].id.clone();
     state.fetch_log(root);
     state.ui.tab = turbogit_app::state::Tab::Log;
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         state,
+        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
     );
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
     settle(&mut harness);
     // Page the whole history in through the pane's own affordance, so the
     // window is as deep as the real one gets.

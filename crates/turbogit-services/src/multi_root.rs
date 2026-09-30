@@ -134,14 +134,6 @@ pub fn register_all<P: AsRef<Path>>(
         .collect()
 }
 
-/// Aggregate per-root change counts: `(id, modified_count, unversioned_count)`.
-pub fn roots_status(mgr: &MultiRootManager) -> Vec<(RootId, usize, usize)> {
-    mgr.roots
-        .iter()
-        .map(|r| (r.id.clone(), r.status.modified(), r.status.unversioned()))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,37 +7,24 @@
 
 use std::path::{Path, PathBuf};
 
+use test_support::git_seed::git;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::integrate_service;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
-    std::fs::write(dir.join(name), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
+    test_support::git_seed::commit(dir, name, body, msg);
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 /// A repo on `main` with two commits, plus a `feature` branch forked at the
 /// first commit carrying one extra commit. Returns (main tip, feature commit).
+///
+/// Kept local, not `git_seed::repo_with_feature_branch` despite the name: two
+/// commits on `main`, `feature` forked at the *first*, no remote — two assertions
+/// below are literally `rev-list --count main == 2` and `== 3`, and a remote
+/// would turn the no-upstream branch guard on. The old runner's `GIT_AUTHOR_*`
+/// env is gone: `seeded_repo` sets the same `t <t@t>` on the repository.
 fn repo_with_feature_branch() -> (PathBuf, String, String) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("repo");

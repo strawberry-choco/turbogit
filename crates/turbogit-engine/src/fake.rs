@@ -476,10 +476,6 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn add_all(&self, _root: &Path) -> TgResult<()> {
-        Ok(())
-    }
-
     fn unstage(&self, _root: &Path, _paths: &[PathBuf]) -> TgResult<()> {
         Ok(())
     }

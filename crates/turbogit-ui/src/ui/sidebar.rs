@@ -31,6 +31,7 @@ use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::smart_rules::SmartGroupRule;
 use turbogit_app::state::{AppState, Dialog, Toast};
+use turbogit_domain::model::forward_slash_path;
 
 /// Left rail width (screen 01); also used by the shell's geometry.
 pub const SIDEBAR_WIDTH: f32 = 280.0;
@@ -260,12 +261,13 @@ fn render_selection_bar(ui: &mut Ui, state: &mut AppState, total: usize) {
     let rect = ui.max_rect();
     let painter = ui.painter().clone();
     painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-    painter.line_segment(
-        [
-            Pos2::new(rect.left(), rect.top() + 0.5),
-            Pos2::new(rect.right(), rect.top() + 0.5),
-        ],
-        Stroke::new(1.0, Palette::LINE_SUBTLE),
+    // Structural tone: this is the selected band's own edge, not a division
+    // inside one surface.
+    widgets::edge_rule(
+        ui.painter(),
+        rect,
+        widgets::Edge::Top,
+        Palette::RULE_STRUCTURAL,
     );
 
     let cy = rect.center().y;
@@ -411,13 +413,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     // holds against the rail as well as against the app background.
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::SIDEBAR);
-    ui.painter().line_segment(
-        [
-            Pos2::new(rect.right() - 0.5, rect.top()),
-            Pos2::new(rect.right() - 0.5, rect.bottom()),
-        ],
-        Stroke::new(1.0, Palette::LINE),
-    );
+    // `LINE`, not `LINE_SUBTLE`: this edge separates the rail from the content
+    // column beside it.
+    widgets::edge_rule(ui.painter(), rect, widgets::Edge::Right, Palette::LINE);
 
     let mut col = ui.new_child(
         UiBuilder::new()
@@ -1287,9 +1285,14 @@ fn group_header_rect(ui: &mut Ui) -> egui::Rect {
 /// The node's relative path under the project directory, normalized to
 /// forward slashes so collapse keys are stable across platforms (and match
 /// the persisted `ui.ron` keys on any OS).
+///
+/// Two jobs, and only the second one is shared: the `strip_prefix` is what
+/// makes a key *relative* and what answers `""` for a path outside the
+/// project, and [`forward_slash_path`] is only the separator rewrite. Folding
+/// this into that helper would drop the strip and lose a user's collapsed tree.
 fn relative_key(path: &std::path::Path, project_dir: &std::path::Path) -> String {
     path.strip_prefix(project_dir)
-        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .map(forward_slash_path)
         .unwrap_or_default()
 }
 

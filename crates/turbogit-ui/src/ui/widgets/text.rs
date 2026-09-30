@@ -1,15 +1,29 @@
-//! General-purpose text utilities used by commit presentations.
+//! Text painting for the widget vocabulary, plus the re-exported short-commit-reference helper.
 
-use egui::{Color32, FontId, Pos2, Rect};
+use egui::{Color32, FontId, Pos2, Rect, RichText, Ui};
 
-/// Default number of Unicode characters retained from a commit reference.
-pub const SHORT_COMMIT_REF_CHARS: usize = 7;
+use crate::theme::Palette;
 
-/// Format a commit reference for compact display without splitting a Unicode
-/// scalar value. References at or below the default length pass through intact.
-pub fn short_commit_ref(reference: &str) -> String {
-    reference.chars().take(SHORT_COMMIT_REF_CHARS).collect()
+/// The one "no X" empty state: the sentence a list shows when it has nothing to
+/// list, in the app's **muted** ink, at the body type.
+///
+/// **Why one function.** Twenty-six call sites painted twenty-nine such sentences eight
+/// different ways, one a raw `Color32::GRAY` at 4.3:1 — below the 4.5:1 floor the ink
+/// ramp is audited at. All are now `INK_3`, the step R3 gives section labels, column
+/// headers and metadata, which is what these sit under. Deliberately not `INK_4`, the
+/// step for what the user already knows they can ignore: it is sub-AA (3.5:1) on every
+/// surface. The type is the body type, not the 9 px `MICRO_TEXT` a header uses.
+///
+/// **What this is not.** Not a `note`/`alert_box` well — a framed well would make an
+/// ordinary result look like a problem; not a `group_title`, the caller's heading; not
+/// `branch_tree_view::no_branches_state`, a call to action.
+pub fn empty_state(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).color(Palette::INK_3));
 }
+
+/// Re-exported: the format is a git fact, not a widget one, but these names are
+/// established public surface (`turbogit_ui::ui::widgets::short_commit_ref`).
+pub use turbogit_domain::model::{SHORT_COMMIT_REF_CHARS, short_commit_ref};
 
 /// Paint `text` centred inside `rect` on **both** axes.
 ///

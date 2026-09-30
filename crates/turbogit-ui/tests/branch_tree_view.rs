@@ -32,7 +32,7 @@ use test_support::harness::{
 };
 use turbogit_app::state::TreeState;
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
-use turbogit_ui::theme::{Palette, configure_style, install_fonts};
+use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::branch_tree_view::{
     TreeEvent, TreeGroup, TreeProps, branch_tree, remotes_revealed,
 };
@@ -205,6 +205,22 @@ impl Fixture {
         }
     }
 
+    /// alpha alone, remote groups open: the per-remote collapse at top level.
+    fn alpha_with_remotes() -> Self {
+        let mut fx = Self::alpha_only();
+        fx.tree.show_remotes = true;
+        fx
+    }
+
+    /// Two repositories, alpha's remotes revealed from its rollup.
+    fn alpha_revealed_in_two_repos() -> Self {
+        let mut fx = Self::two_repos();
+        fx.tree
+            .remotes_revealed
+            .insert(RootId(Arc::from(PathBuf::from("/alpha"))));
+        fx
+    }
+
     /// The view model, rebuilt each frame exactly as the surfaces do.
     fn view(&self) -> BranchView {
         build_branch_view(&self.roots, &self.tags, &|root| {
@@ -264,12 +280,14 @@ fn fixture_harness(fx: Fixture) -> Harness<'static, Fixture> {
 
 /// The same fixture at an explicit width, for the narrow-list cases.
 fn fixture_harness_at(fx: Fixture, width: f32) -> Harness<'static, Fixture> {
+    // Kept local, not `harness::widget_harness`, whose state is `()`: the
+    // props-in / events-out round trip needs the `Fixture` itself as the state.
     let mut fonts_installed = false;
     let mut harness = Harness::new_ui_state(
         move |ui, fx| {
-            configure_style(ui.ctx());
+            turbogit_ui::theme::configure_style(ui.ctx());
             if !fonts_installed {
-                install_fonts(ui.ctx());
+                turbogit_ui::theme::install_fonts(ui.ctx());
                 fonts_installed = true;
             }
             let view = fx.view();
@@ -338,6 +356,12 @@ fn galleys_for(harness: &Harness<'_, Fixture>, text: &str) -> Vec<PaintedGalley>
         .into_iter()
         .filter(|g| g.text == text)
         .collect()
+}
+
+/// True when some painted galley contains `needle`. Substring, because a painted
+/// string is rarely the needle whole; exact-text callers ask [`galleys_for`].
+fn painted_contains(harness: &Harness<'_, Fixture>, needle: &str) -> bool {
+    painted_text(harness).iter().any(|t| t.contains(needle))
 }
 
 // --- rows per repository ------------------------------------------------------
@@ -863,30 +887,47 @@ fn count_label(h: &Harness<'_, Fixture>, label: &str) -> usize {
 
 // --- the active-branch marker -------------------------------------------------
 
-/// One `Current` marker per repository section — the row's answer to "where am
-/// I right now". It is a word in the accent ink on no fill, so a current row
+/// One `Current` marker per repository section — the row's answer to "where am I
+/// right now". It is a word in the accent ink on no fill, so a current row
 /// carries no second filled shape (see
 /// `the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_a_word`).
+///
+/// (case, fixture, remotes revealed, markers expected). The third is the
+/// load-bearing one — revealing remotes must not add a second marker for the
+/// same one current branch.
+type CurrentMarkerRow = (&'static str, fn() -> Fixture, bool, usize);
+
+const CURRENT_MARKERS: [CurrentMarkerRow; 3] = [
+    (
+        "two repositories, remotes rolled up",
+        Fixture::two_repos,
+        false,
+        2,
+    ),
+    ("one repository", Fixture::alpha_only, false, 1),
+    (
+        "two repositories with their remotes revealed",
+        Fixture::two_repos,
+        true,
+        2,
+    ),
+];
+
 #[test]
 fn one_current_marker_per_repo_section() {
-    let mut h = fixture_harness(Fixture::two_repos());
-    settle(&mut h);
+    for &(case, fixture, show_remotes, expected) in &CURRENT_MARKERS {
+        let mut fx = fixture();
+        fx.tree.show_remotes = show_remotes;
+        let mut h = fixture_harness(fx);
+        settle(&mut h);
 
-    // alpha is on `main`, beta on `wip`.
-    assert_eq!(
-        galleys_for(&h, "Current").len(),
-        2,
-        "one current marker per repo section: {:?}",
-        painted_text(&h)
-    );
-
-    let mut h = fixture_harness(Fixture::alpha_only());
-    settle(&mut h);
-    assert_eq!(
-        galleys_for(&h, "Current").len(),
-        1,
-        "a single section paints a single current marker"
-    );
+        assert_eq!(
+            galleys_for(&h, "Current").len(),
+            expected,
+            "{case}: one current marker per repo section: {:?}",
+            painted_text(&h)
+        );
+    }
 }
 
 /// The current row answers "where am I" with a band across the whole list plus
@@ -1045,22 +1086,7 @@ fn a_current_row_keeps_its_state_words() {
     );
 }
 
-/// Revealing remote rows must not multiply the marker: one current branch is
-/// one marker, per repository section.
-#[test]
-fn revealing_remotes_does_not_add_a_second_current_marker() {
-    let mut fx = Fixture::two_repos();
-    fx.tree.show_remotes = true;
-    let mut h = fixture_harness(fx);
-    settle(&mut h);
-
-    assert_eq!(
-        galleys_for(&h, "Current").len(),
-        2,
-        "still one marker per section with remotes open: {:?}",
-        painted_text(&h)
-    );
-}
+// Revealing remotes must not multiply the marker: third `CURRENT_MARKERS` row.
 
 // --- favourite pinning ----------------------------------------------------------
 
@@ -1083,70 +1109,117 @@ fn favorite_pins_above_the_current_branch_row() {
 
 // --- group toggles: events and collapse ---------------------------------------
 
+/// A group header's click emits the group it names, and applying that event
+/// opens or closes it. Each row names *which way*: Tags opens (collapsed by
+/// default), Local collapses (open).
+///
+/// (case, the header Button's label, the group, its content string, before,
+/// after)
+type GroupToggleRow = (
+    &'static str,
+    &'static str,
+    TreeGroup,
+    &'static str,
+    bool,
+    bool,
+);
+
+const GROUP_TOGGLES: [GroupToggleRow; 2] = [
+    (
+        "Tags opens on the first click",
+        "Tags",
+        TreeGroup::Tags,
+        "v1.0",
+        false,
+        true,
+    ),
+    (
+        "Local collapses on the first click",
+        "Local",
+        TreeGroup::Local,
+        "starred",
+        true,
+        false,
+    ),
+];
+
 #[test]
-fn tag_group_toggle_emits_event_and_opens_the_group() {
-    let mut h = fixture_harness(Fixture::alpha_only());
-    settle(&mut h);
-    assert!(
-        !painted_text(&h).iter().any(|t| t.contains("v1.0")),
-        "tags start collapsed (TreeState::default)"
-    );
+fn a_group_header_click_emits_its_own_group_and_applies_it() {
+    for &(case, label, group, needle, before, after) in &GROUP_TOGGLES {
+        let mut h = fixture_harness(Fixture::alpha_only());
+        settle(&mut h);
 
-    let events = click_events(&mut h, "Tags");
-    assert!(
-        events.contains(&TreeEvent::GroupToggled(TreeGroup::Tags)),
-        "tag header click must emit GroupToggled(Tags): {events:#?}"
-    );
-    settle(&mut h);
-    assert!(
-        painted_text(&h).iter().any(|t| t.contains("v1.0")),
-        "the tags group opens after the caller applies the event"
-    );
-}
+        assert_eq!(
+            painted_contains(&h, needle),
+            before,
+            "{case}: before the click, `{needle}` painted = {before}: {:?}",
+            painted_text(&h)
+        );
 
-#[test]
-fn local_group_toggle_emits_event_and_collapses() {
-    let mut h = fixture_harness(Fixture::alpha_only());
-    settle(&mut h);
+        let events = click_events(&mut h, label);
+        assert!(
+            events.contains(&TreeEvent::GroupToggled(group)),
+            "{case}: the `{label}` header click must emit GroupToggled({group:?}): \
+             {events:#?}"
+        );
+        settle(&mut h);
 
-    let events = click_events(&mut h, "Local");
-    assert!(
-        events.contains(&TreeEvent::GroupToggled(TreeGroup::Local)),
-        "{events:#?}"
-    );
-    settle(&mut h);
-    assert!(
-        !painted_text(&h).iter().any(|t| t.contains("starred")),
-        "local rows hide while the group is collapsed"
-    );
+        assert_eq!(
+            painted_contains(&h, needle),
+            after,
+            "{case}: after the caller applies the event, `{needle}` painted = \
+             {after}: {:?}",
+            painted_text(&h)
+        );
+    }
 }
 
 // --- per-remote collapse --------------------------------------------------------
 
+/// A remote header's click emits `RemoteToggled` for its own `(root, remote)`,
+/// which hides that remote's branches while its header stays.
+/// (case, the fixture that reaches the same header)
+type PerRemoteCollapseRow = (&'static str, fn() -> Fixture);
+
+const PER_REMOTE_COLLAPSE: [PerRemoteCollapseRow; 2] = [
+    ("remotes open at the top level", Fixture::alpha_with_remotes),
+    (
+        "inside an already-revealed repository",
+        Fixture::alpha_revealed_in_two_repos,
+    ),
+];
+
 #[test]
 fn remote_header_toggle_emits_event_and_collapses_that_remote() {
-    let mut fx = Fixture::alpha_only();
-    fx.tree.show_remotes = true;
-    let mut h = fixture_harness(fx);
-    settle(&mut h);
+    for &(case, fixture) in &PER_REMOTE_COLLAPSE {
+        let mut h = fixture_harness(fixture());
+        settle(&mut h);
+        // Exact text, not substring: a `galleys_for` lookup cannot be satisfied
+        // by a galley that merely contains the name.
+        assert!(
+            !galleys_for(&h, "remote-only").is_empty(),
+            "{case}: the remote's branches are open before the header is clicked"
+        );
 
-    let events = click_events(&mut h, "origin");
-    assert!(
-        events.contains(&TreeEvent::RemoteToggled {
-            root: RootId(Arc::from(PathBuf::from("/alpha"))),
-            remote: "origin".to_string(),
-        }),
-        "{events:#?}"
-    );
-    settle(&mut h);
-    assert!(
-        !painted_text(&h).iter().any(|t| t.contains("remote-only")),
-        "the collapsed remote's branches hide"
-    );
-    assert!(
-        painted_text(&h).iter().any(|t| t.contains("origin")),
-        "the collapsed remote's header stays"
-    );
+        let events = click_events(&mut h, "origin");
+        assert!(
+            events.contains(&TreeEvent::RemoteToggled {
+                root: RootId(Arc::from(PathBuf::from("/alpha"))),
+                remote: "origin".to_string(),
+            }),
+            "{case}: the `origin` header click must emit RemoteToggled for its own \
+             (root, remote): {events:#?}"
+        );
+        settle(&mut h);
+        assert!(
+            galleys_for(&h, "remote-only").is_empty(),
+            "{case}: the collapsed remote's branches hide"
+        );
+        assert!(
+            painted_contains(&h, "origin"),
+            "{case}: the collapsed remote's header stays"
+        );
+    }
 }
 
 /// The Log pane's tree starts every remote group collapsed: the header rows
@@ -1254,36 +1327,8 @@ fn one_click_returns_a_revealed_repository_to_its_rollup() {
     );
 }
 
-/// Revealing a repository does not disturb the per-remote collapse that already
-/// works inside it.
-#[test]
-fn per_remote_collapse_still_works_inside_a_revealed_repository() {
-    let mut fx = Fixture::two_repos();
-    fx.tree.show_remotes = false;
-    fx.tree
-        .remotes_revealed
-        .insert(RootId(Arc::from(PathBuf::from("/alpha"))));
-    let mut h = fixture_harness(fx);
-    settle(&mut h);
-
-    assert!(
-        !galleys_for(&h, "remote-only").is_empty(),
-        "the revealed group is open"
-    );
-    let events = click_events(&mut h, "origin");
-    assert!(
-        events.contains(&TreeEvent::RemoteToggled {
-            root: RootId(Arc::from(PathBuf::from("/alpha"))),
-            remote: "origin".to_string(),
-        }),
-        "{events:#?}"
-    );
-    settle(&mut h);
-    assert!(
-        galleys_for(&h, "remote-only").is_empty(),
-        "collapsing that remote still hides its branches"
-    );
-}
+// Revealing a repository must not disturb the per-remote collapse: second
+// `PER_REMOTE_COLLAPSE` row.
 
 /// A reveal is tree state, so searching and clearing must not lose it.
 #[test]
@@ -1358,53 +1403,67 @@ fn search_filters_the_tree_live() {
     assert!(!texts.iter().any(|t| t.contains("v1.0")));
 }
 
-// --- no-match state: the dead end becomes the next intent ------------------------
+// --- the dead ends: no match, and nothing at all ---------------------------------
+
+/// A dead end names itself and offers exactly one action: create the name it
+/// named. The name the event carries is per row.
+///
+/// (case, fixture, search text, the sentence painted, the action's label, the name
+/// the event carries)
+type CreateDeadEndRow = (
+    &'static str,
+    fn() -> Fixture,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+);
+
+const CREATE_DEAD_ENDS: [CreateDeadEndRow; 2] = [
+    (
+        "a filter nothing matches",
+        Fixture::two_repos,
+        "zzz",
+        "no branch called zzz",
+        "Create \"zzz\"",
+        "zzz",
+    ),
+    (
+        "a repository with no branches at all",
+        Fixture::empty_repo,
+        "",
+        "This repo has no branches yet",
+        "Create the first branch",
+        "",
+    ),
+];
 
 #[test]
-fn no_match_state_offers_to_create_the_typed_name() {
-    let mut fx = Fixture::two_repos();
-    fx.filter = "zzz".to_string();
-    let mut h = fixture_harness(fx);
-    settle(&mut h);
+fn a_dead_end_names_itself_and_offers_to_create_that_name() {
+    for &(case, fixture, filter, painted, button, name) in &CREATE_DEAD_ENDS {
+        let mut fx = fixture();
+        fx.filter = filter.to_string();
+        let mut h = fixture_harness(fx);
+        settle(&mut h);
 
-    let texts = painted_text(&h);
-    assert!(
-        texts.iter().any(|t| t.contains("no branch called zzz")),
-        "{texts:#?}"
-    );
-    let events = click_events(&mut h, "Create \"zzz\"");
-    assert_eq!(
-        events,
-        vec![TreeEvent::CreateBranchRequested {
-            name: "zzz".to_string()
-        }],
-        "the create event carries the typed name"
-    );
+        let texts = painted_text(&h);
+        assert!(
+            texts.iter().any(|t| t.contains(painted)),
+            "{case}: the dead end says which name it found nothing for: {texts:#?}"
+        );
+        let events = click_events(&mut h, button);
+        assert_eq!(
+            events,
+            vec![TreeEvent::CreateBranchRequested {
+                name: name.to_string()
+            }],
+            "{case}: the create event carries the name the dead end stated — the \
+             typed one for a no-match, and none at all for the empty state"
+        );
+    }
 }
 
-// --- empty state -------------------------------------------------------------------
-
-#[test]
-fn empty_state_offers_one_create_action() {
-    let mut h = fixture_harness(Fixture::empty_repo());
-    settle(&mut h);
-
-    let texts = painted_text(&h);
-    assert!(
-        texts
-            .iter()
-            .any(|t| t.contains("This repo has no branches yet")),
-        "{texts:#?}"
-    );
-    let events = click_events(&mut h, "Create the first branch");
-    assert_eq!(
-        events,
-        vec![TreeEvent::CreateBranchRequested {
-            name: String::new()
-        }],
-        "the empty state's create event carries no typed name"
-    );
-}
+// --- the reading state -----------------------------------------------------------
 
 #[test]
 fn reading_state_shows_while_a_scan_is_in_flight() {

@@ -10,8 +10,8 @@
 use egui::Ui;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use std::path::{Path, PathBuf};
-use test_support::harness::{assert_not_painted, assert_painted};
+use test_support::harness::{assert_not_painted, assert_painted, right_click_row};
+use test_support::srcscan;
 use turbogit_ui::theme::{configure_style, install_fonts};
 use turbogit_ui::ui::icons::Icon;
 
@@ -52,6 +52,9 @@ fn show_menu(ui: &Ui, row: &'static str, dismiss: &mut bool) -> Option<&'static 
     .flatten()
 }
 
+/// **Not** `harness::widget_harness`, whose kittest-default 0.25s frame step is
+/// too coarse: a secondary click's press and release must land inside the window
+/// egui treats as a double click.
 fn fixture_harness() -> Harness<'static, Fixture> {
     let mut fonts_installed = false;
     let mut harness = Harness::builder().with_step_dt(1.0 / 60.0).build_ui_state(
@@ -85,16 +88,6 @@ fn fixture_harness() -> Harness<'static, Fixture> {
     );
     harness.set_size(egui::vec2(600.0, 400.0));
     harness
-}
-
-fn right_click_row(harness: &mut Harness<'_, Fixture>, row: &str) {
-    harness
-        .get_all_by_role(egui::accesskit::Role::Button)
-        .find(|n| n.accesskit_node().label() == Some(row.to_string()))
-        .unwrap_or_else(|| panic!("row {row}"))
-        .click_secondary();
-    harness.step();
-    harness.step();
 }
 
 /// A right-click stashes the pointer as the menu's anchor, and the host floats
@@ -207,23 +200,6 @@ fn a_second_right_click_retargets_the_open_menu() {
 
 // --- the extraction's own guard: one lifecycle, one home -------------------------
 
-/// Walk a directory, yielding every `.rs` path under it.
-fn rust_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            out.extend(rust_files(&path));
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    out
-}
-
 /// The lifecycle is one component's, so the shapes it is built from appear there
 /// and nowhere else: a pointer anchor read out of egui memory, and the
 /// previous-frame tag that decides whether a click outside may dismiss. A second
@@ -231,9 +207,9 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
 /// two menus would reintroduce.
 #[test]
 fn no_other_module_restates_the_menu_lifecycle() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let host = src.join("ui/widgets/menu_host.rs");
-    let offenders: Vec<String> = rust_files(&src)
+    let offenders: Vec<String> = srcscan::rust_files(&src)
         .into_iter()
         .filter(|path| path != &host)
         .filter(|path| {

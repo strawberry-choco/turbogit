@@ -274,7 +274,7 @@ fn filter_buckets<'a>(state: &AppState, mut buckets: Vec<Bucket<'a>>) -> (Vec<Bu
     for bucket in &mut buckets {
         bucket
             .changes
-            .retain(|c| c.path.display().to_string().to_lowercase().contains(&query));
+            .retain(|c| widgets::filter_matches(&c.path.display().to_string(), &query));
     }
     buckets.retain(|b| !b.changes.is_empty());
     let shown = state.ui.file_filter.trim();
@@ -386,6 +386,12 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
 
         let (buckets, no_match) = filter_buckets(state, staging_buckets(state));
         let (unversioned, _) = filter_buckets(state, unversioned_buckets(state));
+        // **This site produces the empty state's words and does not paint it.** The
+        // sentence is the *filter's* answer — "No local changes." when nothing matched,
+        // and the filter's own "nothing matches <query>" when a query excluded
+        // everything — so the wording stays here. Moving the paint up to this scope
+        // would make the tree unable to report "nothing painted", which is the fact
+        // that decides whether the sentence appears at all.
         let empty_text = if no_match.is_empty() {
             "No local changes."
         } else {
@@ -440,7 +446,7 @@ fn changes_tree(
                 unversioned_group(ui, state, unversioned_buckets, actions);
             }
             if !painted {
-                ui.colored_label(Color32::GRAY, empty_text);
+                widgets::empty_state(ui, empty_text);
             }
         });
 }
@@ -1714,12 +1720,12 @@ fn change_nav(ui: &mut Ui, state: &mut AppState, path: &Path) {
     let next_enabled = current.is_some_and(|i| i + 1 < files.len());
     // Right-to-left: the Next chevron is allocated first so it sits at the
     // card edge, with Previous to its left.
-    let next = icon_button_enabled(ui, Icon::CHEVRON_RIGHT, next_enabled);
+    let next = widgets::icon_button_enabled(ui, Icon::CHEVRON_RIGHT, next_enabled);
     next.widget_info(|| WidgetInfo::labeled(WidgetType::Button, next_enabled, "Next change"));
     if next_enabled && next.clicked() {
         state.ui.preview_change = current.and_then(|i| files.get(i + 1)).cloned();
     }
-    let prev = icon_button_enabled(ui, Icon::CHEVRON_LEFT, prev_enabled);
+    let prev = widgets::icon_button_enabled(ui, Icon::CHEVRON_LEFT, prev_enabled);
     prev.widget_info(|| WidgetInfo::labeled(WidgetType::Button, prev_enabled, "Previous change"));
     if prev_enabled && prev.clicked() {
         state.ui.preview_change = current.and_then(|i| files.get(i - 1)).cloned();
@@ -1765,19 +1771,6 @@ fn status_chip_label(status: ChangeStatus) -> &'static str {
         ChangeStatus::Ignored => "Ignored",
         ChangeStatus::Conflicted => "Conflicted",
     }
-}
-
-/// [`widgets::icon_button`] with an explicit `enabled` flag: disabled dims
-/// the button and turns clicks into no-ops, painted through
-/// [`widgets::disabled_child_scope`] so the disabled state never leaks into the
-/// remaining header widgets. An enabled flag short-circuits straight to
-/// [`widgets::icon_button`], so only the disabled path is built in a child
-/// scope — the same shape [`widgets::compact_button_enabled`] keeps.
-fn icon_button_enabled(ui: &mut Ui, icon: Icon, enabled: bool) -> egui::Response {
-    if enabled {
-        return widgets::icon_button(ui, icon);
-    }
-    widgets::disabled_child_scope(ui, enabled, |child| widgets::icon_button(child, icon))
 }
 
 // ------------------------------------------------- the commit card itself ---

@@ -83,8 +83,8 @@ pub fn age_label(delta_secs: i64) -> String {
 // --- Rendering ----------------------------------------------------------------
 
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Sense, Stroke, Ui,
-    UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, Rect, Sense, Ui, UiBuilder,
+    Vec2, WidgetInfo, WidgetType,
 };
 
 use super::components;
@@ -212,7 +212,7 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
                 .caches
                 .log(id)
                 .and_then(|commits| commits.first())
-                .map(|c| (c.message.lines().next().unwrap_or("").to_string(), c.time))
+                .map(|c| (c.subject().to_string(), c.time))
         },
         now,
     );
@@ -286,12 +286,15 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             Palette::INK_3,
         );
     }
-    thp.line_segment(
-        [
-            Pos2::new(header_rect.left(), header_rect.bottom()),
-            Pos2::new(header_rect.right(), header_rect.bottom()),
-        ],
-        Stroke::new(1.0, Palette::LINE_SUBTLE),
+    // The column-header's underline, through the shared edge rule. **This is a
+    // half-pixel change from the copy it replaces:** a 1px stroke centred on an
+    // integer coordinate straddles two device pixel rows and each gets half
+    // coverage, so the rule read measurably dimmer than every other hairline.
+    widgets::edge_rule(
+        &thp,
+        header_rect,
+        widgets::Edge::Bottom,
+        Palette::RULE_STRUCTURAL,
     );
 
     /// One repo row of the selection summary. Taller than the 24/26 px ramp

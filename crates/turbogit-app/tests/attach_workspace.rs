@@ -9,34 +9,9 @@
 //! Asserts only on the public surface: `AppState` transitions and the
 //! persisted global recents store (ADR-0005).
 
-use std::path::Path;
+use test_support::git_seed::repo_with_one_commit;
 use turbogit_app::recents::{RecentKind, load};
 use turbogit_app::state::AppState;
-
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
-/// Seed a minimal repo at `dir`: one branch, one commit touching file.txt.
-fn seed_repo(dir: &Path) {
-    std::fs::create_dir_all(dir).expect("repo dir");
-    run_git(dir, &["init", "-q", "-b", "main"]);
-    run_git(dir, &["config", "user.email", "test@example.com"]);
-    run_git(dir, &["config", "user.name", "Test"]);
-    std::fs::write(dir.join("file.txt"), "v1\n").expect("work file");
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-q", "-m", "initial"]);
-}
 
 #[test]
 fn attach_workspace_deep_scans_registers_all_roots_and_records_workspace_recent() {
@@ -45,13 +20,13 @@ fn attach_workspace_deep_scans_registers_all_roots_and_records_workspace_recent(
 
     // The workspace container is itself NOT a repo; its repos sit at various
     // depths, one strictly deeper than SCAN_MAX_DEPTH so only scan_deep finds
-    // it.
+    // it. The recipe `git init`s *into* `project` rather than creating it, so
+    // each level it is handed has to exist first.
     let workspace = root.path().join("ws");
-    std::fs::create_dir_all(&workspace).unwrap();
-    let deep_repo = workspace.join("a").join("b").join("c").join("d");
-    seed_repo(&deep_repo);
-    let shallow_repo = workspace.join("alpha");
-    seed_repo(&shallow_repo);
+    let deep_parent = workspace.join("a").join("b").join("c");
+    std::fs::create_dir_all(&deep_parent).unwrap();
+    let deep_repo = repo_with_one_commit(&deep_parent, "d");
+    let shallow_repo = repo_with_one_commit(&workspace, "alpha");
 
     let mut state = AppState::launch_in(None, Some(config.path().to_path_buf()));
     state.attach_workspace(&workspace);

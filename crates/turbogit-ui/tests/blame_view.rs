@@ -10,10 +10,15 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{Color32, Pos2, Rect, Shape};
+use egui::{Pos2, Rect, Shape};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
-use test_support::harness::{click_menu_item, right_click_row};
+use test_support::git_seed::{commit, git};
+use test_support::harness::{
+    assert_not_painted, assert_painted, click_menu_item, filled_rects, painted_text,
+    right_click_row,
+};
+use test_support::srcscan;
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::keyed_read::Keyed;
 use turbogit_app::state::{AppState, Tab};
@@ -23,55 +28,12 @@ use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::{configure_style, install_fonts};
 
-// --- helpers (mirrors tests/git_log.rs) --------------------------------------
-
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-#[track_caller]
-fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was not painted; painted text:\n{texts:#?}"
-    );
-}
-
-#[track_caller]
-fn assert_not_painted(harness: &Harness<'_, AppState>, needle: &str) {
-    let texts = painted_text(harness);
-    assert!(
-        !texts.iter().any(|t| t.contains(needle)),
-        "`{needle}` was unexpectedly painted; painted text:\n{texts:#?}"
-    );
-}
-
-fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Rect(rect_shape) if rect_shape.fill != Color32::TRANSPARENT => {
-                Some((rect_shape.rect, rect_shape.fill))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Step frames until the painted output stabilizes and no keyed read is
-/// pending — diff or blame, the gate does not say which (mirrors
-/// tests/diff_viewer.rs's settle).
+/// Step frames until the painted output stabilizes **and no keyed read is
+/// pending** — diff or blame, the gate does not say which.
+///
+/// Deliberately neither `harness::settle` nor `harness::settle_quiet`: both ask
+/// only whether the layout stopped relaying out, so a suite driving the blame
+/// view could read a placeholder while its diff or blame request is in flight.
 pub fn settle(harness: &mut Harness<'_, AppState>) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut prev = String::new();
@@ -101,37 +63,26 @@ struct Seed {
     c1: String,
 }
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
-    std::fs::write(dir.join(name), body).expect("writing work file");
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-m", msg]);
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    commit(dir, name, body, msg);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_owned()
 }
 
 /// One root `alpha`: c1 creates file.txt (one line), c2 rewrites it to two
 /// lines, c3 is docs-only. Blame at c2 attributes line 1 → c1, line 2 → c2.
+///
+/// **Not a `git_seed` recipe, and the reason is the shape:** the middle commit
+/// must *rewrite a file the first one created* so blame has a line to attribute
+/// to each, and `repo_with_history`'s commits are on disjoint paths — which can
+/// never conflict.
 fn seeded_project() -> Seed {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
     let alpha = project.join("alpha");
     std::fs::create_dir_all(&alpha).expect("alpha dir");
-    run_git(&alpha, &["init", "-b", "main"]);
-    run_git(&alpha, &["config", "user.email", "test@example.com"]);
-    run_git(&alpha, &["config", "user.name", "Test"]);
+    git(&alpha, &["init", "-b", "main"]);
+    git(&alpha, &["config", "user.email", "test@example.com"]);
+    git(&alpha, &["config", "user.name", "Test"]);
     let c1 = commit_file(
         &alpha,
         "file.txt",
@@ -599,66 +550,6 @@ fn blame_row_label(id: &str, content: &str) -> String {
     format!("{} {content}", short(id))
 }
 
-/// The blame view's source with every comment blanked, one space per character
-/// so line structure survives — **and every line of code kept**.
-///
-/// The same reasoning as `git_log.rs`'s `code_only`: a scan for `CommitTable::*`
-/// has to be about what the module *calls*, or this file's own documentation —
-/// which names every one of those constants while explaining why — would satisfy
-/// the ratchet forever.
-///
-/// The "kept" half matters as much as the "blanked" half. A helper that blanks
-/// the code as well as the comments returns a file of newlines and spaces, and
-/// then every `!scan.contains(needle)` over it is true for the uninteresting
-/// reason that the needle cannot be in there at all. That is not a ratchet; it
-/// is a comment about one. The mutation that caught it here replaced
-/// `CommitTable::ROW_HEIGHT` with a literal `20.0` and left the file full of prose
-/// about `CommitTable::ROW_HEIGHT` — the broken scan passed it.
-fn code_only(src: &str) -> String {
-    let chars: Vec<char> = src.chars().collect();
-    let mut out: Vec<char> = Vec::with_capacity(chars.len());
-    let (mut i, mut block, mut line) = (0usize, false, false);
-    while i < chars.len() {
-        let c = chars[i];
-        let next = chars.get(i + 1).copied().unwrap_or('\0');
-        if block {
-            if c == '*' && next == '/' {
-                block = false;
-                out.push(' ');
-                out.push(' ');
-                i += 2;
-                continue;
-            }
-        } else if line {
-            if c == '\n' {
-                line = false;
-                out.push('\n');
-                i += 1;
-                continue;
-            }
-        } else if c == '/' && next == '/' {
-            line = true;
-            out.push(' ');
-            out.push(' ');
-            i += 2;
-            continue;
-        } else if c == '/' && next == '*' {
-            block = true;
-            out.push(' ');
-            out.push(' ');
-            i += 2;
-            continue;
-        }
-        out.push(if c == '\n' || !(block || line) {
-            c
-        } else {
-            ' '
-        });
-        i += 1;
-    }
-    out.into_iter().collect()
-}
-
 /// **The blame view's row height and cell offsets are the commit table's, read
 /// from its own published constants — not this module's literals.**
 ///
@@ -691,7 +582,7 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
     select_commit_and_file(&mut harness, &seed);
 
     // ---- the source seam: no private geometry ----------------------------
-    let blame_src = code_only(include_str!("../src/ui/blame_view.rs"));
+    let blame_src = srcscan::code_only(include_str!("../src/ui/blame_view.rs"));
     for constant in [
         "CommitTable::ROW_HEIGHT",
         "CommitTable::HASH",

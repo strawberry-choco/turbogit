@@ -22,35 +22,26 @@
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use test_support::harness::{assert_not_painted, assert_painted, filled_rects, galley_origin};
+use test_support::harness::{
+    KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, filled_rects, galley_origin,
+    shell_harness_over_unstyled,
+};
 
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape, accesskit::Role};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
+use test_support::git_seed::git;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 use turbogit_ui::theme::Palette;
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Run `git` without asserting success (for commands that may legitimately
 /// fail, e.g. a merge that conflicts).
+/// Run `git` WITHOUT asserting success, unlike `git_seed::git` which asserts:
+/// `seed_two_conflicts` ends with `git merge`, whose refusal to auto-merge two
+/// rewritten hunks IS the fixture.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)
@@ -65,6 +56,9 @@ struct Repo {
 /// Create an initialized temp repository with one base commit on the default
 /// branch and repo-local user config so commits work headlessly. The caller
 /// keeps `parent` (a `TempDir`) alive for the duration of the test.
+/// Local repo builder, not a `git_seed` recipe: it runs `init -q` with **no
+/// `-b main`**, so the default branch is whatever `init.defaultBranch` says,
+/// where every recipe pins `main`. A green run would not catch that.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -130,14 +124,15 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Unstyled: the panes' tints and widths are read off the frame, and the dark
+/// tokens plus embedded JetBrains Mono would re-measure it in another face.
+///
+/// `max_steps` is 1024, not kittest's default of 4: this suite calls
+/// `Harness::run()`, and `run()` — unlike `step()` — enforces the budget, by
+/// panicking past it.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    )
+    shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
 /// Poll `f` until it returns true or the deadline elapses (worker threads run

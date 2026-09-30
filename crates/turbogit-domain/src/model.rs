@@ -186,6 +186,47 @@ pub struct BranchTip {
     pub time: chrono::DateTime<chrono::Utc>,
 }
 
+impl BranchTip {
+    /// Build a tip from the four parts both engines gather, so the shape is written
+    /// once rather than as a field-for-field literal in each adapter.
+    ///
+    /// `short_hash` is the caller's *already-shortened* reference on purpose: the CLI
+    /// reads `%(objectname:short)` out of `for-each-ref` while libgit2 shortens a
+    /// full OID through [`short_commit_ref`]. Folding that in would move a rule, not
+    /// share a shape.
+    pub fn from_parts(
+        short_hash: impl Into<String>,
+        subject: impl Into<String>,
+        author: impl Into<String>,
+        time: chrono::DateTime<chrono::Utc>,
+    ) -> Self {
+        Self {
+            short_hash: short_hash.into(),
+            message: subject.into(),
+            author: author.into(),
+            time,
+        }
+    }
+}
+
+/// The three conflict markers this parser understands and both painters draw.
+/// They are git wire-format facts with no service policy in them, so they live
+/// in the leaf crate every other layer already sees: `services` parses them,
+/// `ui` paints them, and neither can name a different marker than the other.
+///
+/// Deliberately three, and that is a fact about the conflict style in use rather
+/// than an oversight. git can also write a *common ancestor* marker,
+/// `||||||| <base>`, and does so when the merge is configured for the `diff3` or
+/// `zdiff3` conflict style. Nothing in this tree parses or draws that form. If
+/// support for it is ever added it must be added here first: a parser that grew
+/// a fourth marker while the two painters still drew three would show a user a
+/// conflict block with no base section and no way to tell why.
+pub const CONFLICT_MARKER_OURS: &str = "<<<<<<<";
+/// The divider between the two sides of one conflict block.
+pub const CONFLICT_MARKER_SEPARATOR: &str = "=======";
+/// The marker that closes a conflict block, carrying the other side's label.
+pub const CONFLICT_MARKER_THEIRS: &str = ">>>>>>>";
+
 /// SHA-1 hex string.
 pub type CommitId = String;
 
@@ -275,6 +316,42 @@ pub struct Commit {
     pub root: RootId,
     /// Committer's GPG signature state (issue 17).
     pub signature: SignatureState,
+}
+
+/// Default number of Unicode characters retained from a commit reference.
+pub const SHORT_COMMIT_REF_CHARS: usize = 7;
+
+/// Format a commit reference for compact display without splitting a Unicode
+/// scalar value. References at or below the default length pass through intact.
+pub fn short_commit_ref(reference: &str) -> String {
+    reference.chars().take(SHORT_COMMIT_REF_CHARS).collect()
+}
+
+/// The subject a MESSAGE will read as — the first line, which is git's own definition
+/// of a commit's subject and this rule's. One definition, because it is a *rule*: a
+/// caller that re-derives it can disagree with whatever compares subjects.
+pub fn subject_of_message(message: &str) -> &str {
+    message.lines().next().unwrap_or_default()
+}
+
+impl Commit {
+    /// A commit's subject, read the way every surface reads it: the first line
+    /// of the message.
+    pub fn subject(&self) -> &str {
+        subject_of_message(&self.message)
+    }
+}
+
+/// A path in git's spelling: forward slashes throughout, so a path string means the
+/// same thing on every platform.
+///
+/// This is the **plain** rewrite — separators become `/` and nothing else moves:
+/// `a//b` stays `a//b`, and a filename that genuinely contains a `\` is rewritten too.
+/// The two places wanting the *other* answer keep their own spelling: `diff_engine`'s
+/// patch headers normalise through `Path::components`, and the sidebar's collapse keys
+/// add a project-prefix strip on top.
+pub fn forward_slash_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 /// Status of one file in a working tree.
@@ -374,12 +451,6 @@ impl RootStatus {
             .filter(|c| c.status == ChangeStatus::Unversioned)
             .count()
     }
-    pub fn ignored(&self) -> usize {
-        self.changes
-            .iter()
-            .filter(|c| c.status == ChangeStatus::Ignored)
-            .count()
-    }
 }
 
 /// A 3-way conflict awaiting resolution.
@@ -475,9 +546,6 @@ pub struct MultiRootManager {
 }
 
 impl MultiRootManager {
-    pub fn new() -> Self {
-        Self::default()
-    }
     pub fn register_root(&mut self, root: Root) {
         if !self.roots.iter().any(|r| r.id == root.id) {
             self.roots.push(root);
@@ -1237,15 +1305,4 @@ pub struct RebasePlanEntry {
     pub commit: CommitId,
     pub subject: String,
     pub message: Option<String>,
-}
-
-/// A parsed diff line for the viewer (color-coded by prefix).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DiffLine {
-    /// Context / header / hunk marker (no sign).
-    Meta(String),
-    /// Added line.
-    Add(String),
-    /// Removed line.
-    Del(String),
 }

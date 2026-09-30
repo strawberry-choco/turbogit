@@ -2,29 +2,15 @@
 //! a remote-tracking ref reports `Gone` when its upstream branch was
 //! deleted on the remote, and tags report pushed vs local-only.
 
-use std::path::Path;
-
+use test_support::git_seed::git;
 use turbogit_domain::model::{GitRefKind, RefState, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// The fixtures stay inline and local, deliberately NOT `git_seed` recipes: they need
+// a tag pushed to a bare origin plus a SECOND tag that never left the machine, and
+// — in the first case — a `git update-ref -d` INSIDE the bare remote so the local
+// tracking ref survives to be marked `Gone`.
 
 #[test]
 fn decorations_report_remote_gone_and_tag_push_state() {

@@ -8,6 +8,7 @@ use std::path::Path;
 use std::process::Command;
 
 use chrono::DateTime;
+use test_support::git_seed::git;
 use turbogit_domain::model::{BranchKind, Upstream, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -24,27 +25,13 @@ fn engine() -> CliExecutor {
     }
 }
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// Commit a new file with both author and committer dates pinned.
-fn commit(repo: &Path, msg: &str, epoch: i64) {
+/// Commit a new file with both author and committer dates pinned to `epoch`.
+///
+/// Stays local because it sets `GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE` per call
+/// and `git_seed::git` takes no per-call environment. The pin is load-bearing:
+/// without it those commits would carry the wall clock and the stale badge's
+/// `EPOCH_1..=EPOCH_4` assertions would assert nothing.
+fn commit_at_epoch(repo: &Path, msg: &str, epoch: i64) {
     std::fs::write(repo.join("f.txt"), format!("{msg}\n")).unwrap();
     git(repo, &["add", "."]);
     let out = Command::new("git")
@@ -83,6 +70,9 @@ fn remote<'a>(
 
 #[test]
 fn branches_parse_ahead_behind_gone_and_last_touched() {
+    // Inline rather than a `git_seed` recipe: this needs a bare `origin` pushed
+    // to twice, a `ghost` deleted INSIDE the bare and then pruned, and a `feat`
+    // tracking `origin/main`.
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     let origin = tmp.path().join("origin.git");
@@ -93,7 +83,7 @@ fn branches_parse_ahead_behind_gone_and_last_touched() {
 
     // c1 on main is the fork point; the branch is pushed once before any
     // divergence so `feat` can track `origin/main`.
-    commit(&repo, "c1", EPOCH_1);
+    commit_at_epoch(&repo, "c1", EPOCH_1);
     git(
         &repo,
         &[
@@ -124,10 +114,10 @@ fn branches_parse_ahead_behind_gone_and_last_touched() {
     git(&repo, &["branch", "feat"]);
     git(&repo, &["branch", "--set-upstream-to=origin/main", "feat"]);
     git(&repo, &["checkout", "-q", "feat"]);
-    commit(&repo, "c2", EPOCH_2);
-    commit(&repo, "c3", EPOCH_3);
+    commit_at_epoch(&repo, "c2", EPOCH_2);
+    commit_at_epoch(&repo, "c3", EPOCH_3);
     git(&repo, &["checkout", "-q", "main"]);
-    commit(&repo, "c4", EPOCH_4);
+    commit_at_epoch(&repo, "c4", EPOCH_4);
     git(&repo, &["push", "-q", "origin", "main"]);
 
     // Delete the remote ghost branch and prune its tracking ref.

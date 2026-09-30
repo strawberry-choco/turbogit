@@ -12,6 +12,14 @@
 //! it every frame — Branches popup, VCS operations popup, command palette,
 //! modal dialogs, confirm prompts, the Settings modal (issue #16), and the
 //! toast.
+//!
+//! Four surfaces share the deferred-intent pattern (a row returns an intent, a
+//! collector applies it after rendering, because rows hold `&AppState` and the
+//! verbs need `&mut AppState`). They are **four types, not one** — two were both
+//! called `RowIntent` and shared nothing, so a sweep for a shared name among them
+//! is a mistake — and their collectors differ by design: the commit table needs
+//! two slots (a right-click is two facts), `branch_widget` rows are last-wins
+//! (one row raises several quick-actions), and the tree emits several per frame.
 
 pub mod activity_panel;
 pub mod banner;
@@ -24,6 +32,9 @@ pub mod branches_tree;
 pub mod bulk_monitor;
 pub mod bulk_preflight;
 pub mod cherry_across;
+/// Column-table tool pane shared by `worktrees` and `submodules`; internal like
+/// [`kit`].
+pub(crate) mod column_table;
 pub mod commit_menu;
 pub mod commit_window;
 pub mod components;

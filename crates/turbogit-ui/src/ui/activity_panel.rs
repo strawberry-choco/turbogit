@@ -9,8 +9,8 @@
 
 use chrono::Local;
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Layout, Pos2, RichText, ScrollArea, Sense,
-    Shape, Stroke, Ui, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Layout, RichText, ScrollArea, Sense, Shape,
+    Ui, Vec2, WidgetInfo, WidgetType,
 };
 
 use super::icons::{self, Icon};
@@ -45,13 +45,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     let rect = ui.max_rect();
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-    ui.painter().line_segment(
-        [
-            Pos2::new(rect.left(), rect.top() + 0.5),
-            Pos2::new(rect.right(), rect.top() + 0.5),
-        ],
-        Stroke::new(1.0, Palette::LINE),
-    );
+    // `LINE`, not `LINE_SUBTLE`: this edge separates the bottom strip from the
+    // central body above it.
+    widgets::edge_rule(ui.painter(), rect, widgets::Edge::Top, Palette::LINE);
 
     // Snapshot the visible feed so the rows borrow nothing while the
     // header controls mutate the log.
@@ -94,11 +90,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         if rows.is_empty() {
             ui.add_space(16.0);
-            ui.label(
-                RichText::new("No activity yet — dispatched operations land here.")
-                    .font(FontId::new(ROW_TEXT, FontFamily::Proportional))
-                    .color(Palette::INK_3),
-            );
+            widgets::empty_state(ui, "No activity yet — dispatched operations land here.");
             return;
         }
         // Newest first: the feed is a record, but what the user wants to

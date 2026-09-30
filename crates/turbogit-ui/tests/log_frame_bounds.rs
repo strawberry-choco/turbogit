@@ -19,8 +19,9 @@ use std::sync::OnceLock;
 use egui::{Color32, Pos2, Rect, Shape};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use test_support::harness::{filled_rects, painted_text, settle, shell_harness_over};
 use turbogit_app::state::AppState;
-use turbogit_ui::theme::{Palette, configure_style, install_fonts};
+use turbogit_ui::theme::Palette;
 
 /// The row pitch's fixed part — a commit row allocates exactly this height
 /// (`crate::theme::FILE_ROW_HEIGHT`); egui adds `item_spacing.y` on top, which
@@ -31,48 +32,9 @@ const ROW_H: f32 = 24.0;
 const MAIN_LEN: usize = 150;
 
 // --- painted-output probes ----------------------------------------------------
-
-fn painted_text(harness: &Harness<'_, AppState>) -> Vec<String> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(text) => Some(text.galley.text().to_owned()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Step frames until the painted output stabilizes (the 10-frame local rule
-/// `git_log.rs` uses for the same reason).
-fn settle(harness: &mut Harness<'_, AppState>) {
-    let mut prev = String::new();
-    for _ in 0..10 {
-        harness.step();
-        let fingerprint = format!("{:?}", painted_text(harness));
-        if fingerprint == prev {
-            return;
-        }
-        prev = fingerprint;
-    }
-    panic!("log layout did not settle within 10 frames");
-}
-
-/// Every filled rectangle painted by the last frame as `(rect, fill)`.
-fn filled_rects(harness: &Harness<'_, AppState>) -> Vec<(Rect, Color32)> {
-    harness
-        .output()
-        .shapes
-        .iter()
-        .filter_map(|clipped| match &clipped.shape {
-            Shape::Rect(rect_shape) if rect_shape.fill != Color32::TRANSPARENT => {
-                Some((rect_shape.rect, rect_shape.fill))
-            }
-            _ => None,
-        })
-        .collect()
-}
+// The painted queries are the shared `test_support::harness` ones. What is left
+// here is what no shared query answers: the graph band's geometry, the row lattice
+// read off the painted circles, and the exact-match label probe below.
 
 /// The central graph band between the branches pane and the right column — the
 /// region a commit row lives in, and the only one the row count is read from
@@ -218,22 +180,10 @@ fn lane_node_colour(harness: &Harness<'_, AppState>, text: &str) -> Option<Color
         .map(|(_, colour)| colour)
 }
 
-/// The pitch between two adjacent painted rows, measured from painted output:
-/// the y of one row's cell centre to the next one's. This is the number the
-/// row-count bound is derived from, so the bound never assumes a spacing the
-/// code does not use.
-#[allow(dead_code)]
-fn measured_pitch(harness: &Harness<'_, AppState>, first: &str, second: &str) -> f32 {
-    let a = text_center_y(harness, first).expect("first row painted");
-    let b = text_center_y(harness, second).expect("second row painted");
-    assert!(
-        b > a,
-        "`{second}` must be painted below `{first}` for a pitch to exist"
-    );
-    b - a
-}
-
-#[allow(dead_code)]
+/// Assert some painted text galley is EXACTLY `needle`. Not the shared
+/// `assert_painted`: the call sites pass whole commit SUBJECTS, which a
+/// containment match could satisfy with a longer galley that merely mentions them.
+#[track_caller]
 fn assert_painted(harness: &Harness<'_, AppState>, needle: &str) {
     let texts = painted_text(harness);
     assert!(
@@ -250,6 +200,12 @@ fn main_time(i: usize) -> i64 {
     1000 + 2 * i as i64
 }
 
+/// A `git` runner that pins the commit identity on every invocation.
+///
+/// Not `test_support::git_seed::git`, which takes no per-call env: the row order here
+/// is decided by explicit `1000 + 2n` epoch seconds in the `fast-import` stream, and
+/// pinning `GIT_AUTHOR_*`/`GIT_COMMITTER_*` fixes the repository's own identity too
+/// rather than borrowing the machine's global config.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)
@@ -268,24 +224,13 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// The seeded repository, kept alive for the whole test binary.
+///
+/// Not a `git_seed` recipe: 153 commits with a mid-list merge and hand-written
+/// timestamps has no equivalent upstream.
 struct Long {
     _tmp: tempfile::TempDir,
     project: PathBuf,
-    #[allow(dead_code)]
-    repo: PathBuf,
-    /// The merge commit — row 0 of the window, the commit that OPENS the side
-    /// branch's lane.
-    #[allow(dead_code)]
-    merge: String,
-    /// The merge's SECOND parent (`topic`'s tip), one row below the merge.
-    #[allow(dead_code)]
-    topic_tip: String,
-    /// The side branch's root commit, the row below its tip.
-    #[allow(dead_code)]
-    topic_root: String,
-    /// `main`'s oldest commit, the last row of the window.
-    #[allow(dead_code)]
-    oldest: String,
 }
 
 /// One repository, seeded once for the whole binary in a single `fast-import`
@@ -411,18 +356,7 @@ fn long_history() -> &'static Long {
             String::from_utf8_lossy(&out.stderr)
         );
         git(&repo, &["reset", "-q", "--hard", "main"]);
-        let rev = |rev: &str| git(&repo, &["rev-parse", rev]).trim().to_owned();
-        Long {
-            merge: rev("HEAD"),
-            topic_tip: rev("HEAD^2"),
-            topic_root: rev("HEAD^2^"),
-            // `c0` is MAIN_LEN first-parent steps back from the merge: the
-            // merge adds one commit on top of the linear chain.
-            oldest: rev(&format!("HEAD~{MAIN_LEN}")),
-            _tmp: tmp,
-            project,
-            repo,
-        }
+        Long { _tmp: tmp, project }
     })
 }
 
@@ -441,23 +375,12 @@ fn long_log_harness() -> Harness<'static, AppState> {
     let root = state.multi.roots[0].id.clone();
     state.fetch_log(root.clone());
     state.ui.tab = turbogit_app::state::Tab::Log;
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
+    // The shared shell launcher, at this suite's box. Its preamble drains events
+    // every frame, for production parity with `src/app.rs`.
+    let mut harness = shell_harness_over(
         state,
+        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
     );
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
     settle(&mut harness);
     settle_until(&mut harness, "c149");
     // Page until the whole history is in the window. Each click is the pane's
@@ -491,7 +414,6 @@ fn settle_until(harness: &mut Harness<'_, AppState>, needle: &str) {
 /// egui applies whole in a single frame — a bare wheel delta is spread over
 /// several frames, and a list that pages while it is still scrolling reads as
 /// two arrivals at the bottom rather than one.
-#[allow(dead_code)]
 fn wheel(harness: &mut Harness<'static, AppState>, delta: f32) {
     // The pointer only has to be inside the list. Under the search box is
     // inside the list at every scroll position, and that box is painted at

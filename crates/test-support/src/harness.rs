@@ -13,10 +13,133 @@
 //! the recording executor without paying `egui_kittest`'s compile cost.
 
 use egui::epaint::TextShape;
-use egui::{Color32, FontFamily, Pos2, Rect, Shape};
+use egui::{Color32, FontFamily, Pos2, Rect, Shape, Ui, Vec2};
 use egui_kittest::Harness;
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::{configure_style, install_fonts};
+
+/// The full shell over the caller's `state` in a `size` box, at kittest's own defaults.
+pub fn shell_harness_over(state: AppState, size: Vec2) -> Harness<'static, AppState> {
+    shell_harness_built(state, size, Tempo::KITTEST_DEFAULT, true)
+}
+
+/// [`shell_harness_over`] at a 1/60 s `step_dt` — the clock a fade stays **in
+/// flight** at. `step_dt` is not a speed knob: `_step` writes it into the frame's
+/// `predicted_dt`, which is what egui integrates animations against, so an
+/// `egui::Area` opened this frame paints at `remap_clamp(age, 0..=animation_time)`
+/// with `animation_time = 0.12` (`theme.rs:725`). At kittest's 1/4 s that window
+/// is **already fully painted on its first visible frame** — alpha exactly 1.0 —
+/// so a fill or stroke assertion requiring alpha *strictly* below 1.0 can only pass
+/// here. See `branch_context_menu.rs::the_branch_context_menu_keeps_the_float_stroke`.
+pub fn shell_harness_over_animated(state: AppState, size: Vec2) -> Harness<'static, AppState> {
+    shell_harness_built(state, size, Tempo::SIXTY_FPS, true)
+}
+
+/// [`shell_harness_over`] with neither tokens nor embedded fonts, and a
+/// `max_steps` budget stated by the caller.
+///
+/// Unstyled because painted-string and rect assertions must measure the frame as egui
+/// draws it: the embedded stack re-measures every string and the tokens move the
+/// rects a click lands in. The event drain is still wanted and runs.
+///
+/// `max_steps` is required rather than defaulted because kittest's default is **4**
+/// and `Harness::run` — unlike `Harness::step` — **panics** once a run exceeds it. A
+/// shell with an operation in flight never settles, so those suites need hundreds of
+/// steps; a hidden default would restore the very 4 this exists to remove.
+pub fn shell_harness_over_unstyled(
+    state: AppState,
+    size: Vec2,
+    max_steps: u64,
+) -> Harness<'static, AppState> {
+    shell_harness_built(
+        state,
+        size,
+        Tempo {
+            max_steps,
+            ..Tempo::KITTEST_DEFAULT
+        },
+        false,
+    )
+}
+
+/// The box kittest's `HarnessBuilder` starts at — a launcher's inherited default.
+pub const KITTEST_DEFAULT_BOX: Vec2 = Vec2::new(800.0, 600.0);
+
+/// The `[max_steps, step_dt]` pair, which kittest accepts only at build time.
+#[derive(Clone, Copy)]
+struct Tempo {
+    max_steps: u64,
+    step_dt: f32,
+}
+
+impl Tempo {
+    /// kittest's own `HarnessBuilder` defaults: four steps of a quarter second.
+    const KITTEST_DEFAULT: Self = Self {
+        max_steps: 4,
+        step_dt: 1.0 / 4.0,
+    };
+    /// A 1/60 s clock, budget untouched — see [`shell_harness_over_animated`].
+    const SIXTY_FPS: Self = Self {
+        step_dt: 1.0 / 60.0,
+        ..Self::KITTEST_DEFAULT
+    };
+}
+
+/// The shell preamble, spelled out once so the rules cannot drift between the
+/// public constructors.
+///
+/// The once-only install must stay once-only: if `install_fonts` ran every frame, no
+/// assertion in the tree would fail — the shell would simply lay out with different
+/// glyph metrics. The flag is per-harness, not a `static`, which is process-wide.
+fn shell_harness_built(
+    state: AppState,
+    size: Vec2,
+    tempo: Tempo,
+    styled: bool,
+) -> Harness<'static, AppState> {
+    let mut fonts_installed = false;
+    let mut harness = Harness::builder()
+        .with_max_steps(tempo.max_steps)
+        .with_step_dt(tempo.step_dt)
+        .build_ui_state(
+            move |ui, state| {
+                if styled {
+                    configure_style(ui.ctx());
+                    if !fonts_installed {
+                        install_fonts(ui.ctx());
+                        fonts_installed = true;
+                    }
+                }
+                state.drain_events();
+                turbogit_ui::render(ui, state);
+            },
+            state,
+        );
+    // `set_size` after construction, not `with_size`: kittest runs two frames of its
+    // own inside the builder that `with_size` would lay out at the caller's box.
+    harness.set_size(size);
+    harness
+}
+
+/// A bare `Harness<'static, ()>` painting `body` into a [`egui::CentralPanel`] at
+/// `size`. No `AppState` or drain, but the same tokens and fonts as
+/// [`shell_harness_over`], so a widget is measured against the shell's glyph.
+pub fn widget_harness(size: Vec2, body: impl Fn(&mut Ui) + 'static) -> Harness<'static, ()> {
+    let mut fonts_installed = false;
+    let mut harness = Harness::new_ui_state(
+        move |ui, _| {
+            configure_style(ui.ctx());
+            if !fonts_installed {
+                install_fonts(ui.ctx());
+                fonts_installed = true;
+            }
+            egui::CentralPanel::default().show(ui, |ui| body(ui));
+        },
+        (),
+    );
+    harness.set_size(size);
+    harness
+}
 
 /// A harness rendering the full shell over a fresh [`AppState`].
 ///
@@ -24,8 +147,6 @@ use turbogit_ui::theme::{configure_style, install_fonts};
 /// the render is deterministic, no background git workers are spawned, and —
 /// per the Welcome-vs-shell model (spec §9.2) — the central body shows the
 /// Welcome placeholder while every shell region still renders.
-/// Setup mirrors production (`app.rs`): dark-only tokens every frame plus
-/// embedded JetBrains Mono installed once.
 pub fn shell_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
     let project = tempfile::tempdir().expect("temp project dir");
     // Inject an empty throwaway config dir so the developer's real global
@@ -42,21 +163,7 @@ pub fn shell_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
         state.multi.roots.is_empty(),
         "test project must discover no roots"
     );
-
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            configure_style(ui.ctx());
-            if !fonts_installed {
-                install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    (harness, project)
+    (shell_harness_over(state, Vec2::new(1024.0, 768.0)), project)
 }
 
 /// All text painted by the last completed frame.
@@ -391,4 +498,30 @@ pub fn settle<S>(harness: &mut Harness<'_, S>) {
         prev = fingerprint;
     }
     panic!("shell layout did not settle within 10 frames");
+}
+
+/// Step frames until the painted text is byte-identical for **three consecutive**
+/// frames, up to 300, sleeping 10ms between frames so a worker can post between them.
+///
+/// Kept separate from [`settle`] on purpose: that one answers "has the layout stopped
+/// relaying out?" off a single repeat, which a shell with background work reaches
+/// *between* worker repaints — so a suite that then clicks acts on stale coordinates.
+pub fn settle_quiet<S>(harness: &mut Harness<'_, S>) {
+    let mut stable = 0;
+    let mut prev = String::new();
+    for _ in 0..300 {
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let fingerprint = format!("{:?}", painted_text(harness));
+        if fingerprint == prev {
+            stable += 1;
+            if stable >= 3 {
+                return;
+            }
+        } else {
+            stable = 0;
+            prev = fingerprint;
+        }
+    }
+    panic!("shell layout did not settle within 300 frames; last painted:\n{prev}");
 }

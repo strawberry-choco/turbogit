@@ -17,6 +17,8 @@ use turbogit_app::state::AppState;
 
 // --- git fixture ---------------------------------------------------------------
 
+/// A `git` runner that pins the commit identity on every invocation, and
+/// deliberately NOT `test_support::git_seed::git`, which takes no per-call env.
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -136,6 +138,9 @@ fn failed_op_appends_error_entry() {
 
 /// `git` that tolerates failure — used to plant a merge conflict, where the
 /// non-zero exit is the point.
+/// `git` that tolerates failure — used to plant a merge conflict. Deliberately
+/// NOT `test_support::git_seed::git`, which asserts: `plant_merge_conflict`'s
+/// `git merge` is *supposed* to be refused.
 fn git_ok_or_fail(dir: &Path, args: &[&str]) {
     let _ = Command::new("git").args(args).current_dir(dir).output();
 }
@@ -196,59 +201,3 @@ fn op_leaving_conflicts_logs_warning_entry() {
 }
 
 // --- pure feed semantics (repo / time filters, clear) ---------------------------
-
-use chrono::{Duration as ChronoDuration, Local};
-use turbogit_app::activity::{ActivityEntry, ActivityLog, TimeWindow};
-
-fn entry(minutes_ago: i64, repo: &str, message: &str) -> ActivityEntry {
-    ActivityEntry {
-        at: Local::now() - ChronoDuration::minutes(minutes_ago),
-        repo: Some(repo.to_string()),
-        message: message.to_string(),
-        kind: ActivityKind::Success,
-    }
-}
-
-/// Contract: the repo filter narrows the visible feed to exactly that
-/// repo's entries; `None` shows everything.
-#[test]
-fn repo_filter_narrows_visible_entries() {
-    let mut log = ActivityLog::default();
-    log.push(entry(0, "alpha", "Fetch from origin"));
-    log.push(entry(0, "beta", "Pull"));
-
-    let all = log.visible(Local::now());
-    assert_eq!(all.len(), 2, "no filter → every entry");
-
-    log.repo_filter = Some("alpha".to_string());
-    let only_alpha = log.visible(Local::now());
-    assert_eq!(only_alpha.len(), 1);
-    assert_eq!(only_alpha[0].repo.as_deref(), Some("alpha"));
-}
-
-/// Contract: the 30-minute window hides older entries but keeps fresh ones;
-/// `All` keeps everything regardless of age.
-#[test]
-fn time_window_excludes_old_entries() {
-    let mut log = ActivityLog::default();
-    log.push(entry(0, "alpha", "fresh"));
-    log.push(entry(40, "alpha", "stale"));
-
-    log.window = TimeWindow::Last30Min;
-    let recent = log.visible(Local::now());
-    assert_eq!(recent.len(), 1);
-    assert_eq!(recent[0].message, "fresh");
-
-    log.window = TimeWindow::All;
-    assert_eq!(log.visible(Local::now()).len(), 2);
-}
-
-/// Contract: `clear` empties the feed for good.
-#[test]
-fn clear_empties_the_feed() {
-    let mut log = ActivityLog::default();
-    log.push(entry(0, "alpha", "Fetch from origin"));
-    log.clear();
-    assert!(log.entries.is_empty());
-    assert!(log.visible(Local::now()).is_empty());
-}

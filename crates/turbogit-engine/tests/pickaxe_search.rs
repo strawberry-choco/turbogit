@@ -3,30 +3,18 @@
 //! when the occurrence count of the string in the tracked content changed
 //! there, even if its message, hash, and author do not mention it.
 
-use std::path::Path;
-
+use test_support::git_seed::git;
 use turbogit_domain::model::LogOpts;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// The old runner's `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env was redundant: the two
+// `git config` lines below set the same `t <t@t>`, so dropping it leaves the
+// commit objects identical.
+//
+// The fixture stays local, not a `git_seed` recipe: it needs two commits on two
+// DIFFERENT paths so exactly one changes the occurrence count of "granular".
 
 #[test]
 fn pickaxe_scopes_the_log_to_commits_changing_the_string() {

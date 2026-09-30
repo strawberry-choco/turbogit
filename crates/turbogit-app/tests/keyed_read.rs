@@ -8,8 +8,8 @@
 //! `drain_events` settles it; no thread and no deadline is involved.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use test_support::git_seed::git;
 use turbogit_app::diff_model::FileMeta;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
 use turbogit_app::state::{AppState, BlameTarget, DiffComparison};
@@ -24,45 +24,26 @@ fn body_lines(patch: &Patch) -> impl Iterator<Item = &turbogit_domain::model::Pa
         .flat_map(|h| &h.lines)
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).trim().to_owned()
-}
-
 /// One committed `README.md`, optionally left with an unstaged edit.
+///
+/// On `git_seed`, which configures the identity on the repository. That is why
+/// the old `GIT_AUTHOR_*` env is gone: these fixtures set no identity of their
+/// own, so env was the only source and commits would take a machine-global one.
 fn repo(dir: &Path, dirty: bool) -> PathBuf {
-    let work = dir.join("work");
-    git(dir, &["init", "-q", "-b", "main", work.to_str().unwrap()]);
-    std::fs::write(work.join("README.md"), "one\ntwo\n").unwrap();
-    git(&work, &["add", "."]);
-    git(&work, &["commit", "-q", "-m", "init"]);
+    let work = test_support::git_seed::repo_with_one_commit(dir, "work");
     if dirty {
-        std::fs::write(work.join("README.md"), "one\nTWO\nthree\n").unwrap();
+        std::fs::write(work.join("README.md"), "X\nthree\n").unwrap();
     }
     work
 }
 
 /// A `README.md` with a staged edit *and* a further unstaged one on top, so
 /// the Staged and Repo comparisons have genuinely different answers to reach.
+///
+/// The staged edit is **staged, not committed**, and that is the whole
+/// precondition: committing it would make the Staged comparison answer `Empty`.
 fn repo_with_staged_and_unstaged(dir: &Path) -> PathBuf {
-    let work = dir.join("both");
-    git(dir, &["init", "-q", "-b", "main", work.to_str().unwrap()]);
-    std::fs::write(work.join("README.md"), "one\n").unwrap();
-    git(&work, &["add", "."]);
-    git(&work, &["commit", "-q", "-m", "init"]);
+    let work = test_support::git_seed::repo_with_one_commit(dir, "both");
     std::fs::write(work.join("README.md"), "TWO\n").unwrap();
     git(&work, &["add", "."]);
     std::fs::write(work.join("README.md"), "TWO\nthree\n").unwrap();
@@ -82,6 +63,9 @@ fn head_vs_worktree(work: &Path) -> DiffTarget {
 
 /// Settle everything the launch queued, so an event count below means exactly
 /// what one read put there.
+///
+/// Not a `test_support::harness` settle: this drains the event channel on a
+/// state predicate, which is the question `state.drain_events()` below asks.
 fn settle_first(state: &mut AppState) {
     while state.drain_events() > 0 {}
 }
@@ -333,19 +317,10 @@ fn a_synthesized_answer_leaves_nothing_pending() {
 #[test]
 fn a_blame_answer_is_not_another_revisions_answer() {
     let tmp = tempfile::tempdir().unwrap();
-    let work = tmp.path().join("blame");
-    git(
-        tmp.path(),
-        &["init", "-q", "-b", "main", work.to_str().unwrap()],
-    );
-    std::fs::write(work.join("README.md"), "one\n").unwrap();
-    git(&work, &["add", "."]);
-    git(&work, &["commit", "-q", "-m", "first"]);
-    let first = git(&work, &["rev-parse", "HEAD"]);
-    std::fs::write(work.join("README.md"), "one\ntwo\n").unwrap();
-    git(&work, &["add", "."]);
-    git(&work, &["commit", "-q", "-m", "second"]);
-    let second = git(&work, &["rev-parse", "HEAD"]);
+    let work = test_support::git_seed::repo_with_one_commit(tmp.path(), "blame");
+    let first = git(&work, &["rev-parse", "HEAD"]).trim().to_string();
+    test_support::git_seed::commit(&work, "README.md", "one\ntwo\n", "second");
+    let second = git(&work, &["rev-parse", "HEAD"]).trim().to_string();
 
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&work));
     settle_first(&mut state);

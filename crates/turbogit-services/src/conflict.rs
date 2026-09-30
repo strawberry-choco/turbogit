@@ -6,20 +6,10 @@
 //! offers helpers to stage a resolved file or to apply the simplest automatic
 //! strategy.
 
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 use turbogit_engine_api::GitExecutor;
-
-/// Return the list of conflicted paths reported by `git status`.
-///
-/// The engine already populates [`RootStatus::conflicted`]; this is a thin
-/// accessor used by the UI and the batch helpers below.
-pub fn detect(status: &RootStatus) -> Vec<PathBuf> {
-    status.conflicted.clone()
-}
 
 /// The three sides of one conflicted path, as the engine answers them.
 pub fn read_versions(
@@ -109,6 +99,11 @@ pub fn unresolved(status: &RootStatus) -> usize {
 /// fallback path when no base version is available for a structured 3-way
 /// merge, and the reference the Phase L1 parity tests compare
 /// [`turbogit_services::diff_engine::merge_segments`] against.
+///
+/// The three markers come from `turbogit_domain::model`, which is also where the two
+/// surfaces that *paint* them read theirs, so the parser and both painters cannot name
+/// different markers. A fourth — git's `|||||||` common-ancestor form, which this parser
+/// does not handle — can only arrive by changing one place.
 pub fn parse_conflict_markers(content: &str) -> (Vec<(String, String, bool)>, usize) {
     let mut segs: Vec<(String, String, bool)> = Vec::new();
     let mut conflicts = 0usize;
@@ -118,7 +113,7 @@ pub fn parse_conflict_markers(content: &str) -> (Vec<(String, String, bool)>, us
     // mode: 0 = normal, 1 = inside ours, 2 = inside theirs
     let mut mode = 0u8;
     for line in content.lines() {
-        if line.starts_with("<<<<<<<") {
+        if line.starts_with(CONFLICT_MARKER_OURS) {
             if !normal.is_empty() {
                 segs.push((std::mem::take(&mut normal), String::new(), false));
             }
@@ -126,9 +121,9 @@ pub fn parse_conflict_markers(content: &str) -> (Vec<(String, String, bool)>, us
             conflicts += 1;
             ours.clear();
             theirs.clear();
-        } else if line.starts_with("=======") && mode == 1 {
+        } else if line.starts_with(CONFLICT_MARKER_SEPARATOR) && mode == 1 {
             mode = 2;
-        } else if line.starts_with(">>>>>>>") && (mode == 1 || mode == 2) {
+        } else if line.starts_with(CONFLICT_MARKER_THEIRS) && (mode == 1 || mode == 2) {
             segs.push((std::mem::take(&mut ours), std::mem::take(&mut theirs), true));
             mode = 0;
         } else {

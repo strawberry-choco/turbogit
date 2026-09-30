@@ -7,8 +7,9 @@
 //! layer: stage one hunk of two, reverse-unstage a hunk, intent-to-add
 //! partial staging of an untracked file.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
+use test_support::git_seed::git;
 use turbogit_domain::model::{Patch, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::{ApplyDirection, GitExecutor};
@@ -20,22 +21,11 @@ fn value(text: &str) -> Patch {
 }
 
 // ---------------------------------------------------------------- helpers --
-
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+//
+// `temp_repo` stays local and keeps a real difference: its `git init` passes NO `-b`,
+// so the default branch is whatever the machine's `init.defaultBranch` says. Its
+// assertions read `status --porcelain` and `diff`, not a branch name, so nothing
+// would notice if that changed. It also returns a `Repo` that owns the `TempDir`.
 
 struct Repo {
     path: PathBuf,

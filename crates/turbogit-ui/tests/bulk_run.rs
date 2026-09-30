@@ -9,33 +9,32 @@
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use test_support::harness::{assert_not_painted, assert_painted, settle};
+use test_support::git_seed::git as git_ok;
+use test_support::harness::{
+    assert_not_painted, assert_painted, settle, shell_harness_over_unstyled,
+};
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_run::RowState;
 
-/// Run `git <args>` in `repo`; `ok=false` tolerates failure (conflict
-/// seeding). Returns stdout.
-fn git(repo: &Path, args: &[&str], ok: bool) -> String {
-    let out = std::process::Command::new("git")
+/// Run `git` without asserting success.
+///
+/// Deliberately NOT `test_support::git_seed::git`, which asserts: the one call
+/// that needs this is `git merge other`, whose failure IS the conflicted fixture.
+fn git_unchecked(repo: &Path, args: &[&str]) {
+    let _ = std::process::Command::new("git")
         .args(args)
         .current_dir(repo)
-        .output()
-        .expect("git invocation");
-    assert!(
-        !ok || out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf-8 stdout")
-}
-
-fn git_ok(repo: &Path, args: &[&str]) -> String {
-    git(repo, args, true)
+        .output();
 }
 
 /// Create an initialized temp repository with one base commit on `main`
 /// plus an `origin` remote so upstream reads can be exercised.
+///
+/// Kept local, NOT `git_seed::repo_with_origin`: the bare is named
+/// `<name>.origin` (two tests then break that URL), and the seeded file is
+/// `base.txt` — the conflict resolver asserts the row paints "Merge: base.txt",
+/// and `two_repo_project` dirties it to give the skipped row its precondition.
+/// `repo_with_one_commit` seeds `README.md`, which would make both untracked.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -78,16 +77,14 @@ fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 }
 
 /// Headless harness driving the full app UI (mirrors `bulk_operations`).
+///
+/// Unstyled: no `configure_style` and no `install_fonts`, because this suite
+/// asserts on the painted cascade-monitor labels and the shared preamble would
+/// lay them out in the embedded JetBrains Mono stack. `max_steps` is 1024 rather
+/// than kittest's default of 4 — the run budget a cascade drives is the one thing
+/// the shared helper leaves out.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(egui::vec2(1280.0, 800.0));
-    h
+    shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
 
 /// Step until the named repo's row is terminal (Done / Failed / Skipped).
@@ -189,7 +186,7 @@ fn resolve_on_a_conflicted_repo_opens_the_conflict_resolver() {
     git_ok(&alpha, &["checkout", "-q", "main"]);
     std::fs::write(alpha.join("base.txt"), "ours\n").unwrap();
     git_ok(&alpha, &["commit", "-qam", "ours"]);
-    git(&alpha, &["merge", "other"], false);
+    git_unchecked(&alpha, &["merge", "other"]);
     // Break the remote so the fetch fails and the row exposes Resolve.
     git_ok(
         &alpha,

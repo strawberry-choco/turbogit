@@ -16,6 +16,9 @@ use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, BlameTarget};
 use turbogit_domain::model::BlameLine;
 
+/// A `git` runner pinning the commit identity, not `git_seed::git`, which takes
+/// no per-call env. It covers the `rev-parse` and `add` calls too, and is what
+/// keeps a blame line's author the same on every machine.
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .args(args)

@@ -1,5 +1,5 @@
 //! Issue 16 — Cherry-pick across repositories, app seam: the dialog's
-//! forecast over the current multi-repo selection and the run itself,
+//! default targets over the current multi-repo selection and the run itself,
 //! dispatched through the cascade pool and reported through the run
 //! monitor, with conflicts held and never auto-resolved.
 //!
@@ -10,24 +10,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use test_support::git_seed::git;
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_run::RowState;
-
-/// Run `git <args>` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
 
 fn commit_file(repo: &Path, name: &str, body: &str, msg: &str) -> String {
     std::fs::write(repo.join(name), body).unwrap();
@@ -97,8 +82,6 @@ fn wait_for_run_end(state: &mut AppState) {
     }
 }
 
-// -- Forecast + default targets -------------------------------------------------
-
 #[test]
 fn the_dialog_defaults_to_the_current_multi_repo_selection_as_targets() {
     let (_tmp, project, alpha, beta, gamma, _commits) = project("cpa-default");
@@ -111,36 +94,6 @@ fn the_dialog_defaults_to_the_current_multi_repo_selection_as_targets() {
     assert_eq!(dlg.cherry_source.as_ref(), Some(&rid(&alpha)));
     assert_eq!(dlg.cherry_targets, vec![rid(&beta), rid(&gamma)]);
     assert!(dlg.cherry_stop_on_conflict, "the policy defaults to on");
-}
-
-#[test]
-fn the_forecast_predicts_applies_risk_and_outcome_per_target() {
-    let (_tmp, project, alpha, beta, gamma, commits) = project("cpa-forecast");
-    let mut state = AppState::for_roots(&project, &[alpha.clone(), beta.clone(), gamma.clone()]);
-    state.ui.repo_selection = [rid(&beta), rid(&gamma)].into_iter().collect();
-    state.open_cherry_across();
-    state.cherry_toggle_commit(commits[1].clone());
-    state.cherry_toggle_commit(commits[2].clone());
-
-    let forecast = state
-        .ui
-        .dlg
-        .cherry_forecast
-        .as_ref()
-        .expect("forecast computed");
-    assert_eq!(forecast.len(), 2, "one row per target");
-    let beta_row = forecast.iter().find(|t| t.root == rid(&beta)).unwrap();
-    assert_eq!((beta_row.applies, beta_row.total), (2, 2));
-    assert_eq!(
-        beta_row.risk,
-        turbogit_services::cherry_across::TargetRisk::Low
-    );
-    let gamma_row = forecast.iter().find(|t| t.root == rid(&gamma)).unwrap();
-    assert_eq!(
-        gamma_row.risk,
-        turbogit_services::cherry_across::TargetRisk::High,
-        "gamma diverged on b.txt — the conflict is predicted before running"
-    );
 }
 
 // -- The run --------------------------------------------------------------------

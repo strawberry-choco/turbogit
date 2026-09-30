@@ -86,7 +86,7 @@ use turbogit_app::state::{
 };
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
-    SignatureState,
+    SignatureState, forward_slash_path,
 };
 use turbogit_services::sync_service;
 
@@ -729,32 +729,21 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
 
 /// Run one pane's body inside the log's one card.
 ///
-/// [`widgets::card`] is the shared card, and everything it decides here is its
-/// default decision: the content surface, the card radius, and **no stroke** —
+/// All four cards in this file's composition are this function. **No stroke**:
 /// [`widgets::CardFrame::bordered`] is reserved for a surface that floats above
-/// its surroundings, and a log pane is not one. There are four cards in this
-/// file's composition and they are all this function, so "a card paints no
-/// stroke" is one assertion rather than four.
+/// its surroundings, and a log pane is not one.
 ///
-/// The padding is [`PANE_CARD_PAD`], and the other thing this adds is the
-/// height. A card in a flow grows to its content, which is right for a card and
-/// wrong for a *pane*: the details pane is a pinned 440 px bottom panel with a
-/// height of its own, and a surface that stopped short of it would leave the
-/// panel's own background showing underneath. So the card is stretched to the
-/// region it was given — measured as the space actually left over, because a
-/// min-height claim would be measured from wherever the content left the cursor
-/// rather than from the pane's top edge, and a tall commit would then push the
-/// surface past its own panel.
+/// The sizing is [`widgets::CardSizing::StretchHeight`], and the stretch
+/// measures from the pane's **top edge** before the contents run, not from where
+/// the content left the cursor — otherwise a tall commit pushes the surface past
+/// its own 440 px panel.
 fn pane_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     widgets::card(
         ui,
-        widgets::CardFrame::default().padded(PANE_CARD_PAD),
-        |ui| {
-            let height = ui.available_height();
-            let out = add(ui);
-            ui.add_space((height - ui.min_rect().height()).max(0.0));
-            out
-        },
+        widgets::CardFrame::default()
+            .padded(PANE_CARD_PAD)
+            .stretch_height(),
+        add,
     )
     .inner
 }
@@ -1158,11 +1147,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     // slot it does not have, and the message stays put where the pane has always
     // shown it instead of scrolling away with a list that has nothing in it.
     if display.is_empty() {
-        ui.label(
-            RichText::new("No commits match.")
-                .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                .color(Palette::INK_3),
-        );
+        widgets::empty_state(ui, "No commits match.");
     }
 
     // Auto-load-more (P6): the trigger is a settled bottom on an overflowing
@@ -1246,6 +1231,10 @@ fn select_commit_row(state: &mut AppState, root: RootId, id: String) {
 /// (ADR-0024); there is deliberately no "menu without selection" intent. Both
 /// intents are applied by [`select_commit_row`], so neither can end up naming a
 /// different repository from the other.
+///
+/// **Not to be merged with `branch_widget::BranchRowAction`** — also once called
+/// `RowIntent`, but that one carries a verb and a payload where this is a bare
+/// click. See `ui/mod.rs` for the four deferred-intent sites.
 enum RowIntent {
     None,
     Select,
@@ -1297,29 +1286,26 @@ fn commit_context_menu(ui: &mut Ui, state: &mut AppState) {
     };
     let target = widgets::menu_host::target_of(&root_id, &cid);
     let ctx = ui.ctx().clone();
-    let mut dismiss = false;
-    let picked = widgets::menu_host::host_menu(
+    widgets::menu_host::host_row_menu(
         ui,
-        widgets::menu_host::MenuId::new("log_commit", &target),
-        true,
-        &mut dismiss,
-        |ui| {
+        state,
+        "log_commit",
+        target,
+        |ui, state| {
             find_commit(state, &root_id, &cid)
                 .cloned()
                 .and_then(|commit| commit_menu(ui, &commit, &commit_facts(state, &root_id, &cid)))
         },
+        |state| state.ui.log_commit_menu = None,
+        |state, action| apply_commit_action(state, &ctx, &root_id, &cid, action),
     );
-    if dismiss {
-        state.ui.log_commit_menu = None;
-    }
-    if let Some(action) = picked.flatten() {
-        apply_commit_action(state, &ctx, &root_id, &cid, action);
-    }
 }
 
 /// One dispatcher for all eleven items — the ruling ADR-0023 made for branches
-/// applied to commits. It closes the menu first, so no action can be taken
-/// against a menu the developer can no longer see.
+/// applied to commits.
+///
+/// [`widgets::menu_host::host_row_menu`] closes the menu before this runs, so no
+/// action fires against a menu the developer can no longer see.
 fn apply_commit_action(
     state: &mut AppState,
     ctx: &egui::Context,
@@ -1327,7 +1313,6 @@ fn apply_commit_action(
     cid: &str,
     action: CommitMenuAction,
 ) {
-    state.ui.log_commit_menu = None;
     // Every verb acts on the commit this menu was opened on and none of them
     // changes the selection, so the list is asked to show that commit again
     // (issue 08): the menu can outlive a scroll — it is app state, not a frame's
@@ -1734,7 +1719,7 @@ fn commit_row(
     let message_left = content_left + COL_MESSAGE;
     let budget = (date_x - 8.0 - if labels.is_empty() { 0.0 } else { PILL_RESERVE } - message_left)
         .max(24.0);
-    let subject = c.message.lines().next().unwrap_or("");
+    let subject = c.subject();
     // Fitted to the column behind a width oracle, so the row spends a bounded
     // number of layouts on the fit rather than one per dropped character.
     let subject_fit = fit_to_budget(&truncate(subject, 44), budget, &|text: &str| {
@@ -1908,11 +1893,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
     widgets::pane_header(ui, "CHANGED FILES", count.as_deref(), |_ui| {});
 
     let Some((root_id, cid)) = selection else {
-        ui.label(
-            RichText::new("Select a commit to see its changed files.")
-                .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                .color(Palette::INK_3),
-        );
+        widgets::empty_state(ui, "Select a commit to see its changed files.");
         return;
     };
 
@@ -1923,12 +1904,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
     widgets::search_input(ui, "Filter changed files", &mut state.ui.log_file_filter);
     let filter = state.ui.log_file_filter.trim().to_lowercase();
     let row_shown = |change: &turbogit_domain::model::Change| {
-        filter.is_empty()
-            || change
-                .path
-                .to_string_lossy()
-                .to_lowercase()
-                .contains(&filter)
+        filter.is_empty() || widgets::filter_matches(&change.path.to_string_lossy(), &filter)
     };
     let shown = files.iter().filter(|c| row_shown(c)).count();
 
@@ -1947,19 +1923,11 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
             }
         }
         if files.is_empty() {
-            ui.label(
-                RichText::new("No changed files.")
-                    .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                    .color(Palette::INK_3),
-            );
+            widgets::empty_state(ui, "No changed files.");
         } else if shown == 0 {
             // A filter that hides every row is its own state — never the
             // "this commit changed nothing" message (issue 02).
-            ui.label(
-                RichText::new("No file matches the filter.")
-                    .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
-                    .color(Palette::INK_3),
-            );
+            widgets::empty_state(ui, "No file matches the filter.");
         }
     });
 
@@ -2024,13 +1992,12 @@ fn file_row_context_menu(ui: &mut Ui, state: &mut AppState) {
         return;
     };
     let target = widgets::menu_host::target_of(&root_id, &path.to_string_lossy());
-    let mut dismiss = false;
-    let picked = widgets::menu_host::host_menu(
+    widgets::menu_host::host_row_menu(
         ui,
-        widgets::menu_host::MenuId::new("log_file_row", &target),
-        true,
-        &mut dismiss,
-        |ui| {
+        state,
+        "log_file_row",
+        target,
+        |ui, state| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.set_min_width(240.0);
             // Scoping to a file whose history is already on screen is a no-op, so
@@ -2071,15 +2038,11 @@ fn file_row_context_menu(ui: &mut Ui, state: &mut AppState) {
             }
             picked
         },
+        // Close before the verb, or the right-click that picked an item
+        // reopens this menu next frame.
+        |state| state.ui.log_file_menu = None,
+        |state, action| apply_file_action(state, &root_id, &cid, action),
     );
-    if dismiss {
-        state.ui.log_file_menu = None;
-    }
-    if let Some(action) = picked.flatten() {
-        // The menu closes before its verb runs, exactly as the commit menu's does.
-        state.ui.log_file_menu = None;
-        apply_file_action(state, &root_id, &cid, action);
-    }
 }
 
 /// Run one changed-file row's verb against the root and commit the menu was
@@ -2181,7 +2144,7 @@ fn file_row(
     // rather than the muted one (see `row_meta_ink`).
     if let Some(dir) = change.path.parent().filter(|p| !p.as_os_str().is_empty()) {
         let dir_font = FontId::new(MICRO_TEXT, FontFamily::Proportional);
-        let dir_text = dir.to_string_lossy().replace('\\', "/");
+        let dir_text = forward_slash_path(dir);
         let dir_ink = row_meta_ink();
         let dir_galley = elide(&painter, &dir_text, dir_font, dir_ink, text_right - mx);
         painter.galley(Pos2::new(mx, rect.top() + 22.0), dir_galley, dir_ink);
@@ -2414,7 +2377,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     // Subject first (redesign issue 05): the commit's identity, taking over
     // the top of the key-value wall it replaces.
     ui.label(
-        RichText::new(commit.message.lines().next().unwrap_or_default())
+        RichText::new(commit.subject())
             .font(widgets::bold_font_if_available(ui))
             .color(Palette::INK),
     );

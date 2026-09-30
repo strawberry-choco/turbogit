@@ -10,11 +10,12 @@
 //! branch is the shared ref chip, and each row's state is the shared mark
 //! pair. Nothing here decides a colour, a radius or an x offset of its own.
 
-use egui::{Align, Color32, Layout, RichText, ScrollArea, Ui, Vec2, WidgetInfo, WidgetType};
+use egui::{Align, Color32, Layout, Ui, WidgetInfo, WidgetType};
 use turbogit_app::state::{AppState, Dialog, PendingConfirm};
 use turbogit_domain::model::Worktree;
 
-use crate::theme::{Palette, TYPE_BODY, data_font};
+use crate::theme::Palette;
+use crate::ui::column_table::{self, PaneTable};
 use crate::ui::components::{self, KitButton};
 use crate::ui::widgets::{self, PaneColumn};
 
@@ -42,14 +43,6 @@ const WORKTREE_COLUMNS: [PaneColumn; 5] = [
     PaneColumn::end("ACTIONS", 0.0),
 ];
 
-/// Air between two adjacent cells' columns, so a long cell in one column does
-/// not read as belonging to the next.
-///
-/// Applied to the *path* cell, which is the one cell allowed to be as wide as
-/// the table gives it, and which is therefore the only cell that can reach the
-/// column beside it.
-const CELL_GAP: f32 = 8.0;
-
 /// What a worktree whose dirty probe has not returned says.
 ///
 /// A state word, not a spinner: nothing here animates, and the word is the
@@ -60,65 +53,34 @@ const CELL_GAP: f32 = 8.0;
 const PROBING: &str = "probing…";
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    // The list is read **before** the header, because the header's count chip is
-    // that list's own length and not a second opinion about it. The chip is
-    // painted only once the list has landed: a count that appears as 0 and
-    // becomes 3 a frame later is a flickering number, and the pane already says
-    // "Loading worktrees…" underneath, which is the honest thing to show while
-    // the answer is not known.
-    let root = state.selected_root.clone();
-    let loaded: Option<Vec<Worktree>> = root
-        .as_ref()
-        .and_then(|id| state.caches.worktrees(id))
-        .map(<[Worktree]>::to_vec);
-    let count = loaded.as_ref().map(|worktrees| worktrees.len().to_string());
-
-    widgets::pane_header(ui, "WORKTREES", count.as_deref(), |ui| {
-        // The pane's one primary action, in the shared header's right-aligned
-        // slot. It is the **only** blue in this pane, which is what makes the
-        // ref chip below it worth having: a worktree row that painted its
-        // branch in the brand would put a second blue on the screen and the
-        // reader would have to read labels to work out which one is clickable.
-        //
-        // The *band-height* primary is the one, and that is not a preference. A
-        // pane header's band is a fixed height that grows to fit its tallest
-        // child, so a taller control in this slot makes the Worktrees header
-        // taller than every other pane's and pushes its own hairline down with
-        // it. That is precisely what the cross-pane header-geometry ratchet in
-        // `tests/widget_library.rs` exists to catch, and it is right to catch
-        // it: "every tool pane has the same header" stops being true the moment
-        // one pane's action slot is taller than the band. The shared vocabulary
-        // now carries that button — `widgets::compact_primary_button`, the same
-        // brand ladder as the 32px `primary_button` at the band's height — so
-        // the R1 primary has **one** implementation instead of one shared plus a
-        // page-local stand-in borrowed from the branch kit.
-        if widgets::compact_primary_button(ui, "Add worktree").clicked() {
-            state.ui.dlg.wt_path.clear();
-            state.ui.dlg.wt_branch.clear();
-            state.ui.dialog = Some(Dialog::NewWorktree);
-        }
-    });
-    ui.add_space(4.0);
-
-    let Some(id) = root else {
-        return;
-    };
-    let worktrees = loaded.unwrap_or_default();
-    if state.caches.worktrees(&id).is_none() {
-        ui.weak("Loading worktrees…");
-    }
-
-    widgets::column_header(ui, ui.available_rect_before_wrap(), &WORKTREE_COLUMNS);
-    ui.add_space(4.0);
-
-    ScrollArea::vertical().show(ui, |ui| {
-        if worktrees.is_empty() && state.caches.worktrees(&id).is_some() {
-            ui.weak("No linked worktrees. Use “Add worktree” to check a branch out into its own directory.");
-        }
-        for wt in &worktrees {
-            worktree_row(ui, state, wt);
-        }
-    });
+    // The pane's skeleton is [`column_table::column_table_pane`], shared with submodules.
+    column_table::column_table_pane(
+        ui,
+        state,
+        PaneTable {
+            title: "WORKTREES",
+            columns: &WORKTREE_COLUMNS,
+            loading: "Loading worktrees…",
+            empty: "No linked worktrees. Use “Add worktree” to check a branch out into its own directory.",
+            cached: |state, id| state.caches.worktrees(id),
+            actions: &mut |ui, state| {
+                // The pane's one primary action, and the **only** blue in this pane —
+                // which is what makes the ref chip below it worth having.
+                //
+                // The *band-height* primary is the one, not a preference: a taller
+                // control in this slot makes the Worktrees header taller than every
+                // other pane's and pushes its own hairline down, which is what the
+                // cross-pane header-geometry ratchet in `tests/widget_library.rs`
+                // catches.
+                if widgets::compact_primary_button(ui, "Add worktree").clicked() {
+                    state.ui.dlg.wt_path.clear();
+                    state.ui.dlg.wt_branch.clear();
+                    state.ui.dialog = Some(Dialog::NewWorktree);
+                }
+            },
+            row: &mut worktree_row,
+        },
+    );
 }
 
 /// One worktree row: path, branch, dirty status, and the remove action.
@@ -143,7 +105,9 @@ fn worktree_row(ui: &mut Ui, state: &mut AppState, wt: &Worktree) {
         .unwrap_or("<worktree>")
         .to_string();
     ui.horizontal(|ui| {
-        widgets::column_cell(ui, &WORKTREE_COLUMNS, 0, |ui| path_cell(ui, wt));
+        widgets::column_cell(ui, &WORKTREE_COLUMNS, 0, |ui| {
+            column_table::path_cell(ui, &WORKTREE_COLUMNS, &wt.path)
+        });
         widgets::column_cell(ui, &WORKTREE_COLUMNS, 1, |ui| {
             // The branch is a **ref name**, so it is the ref chip: the
             // raised-on-card fill with secondary ink, never the brand. A chip
@@ -177,43 +141,6 @@ fn worktree_row(ui: &mut Ui, state: &mut AppState, wt: &Worktree) {
         });
     });
     ui.add_space(2.0);
-}
-
-/// The PATH cell: the row's **primary column**, in the data face.
-///
-/// Primary ink because the path is what tells one row from another — it is the
-/// one thing in the row the reader is looking for. The monospaced data face
-/// because a path is data, and because a monospaced column of paths is
-/// scannable in a way a proportional one is not (same rule `ref_chip` and
-/// `hash_chip` follow).
-///
-/// The width is **derived, never stated**: it is the gap from this cell's
-/// origin to the next column's, both read from [`WORKTREE_COLUMNS`], so the path
-/// takes exactly the room the other columns leave it and no more. A long path
-/// elides rather than pushing the columns beside it out of line.
-fn path_cell(ui: &mut Ui, wt: &Worktree) {
-    let next_column = WORKTREE_COLUMNS[1].origin(ui.max_rect());
-    let width = (next_column - ui.cursor().left() - CELL_GAP).max(0.0);
-    // Laid out in a band of its own rather than through `add_sized`, because
-    // `add_sized` **centres** its widget in the size it is given: a path would
-    // then start wherever its own length left it, and a column whose cells do
-    // not start at the column are not a column. `left_to_right(Align::Center)`
-    // is the one layout that starts the text on the cell's left edge and still
-    // centres it against the chip and the state mark in the same 18px band.
-    ui.allocate_ui_with_layout(
-        Vec2::new(width, widgets::CHIP_HEIGHT),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(wt.path.display().to_string())
-                        .font(data_font(TYPE_BODY))
-                        .color(Palette::INK),
-                )
-                .truncate(),
-            );
-        },
-    );
 }
 
 /// The STATE cell's word and ink for one worktree's dirty probe.

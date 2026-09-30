@@ -36,32 +36,23 @@
 use egui::{Color32, Key, Modifiers, Rect};
 use egui_kittest::Harness;
 use std::path::{Path, PathBuf};
+use test_support::git_seed::git;
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_ink,
-    settle,
+    settle, shell_harness_over_unstyled,
 };
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::{Palette, RAIL_WIDTH, RepoState};
 use turbogit_ui::ui::shell;
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git invocation");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf-8 stdout")
-}
 
 /// Create an initialized temp repository with one base commit on the
 /// default branch plus an `origin` remote so upstream tracking reads
 /// can be exercised.
+/// Local repo builder, deliberately NOT `test_support::git_seed::repo_with_origin`.
+///
+/// The recipe commits `README.md`; this suite's change lists and diff panes name the
+/// file they changed, so the base commit has to be `base.txt`. A `base.txt` recipe
+/// would be `test-support` work, not this lane's.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -128,16 +119,12 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
 /// sidebar assertion in it passes vacuously. Tests that mean to look at the
 /// sidebar pass [`rail_visible_size`]; tests about the shell itself pass
 /// [`HARNESS_DEFAULT`].
+///
+/// Deliberately unstyled: this suite's whole subject is band geometry read off
+/// painted rects, and the embedded font stack would move those rects. `max_steps` is
+/// 1024 against kittest's default of 4, which the styled constructor cannot express.
 fn harness_at(state: AppState, width: f32, height: f32) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(egui::vec2(width, height));
-    h
+    shell_harness_over_unstyled(state, egui::vec2(width, height), 1024)
 }
 
 /// Drive a manual refresh through `Ctrl+T` — the frozen refresh shortcut

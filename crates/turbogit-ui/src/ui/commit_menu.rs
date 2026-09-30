@@ -91,17 +91,17 @@ impl CommitMenuAction {
 /// kind of commit this is, which history it sits in, what branch is checked out
 /// — are stated after it.
 mod reason {
-    pub const DIRTY: &str = "Resolve the uncommitted changes first";
-    pub const SINGLE_ROOT: &str = "only one repository is open";
-    pub const PROTECTED: &str = "the current branch is protected";
-    pub const OFF_BRANCH: &str = "not on the current branch";
-    pub const MERGE_DROP: &str = "a merge commit cannot be dropped";
-    pub const MERGE_REWORD: &str = "a merge commit cannot be reworded";
+    pub(crate) const DIRTY: &str = "Resolve the uncommitted changes first";
+    pub(crate) const SINGLE_ROOT: &str = "only one repository is open";
+    pub(crate) const PROTECTED: &str = "the current branch is protected";
+    pub(crate) const OFF_BRANCH: &str = "not on the current branch";
+    pub(crate) const MERGE_DROP: &str = "a merge commit cannot be dropped";
+    pub(crate) const MERGE_REWORD: &str = "a merge commit cannot be reworded";
     // Stated in the service's own noun, so the item and the refusal the service
     // would give name the commit the same way. The fallback toast in
     // `AppState::open_rewrite_preflight` quotes that message verbatim.
-    pub const ROOT_DROP: &str = "a root commit cannot be dropped";
-    pub const ROOT_REWORD: &str = "a root commit cannot be reworded";
+    pub(crate) const ROOT_DROP: &str = "a root commit cannot be dropped";
+    pub(crate) const ROOT_REWORD: &str = "a root commit cannot be reworded";
 }
 
 /// Plain facts about one commit's repository, each one read off state the log

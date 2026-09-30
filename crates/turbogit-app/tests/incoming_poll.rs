@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use test_support::RecordingExecutor;
+use test_support::git_seed::{git, repo_with_one_commit, repo_with_origin};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
@@ -33,42 +34,21 @@ use turbogit_engine_api::GitExecutor;
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git` in `dir`, asserting success.
-fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+/// A temp repo on `main` tracking its own local bare remote, plus the bare's
+/// path.
+///
+/// A thin wrapper over `git_seed::repo_with_origin`; only the bare's directory
+/// name differs, and nothing reads it — callers pass the returned path on.
+fn repo_with_upstream(parent: &Path, name: &str) -> (PathBuf, PathBuf) {
+    let work = repo_with_origin(parent, name);
+    let remote = parent.join(format!("{name}.git"));
+    (work, remote)
 }
 
-/// A temp repo on `main` tracking its own local bare remote
-/// (`<parent>/<name>-remote.git`), plus the bare's path.
-fn repo_with_upstream(parent: &Path, name: &str) -> (PathBuf, PathBuf) {
-    let path = parent.join(name);
-    let remote = parent.join(format!("{name}-remote.git"));
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q", "-b", "main"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("base.txt"), "base\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "base"]);
-    git(
-        &path,
-        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
-    );
-    git(
-        &path,
-        &["remote", "add", "origin", remote.to_str().unwrap()],
-    );
-    git(&path, &["push", "-q", "-u", "origin", "main"]);
-    (path, remote)
+/// A plain temp repo with no remote at all — the one case `repo_with_origin`
+/// cannot reach.
+fn repo_without_upstream(parent: &Path, name: &str) -> PathBuf {
+    repo_with_one_commit(parent, name)
 }
 
 /// Push an extra commit to the bare remote via a throwaway clone, so the
@@ -94,18 +74,9 @@ fn commit_on_remote(parent: &Path, bare: &Path, name: &str, file: &str) {
     git(&other, &["push", "-q", "origin", "main"]);
 }
 
-/// A plain temp repo with no remote at all.
-fn repo_without_upstream(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q", "-b", "main"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("solo.txt"), "solo\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "solo"]);
-    path
-}
+// `init_repo_with_upstream` (below) stays local for one reason no recipe can
+// express: the bare remote must live OUTSIDE the project directory, or the
+// launch-time project scan picks the remote up as a second root.
 
 /// `for_roots` with the executor/settings swap AFTER synchronous
 /// registration, so setup reads never reach the recorder.

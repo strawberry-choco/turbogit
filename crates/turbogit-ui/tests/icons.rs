@@ -268,9 +268,9 @@ mod log_capture {
     use std::sync::{Mutex, OnceLock};
 
     /// Captured `(level, message)` records, shared process-wide.
-    pub static RECORDS: OnceLock<Mutex<Vec<(log::Level, String)>>> = OnceLock::new();
+    pub(crate) static RECORDS: OnceLock<Mutex<Vec<(log::Level, String)>>> = OnceLock::new();
 
-    pub struct Capture;
+    pub(crate) struct Capture;
 
     impl log::Log for Capture {
         fn enabled(&self, metadata: &log::Metadata) -> bool {

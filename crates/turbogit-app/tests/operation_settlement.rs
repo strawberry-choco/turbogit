@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tempfile::TempDir;
+use test_support::git_seed::{self, commit};
 use turbogit_app::activity::ActivityKind;
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
@@ -22,6 +23,11 @@ use turbogit_domain::model::{MergeOpts, RebaseAction, RebaseOpts, RebasePlanEntr
 
 // --- git fixture ---------------------------------------------------------------
 
+/// Run `git <args>` in `dir`, asserting success and discarding stdout.
+///
+/// Kept local because `GIT_EDITOR=true` is load-bearing — every rebase flavour
+/// here is a rewrite, and a rewrite opens an editor unless one is suppressed —
+/// and the per-call identity env is this suite's only identity source.
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -42,18 +48,7 @@ fn git(dir: &Path, args: &[&str]) {
 
 /// `git rev-parse <rev>` — a full commit id.
 fn rev(dir: &Path, r: &str) -> String {
-    let out = Command::new("git")
-        .args(["rev-parse", r])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
-}
-
-fn commit_readme(repo: &Path, body: &str, message: &str) {
-    std::fs::write(repo.join("README.md"), format!("{body}\n")).unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-q", "-m", message]);
+    git_seed::git(dir, &["rev-parse", r]).trim().to_string()
 }
 
 /// A repository whose history offers a pair of commits touching the same lines
@@ -65,18 +60,19 @@ fn commit_readme(repo: &Path, body: &str, message: &str) {
 /// ```
 ///
 /// Ends checked out on `feature`.
+///
+/// Kept local, not `git_seed::repo_with_conflict`: that recipe leaves a merge
+/// *in progress* with the conflict staged, and the tests below are about a
+/// *rebase* that stops on conflicts — starting post-merge would make the rebase
+/// a no-op.
 fn conflicting_repo() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = tmp.path().join("alpha");
-    git(
-        tmp.path(),
-        &["init", "-q", "-b", "main", repo.to_str().unwrap()],
-    );
-    commit_readme(&repo, "base", "A: base");
+    let repo = git_seed::repo_with_one_commit(tmp.path(), "alpha");
+    commit(&repo, "README.md", "base\n", "A: base");
     let base = rev(&repo, "HEAD");
-    commit_readme(&repo, "main side", "M: main side");
+    commit(&repo, "README.md", "main side\n", "M: main side");
     git(&repo, &["checkout", "-q", "-b", "feature", &base]);
-    commit_readme(&repo, "feature side", "F: feature side");
+    commit(&repo, "README.md", "feature side\n", "F: feature side");
     (tmp, repo)
 }
 
@@ -96,12 +92,7 @@ fn interactive_plan_conflicting(repo: &Path) -> Vec<RebasePlanEntry> {
 
 /// The repository left mid-rebase with one conflicted file.
 fn assert_repo_is_conflicted(repo: &Path) {
-    let out = Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(repo)
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let text = git_seed::git(repo, &["status", "--porcelain"]);
     assert!(
         text.contains("UU"),
         "the rebase must leave a conflicted file, got:\n{text}"
@@ -615,12 +606,7 @@ fn short(sha: &str) -> String {
 
 /// The subjects a repository's log holds, newest first.
 fn subjects(dir: &Path) -> Vec<String> {
-    let out = Command::new("git")
-        .args(["log", "--format=%s"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&out.stdout)
+    git_seed::git(dir, &["log", "--format=%s"])
         .lines()
         .map(str::to_string)
         .collect()
@@ -704,15 +690,7 @@ fn a_reworded_commit_settles_without_leaking_its_new_message() {
         "the message is content, not part of the record: {:?}",
         entries[0].message
     );
-    let text = String::from_utf8_lossy(
-        &Command::new("git")
-            .args(["log", "--format=%s", "-1"])
-            .current_dir(&alpha)
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .to_string();
+    let text = git_seed::git(&alpha, &["log", "--format=%s", "-1"]);
     assert_eq!(text.trim(), "a corrected subject");
 }
 
@@ -724,7 +702,7 @@ fn a_refused_rewrite_is_reported_as_a_failure_of_its_own_kind() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
     // A second commit, so the target has a first parent and a plan can be built
     // for it at all: a root commit is refused before any plan exists.
-    commit_readme(&alpha, "y", "second");
+    commit(&alpha, "README.md", "y\n", "second");
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
     let root = registered_root(&state, &alpha);
     // `main` is protected by the default settings, and HEAD is on it.

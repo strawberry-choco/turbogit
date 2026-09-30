@@ -532,13 +532,12 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     if let Some((root_id, name)) = state.ui.branches_tree.context_menu.clone() {
         let target = widgets::menu_host::target_of(&root_id, &name);
         let root_name = root_id.name();
-        let mut dismiss = false;
-        let picked = widgets::menu_host::host_menu(
+        widgets::menu_host::host_row_menu(
             ui,
-            widgets::menu_host::MenuId::new("branches", &target),
-            true,
-            &mut dismiss,
-            |ui| {
+            state,
+            "branches",
+            target,
+            |ui, state| {
                 let mut picked = None;
                 if let Some(root) = state.multi.by_id(&root_id).cloned()
                     && let Some(branch) = root.branches.iter().find(|b| b.name == name).cloned()
@@ -552,21 +551,18 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
                 }
                 picked
             },
+            // Closes on dismissal *and* pick, so the two never race the field.
+            |state| state.ui.branches_tree.context_menu = None,
+            |state, action| {
+                let branch = state
+                    .multi
+                    .by_id(&root_id)
+                    .and_then(|r| r.branches.iter().find(|b| b.name == name).cloned());
+                if let Some(branch) = branch {
+                    apply_branch_action(state, &root_id, &branch, action);
+                }
+            },
         );
-        if dismiss {
-            state.ui.branches_tree.context_menu = None;
-        }
-        // The dispatcher closes the menu before its action runs, so an item
-        // click and a dismissal never race over the same field.
-        if let Some(action) = picked.flatten() {
-            let branch = state
-                .multi
-                .by_id(&root_id)
-                .and_then(|r| r.branches.iter().find(|b| b.name == name).cloned());
-            if let Some(branch) = branch {
-                apply_branch_action(state, &root_id, &branch, action);
-            }
-        }
     }
 }
 
@@ -787,7 +783,6 @@ fn apply_branch_action(
     branch: &Branch,
     action: BranchMenuAction,
 ) {
-    state.ui.branches_tree.context_menu = None;
     match action {
         BranchMenuAction::Checkout => checkout_branch(state, root, branch),
         BranchMenuAction::NewBranchFrom => {

@@ -34,7 +34,7 @@ pub fn render_diff(
     let root = match state.selected_path() {
         Some(r) => r,
         None => {
-            ui.label("No repository selected.");
+            widgets::empty_state(ui, "No repository selected.");
             return;
         }
     };
@@ -174,7 +174,7 @@ pub fn render_diff(
             let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
             paint_rename_header(ui.painter(), &rect, text, &mono_font());
         }
-        ui.colored_label(Palette::INK_2, "No content changes.");
+        widgets::empty_state(ui, "No content changes.");
         return;
     }
 

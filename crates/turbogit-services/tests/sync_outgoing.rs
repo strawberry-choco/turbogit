@@ -6,31 +6,20 @@
 //! full commit SHAs in log order.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+use test_support::git_seed::{git, repo_with_one_commit, repo_with_origin};
 use turbogit_domain::model::{MultiRootManager, RootId, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::multi_root::{build_root, register};
 use turbogit_services::sync_service::outgoing_per_root;
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
 /// Append a line to `file.txt` in `dir`, stage, commit, and return the new
 /// HEAD SHA (`git rev-parse HEAD`).
-fn commit(dir: &Path, msg: &str) -> String {
+///
+/// Not `git_seed::commit`: the shared primitive *overwrites* the file, this one
+/// appends, so three calls leave it at three lines.
+fn append_commit(dir: &Path, msg: &str) -> String {
     let file = dir.join("file.txt");
     let mut f = std::fs::OpenOptions::new()
         .create(true)
@@ -41,39 +30,28 @@ fn commit(dir: &Path, msg: &str) -> String {
     writeln!(f, "{msg}").expect("appending work file");
     drop(f);
 
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-m", msg]);
-    run_git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", msg]);
+    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
-/// Fresh repo on `main` with local identity configured, a bare remote at
-/// `<tmp>/remote.git`, and `main` pushed to it (commit c1); then two more
-/// local commits c2 and c3 that are ahead of `origin/main`.
+/// Fresh repo on `main` with local identity configured, a bare remote, and
+/// `main` pushed to it (commit c1); then two more local commits c2 and c3 that
+/// are ahead of `origin/main`.
+///
+/// The floor is [`repo_with_origin`], so that recipe owns it. The two local
+/// commits on top are the part no recipe produces: this suite is about the
+/// divergence `rev-list @{u}..HEAD` has to enumerate, in log order.
 ///
 /// Returns `(tempdir guard, repo path, [c1, c2, c3] SHAs)`.
 fn repo_ahead_of_origin() -> (tempfile::TempDir, PathBuf, Vec<String>) {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let repo = tmp.path().join("repo");
-    let remote = tmp.path().join("remote.git");
-    std::fs::create_dir_all(&repo).expect("repo dir");
+    let project = tmp.path().to_path_buf();
+    let repo = repo_with_origin(&project, "repo");
+    let c1 = git(&repo, &["rev-parse", "main"]).trim().to_string();
 
-    run_git(&repo, &["init", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
-    let c1 = commit(&repo, "c1");
-
-    run_git(
-        &repo,
-        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
-    );
-    run_git(
-        &repo,
-        &["remote", "add", "origin", remote.to_str().unwrap()],
-    );
-    run_git(&repo, &["push", "-u", "origin", "main"]);
-
-    let c2 = commit(&repo, "c2");
-    let c3 = commit(&repo, "c3");
+    let c2 = append_commit(&repo, "c2");
+    let c3 = append_commit(&repo, "c3");
 
     (tmp, repo, vec![c1, c2, c3])
 }
@@ -94,7 +72,7 @@ fn outgoing_commits_lists_local_ahead_shas_in_log_order() {
     assert_eq!(got, expected);
 
     // Cross-check against raw git output for the same range.
-    let raw = run_git(&repo, &["log", "--format=%H", "@{u}..HEAD"]);
+    let raw = git(&repo, &["log", "--format=%H", "@{u}..HEAD"]);
     let via_git: Vec<String> = raw
         .lines()
         .map(str::trim)
@@ -141,12 +119,7 @@ fn outgoing_per_root_yields_empty_for_root_without_upstream() {
 
     // Second repo: current branch, but never pushed — no remote, no tracking.
     let tmp_solo = tempfile::tempdir().expect("tempdir");
-    let solo_repo = tmp_solo.path().join("solo");
-    std::fs::create_dir_all(&solo_repo).expect("solo repo dir");
-    run_git(&solo_repo, &["init", "-b", "main"]);
-    run_git(&solo_repo, &["config", "user.email", "test@example.com"]);
-    run_git(&solo_repo, &["config", "user.name", "Test"]);
-    commit(&solo_repo, "only local");
+    let solo_repo = repo_with_one_commit(tmp_solo.path(), "solo");
 
     register(
         &mut mgr,

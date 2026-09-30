@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{Root, RootId};
 
+use crate::ui::widgets;
+
 /// Sidebar and branch headers share state meanings and colors.
 pub use crate::theme::RepoState as DotState;
 
@@ -132,11 +134,11 @@ pub fn filter_tree(project_dir: &Path, tree: &ProjectTree, query: &str) -> Proje
         return tree.clone();
     }
     filter_repos(project_dir, tree, |r| {
-        r.name.to_lowercase().contains(&q)
-            || r.path.to_string_lossy().to_lowercase().contains(&q)
+        widgets::filter_matches(&r.name, &q)
+            || widgets::filter_matches(&r.path.to_string_lossy(), &q)
             || r.branch
                 .as_deref()
-                .is_some_and(|b| b.to_lowercase().contains(&q))
+                .is_some_and(|b| widgets::filter_matches(b, &q))
             || ancestor_folder_matches(project_dir, r, &q)
     })
 }
@@ -423,7 +425,7 @@ fn ancestor_folder_matches(project_dir: &Path, repo: &RepoNode, q: &str) -> bool
     };
     rel.components()
         .take(rel.components().count().saturating_sub(1))
-        .any(|c| c.as_os_str().to_string_lossy().to_lowercase().contains(q))
+        .any(|c| widgets::filter_matches(&c.as_os_str().to_string_lossy(), q))
 }
 
 /// File-name label of a path (the `<repo>` fallback matches the shell's).

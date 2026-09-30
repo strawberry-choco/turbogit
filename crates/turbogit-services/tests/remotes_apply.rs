@@ -6,39 +6,17 @@
 //! repositories.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{MultiRootManager, Remote, RootId};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::multi_root::{build_root, register};
 use turbogit_services::remote_service::{RemoteChange, apply_to_selection};
 
-/// Run `git <args>` in `dir`, asserting success.
-fn run_git(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
+use test_support::git_seed::{git as run_git, repo_with_one_commit as fresh_repo};
 
-/// Fresh repo on `main` with local identity and one committed file.
-fn fresh_repo(tmp: &Path, name: &str) -> PathBuf {
-    let repo = tmp.join(name);
-    std::fs::create_dir_all(&repo).expect("repo dir");
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
-    std::fs::write(repo.join("seed.txt"), "seed\n").expect("seed");
-    run_git(&repo, &["add", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "seed"]);
-    repo
-}
+// Only the seeded commit differs (`README.md` = "x\n" rather than `seed.txt`), and
+// nothing in this file reads it: every assertion is about the remote `origin`, the
+// per-repo outcomes, or which roots were touched.
 
 /// A registered manager over `repos`, through the production registration path.
 fn manager(engine: &CliExecutor, repos: &[PathBuf]) -> MultiRootManager {

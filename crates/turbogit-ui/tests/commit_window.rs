@@ -19,30 +19,20 @@ use egui_kittest::{
 };
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use test_support::git_seed::git;
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_ink,
-    painted_paths, painted_text, stroked_rects,
+    painted_paths, painted_text, shell_harness_over_unstyled, stroked_rects,
 };
 use turbogit_app::state::{AppState, CommitSubTab, Dialog};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::widgets::{CHIP_HEIGHT, PANE_HEADER_HEIGHT};
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
 
 /// Run `git` without asserting success (for commands that may legitimately
 /// fail, e.g. a merge that conflicts).
+///
+/// Deliberately NOT `git_seed::git`, which asserts: this exists for the command
+/// whose failure IS the fixture (`seed_conflict`'s `git merge --no-edit side`).
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)
@@ -57,6 +47,11 @@ struct Repo {
 /// Create an initialized temp repository with one base commit on the default
 /// branch and repo-local user config so commits work headlessly. The caller
 /// keeps `parent` (a `TempDir`) alive for the duration of the test.
+///
+/// Kept local, NOT `git_seed::repo_with_one_commit`: the seeded file's NAME is
+/// load-bearing (`seed_changes` rewrites `base.txt` as a modification, and half
+/// the suite asserts on the `M` badge), and the unqualified `git init -q` leaves
+/// the default branch as the machine's, which `Repo::branch` reads back.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -140,27 +135,18 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 /// `text_styles`. Ticket 11 observed this while reconciling the header geometry
 /// and reported it rather than fixing it.
 ///
-/// The harness is deliberately left as it is: calling `configure_style` here would
-/// shift `item_spacing` and `button_padding` for the ~40 tests in this file, which
-/// is a different ticket's work and not a note's work. [`test_support::harness::shell_harness`]
-/// is the faithful one — it configures the style — and it is what a test about
-/// egui-native appearance should use.
-///
-/// The practical rule: **this file is not a proxy for any egui-native widget.** A
-/// shared-widget assertion here is worth exactly what it says; a `ui.button`'s
-/// size, padding or ink is not.
+/// The harness is deliberately the **unstyled** one: no `configure_style`, no
+/// `install_fonts`. Calling `configure_style` here would shift `item_spacing` and
+/// `button_padding` for the ~40 tests in this file, and every assertion below
+/// about a `ui.button`, `TextEdit`, combo box, scrollbar or menu frame is
+/// measured against egui's defaults. This file is not a proxy for any
+/// egui-native widget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     // Generous width so the Commit window's two zones (fixed-width commit
     // panel + diff preview) fit without clipping the multi-root select-all
-    // rows; the shell's metadata rail was removed (redesign 03).
-    let mut harness = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1280.0, 800.0));
+    // rows. `1024` is the stated `max_steps` rather than kittest's default of 4,
+    // because `Harness::run` PANICS once a run exceeds it.
+    let mut harness = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     // The first frames after startup relayout (embedded fonts take effect
     // at pass 2), so clicks must only happen on a settled frame
     // (test-support `settle`'s rationale).

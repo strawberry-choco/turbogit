@@ -12,11 +12,12 @@
 //! [`crate::theme::RepoState::color`] like every other state in the app. Nothing
 //! here decides a colour, a radius or an x offset of its own.
 
-use egui::{Align, Layout, RichText, ScrollArea, Ui, Vec2};
+use egui::{Align, Layout, RichText, Ui};
 use turbogit_app::state::{AppState, PendingConfirm};
 use turbogit_domain::model::{Submodule, SubmoduleState};
 
-use crate::theme::{Palette, RepoState, TYPE_BODY, TYPE_CONTROL, data_font};
+use crate::theme::{Palette, RepoState, TYPE_CONTROL, data_font};
+use crate::ui::column_table::{self, PaneTable};
 use crate::ui::components;
 use crate::ui::widgets::{self, PaneColumn};
 
@@ -45,46 +46,22 @@ const SUBMODULE_COLUMNS: [PaneColumn; 5] = [
     PaneColumn::end("ACTIONS", 0.0),
 ];
 
-/// Air between two adjacent cells' columns, so a long cell in one column does
-/// not read as belonging to the next. Applied to the *path* cell, the one cell
-/// allowed to be as wide as the table gives it.
-const CELL_GAP: f32 = 8.0;
-
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    // Read **before** the header, because the header's count chip is this list's
-    // own length and not a second opinion about it. Painted only once the list
-    // has landed: a count that appears as 0 and becomes 3 a frame later is a
-    // flickering number, and the pane already says "Loading submodules…"
-    // underneath, which is the honest thing to show while the answer is unknown.
-    let root = state.selected_root.clone();
-    let loaded: Option<Vec<Submodule>> = root
-        .as_ref()
-        .and_then(|id| state.caches.submodules(id))
-        .map(<[Submodule]>::to_vec);
-    let count = loaded.as_ref().map(|subs| subs.len().to_string());
-
-    widgets::pane_header(ui, "SUBMODULES", count.as_deref(), |_ui| {});
-    ui.add_space(4.0);
-
-    let Some(id) = root else {
-        return;
-    };
-    let submodules = loaded.unwrap_or_default();
-    if state.caches.submodules(&id).is_none() {
-        ui.weak("Loading submodules…");
-    }
-
-    widgets::column_header(ui, ui.available_rect_before_wrap(), &SUBMODULE_COLUMNS);
-    ui.add_space(4.0);
-
-    ScrollArea::vertical().show(ui, |ui| {
-        if submodules.is_empty() && state.caches.submodules(&id).is_some() {
-            ui.weak("No registered submodules in this repository.");
-        }
-        for sub in &submodules {
-            submodule_row(ui, state, sub);
-        }
-    });
+    column_table::column_table_pane(
+        ui,
+        state,
+        PaneTable {
+            title: "SUBMODULES",
+            columns: &SUBMODULE_COLUMNS,
+            loading: "Loading submodules…",
+            empty: "No registered submodules in this repository.",
+            cached: |state, id| state.caches.submodules(id),
+            // No header action: a submodule's verbs live on its own row, next to
+            // the state they apply to.
+            actions: &mut |_ui, _state| {},
+            row: &mut submodule_row,
+        },
+    );
 }
 
 /// One submodule row: path, checked-out commit, recorded commit, status, and
@@ -116,7 +93,9 @@ fn submodule_row(ui: &mut Ui, state: &mut AppState, sub: &Submodule) {
         _ => sub.recorded.as_deref(),
     };
     ui.horizontal(|ui| {
-        widgets::column_cell(ui, &SUBMODULE_COLUMNS, 0, |ui| path_cell(ui, sub));
+        widgets::column_cell(ui, &SUBMODULE_COLUMNS, 0, |ui| {
+            column_table::path_cell(ui, &SUBMODULE_COLUMNS, &sub.path)
+        });
         widgets::column_cell(ui, &SUBMODULE_COLUMNS, 1, |ui| {
             commit_cell(ui, sub.head.as_deref(), diverged)
         });
@@ -145,40 +124,6 @@ fn submodule_row(ui: &mut Ui, state: &mut AppState, sub: &Submodule) {
         });
     });
     ui.add_space(2.0);
-}
-
-/// The PATH cell: the row's **primary column**, in the data face.
-///
-/// Primary ink because the path is what tells one row from another — it is the
-/// one thing in the row the reader is looking for. The monospaced data face
-/// because a path is data, and because a monospaced column of paths is
-/// scannable in a way a proportional one is not.
-///
-/// The width is **derived, never stated**: it is the gap from this cell's origin
-/// to the next column's, both read from [`SUBMODULE_COLUMNS`], so the path takes
-/// exactly the room the other columns leave it and no more. A long path elides
-/// rather than pushing the columns beside it out of line.
-fn path_cell(ui: &mut Ui, sub: &Submodule) {
-    let next_column = SUBMODULE_COLUMNS[1].origin(ui.max_rect());
-    let width = (next_column - ui.cursor().left() - CELL_GAP).max(0.0);
-    // Laid out in a band of its own rather than through `add_sized`, because
-    // `add_sized` **centres** its widget in the size it is given: a path would
-    // then start wherever its own length left it, and a column whose cells do
-    // not start at the column are not a column.
-    ui.allocate_ui_with_layout(
-        Vec2::new(width, widgets::CHIP_HEIGHT),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(sub.path.display().to_string())
-                        .font(data_font(TYPE_BODY))
-                        .color(Palette::INK),
-                )
-                .truncate(),
-            );
-        },
-    );
 }
 
 /// True when the checkout is at a different commit than the superproject

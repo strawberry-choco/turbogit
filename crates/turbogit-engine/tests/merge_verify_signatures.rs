@@ -5,24 +5,15 @@
 
 use std::path::{Path, PathBuf};
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{MergeOpts, VcsSettings};
 use turbogit_engine::GitExecutor as _;
 use turbogit_engine::cli::CliExecutor;
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// `unsigned_fixture` stays local, not a `git_seed` recipe: the closest one
+// (`repo_with_feature_branch`) would add a bare `origin` and an upstream to a
+// fixture whose whole premise is that the incoming commits are plain unsigned
+// local commits.
 
 /// Append `text` to `<dir>/file.txt`, stage, commit.
 fn commit(dir: &Path, text: &str) {
@@ -35,8 +26,8 @@ fn commit(dir: &Path, text: &str) {
     use std::io::Write;
     writeln!(f, "{text}").expect("appending work file");
     drop(f);
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-q", "-m", text]);
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", text]);
 }
 
 /// Repo on `main` with a `feature` branch strictly ahead (unsigned commits —
@@ -45,13 +36,13 @@ fn unsigned_fixture() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     commit(&repo, "base");
-    run_git(&repo, &["checkout", "-q", "-b", "feature"]);
+    git(&repo, &["checkout", "-q", "-b", "feature"]);
     commit(&repo, "feature-1");
-    run_git(&repo, &["checkout", "-q", "main"]);
+    git(&repo, &["checkout", "-q", "main"]);
     (tmp, repo)
 }
 
@@ -77,7 +68,7 @@ fn verify_signatures_refuses_unsigned_incoming_commits() {
     );
     // The refusal left the branch untouched.
     assert_eq!(
-        run_git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
         "main"
     );
 }

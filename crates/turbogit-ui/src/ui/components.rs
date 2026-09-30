@@ -19,8 +19,8 @@ use egui::{
 
 use super::icons::{self, Icon};
 use super::widgets::{
-    BADGE_TINT, CHIP_PAD_X, COMPACT_CHIP_GEOMETRY, COUNT_CHIP_COLORS, REF_CHIP_COLORS, WidgetState,
-    count_chip, mix, tint_over_bg,
+    CHIP_PAD_X, COMPACT_CHIP_GEOMETRY, COUNT_CHIP_COLORS, REF_CHIP_COLORS, WidgetState, count_chip,
+    mix, tint_over_bg,
 };
 use crate::theme::{Palette, TYPE_BODY, TYPE_CHIP, TYPE_SECTION, chrome_font, data_font};
 
@@ -38,8 +38,6 @@ pub const SIDE_PANEL_W: f32 = 220.0;
 pub const PAD_LIST: f32 = 16.0;
 /// Padding inside toolbars and strips.
 pub const PAD_STRIP: f32 = 12.0;
-/// Padding inside side panels.
-pub const PAD_PANEL: f32 = 16.0;
 
 /// Icon drawing size for the branch screen — 12px (13px for the detail title
 /// rows). Always paired with a ≥[`CLICK_TARGET_MIN`] hitbox.
@@ -603,11 +601,6 @@ pub fn sync_ink(kind: SyncKind) -> Color32 {
         SyncKind::Diverged => crate::theme::RepoState::Diverged.color(),
         SyncKind::Gone => Palette::DANGER,
     }
-}
-
-/// §13 meaning token for a sync badge's tinted background.
-pub fn sync_bg(kind: SyncKind) -> Color32 {
-    tint_over_bg(sync_ink(kind), BADGE_TINT)
 }
 
 /// Fit identifying ends to actual font metrics, including wide Unicode glyphs.

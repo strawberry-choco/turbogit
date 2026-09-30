@@ -8,9 +8,9 @@
 //! one canned patch.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
+use test_support::git_seed::repo_with_one_commit;
 use turbogit_app::diff_model::{DisplayRow, RowKind};
 use turbogit_app::keyed_read::{DiffTarget, Read};
 use turbogit_app::state::{AppState, DiffComparison};
@@ -18,26 +18,12 @@ use turbogit_engine::fake::FakeExecutor;
 use turbogit_services::hunk_stats::HunkSpan;
 
 /// One committed file, so the headless harness has a root to read against.
+///
+/// The recipe's committed file is `README.md` rather than this builder's, and
+/// nothing reads it: the patch every shape is rendered from is the canned
+/// `EVERY_SHAPE` string handed to `FakeExecutor`, never read off the worktree.
 fn repo(dir: &Path) -> PathBuf {
-    let work = dir.join("work");
-    let run = |args: &[&str]| {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(&work)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .output();
-        assert!(
-            out.expect("git must be on PATH").status.success(),
-            "{args:?}"
-        );
-    };
-    std::fs::create_dir_all(&work).unwrap();
-    run(&["init", "-q", "-b", "main"]);
-    std::fs::write(work.join("README.md"), "one\ntwo\nthree\n").unwrap();
-    run(&["add", "."]);
-    run(&["commit", "-q", "-m", "init"]);
-    work
+    repo_with_one_commit(dir, "work")
 }
 
 /// A patch holding every shape the row model has to render: an edit with a

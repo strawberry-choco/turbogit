@@ -17,9 +17,10 @@ use std::time::Duration;
 use egui_kittest::kittest::NodeT as _;
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
+use test_support::git_seed::{commit, git};
 use test_support::harness::{
     assert_menu_item_gated, assert_not_painted, assert_painted, click_menu_item, painted_galleys,
-    painted_text, right_click_row,
+    right_click_row, settle_quiet, shell_harness_over,
 };
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, Tab};
@@ -30,27 +31,12 @@ use turbogit_ui::theme::Palette;
 
 // --- git fixture ---------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// `git` WITHOUT asserting success, for reading a ref that is expected to be
 /// absent — `git rev-parse --verify --quiet` exits non-zero when the ref does
 /// not exist, and that non-zero exit is the answer.
+///
+/// The OPPOSITE contract from `git_seed::git`, which asserts success: the non-zero
+/// exit IS the value being read.
 fn git_absent(dir: &Path, args: &[&str]) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(args)
@@ -63,9 +49,7 @@ fn git_absent(dir: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
-    std::fs::write(dir.join(name), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
+    commit(dir, name, body, msg);
     git(dir, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
@@ -129,6 +113,9 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
 }
 
 /// The log shell over any project directory, with its logs warm.
+///
+/// The warm-up stays local because it answers each root's log through the production
+/// `AppEvent::LogLoaded` channel, which is this suite's subject.
 fn log_harness_over(project: PathBuf) -> Harness<'static, AppState> {
     let mut state = AppState::new(project);
     let engine = CliExecutor {
@@ -148,45 +135,12 @@ fn log_harness_over(project: PathBuf) -> Harness<'static, AppState> {
     state.drain_events();
     state.ui.tab = Tab::Log;
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            state.drain_events();
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
+    let mut harness = shell_harness_over(
         state,
+        egui::vec2(1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH, 800.0),
     );
-    harness.set_size(egui::vec2(
-        1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
-        800.0,
-    ));
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     harness
-}
-
-fn settle(harness: &mut Harness<'_, AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let cur = format!("{:?}", painted_text(harness));
-        if cur == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = cur;
-        }
-    }
-    panic!("log layout did not settle within 300 frames");
 }
 
 /// The new-branch dialog's own row for `branch`. The branches pane paints rows
@@ -258,7 +212,7 @@ fn revert_from_the_log_creates_a_revert_commit_visible_in_the_graph() {
 
     right_click_row(&mut harness, &row_label(&seed.c2, "alpha: second commit"));
     click_menu_item(&mut harness, "Copy hash", "Revert commit");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     // Confirmation gate first: the revert must not run before OK.
     assert!(
@@ -266,7 +220,7 @@ fn revert_from_the_log_creates_a_revert_commit_visible_in_the_graph() {
         "revert must ask for confirmation before dispatching"
     );
     harness.get_by_label("OK").click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     // The revert commit appears in the refreshed graph (production event
     // path: OpCompleted → refresh → LogLoaded → cache → repaint).
@@ -306,7 +260,7 @@ fn cherry_pick_opens_the_branch_picker_and_applies_onto_the_chosen_branch() {
     // Pick a main commit to apply onto feature.
     right_click_row(&mut harness, &row_label(&seed.c2, "alpha: second commit"));
     click_menu_item(&mut harness, "Copy hash", "Cherry-pick to…");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     // The picker lists the repo's local branches. `main` is the branch the work
     // is standing on, so it is refused as the current branch — the picker states
@@ -347,7 +301,7 @@ fn cherry_pick_opens_the_branch_picker_and_applies_onto_the_chosen_branch() {
     // The dialog's picker renders in a default-positioned Area at the far
     // left; the pane's row sits right of the sidebar.
     sorted.first().expect("picker row").click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     wait_for(&mut harness, |s| {
         s.ui.toast
@@ -389,7 +343,7 @@ fn new_branch_from_the_menu_creates_the_branch_at_the_right_clicked_commit() {
     // at the clicked commit cannot be mistaken for each other.
     right_click_row(&mut harness, &row_label(&seed.c1, "alpha: first commit"));
     click_menu_item(&mut harness, "Copy hash", "New branch");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_eq!(
         harness.state().ui.dialog,
         Some(Dialog::NewBranch),
@@ -397,7 +351,7 @@ fn new_branch_from_the_menu_creates_the_branch_at_the_right_clicked_commit() {
     );
 
     harness.state_mut().ui.dlg.new_branch_name = "from-the-log".into();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     harness.get_by_label("Create").click();
     wait_for(&mut harness, |s| {
         s.ui.toast
@@ -428,12 +382,12 @@ fn cancelling_the_new_branch_dialog_from_the_menu_creates_nothing() {
 
     right_click_row(&mut harness, &row_label(&seed.c2, "alpha: second commit"));
     click_menu_item(&mut harness, "Copy hash", "New branch");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     harness.state_mut().ui.dlg.new_branch_name = "should-never-exist".into();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     harness.get_by_label("Cancel").click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     assert!(harness.state().ui.dialog.is_none(), "the dialog went");
     assert_eq!(
@@ -465,7 +419,7 @@ fn the_start_from_row_reads_a_commit_as_a_short_reference_and_its_subject() {
 
     right_click_row(&mut harness, &row_label(&seed.c1, "alpha: first commit"));
     click_menu_item(&mut harness, "Copy hash", "New branch");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     assert_painted(&harness, &short(&seed.c1));
     // A 40-character hash is not a base anyone can read.
@@ -494,10 +448,10 @@ fn the_branch_picker_offers_branches_while_the_base_is_a_commit() {
     let mut harness = log_harness(&seed);
     right_click_row(&mut harness, &row_label(&seed.c1, "alpha: first commit"));
     click_menu_item(&mut harness, "Copy hash", "New branch");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     harness.get_by_label("Change…").click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_eq!(
         harness.state().ui.dlg.new_branch_base,
         NewBranchBase::Commit(seed.c1.clone()),
@@ -519,7 +473,7 @@ fn the_branch_picker_offers_branches_while_the_base_is_a_commit() {
     // default-positioned area at the far left (the same disambiguation the
     // cherry-pick test above makes).
     picker_row(&harness, "feature").click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_eq!(
         harness.state().ui.dlg.new_branch_base,
         NewBranchBase::Branch("feature".into()),
@@ -567,7 +521,7 @@ fn history_to_rewrite() -> (TempDir, PathBuf, PathBuf, String, String) {
 fn open_rewrite_preflight(harness: &mut Harness<'_, AppState>, c1: &str, subject: &str) {
     right_click_row(harness, &row_label(c1, subject));
     click_menu_item(harness, "Copy hash", "Drop commit");
-    settle(harness);
+    settle_quiet(harness);
     assert_eq!(
         harness.state().ui.dialog,
         Some(Dialog::RewritePreflight),
@@ -637,7 +591,7 @@ fn confirming_the_drop_preflight_removes_one_commit_and_keeps_its_descendants() 
     // dropped SUBJECT still shows in the changed-files pane until the selection
     // follows the history, which is the next test's subject.)
     warm_logs(&mut harness);
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_painted(&harness, "3 shown");
     assert_painted(&harness, "feature-3");
 }
@@ -653,16 +607,16 @@ fn open_reword_preflight(
 ) {
     right_click_row(harness, &row_label(c1, subject));
     click_menu_item(harness, "Copy hash", "Reword commit");
-    settle(harness);
+    settle_quiet(harness);
     assert_eq!(
         harness.state().ui.dialog,
         Some(Dialog::Reword),
         "the item opens the editor, not the rewrite"
     );
     harness.state_mut().ui.dlg.reword_message = message.to_owned();
-    settle(harness);
+    settle_quiet(harness);
     harness.get_by_label("Reword this commit").click();
-    settle(harness);
+    settle_quiet(harness);
     assert_eq!(
         harness.state().ui.dialog,
         Some(Dialog::RewritePreflight),
@@ -740,7 +694,7 @@ fn confirming_the_reword_preflight_rewrites_the_message_and_nothing_else() {
     // The log refreshed through the ordinary completion path, and it now shows
     // the new message.
     warm_logs(&mut harness);
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_painted(&harness, "feature: the second one");
     // The old subject is gone as a SUBJECT. Checked on a whole galley rather than
     // as a substring, because the reworded commit's file is `feature-2.txt` and
@@ -786,7 +740,7 @@ fn the_selection_stays_on_the_commit_that_was_reworded_at_its_new_hash() {
                 .any(|c| c.message.lines().next() == Some("feature: the second one"))
         })
     });
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     let reworded = git(&repo, &["rev-parse", "feature~1"]).trim().to_string();
     assert_eq!(
@@ -843,7 +797,7 @@ fn the_selection_follows_the_history_to_the_commit_that_took_the_dropped_places(
     wait_for(&mut harness, |s| {
         s.caches.log(&root).is_some_and(|cs| cs.len() == 3)
     });
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     let tip_after = git(&repo, &["rev-parse", "feature"]).trim().to_string();
     assert_ne!(
@@ -901,7 +855,7 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
     harness
         .get_by_label(&row_label(&target, "feature-2"))
         .click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_eq!(
         harness.state().ui.selected_commit.as_deref(),
         Some(target.as_str()),
@@ -929,7 +883,7 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
             .iter()
             .any(|e| e.kind == turbogit_app::activity::ActivityKind::Error)
     });
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     // Reported as a failure, by name, with git's own reason.
     let failure = harness
@@ -992,7 +946,7 @@ fn a_reword_that_git_refuses_is_reported_as_a_failure_and_moves_nothing() {
         s.caches.log(&root).is_some_and(|cs| cs.len() == 4)
     });
     warm_logs(&mut harness);
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert_painted(&harness, "feature-2");
 }
 
@@ -1008,7 +962,7 @@ fn cancelling_the_drop_preflight_changes_nothing() {
 
     open_rewrite_preflight(&mut harness, &target, "feature-2");
     harness.get_by_label("Cancel").click();
-    settle(&mut harness);
+    settle_quiet(&mut harness);
 
     assert!(harness.state().ui.dialog.is_none(), "the dialog went");
     assert_eq!(
@@ -1049,7 +1003,7 @@ fn actions_are_blocked_with_an_explanation_on_protected_branches() {
     right_click_row(&mut harness, &row_label(&seed.c2, "alpha: second commit"));
     assert_menu_item_gated(&mut harness, "Copy hash", "Revert commit");
     click_menu_item(&mut harness, "Copy hash", "Revert commit");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert!(
         harness.state().ui.confirm.is_none(),
         "a blocked revert must never reach the confirmation gate"
@@ -1060,11 +1014,11 @@ fn actions_are_blocked_with_an_explanation_on_protected_branches() {
     harness
         .state_mut()
         .refresh(turbogit_app::root_caches::Affected::All);
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     right_click_row(&mut harness, &row_label(&seed.c2, "alpha: second commit"));
     assert_menu_item_gated(&mut harness, "Copy hash", "Cherry-pick to…");
     click_menu_item(&mut harness, "Copy hash", "Cherry-pick to…");
-    settle(&mut harness);
+    settle_quiet(&mut harness);
     assert!(
         harness.state().ui.dialog.is_none(),
         "a blocked cherry-pick must not open the branch picker"

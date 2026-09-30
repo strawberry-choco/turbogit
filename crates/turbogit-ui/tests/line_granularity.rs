@@ -10,7 +10,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use test_support::harness::painted_text;
+use test_support::git_seed::{git, repo_with_one_commit};
+use test_support::harness::{painted_text, shell_harness_over_unstyled};
 use test_support::{RecordedCall, RecordingExecutor};
 
 use egui::FontFamily::Monospace;
@@ -24,22 +25,6 @@ use turbogit_engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 struct Repo {
     path: PathBuf,
 }
@@ -47,16 +32,13 @@ struct Repo {
 /// Create an initialized temp repository with one base commit on the default
 /// branch and repo-local user config so commits work headlessly. The caller
 /// keeps `parent` (a `TempDir`) alive for the duration of the test.
+///
+/// A thin wrapper over `git_seed::repo_with_one_commit`; nothing here reads the
+/// seeded commit — every assertion is about `code.rs` and the diff rows from it.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("base.txt"), "base\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "init"]);
-    Repo { path }
+    Repo {
+        path: repo_with_one_commit(parent, name),
+    }
 }
 
 /// Commit `code.rs`, then diverge the worktree by editing one long line —
@@ -96,15 +78,13 @@ fn app_state_with_recorder(
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Unstyled, with `max_steps` as the third argument: this suite drives its diff
+/// interactions through `h.run()` (15 call sites) and `Harness::run` PANICS past
+/// kittest's default budget of 4. The drag/character-range geometry below is
+/// measured against egui's default metrics, not the production token set.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(egui::vec2(1280.0, 800.0));
+    let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
     h
 }

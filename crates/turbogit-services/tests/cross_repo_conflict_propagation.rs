@@ -22,27 +22,17 @@
 
 use std::path::{Path, PathBuf};
 
+use test_support::git_seed::git;
 use turbogit_domain::model::{MultiRootManager, Root, RootId, RootStatus};
 use turbogit_engine::build_executor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::conflict_propagation::{apply_to_matches, find_matches};
-/// Run `git` in `repo`, asserting success; returns stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .current_dir(repo)
-        .args(args)
-        .output()
-        .expect("git must run");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed in {}: {}",
-        repo.display(),
-        String::from_utf8_lossy(&out.stderr),
-    );
-    String::from_utf8(out.stdout).expect("utf-8 stdout")
-}
 
 /// Run `git` without asserting success (a merge that conflicts exits non-zero).
+/// Run `git` WITHOUT asserting success, and deliberately NOT
+/// `test_support::git_seed::git` — which asserts it: `seed_conflict` starts a
+/// `git merge` expected to exit non-zero, and that refusal is the conflict the
+/// suite propagates.
 fn git_unchecked(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .current_dir(repo)

@@ -4,28 +4,28 @@
 //! the port needs a raw-args escape hatch so the CLI adapter can run it per
 //! repo. Headless tests over real temporary repositories.
 
+use test_support::git_seed::git;
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
 /// Fresh initialized repo on `main` with local identity configured.
+///
+/// The builder stays local because this suite's repository is INITIALIZED AND
+/// EMPTY — every `git_seed` recipe ends in a commit, so none can stand in here.
+///
+/// `create_dir_all` is kept even though `git init <path>` would create the
+/// directory: it is what makes the shared runner's `current_dir(repo)` safe, and
+/// dropping it turns a missing directory into a misleading
+/// `git must be on PATH: NotFound` panic.
 fn temp_repo(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join(tag);
     std::fs::create_dir_all(&repo).expect("repo dir");
-    for args in [
-        ["init", "-q", "-b", "main"].as_slice(),
-        ["config", "user.email", "test@example.com"].as_slice(),
-        ["config", "user.name", "Test"].as_slice(),
-    ] {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&repo)
-            .output()
-            .expect("spawning git");
-        assert!(out.status.success(), "git {args:?} failed");
-    }
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
     (tmp, repo)
 }
 
@@ -84,17 +84,8 @@ fn a_failing_raw_command_surfaces_the_git_stderr_as_a_cli_error() {
 fn run_raw_honors_the_root_as_working_directory() {
     let (_tmp, repo) = temp_repo("raw-cwd");
     std::fs::write(repo.join("tracked.txt"), "hello\n").unwrap();
-    for args in [
-        ["add", "."].as_slice(),
-        ["commit", "-q", "-m", "c1"].as_slice(),
-    ] {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(&repo)
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?} failed");
-    }
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "c1"]);
 
     let exe = executor();
     let out = exe

@@ -7,48 +7,39 @@
 //! real repository with the [`RecordingExecutor`] counting engine calls.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
+use test_support::git_seed::git;
 use turbogit_app::root_caches::{Affected, file_stat};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// A repository whose HEAD commit edits `a.txt` (+2 / −1) and deletes
 /// `b.txt` (+0 / −1).
+///
+/// **Kept local, not a `git_seed` recipe.** No shared recipe is a two-commit
+/// edit-then-delete, and the churn totals asserted here (`a.txt → (2, 1)`,
+/// `b.txt → (0, 1)`) exist only if the first commit added both files and the
+/// second edited one and removed the other.
 fn seeded_root() -> (TempDir, RootId, PathBuf, String) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("stats");
     std::fs::create_dir_all(&repo).expect("repo dir");
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "cache@example.com"]);
-    run_git(&repo, &["config", "user.name", "Cache Author"]);
-    run_git(&repo, &["config", "core.autocrlf", "false"]);
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "cache@example.com"]);
+    git(&repo, &["config", "user.name", "Cache Author"]);
+    git(&repo, &["config", "core.autocrlf", "false"]);
     std::fs::write(repo.join("a.txt"), "1\n2\n3\n").expect("write a");
     std::fs::write(repo.join("b.txt"), "gone\n").expect("write b");
-    run_git(&repo, &["add", "--", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "base"]);
+    git(&repo, &["add", "--", "."]);
+    git(&repo, &["commit", "-q", "-m", "base"]);
     std::fs::write(repo.join("a.txt"), "1\n2\nX\nY\n").expect("edit a");
     std::fs::remove_file(repo.join("b.txt")).expect("remove b");
-    run_git(&repo, &["add", "--", "."]);
-    run_git(&repo, &["commit", "-q", "-m", "edit and delete"]);
-    let head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+    git(&repo, &["add", "--", "."]);
+    git(&repo, &["commit", "-q", "-m", "edit and delete"]);
+    let head = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
     (tmp, RootId(repo.clone().into()), repo, head)
 }
 

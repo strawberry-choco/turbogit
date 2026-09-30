@@ -1,10 +1,7 @@
-//! Branch operations, favorites, and synchronous branch control across roots.
+//! Branch operations and favorites across roots.
 //!
-//! Thin orchestration layer over [`GitExecutor`] plus helpers that mutate the
-//! in-memory [`MultiRootManager`] (favorites / protected flags) and compute
-//! multi-root aggregates (common branches, synchronous create/checkout).
-
-#![allow(dead_code)]
+//! Thin orchestration layer over [`GitExecutor`] plus a helper that mutates the
+//! in-memory [`MultiRootManager`]'s favorites.
 
 use std::path::Path;
 use turbogit_domain::error::TgResult;
@@ -37,11 +34,6 @@ pub fn delete(vcs: &dyn GitExecutor, root: &Path, name: &str, force: bool) -> Tg
     vcs.branch_delete(root, name, force)
 }
 
-/// Delete a remote-tracking branch in one root.
-pub fn delete_remote(vcs: &dyn GitExecutor, root: &Path, remote: &str, name: &str) -> TgResult<()> {
-    vcs.branch_delete_remote(root, remote, name)
-}
-
 /// Toggle the `favorite` flag on a branch within the given root.
 pub fn toggle_favorite(mgr: &mut MultiRootManager, root: &RootId, name: &str) {
     if let Some(r) = mgr.roots.iter_mut().find(|r| &r.id == root)
@@ -49,88 +41,4 @@ pub fn toggle_favorite(mgr: &mut MultiRootManager, root: &RootId, name: &str) {
     {
         b.favorite = !b.favorite;
     }
-}
-
-/// Set the `protected` flag on a branch within the given root.
-pub fn set_protected(mgr: &mut MultiRootManager, root: &RootId, name: &str, protected: bool) {
-    if let Some(r) = mgr.roots.iter_mut().find(|r| &r.id == root)
-        && let Some(b) = r.branches.iter_mut().find(|b| b.name == name)
-    {
-        b.protected = protected;
-    }
-}
-
-/// Local branch names present in EVERY root.
-pub fn common_branches(mgr: &MultiRootManager) -> Vec<String> {
-    let mut iter = mgr.roots.iter();
-    let mut common: Vec<String> = match iter.next() {
-        Some(first) => first
-            .branches
-            .iter()
-            .filter(|b| b.kind == BranchKind::Local)
-            .map(|b| b.name.clone())
-            .collect(),
-        None => return Vec::new(),
-    };
-    for root in iter {
-        let local: Vec<String> = root
-            .branches
-            .iter()
-            .filter(|b| b.kind == BranchKind::Local)
-            .map(|b| b.name.clone())
-            .collect();
-        common.retain(|n| local.contains(n));
-    }
-    common
-}
-
-/// Create `name` (with checkout) in every root and refresh each root's branches.
-pub fn create_all(
-    vcs: &dyn GitExecutor,
-    mgr: &mut MultiRootManager,
-    name: &str,
-    start_point: Option<&str>,
-) -> Vec<TgResult<()>> {
-    let paths = mgr.roots.iter().map(|r| r.id.0.clone()).collect::<Vec<_>>();
-    let mut results = Vec::with_capacity(paths.len());
-    for path in paths {
-        let res = match vcs.branch_create(&path, name, true, start_point) {
-            Ok(()) => {
-                if let Ok(branches) = vcs.branches(&path)
-                    && let Some(r) = mgr.roots.iter_mut().find(|r| r.id.0 == path)
-                {
-                    r.branches = branches;
-                }
-                Ok(())
-            }
-            Err(e) => Err(e),
-        };
-        results.push(res);
-    }
-    results
-}
-
-/// Check out `name` in every root and refresh each root's branches.
-pub fn checkout_all(
-    vcs: &dyn GitExecutor,
-    mgr: &mut MultiRootManager,
-    name: &str,
-) -> Vec<TgResult<()>> {
-    let paths = mgr.roots.iter().map(|r| r.id.0.clone()).collect::<Vec<_>>();
-    let mut results = Vec::with_capacity(paths.len());
-    for path in paths {
-        let res = match vcs.branch_checkout(&path, name) {
-            Ok(()) => {
-                if let Ok(branches) = vcs.branches(&path)
-                    && let Some(r) = mgr.roots.iter_mut().find(|r| r.id.0 == path)
-                {
-                    r.branches = branches;
-                }
-                Ok(())
-            }
-            Err(e) => Err(e),
-        };
-        results.push(res);
-    }
-    results
 }

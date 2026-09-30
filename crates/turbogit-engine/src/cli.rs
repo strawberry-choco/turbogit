@@ -433,7 +433,7 @@ impl GitExecutor for CliExecutor {
                                     continue;
                                 };
                                 let refname = refname.trim();
-                                if let Some(branch) = refname.strip_prefix("refs/heads/") {
+                                if let Some(branch) = short_ref(refname) {
                                     entry.0.insert(branch.to_string());
                                 } else if let Some(tag) = refname.strip_prefix("refs/tags/") {
                                     // Skip peeled `^{}` duplicates — the
@@ -589,12 +589,7 @@ impl GitExecutor for CliExecutor {
                 last_touched.insert((kind, short.clone()), dt);
                 tips.insert(
                     (kind, short),
-                    BranchTip {
-                        short_hash: oid.to_string(),
-                        message: subject.to_string(),
-                        author: author.to_string(),
-                        time: dt,
-                    },
+                    BranchTip::from_parts(oid, subject, author, dt),
                 );
             }
         }
@@ -859,7 +854,7 @@ impl GitExecutor for CliExecutor {
                 if let Some(p) = path
                     && p != root
                 {
-                    let b = if let Some(stripped) = branch.strip_prefix("refs/heads/") {
+                    let b = if let Some(stripped) = short_ref(&branch) {
                         stripped.to_string()
                     } else {
                         branch
@@ -1028,7 +1023,7 @@ impl GitExecutor for CliExecutor {
             return Ok(None);
         };
         // `merge` is git's full ref path; the branch name is the answer.
-        let name = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
+        let name = short_ref(&merge).unwrap_or(&merge);
         Ok(Some(Upstream {
             remote,
             branch: name.to_string(),
@@ -1429,11 +1424,11 @@ impl GitExecutor for CliExecutor {
             message_tmp = Some(path);
         }
         let editor = match &message_tmp {
-            Some(path) => format!("cp {}", path.to_string_lossy().replace('\\', "/")),
+            Some(path) => format!("cp {}", forward_slash_path(path)),
             None => "true".to_owned(),
         };
         let bin = turbogit_domain::model::git_binary(&self.settings);
-        let todo_str = tmp.to_string_lossy().replace('\\', "/");
+        let todo_str = forward_slash_path(&tmp);
         let status = Command::new(&bin)
             .args(["rebase", "-i", &base_rev])
             .current_dir(root)
@@ -1541,12 +1536,6 @@ impl GitExecutor for CliExecutor {
             a.push(p.to_string_lossy().to_string());
         }
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
-        self.run(root, &args)?;
-        Ok(())
-    }
-
-    fn add_all(&self, root: &Path) -> TgResult<()> {
-        let args = ["add", "-A"];
         self.run(root, &args)?;
         Ok(())
     }
@@ -1909,13 +1898,24 @@ fn map_xy(xy: &str) -> ChangeStatus {
     }
 }
 
+/// The short branch name behind `refs/heads/<name>`, or `None` when `refname` is
+/// not a local branch.
+///
+/// The `Option` is deliberate: refname sites must treat a non-branch as "not a
+/// branch", while the two `branch.<name>.merge` sites spell their own
+/// whole-string fallback. Letting the helper pick would hide which kind of value
+/// each site holds. Building a ref is [`Upstream::git_ref`]'s job.
+pub(crate) fn short_ref(refname: &str) -> Option<&str> {
+    refname.strip_prefix("refs/heads/")
+}
+
 /// Map a `for-each-ref` refname to a [`CommitRef`] decoration (issue #12).
 ///
 /// Local branches keep their short name; remote-tracking branches collapse
 /// `refs/remotes/<remote>/<name…>` to `<remote>/<name…>`; tags drop the
 /// `refs/tags/` prefix. Other namespaces (notes, stash, …) are ignored.
 fn parse_ref_name(refname: &str) -> Option<CommitRef> {
-    let (kind, name) = if let Some(name) = refname.strip_prefix("refs/heads/") {
+    let (kind, name) = if let Some(name) = short_ref(refname) {
         (GitRefKind::Branch, name)
     } else if let Some(rest) = refname.strip_prefix("refs/remotes/") {
         let rest = if rest.is_empty() { return None } else { rest };
@@ -1928,6 +1928,11 @@ fn parse_ref_name(refname: &str) -> Option<CommitRef> {
 
 /// `%G?` → [`SignatureState`] (issue 17): G verified good, B verified bad,
 /// U/E/X present but unverifiable, anything else (N) unsigned.
+///
+/// **Do not merge with `signature_state_of` in `git2_exec.rs`.** libgit2 can see
+/// a signature but never verify one, so that side can reach `Unverified` and
+/// `Unsigned` and nothing else: `Good` is reachable from exactly one backend
+/// because exactly one backend can verify.
 fn parse_signature_state(code: &str) -> SignatureState {
     match code {
         "G" => SignatureState::Good,
@@ -1941,6 +1946,10 @@ fn parse_signature_state(code: &str) -> SignatureState {
 ///
 /// Shapes: `X\tpath` and rename/copy `X<score>\told\tnew` (the new path wins;
 /// the old path is carried as [`Change::orig_path`]).
+///
+/// **Do not merge with `commit_files` in `git2_exec.rs`.** These two exist only
+/// to be compared, and `crates/turbogit-engine/tests/change_stats.rs` is what
+/// fails if they drift.
 fn parse_name_status_line(line: &str) -> Option<Change> {
     let mut parts = line.splitn(3, '\t');
     let code = parts.next()?.trim();
@@ -1975,6 +1984,10 @@ fn parse_name_status_line(line: &str) -> Option<Change> {
 
 /// Parse `git diff-tree --numstat` output into `(path, insertions, deletions)`.
 /// Binary rows carry `-` in both count columns and read as `0/0`.
+///
+/// **Do not merge with `change_stats` in `git2_exec.rs`.** libgit2 has no
+/// numstat at all — that side walks the same diff's line events — so there is no
+/// shared code to extract.
 fn parse_numstat(s: &str) -> Vec<FileStat> {
     let mut out = Vec::new();
     for line in s.lines() {

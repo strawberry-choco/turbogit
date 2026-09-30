@@ -14,36 +14,22 @@
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use std::process::Command;
-use test_support::harness::{assert_not_painted, assert_painted, settle, shell_harness};
+use test_support::git_seed::repo_with_one_commit;
+use test_support::harness::{
+    assert_not_painted, assert_painted, settle, shell_harness, shell_harness_over,
+};
 use turbogit_app::persistence;
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{GitBackend, IncomingCheckInterval, VcsSettings};
 
 /// Harness over a real single-repo project so the shell (tab strip, repo
 /// header) renders — the Welcome page shows the tool tabs no more.
+///
+/// The shared constructor's per-frame `state.drain_events()` is what the live
+/// `git --version` badge needs in order to answer.
 fn repo_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
     let tmp = tempfile::tempdir().expect("tempdir");
-    let repo = tmp.path().join("repo");
-    std::fs::create_dir_all(&repo).expect("repo dir");
-    let git = |args: &[&str]| {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(&repo)
-            .output()
-            .expect("git must be on PATH");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    };
-    git(&["init", "-q", "-b", "main"]);
-    git(&["config", "user.email", "test@example.com"]);
-    git(&["config", "user.name", "Test"]);
-    std::fs::write(repo.join("f.txt"), "hi").expect("write file");
-    git(&["add", "."]);
-    git(&["commit", "-q", "-m", "initial"]);
+    let repo = repo_with_one_commit(tmp.path(), "repo");
 
     let cfg = tempfile::tempdir().expect("temp config dir");
     let cfg_path = cfg.path().to_path_buf();
@@ -54,20 +40,7 @@ fn repo_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
         "seeded repo root must be discovered"
     );
 
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    (harness, tmp)
+    (shell_harness_over(state, egui::vec2(1024.0, 768.0)), tmp)
 }
 
 /// The modal opens from the command palette: the palette's `Settings…`

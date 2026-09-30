@@ -21,7 +21,8 @@ use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_support::harness::{
-    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text,
+    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text, settle_quiet,
+    shell_harness_over,
 };
 use turbogit_app::state::{AppState, PendingConfirm, Tab, Toast, ToastKind};
 use turbogit_ui::theme::Palette;
@@ -31,6 +32,10 @@ use turbogit_ui::ui::popups::Action;
 
 /// Run `git <args>` in `dir`, panicking on failure. Identity comes from env so
 /// no per-repo config calls are needed.
+///
+/// Not `git_seed::git`, which takes no per-call env: `repo_project` below writes
+/// no `user.*` into its repository, so this env is the only identity the
+/// fixture's commits carry, and the confirm-dialog rows carry the author line.
 fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
@@ -72,47 +77,11 @@ fn repo_project() -> (TempDir, PathBuf) {
 
 // --- harness ---------------------------------------------------------------------
 
-/// Harness over a real repo-backed project. Setup mirrors production app.rs:
-/// event pump first, then dark-only tokens + embedded fonts once, then render.
+/// Harness over a real repo-backed project, at the 1024x768 box, from the
+/// shared shell launcher. The old local copy drained events *before* the token
+/// install, which cannot matter: `drain_events` paints nothing.
 fn feedback_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
-    let state = AppState::new(project_dir);
-    let mut fonts_installed = false;
-    let mut harness = Harness::new_ui_state(
-        move |ui, state| {
-            state.drain_events();
-            turbogit_ui::theme::configure_style(ui.ctx());
-            if !fonts_installed {
-                turbogit_ui::theme::install_fonts(ui.ctx());
-                fonts_installed = true;
-            }
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    harness.set_size(egui::vec2(1024.0, 768.0));
-    harness
-}
-
-/// Step frames until painted output is stable for 3 consecutive frames
-/// (tolerates slow background git subprocesses).
-fn settle_quiet(harness: &mut Harness<'_, AppState>) {
-    let mut stable = 0;
-    let mut prev = String::new();
-    for _ in 0..300 {
-        harness.step();
-        std::thread::sleep(Duration::from_millis(10));
-        let fp = format!("{:?}", painted_text(harness));
-        if fp == prev {
-            stable += 1;
-            if stable >= 3 {
-                return;
-            }
-        } else {
-            stable = 0;
-            prev = fp;
-        }
-    }
-    panic!("feedback layout did not settle within 300 frames");
+    shell_harness_over(AppState::new(project_dir), egui::vec2(1024.0, 768.0))
 }
 
 /// Step frames until `pred` holds on public state (async op completion).

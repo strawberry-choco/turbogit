@@ -16,32 +16,19 @@
 //! Asserts only on the public surface: `AppState` transitions and the toast.
 
 use std::path::{Path, PathBuf};
+use test_support::git_seed::git;
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::state::{AppState, ToastKind};
-
-fn run_git(dir: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {}: {}",
-        dir.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
 
 /// Seed a minimal repo at `dir`: one branch (`main`), one commit.
 fn seed_repo(dir: &Path) {
     std::fs::create_dir_all(dir).expect("repo dir");
-    run_git(dir, &["init", "-q", "-b", "main"]);
-    run_git(dir, &["config", "user.email", "test@example.com"]);
-    run_git(dir, &["config", "user.name", "Test"]);
+    git(dir, &["init", "-q", "-b", "main"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "Test"]);
     std::fs::write(dir.join("file.txt"), "v1\n").expect("work file");
-    run_git(dir, &["add", "."]);
-    run_git(dir, &["commit", "-q", "-m", "initial"]);
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "initial"]);
 }
 
 /// A workspace container holding two repos, one of them strictly deeper than

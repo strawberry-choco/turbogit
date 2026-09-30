@@ -33,8 +33,10 @@ use egui_kittest::kittest::NodeT as _;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
+use test_support::git_seed::git;
 use test_support::harness::{
-    assert_not_painted, assert_painted, filled_rects, painted_galleys, painted_text,
+    KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, filled_rects, painted_galleys,
+    painted_text, shell_harness_over_unstyled,
 };
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::error::TgError;
@@ -44,27 +46,14 @@ use turbogit_ui::theme::Palette;
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git` in `dir`, asserting success, and return stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 fn head_sha(repo: &Path) -> String {
     git(repo, &["rev-parse", "HEAD"]).trim().to_string()
 }
 
 /// Resolve `refname` in a bare repository; `None` when it does not exist.
+///
+/// Its own `Command` on purpose: the non-zero exit of `rev-parse --verify` on a
+/// missing ref IS the answer this reads, and `git_seed::git` asserts success.
 fn bare_ref(bare: &Path, refname: &str) -> Option<String> {
     let out = std::process::Command::new("git")
         .arg("--git-dir")
@@ -80,6 +69,10 @@ fn bare_ref(bare: &Path, refname: &str) -> Option<String> {
 /// A temp repo on `main` that is 2 commits ahead of its own local bare
 /// remote (`<parent>/<name>-remote.git`). Commits c2/c3 each touch a
 /// distinctly named file so changed-file previews can distinguish repos.
+///
+/// Kept local rather than `git_seed::repo_with_origin`: every commit is NAMED after the
+/// repository and the builder hands all three SHAs back for the outgoing-tree
+/// assertions, so the messages and paths are the fixture.
 struct Repo {
     path: PathBuf,
     remote: PathBuf,
@@ -191,14 +184,13 @@ fn app_state_with(
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Deliberately unstyled: the production tokens and embedded fonts would change the
+/// frame the painted-geometry assertions below measure. `max_steps` is 1024 rather
+/// than kittest's default of 4, and this suite drives its clicks through
+/// `Harness::run()`, which panics once a run exceeds the budget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    )
+    shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
 /// Poll `f` until it returns true or the deadline elapses (worker threads run

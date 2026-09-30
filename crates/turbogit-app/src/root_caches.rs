@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use turbogit_domain::model::{
     Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, RootId, Submodule, Worktree,
+    forward_slash_path,
 };
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::hunk_stats::{self, FileHunks};
@@ -316,7 +317,7 @@ impl RootHunkStats {
             StatsView::Staged => &self.staged,
             StatsView::Local => &self.local,
         };
-        let want = path.to_string_lossy().replace('\\', "/");
+        let want = forward_slash_path(path);
         view.iter().find(|f| f.path == want)
     }
 }

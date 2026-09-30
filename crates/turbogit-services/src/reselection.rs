@@ -9,7 +9,7 @@
 //! Pure: plans and logs in, an id out. No git, no state, no egui — which is
 //! what lets it be a table.
 
-use turbogit_domain::model::{Commit, CommitId, RebaseAction, RebasePlanEntry};
+use turbogit_domain::model::{self, Commit, CommitId, RebaseAction, RebasePlanEntry};
 
 use crate::history_editor::plan_preview;
 
@@ -105,7 +105,7 @@ fn expected_index(kept: &[RebasePlanEntry], wanted: &RebasePlanEntry) -> Option<
 /// A commit's subject, read the way every surface reads it: the first line of
 /// the message.
 fn subject_of(commit: &Commit) -> &str {
-    subject_of_message(&commit.message)
+    commit.subject()
 }
 
 /// The subject a MESSAGE will read as — the first line, which is git's own
@@ -114,7 +114,8 @@ fn subject_of(commit: &Commit) -> &str {
 /// Public because a caller building [`RewrittenAnchor::Reworded`] has to extract
 /// the subject exactly the way the rule does. If the two ever disagreed the
 /// comparison below would silently find nothing and the pane would clear, so the
-/// definition is exported rather than re-implemented at the call site.
+/// definition is exported rather than re-implemented at the call site. The definition
+/// itself is [`model::subject_of_message`]'s — there is one first line in the workspace.
 pub fn subject_of_message(message: &str) -> &str {
-    message.lines().next().unwrap_or_default()
+    model::subject_of_message(message)
 }

@@ -4,8 +4,6 @@
 //! building a plan from `base..HEAD`, mutating actions, reordering, and
 //! dispatching the final plan to [`GitExecutor::rebase_interactive`].
 
-#![allow(dead_code)]
-
 use std::path::Path;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
@@ -34,7 +32,8 @@ pub fn build_plan(
         .map(|c| RebasePlanEntry {
             action: RebaseAction::Pick,
             commit: c.id,
-            subject: c.message.lines().next().unwrap_or("").to_string(),
+            // `c.id` moved above, so the accessor is out of reach here.
+            subject: subject_of_message(&c.message).to_string(),
             message: None,
         })
         .collect();
@@ -394,16 +393,4 @@ pub fn estimate(plan: &[RebasePlanEntry]) -> String {
         .filter(|e| e.action != RebaseAction::Drop)
         .count();
     format!("~{}s estimated", 3 * replays)
-}
-
-/// Whether `root`'s current branch may be edited.
-///
-/// Returns `true` when there is no current branch (detached HEAD) or the
-/// current branch is not listed in `protected`. A `None` current branch is
-/// always editable.
-pub fn can_edit(root: &Root, protected: &[String]) -> bool {
-    match &root.current_branch {
-        None => true,
-        Some(branch) => !protected.contains(branch),
-    }
 }

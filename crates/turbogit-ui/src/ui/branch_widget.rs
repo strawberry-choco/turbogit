@@ -436,7 +436,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
             }
 
             let Some(root) = root else {
-                ui.label("No repository selected");
+                widgets::empty_state(ui, "No repository selected");
                 return;
             };
             let id = root.id.clone();
@@ -511,7 +511,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                     ScrollArea::vertical().max_height(body_h).show(ui, |ui| {
                         let mut clicked: Option<PopupEntry> = None;
                         let mut toggled_star: Option<String> = None;
-                        let mut row_intent: Option<RowIntent> = None;
+                        let mut row_intent: Option<BranchRowAction> = None;
                         let mut last_section: Option<&'static str> = None;
 
                         for (idx, e) in entries.iter().enumerate() {
@@ -618,7 +618,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                 {
                                     rename.on_disabled_hover_text(reason);
                                 } else if rename.clicked() {
-                                    row_intent = Some(RowIntent::Rename(e.clone()));
+                                    row_intent = Some(BranchRowAction::Rename(e.clone()));
                                 }
                                 let delete =
                                     widgets::compact_button_enabled(ui, "Delete", actions.delete);
@@ -627,10 +627,10 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                 {
                                     delete.on_disabled_hover_text(reason);
                                 } else if delete.clicked() {
-                                    row_intent = Some(RowIntent::Delete(e.clone()));
+                                    row_intent = Some(BranchRowAction::Delete(e.clone()));
                                 }
                                 if widgets::compact_button(ui, "Compare…").clicked() {
-                                    row_intent = Some(RowIntent::Compare(e.clone()));
+                                    row_intent = Some(BranchRowAction::Compare(e.clone()));
                                 }
                                 // New Worktree… stays visibly inert until the
                                 // worktree-from-popup flow exists (ADR-0012).
@@ -642,12 +642,14 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                                 // (issue 32, screen 13).
                                 if protected && hinted {
                                     if widgets::compact_button(ui, "Pull").clicked() {
-                                        row_intent =
-                                            Some(RowIntent::Pull(e.branch_name().to_string()));
+                                        row_intent = Some(BranchRowAction::Pull(
+                                            e.branch_name().to_string(),
+                                        ));
                                     }
                                     if widgets::compact_button(ui, "Merge").clicked() {
-                                        row_intent =
-                                            Some(RowIntent::Merge(e.branch_name().to_string()));
+                                        row_intent = Some(BranchRowAction::Merge(
+                                            e.branch_name().to_string(),
+                                        ));
                                     }
                                 }
                             });
@@ -666,7 +668,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                         }
                         match (clicked, row_intent) {
                             (Some(e), _) => checkout_entry(state, &id, &e),
-                            (None, Some(intent)) => apply_row_intent(state, &id, intent),
+                            (None, Some(intent)) => apply_branch_row_action(state, &id, intent),
                             _ => {}
                         }
                     });
@@ -710,7 +712,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 if widgets::compact_button(ui, "Compare…").clicked()
                     && let Some(e) = entries.get(state.ui.branches_cursor)
                 {
-                    apply_row_intent(state, &id, RowIntent::Compare(e.clone()));
+                    apply_branch_row_action(state, &id, BranchRowAction::Compare(e.clone()));
                 }
             });
         });
@@ -760,8 +762,12 @@ fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
 }
 
 /// A non-checkout row action, deferred to after the row loop (issue 32).
+///
+/// **The name is the point.** `log_window::RowIntent` is a three-arm *click*
+/// intent with no payload; this is a five-arm *action* intent carrying a
+/// `PopupEntry` or a branch name. A name-keyed sweep must not merge them.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum RowIntent {
+enum BranchRowAction {
     Rename(PopupEntry),
     Delete(PopupEntry),
     Compare(PopupEntry),
@@ -775,10 +781,10 @@ enum RowIntent {
 /// Dispatch one deferred row action (issue 32). Delete routes through the
 /// existing rich confirmation (issue 02); rename and compare open their
 /// dialogs via the AppState seams.
-fn apply_row_intent(state: &mut AppState, id: &RootId, intent: RowIntent) {
+fn apply_branch_row_action(state: &mut AppState, id: &RootId, intent: BranchRowAction) {
     match intent {
-        RowIntent::Rename(e) => state.open_rename_branch(id, e.branch_name()),
-        RowIntent::Delete(e) => match e {
+        BranchRowAction::Rename(e) => state.open_rename_branch(id, e.branch_name()),
+        BranchRowAction::Delete(e) => match e {
             PopupEntry::Remote { name, .. } => {
                 state.ui.confirm = Some(PendingConfirm::DeleteRemoteBranch {
                     remote: "origin".into(),
@@ -790,8 +796,8 @@ fn apply_row_intent(state: &mut AppState, id: &RootId, intent: RowIntent) {
             }
             PopupEntry::Tag { .. } => {}
         },
-        RowIntent::Compare(e) => state.open_compare(id, e.branch_name()),
-        RowIntent::Pull(name) => {
+        BranchRowAction::Compare(e) => state.open_compare(id, e.branch_name()),
+        BranchRowAction::Pull(name) => {
             let root = id.clone();
             let affected = Affected::Root(id.clone());
             let rebase =
@@ -807,6 +813,6 @@ fn apply_row_intent(state: &mut AppState, id: &RootId, intent: RowIntent) {
             ));
             state.ui.branches_popup = false;
         }
-        RowIntent::Merge(name) => state.open_merge_into(id, &name),
+        BranchRowAction::Merge(name) => state.open_merge_into(id, &name),
     }
 }

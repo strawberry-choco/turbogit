@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
-    BlameLine, Branch, ChangeStats, Commit, CommitId, CommitRef, Patch, RootId, RootStatus,
-    Submodule, Worktree,
+    BlameLine, ChangeStats, Commit, CommitId, CommitRef, Patch, RootId, RootStatus, Submodule,
+    Worktree,
 };
 
 use crate::root_caches::{Affected, LogScope};
@@ -54,13 +54,6 @@ pub enum AppEvent {
     StatusScanned {
         root: RootId,
         status: TgResult<RootStatus>,
-    },
-    /// Roots were (re)discovered.
-    RootsDetected(Vec<RootId>),
-    /// Branches for a root were loaded.
-    BranchesLoaded {
-        root: RootId,
-        branches: TgResult<Vec<Branch>>,
     },
     /// Log for a root was loaded — one batch of it, plus how it folds into the
     /// root's cached window (log paging).
@@ -121,8 +114,6 @@ pub enum AppEvent {
     },
     /// Fatal / unexpected error to surface in the UI.
     Error(String),
-    /// App is ready (roots initialized, first scan dispatched).
-    Ready,
     /// An asynchronously-computed diff is ready (keyed to avoid races).
     DiffReady {
         key: String,

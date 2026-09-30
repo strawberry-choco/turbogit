@@ -14,6 +14,7 @@
 //! the end of the surface and paints what was opened.
 
 use egui::{Pos2, Rect, Ui};
+use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 
 use super::menu::menu_surface;
@@ -121,4 +122,39 @@ pub fn host_menu<T>(
         *dismiss = true;
     }
     painted
+}
+
+/// The whole of "a row's context menu, once per frame": host it, close it if it
+/// was dismissed, and close it again before running whatever it answered with.
+///
+/// **The unconditional close on a pick is the load-bearing half.** It is why `close`
+/// runs on *both* paths rather than only inside the pick: without it the right-click
+/// that just chose an item reopens the menu on the next frame, which no screenshot
+/// covers.
+///
+/// `build` gets the read-only state because the row loop has just finished and the menu
+/// needs to look a row up; the immutable borrow ends when `build` returns, which is why
+/// `close` can take `&mut AppState` two lines later. `None` means "nothing was painted,
+/// or the row is gone", which is not an error.
+pub(crate) fn host_row_menu<T>(
+    ui: &Ui,
+    state: &mut AppState,
+    salt: &'static str,
+    target: String,
+    build: impl FnOnce(&mut Ui, &AppState) -> Option<T>,
+    close: fn(&mut AppState),
+    apply: impl FnOnce(&mut AppState, T),
+) {
+    let mut dismiss = false;
+    let read_only: &AppState = state;
+    let picked = host_menu(ui, MenuId::new(salt, &target), true, &mut dismiss, |ui| {
+        build(ui, read_only)
+    });
+    if dismiss {
+        close(state);
+    }
+    if let Some(action) = picked.flatten() {
+        close(state);
+        apply(state, action);
+    }
 }

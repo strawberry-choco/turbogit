@@ -9,38 +9,19 @@
 //! completion toast + activity feed.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
+use test_support::git_seed::{git, repo_with_one_commit};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 
-/// Run `git <args>` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("spawning git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-
 /// A freshly-initialized repo with one base commit.
+///
+/// A thin composition over [`repo_with_one_commit`]; only the committed path differs
+/// and no test here reads it. The recipe `git init`s *into* `parent`.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    git(&path, &["init", "-q", "-b", "main"]);
-    git(&path, &["config", "user.email", "test@example.com"]);
-    git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("seed.txt"), "seed\n").unwrap();
-    git(&path, &["add", "."]);
-    git(&path, &["commit", "-q", "-m", "seed"]);
-    path
+    std::fs::create_dir_all(parent).unwrap();
+    repo_with_one_commit(parent, name)
 }
 
 /// Stage a new edit in `repo`.
@@ -61,6 +42,10 @@ fn app_with_selection(project: &Path, roots: &[PathBuf]) -> AppState {
 /// over the same worker pool as a fleet run, which ADR-0019's admission slot
 /// only means something in front of — so the dispatch seam leaves it threaded
 /// even under the headless harness, and its answer really does arrive later.
+///
+/// Not a `test_support::harness` settle: those settle a *painted frame* by fingerprinting
+/// `painted_text`, and this crate does not depend on `egui_kittest`. This pumps the
+/// event pump and exits on a *state* predicate — a completion toast.
 fn settle_bulk_run(state: &mut AppState) {
     // A completion toast survives into later runs; only a toast produced by
     // this dispatch is a valid completion signal.

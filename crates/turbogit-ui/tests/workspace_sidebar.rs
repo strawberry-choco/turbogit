@@ -23,32 +23,22 @@ use egui::accesskit::Role;
 use egui::{Color32, Key, Modifiers, Rect};
 use egui_kittest::{Harness, kittest::Queryable as _};
 use std::path::{Path, PathBuf};
+use test_support::git_seed::git;
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_circles, filled_rects, painted_galleys,
-    painted_text, settle,
+    painted_text, settle, shell_harness_over_unstyled,
 };
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::components::{RowState, row_fill};
 
-/// Run `git` in `repo`, asserting success, and return stdout.
-fn git(repo: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(repo)
-        .output()
-        .expect("git invocation");
-    assert!(
-        out.status.success(),
-        "git {:?} failed: {}",
-        args,
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("utf-8 stdout")
-}
-
 /// Create an initialized temp repository with one base commit on `main`
 /// plus an `origin` remote so upstream reads can be exercised.
+/// Local repo builder, deliberately NOT `test_support::git_seed::repo_with_origin`.
+///
+/// The recipe commits `README.md`; this suite's change lists and diff panes name the
+/// file they changed, so the base commit has to be `base.txt`. A `base.txt` recipe
+/// would be `test-support` work, not this lane's.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     let _ = std::fs::remove_dir_all(&path);
@@ -163,16 +153,13 @@ fn same_named_folders_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
 
 /// Headless harness driving the full app UI (mirrors `workspace_shell_frame`).
 /// Sized wide of the sidebar's small-window threshold so the rail renders.
+///
+/// Deliberately unstyled: this suite measures the rail's painted band, the focus
+/// band's geometry, counter chips and row fills, and the styled preamble would
+/// re-lay them out in the embedded font stack. `max_steps` is 1024 against
+/// kittest's default of 4, which the styled constructor cannot express.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    let mut h = Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    );
-    h.set_size(egui::vec2(1280.0, 800.0));
-    h
+    shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024)
 }
 
 fn app_state(project_dir: &Path, roots: &[PathBuf]) -> AppState {
@@ -270,6 +257,11 @@ fn sidebar_hides_below_the_small_window_threshold() {
 
 /// Run `git` in `repo` without asserting success (for expected failures
 /// such as a conflicting merge).
+/// Run `git` in `repo` WITHOUT asserting success, and deliberately NOT
+/// `test_support::git_seed::git` — which asserts it.
+///
+/// `smart_group_project` puts `extra` mid-merge with a `git merge` that is expected to
+/// exit non-zero; that refusal is what leaves the conflict the group counts.
 fn git_raw(repo: &Path, args: &[&str]) {
     let _ = std::process::Command::new("git")
         .args(args)

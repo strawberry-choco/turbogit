@@ -25,43 +25,30 @@ use std::time::{Duration, Instant};
 use egui_kittest::kittest::Queryable as _;
 use egui_kittest::{Harness, Node};
 use test_support::RecordingExecutor;
-use test_support::harness::{assert_not_painted, assert_painted};
+use test_support::git_seed::{commit as git_seed_commit, git};
+use test_support::harness::{
+    KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, shell_harness_over_unstyled,
+};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RebaseMode, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 
 // ---------------------------------------------------------------- helpers --
 
-/// Run `git <args>` in `dir`, asserting success; returns stdout.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Append `text` to `<dir>/<name>`, stage, commit.
+///
+/// Built on `git_seed::commit`: it overwrites where this appends, so the accumulated
+/// body is read back and rewritten whole.
 fn commit(dir: &Path, name: &str, text: &str) {
     let file = dir.join(name);
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file)
-        .expect("opening work file");
-    use std::io::Write;
-    writeln!(f, "{text}").expect("appending work file");
-    drop(f);
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", text]);
+    let mut body = std::fs::read_to_string(&file).unwrap_or_default();
+    body.push_str(text);
+    body.push('\n');
+    git_seed_commit(dir, name, &body, text);
 }
 
+/// Kept local rather than `git_seed::repo_with_one_commit`: the seeded commit is
+/// `base.txt` = "base\n" with the message "base", and the tests name it.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -94,14 +81,12 @@ fn app_state_recording(project: &Path, roots: &[PathBuf]) -> (AppState, Arc<Reco
 }
 
 /// Headless harness driving the full app UI with event draining per frame.
+///
+/// Kept as [`shell_harness_over_unstyled`] at [`KITTEST_DEFAULT_BOX`]: the unstyled
+/// frame is what the geometry assertions here read, and `max_steps` is stated at 1024
+/// because `Harness::run` panics once a run exceeds kittest's 4.
 fn harness(state: AppState) -> Harness<'static, AppState> {
-    Harness::builder().with_max_steps(1024).build_ui_state(
-        |ui, state| {
-            state.drain_events();
-            turbogit_ui::ui::render(ui, state);
-        },
-        state,
-    )
+    shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
 }
 
 /// Open the Rebase dialog on the given root.

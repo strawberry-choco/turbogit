@@ -9,45 +9,25 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use test_support::git_seed::{git, repo_with_one_commit};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, SubmoduleState};
 
-fn run_git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("git should be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
 /// Canonicalized temp repo with one base commit (canonical because the
 /// engine's main-worktree filtering compares paths).
+///
+/// A thin composition over [`repo_with_one_commit`]; only the committed path
+/// differs, unread.
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
-    let path = parent.join(name);
-    std::fs::create_dir_all(&path).unwrap();
-    run_git(&path, &["init", "-q", "-b", "main"]);
-    run_git(&path, &["config", "user.email", "test@example.com"]);
-    run_git(&path, &["config", "user.name", "Test"]);
-    std::fs::write(path.join("base.txt"), "base\n").unwrap();
-    run_git(&path, &["add", "."]);
-    run_git(&path, &["commit", "-q", "-m", "init"]);
-    path.canonicalize().unwrap()
+    repo_with_one_commit(parent, name).canonicalize().unwrap()
 }
 
 /// Pump events until `pred` holds or the deadline passes.
 ///
-/// The linked-worktree list and its dirty probe keep their own threads:
-/// ADR-0019's admission slot and mutation epoch only mean something with a
-/// worker in front of them, so the dispatch seam deliberately leaves them
-/// `Spawned` even under the headless harness. A submodule list, by contrast,
-/// settles in the one drain the inline pump already made.
+/// Not a `test_support::harness` settle: this drains the event channel on a
+/// *state* predicate, and this crate cannot reach those anyway (it does not
+/// depend on `egui_kittest`).
 fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -62,30 +42,34 @@ fn wait_for(state: &mut AppState, pred: impl Fn(&AppState) -> bool) {
 
 /// A worktree of `repo` on an existing branch, canonicalized like the root.
 fn add_worktree(repo: &Path, parent: &Path, name: &str, branch: &str) -> PathBuf {
-    run_git(repo, &["branch", branch]);
+    git(repo, &["branch", branch]);
     let wt = parent.join(name);
-    run_git(repo, &["worktree", "add", wt.to_str().unwrap(), branch]);
+    git(repo, &["worktree", "add", wt.to_str().unwrap(), branch]);
     wt.canonicalize().unwrap()
 }
 
 /// A superproject root with one submodule at `child`; returns the
 /// canonicalized root and the submodule's relative path.
+///
+/// Kept local: no recipe produces a superproject, and git >= 2.38's
+/// `protocol.file.allow=always` demand for a local-path submodule is outside
+/// every shared shape.
 fn super_with_submodule(parent: &Path, name: &str) -> (PathBuf, PathBuf) {
     let child_src = parent.join(format!("{name}-child-src"));
     std::fs::create_dir_all(&child_src).unwrap();
-    run_git(&child_src, &["init", "-q", "-b", "main"]);
-    run_git(&child_src, &["config", "user.email", "test@example.com"]);
-    run_git(&child_src, &["config", "user.name", "Test"]);
+    git(&child_src, &["init", "-q", "-b", "main"]);
+    git(&child_src, &["config", "user.email", "test@example.com"]);
+    git(&child_src, &["config", "user.name", "Test"]);
     std::fs::write(child_src.join("c.txt"), "one\n").unwrap();
-    run_git(&child_src, &["add", "."]);
-    run_git(&child_src, &["commit", "-q", "-m", "c1"]);
+    git(&child_src, &["add", "."]);
+    git(&child_src, &["commit", "-q", "-m", "c1"]);
 
     let repo = parent.join(name);
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
-    run_git(
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    git(
         &repo,
         &[
             "-c",
@@ -97,7 +81,7 @@ fn super_with_submodule(parent: &Path, name: &str) -> (PathBuf, PathBuf) {
             "child",
         ],
     );
-    run_git(&repo, &["commit", "-q", "-m", "add child"]);
+    git(&repo, &["commit", "-q", "-m", "add child"]);
     (repo.canonicalize().unwrap(), PathBuf::from("child"))
 }
 
@@ -130,19 +114,19 @@ fn fetch_submodules_fills_the_cache_with_state() {
     // Superproject with one submodule (see the engine suite's fixture).
     let child_src = tmp.path().join("child-src");
     std::fs::create_dir_all(&child_src).unwrap();
-    run_git(&child_src, &["init", "-q", "-b", "main"]);
-    run_git(&child_src, &["config", "user.email", "test@example.com"]);
-    run_git(&child_src, &["config", "user.name", "Test"]);
+    git(&child_src, &["init", "-q", "-b", "main"]);
+    git(&child_src, &["config", "user.email", "test@example.com"]);
+    git(&child_src, &["config", "user.name", "Test"]);
     std::fs::write(child_src.join("c.txt"), "one\n").unwrap();
-    run_git(&child_src, &["add", "."]);
-    run_git(&child_src, &["commit", "-q", "-m", "c1"]);
+    git(&child_src, &["add", "."]);
+    git(&child_src, &["commit", "-q", "-m", "c1"]);
 
     let repo = tmp.path().join("super");
     std::fs::create_dir_all(&repo).unwrap();
-    run_git(&repo, &["init", "-q", "-b", "main"]);
-    run_git(&repo, &["config", "user.email", "test@example.com"]);
-    run_git(&repo, &["config", "user.name", "Test"]);
-    run_git(
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "test@example.com"]);
+    git(&repo, &["config", "user.name", "Test"]);
+    git(
         &repo,
         &[
             "-c",
@@ -154,7 +138,7 @@ fn fetch_submodules_fills_the_cache_with_state() {
             "child",
         ],
     );
-    run_git(&repo, &["commit", "-q", "-m", "add child"]);
+    git(&repo, &["commit", "-q", "-m", "add child"]);
     let repo = repo.canonicalize().unwrap();
 
     let state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
@@ -505,7 +489,7 @@ fn stale_pre_mutation_list_settlement_is_dropped_and_fresh_refetch_is_accepted()
 
     // The worker has answered, but the request stays outstanding until its
     // settlement is routed through the pump — that is the window under test.
-    run_git(&repo, &["worktree", "remove", wt.to_str().unwrap()]);
+    git(&repo, &["worktree", "remove", wt.to_str().unwrap()]);
     state
         .tx
         .send(AppEvent::WorktreesMutated { root: root.clone() })
@@ -587,7 +571,7 @@ fn assert_reset_rejects_late_worktree_list(reset: impl FnOnce(&mut AppState, &Pa
     let old_epoch = *epoch;
     reset(&mut state, &other);
     assert!(state.caches.worktrees(&root).is_none());
-    run_git(&repo, &["worktree", "remove", wt.to_str().unwrap()]);
+    git(&repo, &["worktree", "remove", wt.to_str().unwrap()]);
     state.tx.send(held).unwrap();
     state.drain_events();
     assert!(
@@ -882,8 +866,8 @@ fn update_submodule_works_end_to_end() {
     // Move the submodule's HEAD off the recorded commit.
     let sub_wc = repo.join(&sub_path);
     std::fs::write(sub_wc.join("c.txt"), "two\n").unwrap();
-    run_git(&sub_wc, &["add", "."]);
-    run_git(&sub_wc, &["commit", "-q", "-m", "c2"]);
+    git(&sub_wc, &["add", "."]);
+    git(&sub_wc, &["commit", "-q", "-m", "c2"]);
 
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&repo));
     let root = RootId(repo.into());
