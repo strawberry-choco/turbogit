@@ -460,6 +460,132 @@ fn commit_stays_disabled_without_message_or_selection_and_enables_with_both() {
     );
 }
 
+// --- ticket 21b: `Commit All when Nothing Is Staged` --------------------------
+
+/// The sentence the card adds when the empty selection is forgivable. Asserted
+/// as a fragment so the wording can be edited without rewriting the test.
+const COMMIT_ALL_NOTE: &str = "Nothing is staged";
+
+/// The Commit control's brand-filled halves, scoped to the control's own
+/// bounds. Unscoped, a `Palette::ACCENT` count would also see every other
+/// enabled primary in the shell.
+#[track_caller]
+fn accent_halves(h: &Harness<'_, AppState>) -> Vec<egui::Rect> {
+    let button = egui::Rect::from_min_max(
+        h.get_by_label("Commit changes").rect().min,
+        h.get_by_label("Commit split options").rect().max,
+    );
+    filled_rects(h)
+        .into_iter()
+        .filter(|(rect, fill)| *fill == Palette::ACCENT && button.contains_rect(*rect))
+        .map(|(rect, _)| rect)
+        .collect()
+}
+
+/// The setting is the *only* thing that makes an empty selection committable,
+/// and the card says what will be committed when it is on.
+///
+/// Both directions are load-bearing. A change that makes the empty case
+/// always-committable fails the first half — that is the mis-click-turned-into-
+/// a-whole-index-commit this setting exists to keep opt-in. A change that adds
+/// the setting but never consults it fails the second.
+#[test]
+fn commit_all_when_nothing_is_staged_opens_the_empty_selection_and_says_so() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "commit-all-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    // A message, but nothing included — the exact state the forgiveness path is
+    // for.
+    h.state_mut().ui.commit_message = "commit everything".into();
+    h.run();
+
+    // Off (the default): still refused, and the card explains nothing, because
+    // there is nothing forgivable to explain.
+    assert!(
+        commit_button_is_disabled(&h),
+        "an empty selection must stay refused while the opt-in is off"
+    );
+    assert!(
+        !painted_text(&h).iter().any(|t| t.contains(COMMIT_ALL_NOTE)),
+        "the card must not promise a whole-index commit while the setting is off; \
+         painted text: {:?}",
+        painted_text(&h)
+    );
+    assert_eq!(
+        accent_halves(&h).len(),
+        0,
+        "a gated Commit paints no accent fill; the tinted disabled fill is a \
+         different colour by design"
+    );
+
+    // On: the same empty selection commits, and the card states what it will
+    // include.
+    h.state_mut().settings.commit_all_when_nothing_staged = true;
+    h.run();
+    assert!(
+        !commit_button_is_disabled(&h),
+        "the setting is what makes the empty selection committable"
+    );
+    assert!(
+        painted_text(&h).iter().any(|t| t.contains(COMMIT_ALL_NOTE)),
+        "the card must state what an empty selection commits; painted text: {:?}",
+        painted_text(&h)
+    );
+    assert_eq!(
+        accent_halves(&h).len(),
+        2,
+        "the enabled Commit control paints its two brand halves"
+    );
+}
+
+/// The message gate is independent of the selection gate: the setting forgives
+/// an empty *selection*, never an empty *message*. A change that ORs the two
+/// conditions instead of ANDing them lets a message-less commit through, which
+/// is the more dangerous half of the ticket.
+#[test]
+fn an_empty_message_still_refuses_with_commit_all_on() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "commit-all-message-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.state_mut().settings.commit_all_when_nothing_staged = true;
+    h.run();
+    assert!(
+        commit_button_is_disabled(&h),
+        "an empty message must stay refused even with the setting on"
+    );
+
+    h.state_mut().ui.commit_message = "now it may commit".into();
+    h.run();
+    assert!(
+        !commit_button_is_disabled(&h),
+        "the two gates are independent: the message gate still governs"
+    );
+}
+
+// --- ticket 19: the clean-tree statement --------------------------------------
+
+/// A clean repository states the clean-tree sentence rather than leaving an
+/// empty panel. The reference's `stage.default.status` is the specification:
+/// "an empty list" and "nothing to commit" are not the same information.
+#[test]
+fn a_clean_tree_states_the_clean_tree_sentence() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "clean-repo");
+
+    let h = harness(app_state(std::slice::from_ref(&repo.path)));
+    assert!(
+        painted_text(&h)
+            .iter()
+            .any(|t| t.contains("Nothing to commit, working tree is clean.")),
+        "a clean tree must say so in words; painted text: {:?}",
+        painted_text(&h)
+    );
+}
+
 #[test]
 fn commit_executes_for_valid_input() {
     let parent = tempfile::tempdir().unwrap();

@@ -662,6 +662,13 @@ pub struct VcsSettings {
     pub commit_template: String,
     /// Restore workspace context on branch switch.
     pub restore_workspace: bool,
+    /// Let the Commit control act on an **empty selection**. With nothing
+    /// included the commit runs `git commit -a` — every tracked modification —
+    /// instead of refusing (`changes::commit_selected`'s no-selection arm).
+    /// Off by default: refusing an empty commit is the safe behaviour, and the
+    /// opt-in is what keeps a mis-click from committing the whole index.
+    #[serde(default)]
+    pub commit_all_when_nothing_staged: bool,
     /// Highlight modified lines in the gutter.
     pub gutter_markers: bool,
     /// Date format for the log.
@@ -697,6 +704,7 @@ impl Default for VcsSettings {
             warn_detached: true,
             commit_template: String::new(),
             restore_workspace: false,
+            commit_all_when_nothing_staged: false,
             gutter_markers: true,
             date_format: DateFormat::default(),
             no_commit_hooks: false,

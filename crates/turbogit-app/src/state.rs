@@ -986,6 +986,14 @@ pub struct UiState {
     /// Draft executable path the current [`Self::git_version_badge`] was
     /// computed for, so the check reruns only when the path changes.
     pub git_version_checked_path: Option<String>,
+    /// Onboarding environment check (ticket 19): the resolved git executable's
+    /// version, or the reason it could not be resolved, keyed by the
+    /// executable path it was computed for. The Welcome clone card is the
+    /// consumer — a missing `git` is the most common first-run failure, and
+    /// the answer decides whether the clone control is offered at all. The
+    /// Settings page keeps its own draft-scoped badge because it re-checks
+    /// after every keystroke in the executable field.
+    pub git_env_check: Option<(String, Result<String, String>)>,
     /// Settings Protected-Branches page (issue #26): the in-progress text of
     /// the "+ Add pattern" input. Cleared on add; never persisted.
     pub settings_new_pattern: String,
@@ -2820,6 +2828,20 @@ impl AppState {
     /// Create a real repository at `dir` through the engine seam and enter
     /// it (Welcome "Initialize Repository" card, issue #10).
     pub fn initialize_and_enter(&mut self, dir: &Path) {
+        // One preflight for the whole onboarding surface (ticket 19): a nested
+        // `git init` is almost never intended and is confusing to undo. The
+        // check is git's own "am I inside a work tree" — an ancestor marker
+        // walk, so a directory inside an existing checkout counts, which is the
+        // case a user reaches by picking a subdirectory. `GitExecutor::is_repo`
+        // is the wrong question: it is backend-dependent and the git2 adapter
+        // does not search upward.
+        if turbogit_services::multi_root::is_inside_work_tree(dir) {
+            self.ui.toast = Some(Toast::error(format!(
+                "The selected directory {} is already under Git.",
+                dir.display()
+            )));
+            return;
+        }
         if let Err(e) = self.executor.init(dir) {
             self.last_error = Some(e.to_string());
             return;
@@ -2896,6 +2918,26 @@ impl AppState {
                 self.ui.toast = Some(Toast::error(format!("Clone failed: {e}")));
             }
         }
+    }
+
+    /// The onboarding environment check (ticket 19): resolve the configured
+    /// `git`, caching the outcome against the executable path so a change in
+    /// Settings re-runs it and every other frame does not.
+    ///
+    /// This is the check the Welcome clone card runs before any clone work. It
+    /// is worth more in TurboGit than in a client that clones off-thread,
+    /// because [`Self::clone_into`] is synchronous on the calling thread — a
+    /// missing `git` there is a frozen window rather than a failed call.
+    pub fn git_env_check(&mut self) -> Result<String, String> {
+        let key = self.settings.git_executable.clone();
+        if let Some((cached, res)) = &self.ui.git_env_check
+            && *cached == key
+        {
+            return res.clone();
+        }
+        let res = turbogit_engine::resolve_git_version(&self.settings).map_err(|e| e.to_string());
+        self.ui.git_env_check = Some((key, res.clone()));
+        res
     }
 
     /// Drain worker-thread events and apply them to state. Production calls

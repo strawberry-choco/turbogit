@@ -82,6 +82,24 @@ fn scan_dir(
     }
 }
 
+/// Is `dir`, or any ancestor of it, a git work tree?
+///
+/// The marker test is [`scan_dir`]'s — `.git` present, as a directory in an
+/// ordinary checkout and as a *file* in a worktree or a submodule. It is a
+/// filesystem question rather than an engine call on purpose:
+/// [`GitExecutor::is_repo`] is backend-dependent, and the git2 adapter's
+/// `Repository::open` does not search upward, so it answers "is this exactly a
+/// repo root" where this answers git's own "am I inside one". The two are
+/// different questions and the callers that need the second must not be handed
+/// the first.
+///
+/// `GIT_DIR` / `core.worktree` in a parent are not consulted: the marker walk
+/// is what the scanner already trusts, and a `.git` file covers the cases that
+/// matter (worktrees, submodules).
+pub fn is_inside_work_tree(dir: &Path) -> bool {
+    dir.ancestors().any(|a| a.join(".git").exists())
+}
+
 /// Build a full [`Root`] snapshot for `path` through the engine seam.
 pub fn root_snapshot(engine: &dyn GitExecutor, path: &Path) -> TgResult<Root> {
     Ok(Root {
@@ -141,6 +159,36 @@ mod tests {
 
     fn repo_at(dir: &Path) {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
+    }
+
+    /// The ancestor walk is the whole point: a directory *inside* a checkout is
+    /// "under Git", while an untouched sibling tree is not. A `.git` **file**
+    /// (worktree / submodule shape) counts exactly like a directory.
+    #[test]
+    fn is_inside_work_tree_walks_up_to_the_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        repo_at(&repo);
+        let nested = repo.join("src").join("deep");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        assert!(is_inside_work_tree(&repo), "the root itself");
+        assert!(
+            is_inside_work_tree(&nested),
+            "an ancestor carries the marker"
+        );
+
+        let outside = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&outside).unwrap();
+        assert!(!is_inside_work_tree(&outside), "no marker anywhere above");
+
+        let linked = tmp.path().join("linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(linked.join(".git"), "gitdir: ../repo/.git/worktrees/w\n").unwrap();
+        assert!(
+            is_inside_work_tree(&linked.join("sub")),
+            "a worktree's `.git` is a file, and it still marks the tree"
+        );
     }
 
     #[test]
