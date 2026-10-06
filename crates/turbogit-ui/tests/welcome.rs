@@ -30,11 +30,14 @@
 //! - The picker seam is invoked only behind user-initiated flows
 
 use egui::{Color32, Shape};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT as _, Queryable as _},
+};
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::{
-    assert_not_painted, assert_painted, painted_text, settle, shell_harness_over,
+    assert_not_painted, assert_painted, filled_rects, painted_text, settle, shell_harness_over,
 };
 use test_support::wcag::contrast;
 use turbogit_app::recents::{RecentProject, Recents, load, recents_file, record, save};
@@ -1431,3 +1434,125 @@ fn the_welcome_screen_keeps_no_local_copy_of_its_type() {
 /// assertion above reads as a statement about the ramp rather than as a
 /// comparison against another constant in the same expression.
 const TYPE_BODY_HINT: f32 = turbogit_ui::theme::TYPE_BODY;
+
+// --- Cycle 8: ticket 19 — the environment check and the init guard -------------
+
+/// Whether the Clone control is gated, read from the accessibility tree. The
+/// control stays rendered when gated (blocked is never absent), so the gate is
+/// the node's own disabled flag.
+#[track_caller]
+fn clone_is_disabled(harness: &Harness<'_, AppState>) -> bool {
+    harness.get_by_label("Clone").accesskit_node().is_disabled()
+}
+
+/// The brand fills inside the Clone control's own rect — scoped, because the
+/// Welcome hero's brand tile is `Palette::BRAND` as well.
+#[track_caller]
+fn clone_accent_fills(harness: &Harness<'_, AppState>) -> Vec<egui::Rect> {
+    let rect = harness.get_by_label("Clone").rect();
+    filled_rects(harness)
+        .into_iter()
+        .filter(|(r, fill)| *fill == turbogit_ui::theme::Palette::ACCENT && rect.contains_rect(*r))
+        .map(|(r, _)| r)
+        .collect()
+}
+
+/// The clone card checks the environment before any clone work, states a
+/// remedy when it fails, and gates the control on the check.
+///
+/// Both directions are load-bearing: the healthy case asserts the remedy's
+/// **absence**, because a check that always paints "not found" is not a check —
+/// that is the likeliest way this regresses.
+#[test]
+fn clone_card_checks_the_environment_and_gates_the_control_on_it() {
+    let mut fx = bare_fixture();
+    settle(&mut fx.harness);
+
+    // Healthy, but no URL yet: no remedy, and the URL gate alone holds Clone.
+    assert_not_painted(&fx.harness, "Git was not found");
+    assert!(
+        clone_is_disabled(&fx.harness),
+        "an empty URL must not offer a clone"
+    );
+
+    // Healthy and a URL present: both gates open.
+    type_into(
+        &mut fx.harness,
+        "Repository URL",
+        "https://example.com/some/repo.git",
+    );
+    settle(&mut fx.harness);
+    assert_not_painted(&fx.harness, "Git was not found");
+    assert!(
+        !clone_is_disabled(&fx.harness),
+        "a resolvable git and a URL must leave Clone live"
+    );
+    assert!(
+        !clone_accent_fills(&fx.harness).is_empty(),
+        "a live primary Clone paints its brand fill"
+    );
+
+    // Now the check fails. A bogus executable path is the check's own input, so
+    // this is the production failure the card is for.
+    fx.harness.state_mut().settings.git_executable = "/nonexistent/turbogit-missing-git".into();
+    settle(&mut fx.harness);
+
+    assert_painted(&fx.harness, "Git was not found");
+    assert!(
+        clone_is_disabled(&fx.harness),
+        "the environment check is the second, independent gate"
+    );
+    assert!(
+        clone_accent_fills(&fx.harness).is_empty(),
+        "a gated Clone paints no brand fill; two controls gated on one check \
+         would leave this live"
+    );
+}
+
+/// One preflight on the whole onboarding surface: a directory already under Git
+/// is refused and says so, and a clean one is initialized and entered.
+#[test]
+fn initialize_refuses_a_directory_already_under_git() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    // A directory *inside* an existing work tree — the case a user reaches by
+    // picking a subdirectory, and the one a plain `is .git present` test misses.
+    let outer = seed_repo(project.path(), "outer");
+    let nested = outer.join("inner");
+    std::fs::create_dir_all(&nested).expect("create nested dir");
+
+    let picked = nested.clone();
+    let mut fx = fixture_with_picker(move || Some(picked.clone()));
+    settle(&mut fx.harness);
+    fx.harness.get_by_label("Initialize Repository").click();
+    settle(&mut fx.harness);
+
+    assert_painted(&fx.harness, "already under Git");
+    assert!(
+        !nested.join(".git").exists(),
+        "a refused init must not create a repository"
+    );
+    assert!(
+        fx.harness.state().show_welcome(),
+        "the guard leaves the user on Welcome rather than entering the directory"
+    );
+
+    // The other direction: a clean directory is initialized, entered, and the
+    // guard says nothing.
+    let clean = project.path().join("fresh");
+    std::fs::create_dir_all(&clean).expect("create init target");
+    let picked = clean.clone();
+    let mut fx = fixture_with_picker(move || Some(picked.clone()));
+    settle(&mut fx.harness);
+    fx.harness.get_by_label("Initialize Repository").click();
+    settle(&mut fx.harness);
+
+    assert_not_painted(&fx.harness, "already under Git");
+    assert!(
+        clean.join(".git").exists(),
+        "the Initialize card must still create a real repository"
+    );
+    assert!(
+        !fx.harness.state().show_welcome(),
+        "a successful init still enters the shell"
+    );
+}

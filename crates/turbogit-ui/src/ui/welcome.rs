@@ -420,6 +420,12 @@ pub fn pick_dir_public(state: &mut AppState, purpose: &str) -> Option<std::path:
 /// untouched. The card is the shared [`widgets::card`] at 16 px of padding
 /// (wider than the panel padding) and a full-width stretch.
 fn clone_box(ui: &mut Ui, state: &mut AppState) {
+    // The environment check comes first (ticket 19): a missing or unreachable
+    // `git` is the single most common first-run failure, and this card is where
+    // a first run meets it. `clone_into` is synchronous on the calling thread,
+    // so without this the failure is a frozen window instead of a sentence.
+    let git = state.git_env_check();
+    let url_present = !state.ui.welcome_clone_url.trim().is_empty();
     widgets::card(ui, widgets::CardFrame::default().padded(16), |ui| {
         ui.horizontal(|ui| {
             icons::icon(ui, Icon::DOWNLOAD, 16.0, Palette::ACCENT_TEXT);
@@ -439,6 +445,21 @@ fn clone_box(ui: &mut Ui, state: &mut AppState) {
             });
         });
         ui.add_space(10.0);
+
+        // The not-found state, stated with the reason and a route out of it. It
+        // is a *state*, not an error toast: it is true for as long as the check
+        // fails, and it is the reason the Clone control below is gated.
+        if let Err(reason) = &git {
+            ui.label(
+                RichText::new(format!(
+                    "Git was not found ({reason}). Install Git, or set its location in \
+                     Settings \u{203a} Git."
+                ))
+                .size(crate::theme::TYPE_BODY)
+                .color(Palette::STATE_WARNING),
+            );
+            ui.add_space(8.0);
+        }
 
         // Body: URL input fills the row; the Clone button is pinned right.
         // Reserve the button's width first so `text_input` doesn't swallow
@@ -471,7 +492,15 @@ fn clone_box(ui: &mut Ui, state: &mut AppState) {
         if std::mem::take(&mut state.ui.welcome_focus_clone) {
             response.request_focus();
         }
-        if widgets::primary_button(ui, Some(Icon::DOWNLOAD), "Clone").clicked() {
+        // Two independent gates, one control: a URL to clone, and an
+        // environment that can clone it. A control gated on only one of them is
+        // the bug this pins — and it stays rendered-but-gated, so the remedy
+        // above is never the only thing on screen with nothing beside it.
+        let can_clone = git.is_ok() && url_present;
+        let clicked = widgets::disabled_child_scope(ui, can_clone, |ui| {
+            widgets::primary_button(ui, Some(Icon::DOWNLOAD), "Clone").clicked()
+        });
+        if clicked {
             clone_from_url(state);
         }
     });

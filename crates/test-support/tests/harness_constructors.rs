@@ -285,15 +285,37 @@ fn busy_state() -> AppState {
 /// 0.12 s — so its contents are painted at a partial alpha for as many frames
 /// as the clock leaves them, which is the primitive
 /// `shell_harness_over_animated` exists to keep in flight.
+/// The toast body `open_toast` plants and `mid_fade_alphas` looks for. One
+/// constant, because the probe is meaningless if it is aiming at a string the
+/// toast does not carry — it would report "no fade" by finding no text.
+const TOAST_TEXT: &str = "mid-fade probe";
+
 fn open_toast(harness: &mut Harness<'_, AppState>) {
-    harness.state_mut().ui.toast = Some(Toast::success("mid-fade probe"));
+    harness.state_mut().ui.toast = Some(Toast::success(TOAST_TEXT));
 }
 
-/// The alpha of every filled rect the last frame painted that is neither fully
-/// opaque nor fully transparent — i.e. what a frame caught mid-fade.
-fn mid_fade_alphas<S>(harness: &Harness<'_, S>) -> Vec<u8> {
+/// The alpha of every filled rect the frame painted that shares the toast's own
+/// row and is neither fully opaque nor fully transparent — i.e. what the toast
+/// was caught at mid-fade.
+///
+/// Scoped to the toast's row, and it has to be. "Every translucent fill in the
+/// frame" is a proxy that any half-alpha fill satisfies, and `Ui::disable`
+/// paints one on purpose: egui's `disabled_alpha()` is 0.5, so a *gated* control
+/// is a translucent fill with no fade in it whatsoever. An unscoped probe reads
+/// such a control as a fade still in flight, which is a false negative for the
+/// default clock — the exact claim this test exists to make. The Welcome
+/// screen's gated Clone control is the one that found this: it sits at
+/// y≈248-280 while the toast's row is y≈701-715.
+fn mid_fade_alphas<S>(harness: &Harness<'_, S>, toast_text: &str) -> Vec<u8> {
+    let Some(text) = painted_galleys(harness)
+        .into_iter()
+        .find(|g| g.text == toast_text)
+    else {
+        return Vec::new();
+    };
     filled_rects(harness)
         .iter()
+        .filter(|(rect, _)| rect.min.y < text.rect.max.y && rect.max.y > text.rect.min.y)
         .map(|(_, fill)| fill.a())
         .filter(|a| *a > 0 && *a < u8::MAX)
         .collect()
@@ -395,10 +417,10 @@ fn a_fade_at_sixty_fps_is_still_in_flight_where_the_default_clock_finishes_it() 
         open_toast(&mut slow);
         slow.step();
         slow.step();
-        mid_fade_alphas(&slow)
+        mid_fade_alphas(&slow, TOAST_TEXT)
     };
 
-    let fast_fades = mid_fade_alphas(&fast);
+    let fast_fades = mid_fade_alphas(&fast, TOAST_TEXT);
     assert!(
         !fast_fades.is_empty(),
         "at 1/60 s the window's fade must still be running: the frame painted no \

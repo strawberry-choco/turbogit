@@ -249,6 +249,12 @@ fn general_page(ui: &mut Ui, s: &mut VcsSettings) {
         &mut s.restore_workspace,
         "Restore workspace context on branch switch",
     );
+    // Opt-in, and deliberately not the default: on, an empty selection commits
+    // every tracked change rather than refusing.
+    ui.checkbox(
+        &mut s.commit_all_when_nothing_staged,
+        "Commit all when nothing is staged",
+    );
 }
 
 /// Git (screen 11): engine backend, the git executable, remote management.
@@ -637,6 +643,7 @@ fn restore_category_defaults(state: &mut AppState) {
         SettingsCategory::General => {
             draft.staging_area = d.staging_area;
             draft.restore_workspace = d.restore_workspace;
+            draft.commit_all_when_nothing_staged = d.commit_all_when_nothing_staged;
         }
         SettingsCategory::Git => {
             draft.backend = d.backend;

@@ -389,13 +389,18 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
         let (buckets, no_match) = filter_buckets(state, staging_buckets(state));
         let (unversioned, _) = filter_buckets(state, unversioned_buckets(state));
         // **This site produces the empty state's words and does not paint it.** The
-        // sentence is the *filter's* answer — "No local changes." when nothing matched,
+        // sentence is the *filter's* answer — the clean-tree statement when nothing matched,
         // and the filter's own "nothing matches <query>" when a query excluded
         // everything — so the wording stays here. Moving the paint up to this scope
         // would make the tree unable to report "nothing painted", which is the fact
         // that decides whether the sentence appears at all.
+        //
+        // The clean-tree wording is the reference's `stage.default.status` (ticket
+        // 19): an empty list and a sentence are not the same information. It
+        // inherits the old sentence's one weakness — it is a claim about the last
+        // refresh, so it can appear for a frame before a scan lands.
         let empty_text = if no_match.is_empty() {
-            "No local changes."
+            "Nothing to commit, working tree is clean."
         } else {
             &no_match
         };
@@ -2191,8 +2196,25 @@ fn meta_button(ui: &mut Ui, label: &str) -> egui::Response {
 /// belongs to the Commit control alone — a card with two filled greys and a
 /// filled blue reads as three actions of equal weight.
 fn commit_action_row(ui: &mut Ui, state: &mut AppState) {
+    // With nothing included, the commit leans on `git commit -a` to find the
+    // work, so the file list no longer says what is about to be committed —
+    // the note does (ticket 21b). Only the empty-selection case needs it: with
+    // a selection the list is already the answer.
+    if state.settings.commit_all_when_nothing_staged && !has_selected_changes(state) {
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new("Nothing is staged — Commit will include every tracked change.")
+                .size(crate::theme::TYPE_BODY)
+                .color(Palette::INK_2),
+        );
+        ui.add_space(2.0);
+    }
     ui.horizontal(|ui| {
-        let can_commit = !state.ui.commit_message.trim().is_empty() && has_selected_changes(state);
+        // The selection gate is the setting's other half: an empty selection
+        // is committable only while the opt-in is on. The message gate stays
+        // independent — an empty *message* is never committable.
+        let can_commit = !state.ui.commit_message.trim().is_empty()
+            && (has_selected_changes(state) || state.settings.commit_all_when_nothing_staged);
         commit_control(ui, state, can_commit);
         ui.add_space(10.0);
         if widgets::ghost_button(ui, None, "Shelve\u{2026}")
