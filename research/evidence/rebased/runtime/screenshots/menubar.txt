@@ -1,0 +1,459 @@
+== Apple
+  About This Mac
+  System Information
+  missing value
+  System Settings…, 1 update
+  App Store
+  missing value
+  Recent Items
+   Applications
+   Clash Verge
+   Show “Clash Verge” in Finder
+   Feishu
+   Show “Feishu” in Finder
+   Firefox
+   Show “Firefox” in Finder
+   Granola
+   Show “Granola” in Finder
+   Microsoft Teams
+   Show “Microsoft Teams” in Finder
+   MiniMax Code
+   Show “MiniMax Code” in Finder
+   System Settings
+   Show “System Settings” in Finder
+   TraeWork CN
+   Show “TraeWork CN” in Finder
+   WorkBuddy
+   Show “WorkBuddy” in Finder
+   ZCode
+   Show “ZCode” in Finder
+   missing value
+   Documents
+   architecture-review-20260922-162822.html
+   Show “architecture-review-20260922-162822.html” in Finder
+   architecture-review-20260922-171554.html
+   Show “architecture-review-20260922-171554.html” in Finder
+   architecture-review-20260922-172815.html
+   Show “architecture-review-20260922-172815.html” in Finder
+   architecture-review-20260922-220145.html
+   Show “architecture-review-20260922-220145.html” in Finder
+   architecture-review-20260922.html
+   Show “architecture-review-20260922.html” in Finder
+   architecture-review-20260923-194549.html
+   Show “architecture-review-20260923-194549.html” in Finder
+   architecture-review-20260929-074359.html
+   Show “architecture-review-20260929-074359.html” in Finder
+   architecture-review-20260929-150644.html
+   Show “architecture-review-20260929-150644.html” in Finder
+   dark-palette.html
+   Show “dark-palette.html” in Finder
+   riff.dmg
+   Show “riff.dmg” in Finder
+   missing value
+   Servers
+   Macintosh HD
+   OrbStack
+   missing value
+   Clear Menu
+  missing value
+  Force Quit…
+  Force Quit Rebased
+  missing value
+  Sleep
+  Restart…
+  Restart
+  Shut Down…
+  Shut Down
+  missing value
+  Lock Screen
+  Log Out kye…
+  Log Out kye
+  missing value
+== Rebased
+  About Rebased
+  Check for Updates…
+  missing value
+  Settings…
+  missing value
+  Services
+   No Services Apply
+   Services Settings…
+  missing value
+  Hide Rebased
+  Hide Others
+  Show All
+  missing value
+  Quit Rebased
+  Quit and Keep Windows
+== File
+  New
+   Project from Version Control…
+   New Project
+   missing value
+   File
+   Scratch File
+   Directory
+   HTML File
+  Open…
+  Recent Projects
+   Manage Projects…
+  Close Project
+  missing value
+  Plugins…
+  File Properties
+  missing value
+  Local History
+   Show History…
+   missing value
+   Show Project History…
+   Recent Changes
+   Put Label…
+  missing value
+  Save All
+  Reload All from Disk
+  Repair Rebased
+  Invalidate Caches…
+  missing value
+  Manage Rebased Settings
+  New Projects Setup
+   Settings for New Projects…
+   Run Configuration Templates…
+  Save File as Template…
+  missing value
+  Export
+  Print…
+  missing value
+  Power Save Mode
+== Edit
+  Undo
+  Redo
+  missing value
+  Cut
+  Copy
+  Copy as Plain Text
+  Copy Path/Reference…
+  Paste
+  Remove Module
+  missing value
+  Search In Selection
+  Find
+  Find Usages
+   Find Usages
+   Find Usages Settings…
+   Show Usages
+   missing value
+   Find Usages in File
+   Highlight Usages in File
+   Next Highlighted Usage
+   Previous Highlighted Usage
+   Recent Find Usages
+  missing value
+  Select All
+  Add Carets to Ends of Selected Lines
+  Extend Selection
+  Shrink Selection
+  missing value
+  Toggle Case
+  Join Lines
+  Duplicate Line or Selection
+  Fill Paragraph
+  Sort Lines
+  Reverse Lines
+  Transpose
+  missing value
+  Indent Selection
+  Unindent Line or Selection
+  Convert Indents
+  missing value
+  Macros
+  Bookmarks
+   Toggle Bookmark
+   Add Mnemonic Bookmark…
+   missing value
+   Previous Line Bookmark
+   Next Line Bookmark
+   missing value
+   Show Line Bookmarks…
+   Go to Mnemonic…
+  missing value
+  Emoji & Symbols
+  Encode XML/HTML Special Characters
+== View
+  Tool Windows
+   Commit
+   Project
+   Bookmarks
+   Find
+   Git
+   Backup and Sync History
+   Merge Requests
+   Notifications
+   Pull Requests
+   Terminal
+  Appearance
+   Enter Presentation Mode
+   Enter Distraction Free Mode
+   Enter Full Screen
+   Enter Zen Mode
+   missing value
+   Compact Mode
+   Zoom IDE (Current: 100%)…
+   missing value
+   Presentation Assistant
+   missing value
+   Toolbar
+   Navigation Bar
+    Top
+    In Status Bar
+    Don't Show
+    missing value
+    Show Members
+   Tool Window Bars
+   Status Bar
+   Status Bar Widgets
+  missing value
+  Quick Definition
+  Quick Type Definition
+  Quick Documentation
+  missing value
+  Recent Locations
+  Recent Files
+  Recently Changed Files
+  Recent Changes
+  missing value
+  Compare With…
+  missing value
+  Quick Switch Scheme…
+  missing value
+  Reset Font Size in All Editors
+  missing value
+  Bidi Text Base Direction
+   Content-Based
+   Left-to-Right
+   Right-to-Left
+== Navigate
+  Back
+  Forward
+  missing value
+  Search Everywhere
+  missing value
+  Class...
+  File…
+  Symbol…
+  Text…
+  missing value
+  Next Highlighted Error
+  Previous Highlighted Error
+  missing value
+  Next Emmet Edit Point
+  Previous Emmet Edit Point
+  Last Edit Location
+  Next Edit Location
+  missing value
+  Navigate in File
+   Next Method
+   Previous Method
+   Move Caret to Matching Brace
+   missing value
+   Next Live Template Parameter
+   Previous Live Template Parameter
+  missing value
+  Select In…
+  Jump to Navigation Bar
+  missing value
+  Declaration or Usages
+  Implementation(s)
+  Super Method
+  Related Symbol…
+  missing value
+  File Structure
+  File Path
+  Type Hierarchy
+  Call Hierarchy
+== Code
+  Code Completion
+   Basic
+   Type-Matching
+   missing value
+   Complete Current Statement
+   missing value
+   Cyclic Expand Word
+   Cyclic Expand Word (Backward)
+   missing value
+   Call Inline Completion
+   Insert Inline Proposal
+   Insert Inline Proposal's Word
+   Insert Inline Proposal's Line
+   Enable Command Completion
+  missing value
+  Inspect Code…
+  Code Cleanup…
+  Analyze Code
+   Silent Code Cleanup
+   Run Inspection by Name…
+   Configure Current File Analysis…
+   View Offline Inspection Results…
+  Analyze Stack Trace or Thread Dump…
+  missing value
+  Insert Live Template…
+  Save as Live Template…
+  missing value
+  Surround With…
+  Unwrap/Remove…
+  missing value
+  Folding
+   Expand
+   Expand Recursively
+   Expand All
+   missing value
+   Collapse
+   Collapse Recursively
+   Collapse All
+   missing value
+   Expand to Level
+   Expand All to Level
+    1
+    2
+    3
+    4
+    5
+   missing value
+   Expand Doc Comments
+   Collapse Doc Comments
+   missing value
+   Toggle Folding
+   missing value
+   Fold Selection / Remove Region
+   Fold Code Block
+  missing value
+  Comment with Line Comment
+  Comment with Block Comment
+  missing value
+  Move Statement Down
+  Move Statement Up
+  Move Element Left
+  Move Element Right
+  Move Line Down
+  Move Line Up
+== Run
+  Run
+  Debug
+== Tools
+  Create Command Line Launcher…
+  missing value
+  Services
+  XML Actions
+== Git
+  Commit…
+  Push…
+  Update Project...
+  Pull…
+  Fetch
+  missing value
+  Merge…
+  Rebase…
+  missing value
+  Branches…
+  New Branch…
+  New Tag…
+  Reset HEAD…
+  missing value
+  New Worktree…
+  Worktrees…
+  missing value
+  Show Git Log
+  Patch
+  Uncommitted Changes
+   Shelve Changes…
+   Show Shelf
+   Stash Changes…
+   Unstash Changes…
+   Rollback…
+  Selected Directory
+  missing value
+  GitLab
+   Share Project on GitLab
+   Clone Repository…
+   missing value
+   Manage Accounts…
+  GitHub
+   Share Project on GitHub
+   Clone Repository…
+   missing value
+   Manage Accounts…
+  Manage Remotes…
+  Clone…
+  missing value
+  VCS Operations Popup…
+== Window
+  Minimize
+  Zoom
+  Layouts
+  missing value
+  Active Tool Window
+  Editor Tabs
+   Select Next Tab
+   Select Previous Tab
+   Pin Tab
+   Keep Tab Open
+   missing value
+   Close Tab
+   Close Other Tabs
+   Close All Tabs
+   Close Unmodified Tabs
+   Close All but Pinned
+   Close Tabs to the Left
+   Close Tabs to the Right
+   Close All Read-Only
+   missing value
+   Reopen Closed Tab
+   Split with Chooser Navigation
+   Stretch Editor to Top
+   Stretch Editor to Left
+   Stretch Editor to Bottom
+   Stretch Editor to Right
+   Change Splitter Orientation
+   Maximize Editor/Normalize Splits
+   Unsplit
+   Unsplit All
+   Go to Next Splitter
+   Go to Previous Splitter
+   missing value
+   Configure Editor Tabs…
+  Notifications
+   Close First
+   Close All
+  Processes
+   Show
+   Auto Show
+  missing value
+  Next Project Window
+  Previous Project Window
+  Merge All Project Windows
+  missing value
+  tg-r3-fixture
+== Help
+  Find Action…
+  missing value
+  Help
+  missing value
+  What's New in Rebased
+  missing value
+  Keyboard Shortcuts PDF
+  missing value
+  Submit a Bug Report…
+  missing value
+  Show Log in Finder
+  Collect Logs and Diagnostic Data
+  missing value
+  Diagnostic Tools
+   Activity Monitor…
+   Dump Threads
+   missing value
+   Debug Log Settings…
+   Special Files and Folders…
+  Change Memory Settings
+  Edit Custom Properties…
+  Edit Custom VM Options…
+  Delete Leftover Rebased Directories…
+exit: 0

@@ -1,0 +1,27 @@
+﻿# Rebased parity surfaces — research manifest.
+#
+# One row per parity surface. Edit this file to add surfaces or documentation
+# sources; nothing else needs to change. Column order:
+#
+#   surface id  title  doc slugs (comma separated, may be empty)  action id prefixes (comma separated, may be empty)
+#
+# Doc slugs are `https://www.jetbrains.com/help/idea/<slug>.html`. Each is
+# fetched and its HTTP status recorded, so a slug that Goes 404 is reported as a
+# gap instead of failing silently. One row can name several slugs; all of them
+# contribute evidence to that surface.
+#
+# Action prefixes match against `actions-labeled.tsv` (harvested from the
+# installed bundle) so each surface spec arrives preloaded with the real action
+# inventory: id, label, default keystroke.
+
+commit-tool-window	Commit tool window	commit-and-push-changes,working-with-git-tutorial	Git.Stage.,Git.Commit.,Vcs.Commit.,ChangesView.
+branches-popup	Branches popup	manage-branches	Git.CreateNewBranch,Git.Rename.Local.Branch,Git.CompareWithBranch,Git.ShowBranches,Git.Log.Branches.,Git.FindMergedLocalBranches,Git.Cleanup.Branches
+log-tool-window	Log tool window	log-tab,investigate-changes	VcsLog.,Git.Log.,Vcs.CopyCommitSubjectAction,Vcs.CopyRevisionNumberAction,Vcs.CopyCurrentBranchName
+integrate	Integrate: merge, rebase, cherry-pick	apply-changes-from-one-branch-to-another,investigate-changes	Git.Merge,Git.Rebase,Git.CherryPick,Git.AddCommitToRemoteBranch
+conflicts	Conflict resolution	resolve-conflicts,working-with-git-tutorial	Git.ResolveConflicts,Git.RevertResolved,Diff.Apply
+history-rewrite	Rewrite history	edit-project-history	Git.Reword.Commit,Git.Drop.Commits,Git.Squash,Git.Fixup,Git.Uncommit,Git.Interactive.Rebase,Git.Reset,Git.Revert.In.Log
+shelve-stash	Shelve and stash	shelving-and-unshelving-changes	ChangesView.Shelve,ChangesView.Unshelve,Vcs.Shelf.,Git.Stash.,Git.Unstash,Git.Show.Stash
+remotes-sync	Remotes, fetch and push	sync-with-a-remote-repository	Git.Fetch,Git.Pull,Vcs.Push,Git.Configure.Remotes,Git.Unshallow
+onboarding	Repository setup and onboarding	set-up-a-git-repository,working-with-git-tutorial	Git.Init,Git.Clone
+patches	Patches	using-patches	ChangesView.CreatePatch,ChangesView.ApplyPatch,Vcs.ApplySelectedChanges
+diff-viewer	Diff viewer	differences-viewer,compare-file-with-diff	Diff.,Vcs.ShowDiffWithLocal,Vcs.Diff

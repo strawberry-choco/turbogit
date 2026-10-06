@@ -1,0 +1,214 @@
+id	label	description	key
+ChangesView.AddUnversioned			
+ChangesView.ApplyPatch			
+ChangesView.ApplyPatchFromClipboard			
+ChangesView.Browse			
+ChangesView.CreatePatch			
+ChangesView.CreatePatchFromChanges			
+ChangesView.CreatePatchToClipboard			
+ChangesView.Edit			
+ChangesView.EditSource			
+ChangesView.GroupBy.Directory			control Opt+P
+ChangesView.GroupBy.Repository			
+ChangesView.Move			Opt+Shift+M
+ChangesView.NewChangeList			
+ChangesView.Refresh			
+ChangesView.RemoveChangeList			
+ChangesView.RemoveDeleted			
+ChangesView.Rename			F2, Shift F6
+ChangesView.Revert			control Opt+Z
+ChangesView.RevertFiles			
+ChangesView.SaveToShelve			
+ChangesView.SelectFile	Select Opened File in Changes View		
+ChangesView.SetDefault			control SPACE
+ChangesView.Shelve			
+ChangesView.ShelveSilently			
+ChangesView.ShowCommitOptions			control O
+ChangesView.ShowIgnored	Ignored Files	Show ignored files	
+ChangesView.SingleClickPreview			
+ChangesView.ToggleCommitUi			
+ChangesView.UnshelveSilently			
+Diff.AppendLeftSide			
+Diff.AppendRightSide			
+Diff.ApplyLeftSide			control Opt+R
+Diff.ApplyNonConflicts			
+Diff.ApplyNonConflicts.Left			
+Diff.ApplyNonConflicts.Right			
+Diff.ApplyRightSide			control Opt+A
+Diff.ComparePartial.Base.Left			
+Diff.ComparePartial.Base.Right			
+Diff.ComparePartial.Left.Right			
+Diff.CompareWithBase.Left			
+Diff.CompareWithBase.Result			
+Diff.CompareWithBase.Right			
+Diff.FocusOppositePane			control Shift+TAB
+Diff.FocusOppositePaneAndScroll			
+Diff.IgnoreLeftSide			
+Diff.IgnoreRightSide			
+Diff.MagicResolveConflicts			
+Diff.NextChange			Opt+Shift+RIGHT
+Diff.NextConflict			
+Diff.OpenDiffInEditor			
+Diff.OpenInEditor			
+Diff.PrevChange			Opt+Shift+LEFT
+Diff.PreviousConflict			
+Diff.ResolveConflict			
+Diff.ShowDiff			control D
+Diff.ShowInExternalTool			
+Diff.ShowSettingsPopup			control Shift+D
+Diff.ShowStandaloneDiff			
+Git.Add	Add		
+Git.AddCommitToRemoteBranch	Add Commits to Remote Branch…	Cherry-pick selected commits onto a remote branch	
+Git.Branches	_Branches…		
+Git.Branches.Popup.Fetch			
+Git.ChangesView.AcceptTheirs			
+Git.ChangesView.AcceptYours			
+Git.ChangesView.Merge			
+Git.Checkout.Update	Checkout and Update		
+Git.CherryPick.Abort	Abort Cherry-Pick		
+Git.CherryPick.Continue	Continue Cherry-Pick		
+Git.Cleanup.Branches	Clean Up Branches…		
+Git.Clone	Clone…		
+Git.Commit.And.Push.Executor			
+Git.Commit.Stage	Commit…		
+Git.CompareWithBranch	Compare with Branch or Tag…		
+Git.Configure.Remotes	Manage Remotes…		
+Git.CreateNewBranch	New Branch…		control Opt+N
+Git.CreateNewBranch.FromCommit	New Branch…	Create a new branch starting from the selected commit	
+Git.CreateNewWorkingTree	New Worktree…	Create a new Git worktree from the current repository	
+Git.Drop.Commits	Drop Commits		
+Git.Drop.Selected.Changes	Drop Selected Changes		
+Git.Fetch	Fetch		
+Git.FindMergedLocalBranches	Find Merged Local Branches		
+Git.Fixup.To.Commit	Fixup…	Create a fixup commit	
+Git.InMemory.Extract.Selected.Changes	Extract Selected Changes to Separate Commit…	Create a new commit from the selected changes, placing it immediately after the original commit in history	
+Git.Init	Create Git Repository…		
+Git.Interactive.Rebase	Interactively Rebase from Here…	Show the dialog for interactive rebase which allows to squash, fixup, reorder, remove and reword commits	
+Git.Log	Show Git Repository Log…		
+Git.Log.Branches.Change.Branch.Filter	Update Branch Filter in Log	Update branch filter in log with selected branches	
+Git.Log.Branches.Change.Branch.Filter.On.Selection	Update Branch Filter	When a branch is selected, filter the log by this branch	
+Git.Log.Branches.Navigate.Log.To.Branch.On.Selection	Navigate Log to Branch Head	When a branch is selected, navigate the log to this branch head	
+Git.Log.Branches.Navigate.Log.To.Selected.Branch	Navigate Log to Selected Branch Head		
+Git.Log.Hide.Branches	Hide Git Branches		
+Git.Log.HighlightCherryPickedCommits	Not Cherry-Picked Commits	Highlights commits which have not been cherry-picked to the current branch	
+Git.Log.Show.Command	Show Git Log for Command		
+Git.Merge	Merge…		
+Git.Merge.Abort	Abort Merge		
+Git.Merge.Commit	Commit merge		
+Git.New.Branch.In.Log			control Opt+N
+Git.OpenExcludeFile			
+Git.Pull	Pull…		
+Git.PushUpToCommit	Push All up to Here…	Push all previous commits including the selected one	
+Git.Rebase	Rebase…		
+Git.Rebase.Abort	Abort Rebase		
+Git.Rebase.Continue	Continue Rebase		
+Git.Rebase.Skip	Skip Commit		
+Git.Ref.Compare.With			
+Git.Ref.Diff.With.Local			
+Git.Rename.Local.Branch			F2, Shift F6
+Git.Reset	Reset HEAD…		
+Git.Reset.In.Log	Reset Current Branch to Here…		
+Git.ResolveConflicts	Resolve Conflicts…		
+Git.Revert.Abort	Abort Revert		
+Git.Revert.In.Log	Revert Commit	Produce a new commit(s), which reverts the changes made in the original commit(s)	
+Git.RevertResolved	Revert Resolved		
+Git.Reword.Commit	Edit Commit Message…	Change commit message via reword option of git rebase or amend	F2, Shift F6
+Git.Show.Stage	Show Staging Area		
+Git.Show.Stash	Show Git Stash	Open the Git Stash tab	
+Git.Show.WorkingTrees	Worktrees…	Show worktrees in a tool window	
+Git.ShowBranches	Show Branches		
+Git.Squash.Commits	Squash Commits…	Rebase interactively to combine selected commits into one	
+Git.Squash.Into.Commit	Squash Into…	Commit local changes with the intent to squash them into the selected commit	
+Git.Stage.AcceptTheirs			
+Git.Stage.AcceptYours			
+Git.Stage.Add			
+Git.Stage.Add.All	Stage All	Add all unstaged changes and untracked files to index	
+Git.Stage.Add.No.Content			
+Git.Stage.Add.Tracked	Stage All Tracked	Add all unstaged changes in tracked files to index	
+Git.Stage.Compare.Local.Staged	Compare with Staged Version		
+Git.Stage.Compare.Staged.Head	Compare with HEAD Version		
+Git.Stage.Compare.Staged.Local	Compare with Local Version		
+Git.Stage.Compare.Three.Versions	Compare HEAD, Staged and Local Versions		
+Git.Stage.Disable	Changelists	Disable staging area and switch to changelists	
+Git.Stage.Enable	Staging Area	Use the native Git concept of staging for making commits	
+Git.Stage.Merge			
+Git.Stage.Reset			
+Git.Stage.Revert			
+Git.Stage.Show.Local	Show Local Version	Show editor with local content for the current file	
+Git.Stage.Show.Staged	Show Staged Version	Show editor with staged content of the current file	
+Git.Stage.Stash.Files			
+Git.Stage.ThreeSideDiff	Compare HEAD, Staged and Local Versions	Show diff window with HEAD, staged and local versions that allows to interactively add changes into staging area	
+Git.Stage.ToggleCommitAll	Commit All when Nothing Is Staged	Commit all files when there are no staged files	
+Git.Stage.ToggleIgnored			
+Git.Stash	Stash Changes…		
+Git.Stash.Apply	Apply	Apply selected stash	
+Git.Stash.Clear	Clear	Clear all stashes	
+Git.Stash.Drop	Drop	Drop selected stash	
+Git.Stash.Pop	Pop	Pop selected stash	
+Git.Stash.Refresh	Refresh Stashes	Refresh the List of Stashes	
+Git.Stash.Silently	Stash Silently		
+Git.Stash.Toggle.Split.Preview	Preview Diff		
+Git.Stash.UnstashAs	Unstash…	Pop or apply selected stash as new branch with or without index	
+Git.Tag	New Tag…		
+Git.Toolbar.ShowMoreActions	Version Control	VCS Operations	
+Git.Uncommit	Undo Commit…	Undo last commit and put its changes into selected changelist	
+Git.Unshallow	Unshallow repository		
+Git.Unstash	Unstash Changes…		
+Git.WorkingTrees.Open	Open as a Project	Open the worktree as a project	
+Git.WorkingTrees.Prune	Prune	Remove Git records for worktrees whose directories no longer exist	
+Git.WorkingTrees.Refresh	Refresh	Refresh the list of worktrees	
+Git.WorkingTrees.Remove	Delete…	Delete worktree…	
+Vcs.ApplySelectedChanges			
+Vcs.CherryPick			
+Vcs.CombinedDiff.CaretToNextBlock			
+Vcs.CombinedDiff.CaretToPrevBlock			
+Vcs.CombinedDiff.ToggleCollapseAllBlock			
+Vcs.CombinedDiff.ToggleCollapseBlock			
+Vcs.Commit.CloseDialog	Close Commit Dialog		
+Vcs.CopyCommitSubjectAction			
+Vcs.CopyCurrentBranchName			
+Vcs.CopyRevisionNumberAction			
+Vcs.Diff.EnableDisableCombinedDiff			
+Vcs.Diff.ExcludeChangedLinesFromCommit			
+Vcs.Diff.IncludeChangedLinesIntoCommit			
+Vcs.Diff.IncludeWholeChangedLinesIntoCommit			
+Vcs.Diff.ResolveConflictsInImports			
+Vcs.Diff.ShowCombinedDiff			
+Vcs.Diff.ShowDiffInEditorTab			
+Vcs.Diff.ShowDiffInNewWindow			
+Vcs.Diff.ToggleDiffAligningMode			
+Vcs.Diff.ToggleSearchInChanges			
+Vcs.EditSource			
+Vcs.GetVersion			
+Vcs.IntegrateProject			
+Vcs.MoveChangedLinesToChangelist			Opt+Shift+M
+Vcs.OpenRepositoryVersion			
+Vcs.Operations.Popup.Annotate			
+Vcs.Push			
+Vcs.Push.Force			
+Vcs.Push.Simple			
+Vcs.QuickListPopupAction			Opt+BACK_QUOTE
+Vcs.ReformatCommitMessage			
+Vcs.RefreshFileHistory			
+Vcs.RevertSelectedChanges			
+Vcs.RollbackChangedLines			control Opt+Z
+Vcs.RunCommitChecks			
+Vcs.Shelf.Apply			
+Vcs.Shelf.Drop			
+Vcs.Shelf.Pop			
+Vcs.Shelf.UnshelveChanges			
+Vcs.Shelf.UnshelveChangesAndRemove			
+Vcs.Show.Local.Changes			
+Vcs.Show.Shelf			
+Vcs.ShowConsoleTab			
+Vcs.ShowDiffChangedLines			
+Vcs.ShowDiffWithLocal			
+Vcs.ShowDiffWithLocal.Before			
+Vcs.ShowHistoryForBlock			
+Vcs.ShowHistoryForRevision			
+Vcs.ShowMessageHistory			control M
+Vcs.ShowTabbedFileHistory			
+Vcs.ToggleAmendCommitMode			Opt+M
+Vcs.Toolbar.ShowMoreActions			
+Vcs.UpdateProject			
+Vcs.VcsClone			

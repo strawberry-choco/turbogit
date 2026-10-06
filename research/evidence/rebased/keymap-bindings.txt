@@ -1,0 +1,402 @@
+$Copy                                    control C, control INSERT
+$Cut                                     control X, Shift+DELETE
+$Delete                                  DELETE
+$Paste                                   control V, Shift+INSERT
+$Redo                                    control Shift+Z, Opt+Shift+BACK_SPACE
+$SelectAll                               control A
+$Undo                                    control Z, Opt+BACK_SPACE
+ActivateBookmarksToolWindow              Opt+2
+ActivateCommitToolWindow                 Opt+0
+ActivateDebugToolWindow                  Opt+5
+ActivateFindToolWindow                   Opt+3
+ActivateNuGetToolWindow                  Opt+Shift+7
+ActivateProblemsViewToolWindow           Opt+6
+ActivateProjectToolWindow                Opt+1
+ActivateRunToolWindow                    Opt+4
+ActivateServicesToolWindow               Opt+8
+ActivateStructureToolWindow              Opt+7
+ActivateTerminalToolWindow               Opt+F12
+ActivateUnitTestsToolWindow              Opt+Shift+8
+ActivateVersionControlToolWindow         Opt+9
+AutoIndentLines                          control Opt+I
+Back                                     control Opt+LEFT
+BraceOrQuoteOut                          TAB
+CallHierarchy                            control Opt+H
+ChangeSignature                          control F6
+ChangeTypeSignature                      control Shift+F6
+ChangesView.GroupBy.Directory            control Opt+P
+ChangesView.GroupBy.Module               control Opt+M
+ChangesView.Move                         Opt+Shift+M
+ChangesView.Rename                       F2, Shift F6
+ChangesView.Revert                       control Opt+Z
+ChangesView.SetDefault                   control SPACE
+ChangesView.ShowCommitOptions            control O
+ChooseDebugConfiguration                 Opt+Shift+F9
+ChooseRunConfiguration                   Opt+Shift+F10
+ClassNameCompletion                      control Opt+SPACE
+CloseActiveTab                           control Shift+F4
+CloseContent                             control F4
+CloseGotItTooltip                        ESCAPE
+CodeCompletion                           control SPACE
+CodeFloatingToolbar.GotoNextMenu         TAB
+CodeFloatingToolbar.GotoPrevMenu         Shift+TAB
+CodeInspection.OnEditor                  Opt+Shift+I
+CollapseAll                              control SUBTRACT, control MINUS
+CollapseAllRegions                       control Shift+SUBTRACT, control Shift+MINUS
+CollapseBlock                            control Shift+PERIOD
+CollapseExpandableComponent              Shift+ENTER, control SUBTRACT, control MINUS
+CollapseRegion                           control SUBTRACT, control MINUS
+CollapseRegionRecursively                control Opt+SUBTRACT, control Opt+MINUS
+CollapseSelection                        control PERIOD
+CollapseTreeNode                         SUBTRACT
+CommentByBlockComment                    control Shift+SLASH, control Shift+DIVIDE
+CommentByLineComment                     control SLASH, control DIVIDE
+Compare.SameVersion                      control D
+CompareTwoFiles                          control D
+Compile                                  control Shift+F9
+CompileDirty                             control F9
+Console.Execute                          ENTER
+Console.Execute.Multiline                control ENTER
+Console.History.Browse                   control Opt+E
+Console.Open                             control Shift+F10
+ContextHelp                              F1
+CopyElement                              F5
+CopyPaths                                control Shift+C
+CopyReference                            control Opt+Shift+C
+Debug                                    Shift+F9
+Diff.ApplyLeftSide                       control Opt+R
+Diff.ApplyRightSide                      control Opt+A
+Diff.FocusOppositePane                   control Shift+TAB
+Diff.NextChange                          Opt+Shift+RIGHT
+Diff.PrevChange                          Opt+Shift+LEFT
+Diff.ShowDiff                            control D
+Diff.ShowSettingsPopup                   control Shift+D
+DirDiffMenu.SynchronizeDiff              ENTER
+DirDiffMenu.SynchronizeDiff.All          control ENTER
+DumpLookupElementWeights                 control Opt+Shift+W
+DuplicatesForm.SendToLeft                control 1
+DuplicatesForm.SendToRight               control 2
+EditBreakpoint                           control Shift+F8
+EditSource                               F4
+EditSourceInNewWindow                    Shift+F4
+EditorAddCaretPerSelectedLine            Shift+Opt+G
+EditorBackSpace                          BACK_SPACE, Shift+BACK_SPACE
+EditorChooseLookupItem                   ENTER
+EditorChooseLookupItemDot                control PERIOD
+EditorChooseLookupItemReplace            TAB
+EditorCodeBlockEnd                       control CLOSE_BRACKET
+EditorCodeBlockEndWithSelection          control Shift+CLOSE_BRACKET
+EditorCodeBlockStart                     control OPEN_BRACKET
+EditorCodeBlockStartWithSelection        control Shift+OPEN_BRACKET
+EditorCompleteStatement                  control Shift+ENTER
+EditorContextInfo                        Opt+Q
+EditorDecreaseFontSizeGlobal             Opt+Shift+COMMA
+EditorDeleteLine                         control Y
+EditorDeleteToWordEnd                    control DELETE
+EditorDeleteToWordStart                  control BACK_SPACE
+EditorDown                               DOWN
+EditorDownWithSelection                  Shift+DOWN
+EditorDuplicate                          control D
+EditorEnter                              ENTER
+EditorEscape                             ESCAPE
+EditorFocusGutter                        Opt+Shift+6
+EditorIncreaseFontSizeGlobal             Opt+Shift+PERIOD
+EditorIndentSelection                    TAB
+EditorJoinLines                          control Shift+J
+EditorLeft                               LEFT
+EditorLeftWithSelection                  Shift+LEFT
+EditorLineEnd                            END
+EditorLineEndWithSelection               Shift+END
+EditorLineStart                          HOME
+EditorLineStartWithSelection             Shift+HOME
+EditorLookupDown                         control DOWN
+EditorLookupUp                           control UP
+EditorMatchBrace                         control Shift+M
+EditorMoveToPageBottom                   control PAGE_DOWN
+EditorMoveToPageBottomWithSelection      control Shift+PAGE_DOWN
+EditorMoveToPageTop                      control PAGE_UP
+EditorMoveToPageTopWithSelection         control Shift+PAGE_UP
+EditorNextWord                           control RIGHT
+EditorNextWordWithSelection              control Shift+RIGHT
+EditorPageDown                           PAGE_DOWN
+EditorPageDownWithSelection              Shift+PAGE_DOWN
+EditorPageUp                             PAGE_UP
+EditorPageUpWithSelection                Shift+PAGE_UP
+EditorPasteSimple                        control Opt+Shift+V
+EditorPreviousWord                       control LEFT
+EditorPreviousWordWithSelection          control Shift+LEFT
+EditorRight                              RIGHT
+EditorRightWithSelection                 Shift+RIGHT
+EditorScrollDown                         control DOWN
+EditorScrollToCenter                     control M
+EditorScrollUp                           control UP
+EditorSelectWord                         control W
+EditorShowGutterIconTooltip              Opt+Shift+6
+EditorSplitLine                          control ENTER
+EditorStartNewLine                       Shift+ENTER
+EditorStartNewLineBefore                 control Opt+ENTER
+EditorTab                                TAB
+EditorTextEnd                            control END
+EditorTextEndWithSelection               control Shift+END
+EditorTextStart                          control HOME
+EditorTextStartWithSelection             control Shift+HOME
+EditorToggleCase                         control Shift+U
+EditorToggleColumnMode                   Opt+Shift+INSERT
+EditorToggleInsertState                  INSERT
+EditorUnSelectWord                       control Shift+W
+EditorUnindentSelection                  Shift+TAB
+EditorUp                                 UP
+EditorUpWithSelection                    Shift+UP
+EvaluateExpression                       Opt+F8
+ExpandAll                                control ADD, control EQUALS
+ExpandAllRegions                         control Shift+ADD, control Shift+EQUALS
+ExpandAllToLevel1                        control Shift+MULTIPLY, control Shift+MULTIPLY
+ExpandAllToLevel2                        control Shift+MULTIPLY, control Shift+MULTIPLY
+ExpandAllToLevel3                        control Shift+MULTIPLY, control Shift+MULTIPLY
+ExpandAllToLevel4                        control Shift+MULTIPLY, control Shift+MULTIPLY
+ExpandAllToLevel5                        control Shift+MULTIPLY, control Shift+MULTIPLY
+ExpandExpandableComponent                Shift+ENTER, control ADD, control EQUALS
+ExpandLiveTemplateByTab                  TAB
+ExpandRegion                             control ADD, control EQUALS
+ExpandRegionRecursively                  control Opt+ADD, control Opt+EQUALS
+ExpandToLevel1                           control MULTIPLY, control MULTIPLY
+ExpandToLevel2                           control MULTIPLY, control MULTIPLY
+ExpandToLevel3                           control MULTIPLY, control MULTIPLY
+ExpandToLevel4                           control MULTIPLY, control MULTIPLY
+ExpandToLevel5                           control MULTIPLY, control MULTIPLY
+ExpandTreeNode                           ADD
+ExportToTextFile                         Opt+O
+ExpressionTypeInfo                       control Shift+P
+ExternalJavaDoc                          Shift+F1
+ExtractMethod                            control Opt+M
+FileChooser.GoToParent                   BACK_SPACE
+FileChooser.GoToRoot                     control BACK_SLASH
+FileChooser.GotoDesktop                  control D
+FileChooser.GotoHome                     control 1
+FileChooser.GotoModule                   control 3
+FileChooser.GotoProject                  control 2
+FileChooser.NewFolder                    Opt+INSERT, control N
+FileChooser.TogglePathBar                control P
+FileStructurePopup                       control F12
+Find                                     control F, Opt+F3
+FindInPath                               control Shift+F
+FindNext                                 F3, control L
+FindPrevWordAtCaret                      control Shift+F3
+FindPrevious                             Shift+F3, control Shift+L
+FindUsages                               Opt+F7
+FindUsagesInFile                         control F7
+FindWordAtCaret                          control F3
+FocusEditor                              ESCAPE
+ForceRefresh                             control Shift+F5
+ForceRunToCursor                         control Opt+F9
+ForceStepInto                            Opt+Shift+F7
+ForceStepOver                            Opt+Shift+F8
+Forward                                  control Opt+RIGHT
+FullyExpandTreeNode                      MULTIPLY
+Generate                                 Opt+INSERT
+Git.CreateNewBranch                      control Opt+N
+Git.New.Branch.In.Log                    control Opt+N
+Git.Rename.Local.Branch                  F2, Shift F6
+Git.Reword.Commit                        F2, Shift F6
+GotoAction                               control Shift+A
+GotoBookmark0                            control 0
+GotoBookmark1                            control 1
+GotoBookmark2                            control 2
+GotoBookmark3                            control 3
+GotoBookmark4                            control 4
+GotoBookmark5                            control 5
+GotoBookmark6                            control 6
+GotoBookmark7                            control 7
+GotoBookmark8                            control 8
+GotoBookmark9                            control 9
+GotoClass                                control N
+GotoCustomRegion                         control Opt+PERIOD
+GotoDeclaration                          control B
+GotoFile                                 control Shift+N
+GotoImplementation                       control Opt+B
+GotoLine                                 control G
+GotoNextError                            F2
+GotoPreviousError                        Shift+F2
+GotoRelated                              control Opt+HOME
+GotoSuperMethod                          control U
+GotoSymbol                               control Shift+Opt+N
+GotoTest                                 control Shift+T
+GotoTypeDeclaration                      control Shift+B
+HideActiveWindow                         Shift+ESCAPE
+HideAllWindows                           control Shift+F12
+HighlightUsagesInFile                    control Shift+F7
+HippieBackwardCompletion                 Opt+Shift+SLASH
+HippieCompletion                         Opt+SLASH
+ImplementMethods                         control I
+Inline                                   control Opt+N
+InsertLiveTemplate                       control J
+IntroduceConstant                        control Opt+C
+IntroduceField                           control Opt+F
+IntroduceParameter                       control Opt+P
+IntroduceVariable                        control Opt+V
+JumpToLastChange                         control Shift+BACK_SPACE
+JumpToLastWindow                         F12
+MainMenuButton.ShowMenu                  Opt+BACK_SLASH
+MaximizeToolWindow                       control Shift+QUOTE
+MethodDown                               Opt+DOWN
+MethodHierarchy                          control Shift+H
+MethodOverloadSwitchDown                 control DOWN
+MethodOverloadSwitchUp                   control UP
+MethodUp                                 Opt+UP
+Move                                     F6
+MoveElementLeft                          control Opt+Shift+LEFT
+MoveElementRight                         control Opt+Shift+RIGHT
+MoveLineDown                             Opt+Shift+DOWN
+MoveLineUp                               Opt+Shift+UP
+MoveStatementDown                        control Shift+DOWN
+MoveStatementUp                          control Shift+UP
+NewElement                               Opt+INSERT
+NewElementSamePlace                      control Opt+INSERT
+NewScratchFile                           control Opt+Shift+INSERT
+NextDiff                                 F7
+NextEditorTab                            Opt+Shift+RIGHT
+NextOccurence                            control Opt+DOWN
+NextParameter                            TAB
+NextProjectWindow                        control Opt+CLOSE_BRACKET
+NextTab                                  Opt+RIGHT
+NextTemplateVariable                     TAB, ENTER
+OpenInRightSplit                         Shift+ENTER
+OptimizeImports                          control Opt+O
+OverrideMethods                          control O
+ParameterInfo                            control P
+PasteMultiple                            control Shift+V, control Shift+INSERT
+PopupHector                              Cmd+Opt+Shift+H
+PrevParameter                            Shift+TAB
+PreviousDiff                             Shift+F7
+PreviousEditorTab                        Opt+Shift+LEFT
+PreviousOccurence                        control Opt+UP
+PreviousProjectWindow                    control Opt+OPEN_BRACKET
+PreviousTab                              Opt+LEFT
+PreviousTemplateVariable                 Shift+TAB
+QuickActionPopup                         control Opt+ENTER
+QuickChangeScheme                        control BACK_QUOTE
+QuickEvaluateExpression                  control Opt+F8
+QuickImplementations                     control Shift+I
+QuickJavaDoc                             control Q
+RecentFiles                              control E
+RecentLocations                          control Shift+E
+ReformatCode                             control Opt+L
+Refresh                                  control F5
+RenameElement                            Shift+F6
+Replace                                  control R
+ReplaceInPath                            control Shift+R
+Rerun                                    control F5
+RerunTests                               Shift+Opt+R
+ResetIdeScaleAction                      Shift+Opt+0
+ResizeToolWindowDown                     control Opt+Shift+DOWN
+ResizeToolWindowLeft                     control Opt+Shift+LEFT
+ResizeToolWindowRight                    control Opt+Shift+RIGHT
+ResizeToolWindowUp                       control Opt+Shift+UP
+RestoreDefaultLayout                     Shift+F12
+Resume                                   F9
+Run                                      Shift+F10
+RunClass                                 control Shift+F10
+RunInspection                            control Shift+Opt+I
+RunToCursor                              Opt+F9
+SafeDelete                               Opt+DELETE
+SaveAll                                  control S
+SearchEverywhere.CompleteCommand         TAB
+SearchEverywhere.NavigateToNextGroup     PAGE_DOWN, control DOWN
+SearchEverywhere.NavigateToPrevGroup     PAGE_UP, control UP
+SearchEverywhere.NextTab                 TAB
+SearchEverywhere.PrevTab                 Shift+TAB
+SearchEverywhere.SelectItem              Enter
+SelectAllOccurrences                     control Opt+Shift+J
+SelectIn                                 Opt+F1
+SelectNextOccurrence                     Opt+J
+SelectVirtualTemplateElement             Alt Shift O
+SendEOF                                  control D
+ServiceView.GroupByContributor           control Opt+T
+ServiceView.ShowServices                 control Shift+T
+ShelveChanges.UnshelveWithDialog         control Shift+U
+ShelvedChanges.Rename                    F2, Shift F6
+ShowBookmarks                            Shift+F11
+ShowContent                              Opt+DOWN
+ShowErrorDescription                     control F1
+ShowExecutionPoint                       Opt+F10
+ShowFilePath                             control Opt+F12
+ShowFilterPopup                          control Opt+F
+ShowIntentionActions                     Opt+ENTER
+ShowNavBar                               Opt+HOME
+ShowPopupMenu                            CONTEXT_MENU
+ShowProjectStructureSettings             control Opt+Shift+S
+ShowReformatFileDialog                   control Shift+Opt+L
+ShowSearchHistory                        Opt+down
+ShowSettings                             control Opt+S
+ShowSettingsAndFindUsages                control Shift+Opt+F7
+ShowTypeBookmarks                        control Shift+F11
+ShowUsages                               control Opt+F7
+SmartStepInto                            Shift+F7
+SmartTypeCompletion                      control Shift+SPACE
+SplitChooser                             Opt+Shift+ENTER
+SplitChooser.Duplicate                   Cmd+ENTER
+SplitChooser.NextWindow                  TAB
+SplitChooser.PreviousWindow              Shift+TAB
+SplitChooser.Split                       ENTER
+SplitChooser.SplitCenter                 SPACE
+StepInto                                 F7
+StepOut                                  Shift+F8
+StepOver                                 F8
+Stop                                     control F2
+StopBackgroundProcesses                  control Shift+F2
+SurroundWith                             control Opt+T
+SurroundWithLiveTemplate                 control Opt+J
+SwitchCoverage                           control Opt+F6
+SwitchHeaderSource                       F10
+Switcher                                 Cmd+TAB, Cmd+Shift+TAB
+SwitcherIterateItems                     control E
+SwitcherRecentEditedChangedToggleCheckBox control E
+Synchronize                              control Opt+Y
+TextSearchAction                         control Shift+Opt+E
+TodoViewGroupByFlattenPackage            control Opt+C
+TodoViewGroupByShowModules               control Opt+M
+TodoViewGroupByShowPackages              control Opt+P
+ToggleBookmark                           F11
+ToggleBookmark0                          control Shift+0
+ToggleBookmark1                          control Shift+1
+ToggleBookmark2                          control Shift+2
+ToggleBookmark3                          control Shift+3
+ToggleBookmark4                          control Shift+4
+ToggleBookmark5                          control Shift+5
+ToggleBookmark6                          control Shift+6
+ToggleBookmark7                          control Shift+7
+ToggleBookmark8                          control Shift+8
+ToggleBookmark9                          control Shift+9
+ToggleBookmarkWithMnemonic               control F11
+ToggleFindInSelection                    control Opt+E
+ToggleLineBreakpoint                     control F8
+ToggleRenderedDocPresentation            control Opt+Q
+ToggleTemporaryLineBreakpoint            control Shift+Opt+F8
+TypeHierarchy                            control H
+UnselectPreviousOccurrence               Opt+Shift+J
+Unwrap                                   control Shift+DELETE
+UsageFiltering.Imports                   control I
+UsageFiltering.ReadAccess                control R
+UsageFiltering.WriteAccess               control W
+UsageGrouping.DirectoryStructure         control Opt+D
+UsageGrouping.FileStructure              control Opt+F
+UsageGrouping.FlattenModules             control Opt+O
+UsageGrouping.Module                     control Opt+M
+UsageGrouping.UsageType                  control Opt+T
+UsageView.Include                        INSERT
+Vcs.MoveChangedLinesToChangelist         Opt+Shift+M
+Vcs.QuickListPopupAction                 Opt+BACK_QUOTE
+Vcs.RollbackChangedLines                 control Opt+Z
+Vcs.ShowMessageHistory                   control M
+Vcs.ToggleAmendCommitMode                Opt+M
+VcsHistory.ShowAllAffected               Opt+Shift+A
+VcsShowNextChangeMarker                  Shift+control Opt+DOWN
+VcsShowPrevChangeMarker                  Shift+control Opt+UP
+ViewBreakpoints                          control Shift+F8
+ViewSource                               control ENTER
+XDebugger.AttachToProcess                control Opt+F5
+XDebugger.JumpToTypeSource               Shift+F4
+XDebugger.NewWatch                       INSERT
+XDebugger.SetValue                       F2
+ZoomInIdeAction                          Shift+Opt+EQUALS
+ZoomOutIdeAction                         Shift+Opt+MINUS
