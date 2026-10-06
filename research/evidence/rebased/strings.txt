@@ -1,0 +1,4 @@
+GitBundle.properties	1772 entries	from intellij.vcs.git.shared.jar
+GitFrontendBundle.properties	4 entries	from intellij.vcs.git.frontend.jar
+VcsBundle.properties	1259 entries	from intellij.platform.vcs.core.jar
+VcsLogBundle.properties	309 entries	from intellij.platform.vcs.log.impl.jar
