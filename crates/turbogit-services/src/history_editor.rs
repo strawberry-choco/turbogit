@@ -43,8 +43,16 @@ pub fn build_plan(
 }
 
 /// Set the [`RebaseAction`] of the plan entry at `index`, if in range.
+///
+/// Setting [`RebaseAction::Pick`] RESETS the row ("this commit is applied as
+/// is" — the reference's per-row way back): the replacement message goes with
+/// it, so a reworded row clicked back to pick replays the commit untouched.
+/// Every other verb is a retarget, not a reset, and keeps the message.
 pub fn set_action(plan: &mut [RebasePlanEntry], index: usize, action: RebaseAction) {
     if let Some(entry) = plan.get_mut(index) {
+        if action == RebaseAction::Pick {
+            entry.message = None;
+        }
         entry.action = action;
     }
 }
@@ -192,6 +200,8 @@ pub fn render_todo(plan: &[RebasePlanEntry]) -> String {
             RebaseAction::Squash => "squash",
             RebaseAction::Fixup => "fixup",
             RebaseAction::Drop => "drop",
+            RebaseAction::UpdateRef => "update-ref",
+            RebaseAction::Unknown => "unknown",
         };
         text.push_str(&format!("{} {} {}\n", verb, e.commit, e.subject));
     }
@@ -200,8 +210,10 @@ pub fn render_todo(plan: &[RebasePlanEntry]) -> String {
 
 /// Parse an edited REBASE-TODO back into a plan (screen 17's Log tab):
 /// `<verb> <sha> <subject>` per line; comment (`#`) and blank lines are
-/// skipped. An unknown verb is an error — a typo must not silently rewrite
-/// history.
+/// skipped. A verb the parser does not recognise falls back to
+/// [`RebaseAction::Unknown`] — the row survives so the editor can render it
+/// and the engine can refuse the plan, rather than the line being dropped or
+/// silently rewritten as a verb it never was.
 pub fn parse_todo(text: &str) -> TgResult<Vec<RebasePlanEntry>> {
     let mut plan = Vec::new();
     for line in text.lines() {
@@ -221,9 +233,13 @@ pub fn parse_todo(text: &str) -> TgResult<Vec<RebasePlanEntry>> {
             "squash" | "s" => RebaseAction::Squash,
             "fixup" | "f" => RebaseAction::Fixup,
             "drop" | "d" => RebaseAction::Drop,
-            other => {
-                return Err(TgError::Other(format!("unknown rebase-todo verb: {other}")));
-            }
+            "update-ref" | "u" => RebaseAction::UpdateRef,
+            // The parser's fallback (`rebase.entry.action.name.unknown`): a
+            // verb the editor did not write survives as an `Unknown` row the
+            // plan can render, instead of being coerced to a valid-looking
+            // verb. The engine refuses such a plan, so a typo still cannot
+            // silently rewrite history.
+            _ => RebaseAction::Unknown,
         };
         let Some((commit, subject)) = rest.split_once(' ') else {
             return Err(TgError::Other(format!(
@@ -283,7 +299,11 @@ pub fn plan_preview(plan: &[RebasePlanEntry]) -> PlanPreview {
     let mut dropped = 0usize;
     for e in plan {
         match e.action {
-            RebaseAction::Pick | RebaseAction::Reword | RebaseAction::Edit => {
+            RebaseAction::Pick
+            | RebaseAction::Reword
+            | RebaseAction::Edit
+            | RebaseAction::UpdateRef
+            | RebaseAction::Unknown => {
                 kept.push(e.clone());
             }
             RebaseAction::Squash | RebaseAction::Fixup => {
