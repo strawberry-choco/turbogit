@@ -25,10 +25,8 @@
 use crate::theme::Palette;
 use crate::ui::widgets;
 use egui::{RichText, Ui};
-use turbogit_app::operation::Operation;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::operation::PushRequest;
 use turbogit_app::state::{AppState, OutgoingRoot, PushPreview};
-use turbogit_domain::error::TgError;
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, Root, RootId, Signature, SignatureState,
 };
@@ -658,90 +656,49 @@ fn change_letter(status: ChangeStatus) -> &'static str {
     }
 }
 
-/// Dispatch the push on a worker thread. Issue #25: the resolved scope
-/// drives the engine call — `push_roots` for multi-repo scopes (with each
-/// root's per-call remote resolution and protected-branch gating), and
-/// `push` for the single-repo `ThisRepo` path with explicit Remote/Branch
-/// fields. Issue #24: subset selection narrows per root only when the
-/// selection is a suffix of the full outgoing list — non-suffix selections
-/// fall back to a full push (issue #24 fallback semantics).
+/// Dispatch the push on a worker thread as a typed [`Operation::Push`], so a
+/// rejection can be classified and replayed (ticket 13). Issue #25: the
+/// resolved scope drives the engine call — `push_roots` for multi-repo scopes
+/// (with each root's per-call remote resolution and protected-branch gating),
+/// and `push` for the single-repo `ThisRepo` path with explicit Remote/Branch
+/// fields. Issue #24: subset selection narrows per root only when the selection
+/// is a suffix of the full outgoing list — non-suffix selections fall back to a
+/// full push (issue #24 fallback semantics).
 fn execute_push(state: &mut AppState) {
-    let force = state.ui.dlg.force_push;
-    let tags = state.ui.dlg.push_tags;
-    let no_verify = state.ui.dlg.push_no_verify;
-    let set_upstream = state.ui.dlg.push_set_upstream;
-    let settings = state.settings.clone();
     let scope = scope_roots(state);
-    let subset = state.ui.dlg.push_subset.clone();
-    let narrowed_sha: Option<String> = match &subset {
+    let narrowed_sha: Option<String> = match &state.ui.dlg.push_subset {
         SubsetPushState::Suffix { oldest } => Some(oldest.clone()),
         _ => None,
     };
+    let Some(request) = push_request(state, &scope, narrowed_sha) else {
+        return;
+    };
+    state.dispatch_push(request, None);
+}
 
-    if state.ui.dlg.push_scope == PushScope::ThisRepo {
-        let remote = state.ui.dlg.push_remote.clone();
-        let branch = state.ui.dlg.push_branch.clone();
-        let sha = narrowed_sha.clone();
-        if let Some(root) = state.selected_root.clone() {
-            state.dispatch(Operation::custom(
-                "Push",
-                Affected::Root(root.clone()),
-                move |v| {
-                    sync_service::push(
-                        v,
-                        root.as_path(),
-                        &remote,
-                        &branch,
-                        force,
-                        tags,
-                        no_verify,
-                        set_upstream,
-                        sha.as_deref(),
-                        &settings,
-                    )
-                },
-            ));
-        }
+/// Build the [`PushRequest`] the resolved scope describes, or `None` when there
+/// is nothing to push. Shared with the no-dialog push verb (ticket 14), which
+/// runs the same request against the same scope rules.
+pub(crate) fn push_request(
+    state: &AppState,
+    scope: &[Root],
+    narrowed_sha: Option<String>,
+) -> Option<PushRequest> {
+    let mut request = if state.ui.dlg.push_scope == PushScope::ThisRepo {
+        let root = state.selected_root.clone()?;
+        PushRequest::single(
+            root,
+            state.ui.dlg.push_remote.clone(),
+            state.ui.dlg.push_branch.clone(),
+            &state.settings,
+        )
     } else {
-        // Multi-repo push (issue #25): push every root in the resolved scope
-        // via `push_roots`; per-root remote resolution and protected-branch
-        // gating happen inside that service. The roots must outlive the
-        // worker thread, so they move into the closure as owned data.
-        let owned_roots: Vec<Root> = scope.clone();
-        let owned_settings = settings;
-        let owned_sha = narrowed_sha;
-        state.dispatch(Operation::custom("Push", Affected::All, move |v| {
-            let roots_ref: Vec<&Root> = owned_roots.iter().collect();
-            let results = sync_service::push_roots(
-                v,
-                &roots_ref,
-                &owned_settings,
-                force,
-                tags,
-                no_verify,
-                set_upstream,
-                owned_sha.as_deref(),
-            );
-            let failures: Vec<String> = results
-                .into_iter()
-                .filter_map(|(id, r)| {
-                    r.err().map(|e| {
-                        let name =
-                            id.0.file_name()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| id.0.display().to_string());
-                        format!("{name}: {e}")
-                    })
-                })
-                .collect();
-            if failures.is_empty() {
-                Ok(())
-            } else {
-                Err(TgError::Other(format!(
-                    "push failed — {}",
-                    failures.join("; ")
-                )))
-            }
-        }));
-    }
+        PushRequest::scope(scope.to_vec(), &state.settings)
+    };
+    request.force = state.ui.dlg.force_push;
+    request.tags = state.ui.dlg.push_tags;
+    request.no_verify = state.ui.dlg.push_no_verify;
+    request.set_upstream = state.ui.dlg.push_set_upstream;
+    request.selected_oldest = narrowed_sha;
+    Some(request)
 }

@@ -533,6 +533,35 @@ pub enum Dialog {
     Reword,
 }
 
+/// A push rejection held for the rejection notification (ticket 13): the
+/// classified outcome, the request a retry replays verbatim, and the two
+/// recovery choices the surface exposes.
+///
+/// The request is kept rather than rebuilt because the reply to "was rejected"
+/// is "do the same push again, after this update" — a rebuilt target could
+/// silently differ from the push that failed.
+///
+/// It is NOT a [`Dialog`] variant: the Push dialog closes the moment it
+/// dispatches, so a notification that lived inside it would be gone before the
+/// rejection it describes ever arrives.
+#[derive(Clone, Debug)]
+pub struct PushRejection {
+    pub outcome: turbogit_services::sync_service::PushOutcome,
+    pub request: crate::operation::PushRequest,
+    /// The roots the failed push acted on — what "affected only" means when
+    /// the recovery picks its roots.
+    pub affected_roots: Vec<RootId>,
+    /// "Update all repositories": widen the recovery from the affected roots
+    /// to every registered root. Off by default (the conservative reading of
+    /// an undocumented reference default).
+    pub update_all: bool,
+    /// The dialog's "Remember the update method choice and silently update in
+    /// the future" checkbox. Applied to settings when an action is taken with
+    /// it on, so the write-back is a choice the user made, not a side effect
+    /// of the rejection.
+    pub remember: bool,
+}
+
 /// The one sentence the empty-message bound is stated in.
 ///
 /// Both surfaces that show it read it from here — the editor's field, where the
@@ -1042,6 +1071,13 @@ pub struct UiState {
     /// refetches after operations.
     pub blame_cache: Option<(String, std::sync::Arc<[BlameLine]>)>,
     pub dialog: Option<Dialog>,
+    /// The push dispatched and not yet settled. Settlement takes it to replay
+    /// on a retry and to name the target a rejection reports (ticket 13);
+    /// taking it is also what says "no push is in flight".
+    pub push_in_flight: Option<crate::operation::PushRequest>,
+    /// The last push rejection awaiting the user's reply, if any. Session-only
+    /// like every dialog: a rejection is about the push that just failed.
+    pub push_rejection: Option<PushRejection>,
     pub vcs_popup: bool,
     // Workspace picker (issue #34). Session-only; never persisted.
     /// Whether the floating workspace picker is showing.
@@ -2067,6 +2103,28 @@ impl AppState {
             }
             Pump::Inline => run(),
         }
+    }
+
+    /// Dispatch a push, remembering the request so a rejection can be
+    /// classified and replayed (ticket 13).
+    ///
+    /// The request is recorded BEFORE the dispatch on purpose: under
+    /// [`Pump::Inline`] the completion event is queued synchronously inside
+    /// this call, so a rejection settled after the dispatch would still find
+    /// the request here — but a push that never recorded one could never
+    /// recover at all.
+    pub fn dispatch_push(
+        &mut self,
+        request: crate::operation::PushRequest,
+        recover: Option<crate::operation::RecoveryPlan>,
+    ) {
+        let op = match recover {
+            Some(plan) => Operation::push_with_recovery(request.clone(), plan),
+            None => Operation::push(request.clone()),
+        };
+        self.ui.push_in_flight = Some(request);
+        self.ui.push_rejection = None;
+        self.dispatch(op);
     }
 
     /// Run a cache fill on the same seam an [`Operation`] dispatches on.
@@ -3141,6 +3199,10 @@ impl AppState {
                     match result {
                         Ok(()) => {
                             self.show_toast(Toast::success(label.clone()));
+                            // A push that landed needs no replay request kept
+                            // around: what it recorded is only ever read by the
+                            // rejection arm.
+                            self.ui.push_in_flight = None;
                             self.refresh(affected.clone());
                             // Ticket 09: arm the post-hoc undo while the
                             // rewrite's own tip is still the fact to compare
@@ -3236,6 +3298,65 @@ impl AppState {
                                     kind: crate::activity::ActivityKind::Warning,
                                 });
                                 continue;
+                            }
+                            // Ticket 13: a rejected push is not one failure, it
+                            // is six, and they need six different replies. The
+                            // toast still says what git said — this is the
+                            // surface that says what to DO about it.
+                            if matches!(kind, OpKind::Push | OpKind::PushRecovery)
+                                && let Some(request) = self.ui.push_in_flight.take()
+                            {
+                                // Same rule the merge/rebase arm uses: the
+                                // refreshed worktree, not git's stderr text,
+                                // is what says conflicts are really there.
+                                self.refresh(affected.clone());
+                                let conflicts = conflicted_count(self, &affected) > 0;
+                                let phase = if kind == OpKind::PushRecovery {
+                                    turbogit_services::sync_service::PushPhase::Recovery
+                                } else {
+                                    turbogit_services::sync_service::PushPhase::Push
+                                };
+                                let (remote, branch) = push_target_names(self, &request);
+                                let outcome =
+                                    turbogit_services::sync_service::classify_push_failure(
+                                        &e, conflicts, phase, &remote, &branch,
+                                    );
+                                let affected_roots = request.roots();
+                                // The opt-in the rejection notification's
+                                // checkbox writes: an ordinary rejection then
+                                // updates silently instead of asking a second
+                                // time. Gated on `OpKind::Push` — a failed
+                                // RECOVERY always shows its reply, or the two
+                                // would re-dispatch each other forever. The
+                                // fetch classes are out too: the user opted
+                                // into an update, not into an integration they
+                                // did not ask for.
+                                let silent_update = self.settings.auto_update_on_push_rejected
+                                    && kind == OpKind::Push
+                                    && matches!(
+                                        outcome,
+                                        turbogit_services::sync_service::PushOutcome::Rejected { .. }
+                                    );
+                                if silent_update {
+                                    let plan = crate::operation::RecoveryPlan {
+                                        mode: crate::operation::RecoveryMode::Update {
+                                            method: self.settings.update_method,
+                                        },
+                                        roots: affected_roots,
+                                    };
+                                    self.dispatch_push(request, Some(plan));
+                                } else {
+                                    self.ui.push_rejection = Some(PushRejection {
+                                        outcome,
+                                        request,
+                                        affected_roots,
+                                        // The documented fallback for an
+                                        // undocumented reference default: touch
+                                        // only what the failed push touched.
+                                        update_all: false,
+                                        remember: self.settings.auto_update_on_push_rejected,
+                                    });
+                                }
                             }
                             self.show_toast(Toast::error(format!("{label}: {e}")));
                             self.last_error = Some(msg);
@@ -4315,6 +4436,37 @@ fn conflicted_count(state: &AppState, affected: &Affected) -> usize {
         .sum()
 }
 
+/// The `(remote, branch)` a rejection notification names.
+///
+/// The `ThisRepo` path states both in its own fields. A scoped push resolves
+/// the remote per root inside the service, so this reads the same answer back
+/// through `push_remote` for the first pushed root — a multi-root rejection
+/// then names one target in the notification while the toast and the activity
+/// feed name every failing root.
+fn push_target_names(
+    state: &AppState,
+    request: &crate::operation::PushRequest,
+) -> (String, String) {
+    use crate::operation::PushTargets;
+    match &request.targets {
+        PushTargets::Single { remote, branch, .. } => (remote.clone(), branch.clone()),
+        PushTargets::Scope(roots) => {
+            let named = state
+                .multi
+                .roots
+                .iter()
+                .find(|r| roots.iter().any(|s| s.id == r.id) && r.current_branch.is_some());
+            match named {
+                Some(root) => (
+                    turbogit_services::sync_service::push_remote(root),
+                    root.current_branch.clone().unwrap_or_default(),
+                ),
+                None => (String::new(), String::new()),
+            }
+        }
+    }
+}
+
 /// The success message a completed operation reports, chosen by the
 /// operation's identity (ADR-0020). The match is exhaustive on purpose: a new
 /// [`OpKind`] has to say here how it reports before it can be dispatched.
@@ -4331,6 +4483,11 @@ fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &s
         | OpKind::WorktreeRemove
         | OpKind::DropCommit
         | OpKind::RewordCommit
+        // A push reports the verb it ran. Its SUBSTANCE is the failure path —
+        // the classified rejection (ticket 13) — and a push that succeeded has
+        // nothing to explain, so the label is the whole message.
+        | OpKind::Push
+        | OpKind::PushRecovery
         | OpKind::Other => label.to_string(),
     }
 }
