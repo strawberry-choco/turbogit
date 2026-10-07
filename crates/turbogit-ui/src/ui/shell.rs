@@ -22,7 +22,7 @@ use egui::{
 use super::icons::{self, Icon};
 use super::widgets;
 use crate::theme::Palette;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::root_caches::{Affected, LogRead};
 use turbogit_app::state::{AppState, Dialog, Granularity, Tab};
 // --- Spec metrics (§4.2 fixed heights) --------------------------------------
 /// Tab strip height (`.tg-tabs`). The strip is the content area's topmost
@@ -1007,7 +1007,17 @@ fn show_tool_window(ui: &mut Ui, state: &mut AppState) {
     }
     if state.ui.tab == Tab::Log && state.selected_root.is_some() {
         let id = state.selected_root.clone().unwrap();
-        if state.caches.log(&id).is_none() {
+        // A failed read is NOT re-asked every frame. The body asks while the
+        // cache is cold, a failing read leaves it cold, and the cold cache is
+        // then indistinguishable from a first paint — so without this gate the
+        // log retries a command that just failed as fast as the pump can drain
+        // it, and the state it paints alternates between the error and its own
+        // loading. `Refresh` on the state the failure produced is the ask that
+        // clears the gate, because that is when the developer says the reason
+        // may have gone away.
+        if state.caches.log(&id).is_none()
+            && !state.caches.has_log_failure(&LogRead::Commits(id.clone()))
+        {
             state.fetch_log(id);
         }
     }

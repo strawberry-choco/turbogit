@@ -142,6 +142,12 @@ pub struct UiPersist {
     /// before the key existed loading cleanly.
     #[serde(default)]
     pub sidebar_collapsed: std::collections::HashSet<String>,
+    /// The Branches surface's four toggles, behind its settings gear.
+    /// `serde(default)` keeps files written before the gear existed loading
+    /// cleanly, and the default is the shape the surface had before any of
+    /// them were togglable.
+    #[serde(default)]
+    pub branches_view: BranchesViewOptions,
     /// The diff viewer's two view policies. Like the branch view's toggles these
     /// are **presentation, never data**: they change which rows the viewer counts
     /// as different and how a difference is highlighted, not what git is asked or
