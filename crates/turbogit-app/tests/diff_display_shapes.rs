@@ -62,7 +62,7 @@ fn settled_diff(work: &PathBuf) -> Arc<turbogit_app::diff_model::DiffValue> {
         None,
         None,
         DiffComparison::Repo,
-        false,
+        turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("README.md")),
     );
     assert!(matches!(state.read(target.clone()), Read::Waiting));

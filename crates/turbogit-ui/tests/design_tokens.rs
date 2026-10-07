@@ -2302,6 +2302,7 @@ const TOKEN_INVENTORY: &[&str] = &[
     // --- Module-level: accents & marks
     "CASCADE_ACCENT",
     "RAIL_WIDTH",
+    "CARET_WIDTH",
     // --- Module-level: type ramp
     "TYPE_SECTION",
     "TYPE_CHIP",

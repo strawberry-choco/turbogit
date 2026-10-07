@@ -945,6 +945,33 @@ pub enum DiffComparison {
     Local,
 }
 
+/// Which pane of the diff viewer holds the caret (`Diff.FocusOppositePane`).
+///
+/// The panes are the two sides of the comparison, not two widgets: `Old` is the
+/// `Before` band, `New` the `After` one, and in unified rendering the same pair
+/// picks which of a changed line's two rows the caret sits on. The distinction
+/// pays for itself at `F4`, which jumps to the line the caret is on — numbered
+/// against the side it is on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+pub enum DiffPane {
+    /// The `Before` side: old-file numbering.
+    Old,
+    /// The `After` side: new-file numbering.
+    #[default]
+    New,
+}
+
+impl DiffPane {
+    /// The other pane — the whole of `Diff.FocusOppositePane`, which is what
+    /// `⌃⇧⇥` runs.
+    pub fn opposite(self) -> Self {
+        match self {
+            DiffPane::Old => DiffPane::New,
+            DiffPane::New => DiffPane::Old,
+        }
+    }
+}
+
 /// Staging granularity (issue 19, screen 06): what one selection actuation
 /// on the diff surface addresses. `File` — the whole file's diff is the
 /// unit; `Hunk` — whole hunks (the pre-existing whole-hunk protocol);
@@ -1352,9 +1379,22 @@ pub struct UiState {
     /// "N hidden" band. Ephemeral: cleared whenever a fresh diff load
     /// starts, alongside [`Self::diff_current_hunk`].
     pub diff_collapsed: HashSet<usize>,
-    // diff viewer working-tree comparison chips + whitespace toggle (issue #13)
+    // diff viewer working-tree comparison chips + view policies
     pub diff_comparison: DiffComparison,
-    pub diff_ignore_whitespace: bool,
+    /// The viewer's two view policies: which whitespace differences count, and
+    /// how finely a change is highlighted. They are part of what the diff read is
+    /// keyed on, so a change re-folds the display model once instead of per frame.
+    pub diff_policies: DiffPolicies,
+    /// Which pane of the diff viewer holds the caret (`Diff.FocusOppositePane`,
+    /// `⌃⇧⇥`). The New side starts with it because that is the side a reader is
+    /// there to look at.
+    pub diff_pane: DiffPane,
+    /// The diff viewer's settings menu (`⌃⇧D`, on the file row like the toggle it
+    /// replaces) is open.
+    pub diff_options_open: bool,
+    /// The line `F4` jumped to: the caret the diff viewer held, preserved across
+    /// the jump into the blame surface. Cleared by every other route into blame.
+    pub blame_caret_line: Option<usize>,
     /// Armed edge press for F7/Shift+F7 cross-file navigation (spec R7): the
     /// direction and instant of the last edge nudge. A same-direction repeat
     /// inside [`crate::diff_data::EDGE_WINDOW`] crosses to the adjacent
@@ -1707,6 +1747,7 @@ impl AppState {
                 state.ui.recent_custom_commands = ui.recent_custom_commands;
                 state.ui.sidebar_collapsed = ui.sidebar_collapsed;
                 state.ui.branches_view = ui.branches_view;
+                state.ui.diff_policies = ui.diff_policies;
             }
             None => {
                 // No project directory supplied: land on Welcome (ADR-0004).
@@ -1797,6 +1838,7 @@ impl AppState {
             recent_custom_commands: self.ui.recent_custom_commands.clone(),
             sidebar_collapsed: self.ui.sidebar_collapsed.clone(),
             branches_view: self.ui.branches_view,
+            diff_policies: self.ui.diff_policies,
         };
         let _ = crate::persistence::save_ui_state(&self.project_dir, &ui);
     }
@@ -3691,8 +3733,12 @@ impl AppState {
                     self.ui.busy = false;
                     self.last_error = Some(msg);
                 }
-                AppEvent::DiffReady { key, result } => {
-                    crate::keyed_read::settle_diff(self, key, result);
+                AppEvent::DiffReady {
+                    key,
+                    policies,
+                    result,
+                } => {
+                    crate::keyed_read::settle_diff(self, key, policies, result);
                 }
                 AppEvent::BlameReady { key, result } => {
                     crate::keyed_read::settle_blame(self, key, result);

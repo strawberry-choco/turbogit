@@ -56,7 +56,7 @@ fn head_vs_worktree(work: &Path) -> DiffTarget {
         None,
         None,
         DiffComparison::Repo,
-        false,
+        turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("README.md")),
     )
 }
@@ -166,7 +166,7 @@ fn a_different_comparison_is_not_answered_by_the_cached_one() {
         None,
         None,
         DiffComparison::Staged,
-        false,
+        turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("README.md")),
     );
     assert!(
@@ -207,7 +207,7 @@ fn a_pane_answers_with_both_sides_and_keeps_them() {
         None,
         None,
         DiffComparison::Repo,
-        false,
+        turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("art.png")),
     );
     let file = FileMeta {
@@ -291,7 +291,7 @@ fn a_synthesized_answer_leaves_nothing_pending() {
         None,
         None,
         DiffComparison::Local,
-        false,
+        turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("brand-new.txt")),
     );
     state.read(target.clone());

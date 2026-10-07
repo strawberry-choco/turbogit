@@ -903,6 +903,112 @@ pub fn git_binary(settings: &VcsSettings) -> String {
     }
 }
 
+/// The `Ignore Differences` policy: which whitespace differences count as a
+/// change at all.
+///
+/// The five values are a **ladder**, and each rung has to be distinguishable from
+/// the one below it or the ladder has one value and five names:
+/// [`Self::TrimWhitespace`] ignores only a line's outer whitespace,
+/// [`Self::IgnoreWhitespace`] ignores it anywhere within a line,
+/// [`Self::IgnoreWhitespaceAndEmptyLines`] additionally ignores a change that only
+/// adds or removes whole lines of nothing, or that splits/joins lines without
+/// touching their non-whitespace parts, and
+/// [`Self::IgnoreImportsAndFormatting`] adds import-block changes while
+/// *respecting* whitespace inside a string literal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DiffWhitespace {
+    /// The default: white space is significant and every difference shows.
+    #[default]
+    None,
+    /// Leading and trailing whitespace of a line is insignificant.
+    TrimWhitespace,
+    /// Whitespace is insignificant wherever it sits in a line.
+    IgnoreWhitespace,
+    /// Also: whitespace-only added/removed lines, and lines split or joined
+    /// without changing their non-whitespace content.
+    IgnoreWhitespaceAndEmptyLines,
+    /// Also: changes confined to import statements. Whitespace inside a string
+    /// literal stays significant.
+    IgnoreImportsAndFormatting,
+}
+
+impl DiffWhitespace {
+    /// Menu order, reference spelling: the ladder above is the ladder shown.
+    pub const ALL: [Self; 5] = [
+        Self::None,
+        Self::TrimWhitespace,
+        Self::IgnoreWhitespace,
+        Self::IgnoreWhitespaceAndEmptyLines,
+        Self::IgnoreImportsAndFormatting,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::TrimWhitespace => "Trim whitespaces",
+            Self::IgnoreWhitespace => "Ignore whitespaces",
+            Self::IgnoreWhitespaceAndEmptyLines => "Ignore whitespaces and empty lines",
+            Self::IgnoreImportsAndFormatting => "Ignore imports and formatting",
+        }
+    }
+}
+
+/// The `Highlighting Differences` policy: how finely a changed line's highlight
+/// is cut up.
+///
+/// [`Self::Lines`] highlights each changed row as one block;
+/// [`Self::Words`] and [`Self::Characters`] highlight only the differing word or
+/// character runs inside it; [`Self::SplitChanges`] cuts a multi-line change into
+/// the separate changes it is made of, so a line that merely moved inside the
+/// change is not highlighted at all; [`Self::None`] highlights nothing, which is
+/// the value the reference recommends for a heavily modified file — where
+/// highlighting adds difficulty instead of removing it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DiffHighlighting {
+    Words,
+    /// TurboGit's pre-existing rendering: the whole changed row.
+    #[default]
+    Lines,
+    SplitChanges,
+    Characters,
+    None,
+}
+
+impl DiffHighlighting {
+    /// Menu order, reference spelling.
+    pub const ALL: [Self; 5] = [
+        Self::Words,
+        Self::Lines,
+        Self::SplitChanges,
+        Self::Characters,
+        Self::None,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Words => "Words",
+            Self::Lines => "Lines",
+            Self::SplitChanges => "Split changes",
+            Self::Characters => "Characters",
+            Self::None => "None",
+        }
+    }
+}
+
+/// The diff viewer's two view policies, carried together: they are decided at the
+/// same moment (one menu), they invalidate the same cached display model, and
+/// neither changes a byte of what git is asked or what staging applies.
+///
+/// `Default` is the shipped posture: the reference's `None` for whitespace, and
+/// TurboGit's own pre-existing whole-row highlighting. The reference documents no
+/// default for either, so highlighting keeps the behaviour the surface had before
+/// the menu existed rather than inventing one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct DiffPolicies {
+    pub whitespace: DiffWhitespace,
+    pub highlighting: DiffHighlighting,
+}
+
 /// Options for a diff query.
 #[derive(Clone, Debug, Default)]
 pub struct DiffOpts {
