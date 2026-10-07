@@ -1040,6 +1040,10 @@ impl GitExecutor for Git2Executor {
     fn continue_op(&self, root: &Path, op: &str) -> TgResult<()> {
         self.cli.continue_op(root, op)
     }
+
+    fn rebase_skip(&self, root: &Path) -> TgResult<()> {
+        self.cli.rebase_skip(root)
+    }
     fn rewrite_backup_ref(&self) -> &str {
         self.cli.rewrite_backup_ref()
     }

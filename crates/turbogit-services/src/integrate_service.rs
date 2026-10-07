@@ -245,6 +245,23 @@ impl OwnedOperation {
             Self::Revert => "revert",
         }
     }
+
+    /// The argv token git's own recovery flags hang off: `git <this> --abort`,
+    /// `git <this> --continue`.
+    ///
+    /// Spelled out per case rather than returned as [`Self::label`], even though
+    /// the four strings are identical today: `label` is prose owned by the
+    /// refusal sentences, and a reworded one ("Rebasing") would otherwise
+    /// silently change what runs. The operation's identity, not its wording, is
+    /// what the engine is addressed by.
+    pub fn git_subcommand(self) -> &'static str {
+        match self {
+            Self::CherryPick => "cherry-pick",
+            Self::Rebase => "rebase",
+            Self::Merge => "merge",
+            Self::Revert => "revert",
+        }
+    }
 }
 
 /// Where git keeps its operation markers for `root`.

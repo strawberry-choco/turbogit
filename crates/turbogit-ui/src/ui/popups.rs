@@ -8,7 +8,7 @@ use egui::{Pos2, Ui};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use turbogit_app::granular;
-use turbogit_app::operation::Operation;
+use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, Tab, Toast};
@@ -52,6 +52,16 @@ pub enum Action {
     // File filter (spec R7): palette-only discoverability for the `/`
     // shortcut over the Commit tool window's changed-file list.
     FilterFiles,
+    // In-flight operation lifecycle (ticket 16): the reference's own docs say the
+    // recovery survives a dismissed notification — "from the main menu choose
+    // `Git | Continue rebase` to resume it". TurboGit has no main menu bar, so
+    // the palette is its menu route for these three verbs, and the status bar's
+    // clickable item is the other. They are PALETTE-ONLY on purpose: the VCS
+    // popup's action set is a frozen pin (`feedback_chrome.rs`), and the
+    // announcement itself lives in the bar rather than in that popup.
+    AbortOperation,
+    ContinueOperation,
+    SkipCommit,
 }
 
 impl Action {
@@ -78,6 +88,9 @@ impl Action {
             Action::StageHunk => "Stage Hunk",
             Action::UnstageHunk => "Unstage Hunk",
             Action::FilterFiles => "Filter files (/)",
+            Action::AbortOperation => "Abort Operation",
+            Action::ContinueOperation => "Continue Operation",
+            Action::SkipCommit => "Skip Commit",
         }
     }
 
@@ -130,6 +143,9 @@ impl Action {
             Action::StageHunk,
             Action::UnstageHunk,
             Action::FilterFiles,
+            Action::AbortOperation,
+            Action::ContinueOperation,
+            Action::SkipCommit,
         ]
     }
 }
@@ -212,6 +228,31 @@ pub fn run_action(state: &mut AppState, action: Action) {
             state.ui.welcome_visible = false;
             state.ui.tab = Tab::Commit;
             state.ui.focus_file_filter = true;
+        }
+        // The in-flight lifecycle verbs (ticket 16): the menu route to exactly the
+        // operation the status bar's clickable item runs.
+        Action::AbortOperation => run_lifecycle_verb(state, LifecycleVerb::Abort),
+        Action::ContinueOperation => run_lifecycle_verb(state, LifecycleVerb::Continue),
+        Action::SkipCommit => run_lifecycle_verb(state, LifecycleVerb::Skip),
+    }
+}
+
+/// Run one lifecycle verb on the root that is holding an operation which offers
+/// it.
+///
+/// The root comes from [`super::status_inflight::target_for`], which reads git's
+/// own markers: the focused root when it offers the verb, otherwise the root that
+/// does. Nothing in flight says so out loud — a palette entry that silently did
+/// nothing is a dead verb, and these three are the documented way back after the
+/// notification carrying the same verbs has been dismissed.
+fn run_lifecycle_verb(state: &mut AppState, verb: LifecycleVerb) {
+    match super::status_inflight::target_for(state, verb) {
+        Some((root, owner)) => state.dispatch(Operation::Resolve { root, owner, verb }),
+        None => {
+            state.ui.toast = Some(Toast::info(format!(
+                "Nothing in flight to {}",
+                verb.label()
+            )))
         }
     }
 }

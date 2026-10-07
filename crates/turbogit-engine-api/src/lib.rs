@@ -240,6 +240,13 @@ pub trait GitExecutor: Send + Sync {
     /// (`git <op> --continue`).
     fn continue_op(&self, root: &Path, op: &str) -> TgResult<()>;
 
+    /// `git rebase --skip`: abandon the commit a paused rebase stopped on and
+    /// replay the rest. Rebase-only by construction, so it is its own method
+    /// rather than a third flag word on [`Self::continue_op`] — a merge or a
+    /// cherry-pick has no equivalent, and an `op: &str` that could be told to
+    /// skip would let a caller name a resolution git then refuses.
+    fn rebase_skip(&self, root: &Path) -> TgResult<()>;
+
     // ---- the rewrite backup: one reference the engine owns ----
     //
     // A history rewrite records the state it is about to destroy, restores it
