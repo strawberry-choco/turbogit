@@ -1102,6 +1102,15 @@ pub struct UiState {
     pub log_filter: String,
     // Branches tab (issues 03+): search buffer and the focus/scroll intents.
     pub branches_filter: String,
+    /// The Branches surface's four persisted toggles, behind its settings gear.
+    /// Durable, not ephemeral: unlike [`BranchesGroups`], which says whether a
+    /// group is open *right now*, this says whether a group and a grouping level
+    /// exist for this project at all.
+    pub branches_view: crate::persistence::BranchesViewOptions,
+    /// The gear's toggle list is open. Session-only chrome state, the same kind
+    /// as [`Self::branches_scope_picker_open`]: a menu that was open when the app
+    /// quit does not come back open.
+    pub branches_settings_open: bool,
     /// Expand/collapse of Local / Remote / Tags.
     // The tree-remembered branch view state, one independent block per tree
     // surface (branch-tree-view extraction, plan D2): the Branches tool
@@ -1687,6 +1696,7 @@ impl AppState {
                 state.ui.bulk_history = ui.bulk_history;
                 state.ui.recent_custom_commands = ui.recent_custom_commands;
                 state.ui.sidebar_collapsed = ui.sidebar_collapsed;
+                state.ui.branches_view = ui.branches_view;
             }
             None => {
                 // No project directory supplied: land on Welcome (ADR-0004).
@@ -1776,6 +1786,7 @@ impl AppState {
             bulk_history: self.ui.bulk_history.clone(),
             recent_custom_commands: self.ui.recent_custom_commands.clone(),
             sidebar_collapsed: self.ui.sidebar_collapsed.clone(),
+            branches_view: self.ui.branches_view,
         };
         let _ = crate::persistence::save_ui_state(&self.project_dir, &ui);
     }
