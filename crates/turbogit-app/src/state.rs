@@ -206,6 +206,21 @@ pub struct DialogState {
     pub rebase_keep_empty: bool,
     pub rebase_update_refs: bool,
     pub rebase_autosquash: bool,
+    /// `--onto`: reveals the two ordered base fields below the option rows.
+    /// Off means the dialog is a plain rebase onto [`Self::rebase_onto`].
+    pub rebase_onto_enabled: bool,
+    /// `--onto`'s FIRST field: the base the sequence lands on. The order of the
+    /// pair is load-bearing — the two are not interchangeable and one "base"
+    /// field cannot express the move — so they are two fields, never one.
+    pub rebase_new_base: String,
+    /// `--onto`'s SECOND field: the cutoff. Everything ABOVE it on the current
+    /// branch moves; it and everything below stay.
+    pub rebase_old_base: String,
+    /// The `(value, resolves)` pair each `--onto` field's existence check was
+    /// last run for, so one `git rev-parse` answers a value once rather than
+    /// every frame.
+    pub rebase_new_base_check: Option<(String, bool)>,
+    pub rebase_old_base_check: Option<(String, bool)>,
     /// Last computed commits-to-rebase list (the "N COMMITS TO REBASE"
     /// box), cached with [`Self::rebase_preview_key`] so it recomputes only
     /// when the onto branch changes.
@@ -1087,6 +1102,15 @@ pub struct UiState {
     pub log_filter: String,
     // Branches tab (issues 03+): search buffer and the focus/scroll intents.
     pub branches_filter: String,
+    /// The Branches surface's four persisted toggles, behind its settings gear.
+    /// Durable, not ephemeral: unlike [`BranchesGroups`], which says whether a
+    /// group is open *right now*, this says whether a group and a grouping level
+    /// exist for this project at all.
+    pub branches_view: crate::persistence::BranchesViewOptions,
+    /// The gear's toggle list is open. Session-only chrome state, the same kind
+    /// as [`Self::branches_scope_picker_open`]: a menu that was open when the app
+    /// quit does not come back open.
+    pub branches_settings_open: bool,
     /// Expand/collapse of Local / Remote / Tags.
     // The tree-remembered branch view state, one independent block per tree
     // surface (branch-tree-view extraction, plan D2): the Branches tool
@@ -1682,6 +1706,7 @@ impl AppState {
                 state.ui.bulk_history = ui.bulk_history;
                 state.ui.recent_custom_commands = ui.recent_custom_commands;
                 state.ui.sidebar_collapsed = ui.sidebar_collapsed;
+                state.ui.branches_view = ui.branches_view;
             }
             None => {
                 // No project directory supplied: land on Welcome (ADR-0004).
@@ -1771,6 +1796,7 @@ impl AppState {
             bulk_history: self.ui.bulk_history.clone(),
             recent_custom_commands: self.ui.recent_custom_commands.clone(),
             sidebar_collapsed: self.ui.sidebar_collapsed.clone(),
+            branches_view: self.ui.branches_view,
         };
         let _ = crate::persistence::save_ui_state(&self.project_dir, &ui);
     }

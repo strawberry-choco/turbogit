@@ -573,6 +573,15 @@ fn cascade_banner(ui: &mut Ui, state: &mut AppState, siblings: usize) {
 /// ([`AppState::open_rebase_affected_list`]). A protected current branch
 /// disables the start button (history rewrites are blocked on protected
 /// branches).
+///
+/// `--onto` is the option that turns this dialog into the stack-surgery tool:
+/// it reveals **two ordered fields** (new base first, old base second) that
+/// together say "take everything above this cutoff and put it on that base".
+/// One "base" field cannot express the move, and the two are not
+/// interchangeable, so the order is the design, and each field is validated in
+/// its own right. While the option is on, the plain ONTO BRANCH target is
+/// superseded — the old base *is* the upstream git reads — and the dialog says
+/// so above the greyed field rather than letting a filled target read as live.
 fn rebase(ui: &mut Ui, state: &mut AppState) {
     let current = current_branch_name(state);
     let branches: Vec<String> = state
@@ -591,45 +600,57 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
         })
         .unwrap_or_default();
 
-    // ONTO BRANCH
+    let onto_enabled = state.ui.dlg.rebase_onto_enabled;
+
+    // ONTO BRANCH — greyed while the two base fields are in charge.
     group_title(ui, "ONTO BRANCH");
-    let onto_empty = state.ui.dlg.rebase_onto.trim().is_empty();
-    ui.horizontal(|ui| {
-        icon(ui, Icon::GIT_BRANCH, 14.0, Palette::BRAND);
-        if onto_empty {
-            ui.label(
-                egui::RichText::new("Rebase onto…")
-                    .monospace()
-                    .color(Palette::INK_3),
-            );
-        } else {
-            ui.label(
-                egui::RichText::new(state.ui.dlg.rebase_onto.clone())
-                    .monospace()
-                    .color(Palette::INK),
-            );
-        }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Change…").clicked() {
-                state.ui.dlg.rebase_onto_picker_open = !state.ui.dlg.rebase_onto_picker_open;
-            }
-        });
-    });
-    if state.ui.dlg.rebase_onto_picker_open {
-        for name in &branches {
-            if ui
-                .selectable_label(&state.ui.dlg.rebase_onto == name, name.clone())
-                .clicked()
-            {
-                state.ui.dlg.rebase_onto = name.clone();
-                state.ui.dlg.rebase_onto_picker_open = false;
-                state.ui.dlg.rebase_preview = None;
-            }
-        }
+    if onto_enabled {
+        ui.label(
+            egui::RichText::new("The plain target is superseded by the two base fields")
+                .color(Palette::INK_3),
+        );
     }
+    ui.add_enabled_ui(!onto_enabled, |ui| {
+        ui.horizontal(|ui| {
+            icon(ui, Icon::GIT_BRANCH, 14.0, Palette::BRAND);
+            let onto_empty = state.ui.dlg.rebase_onto.trim().is_empty();
+            if onto_empty {
+                ui.label(
+                    egui::RichText::new("Rebase onto…")
+                        .monospace()
+                        .color(Palette::INK_3),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new(state.ui.dlg.rebase_onto.clone())
+                        .monospace()
+                        .color(Palette::INK),
+                );
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.button("Change…").clicked() {
+                    state.ui.dlg.rebase_onto_picker_open = !state.ui.dlg.rebase_onto_picker_open;
+                }
+            });
+        });
+        if state.ui.dlg.rebase_onto_picker_open {
+            for name in &branches {
+                if ui
+                    .selectable_label(&state.ui.dlg.rebase_onto == name, name.clone())
+                    .clicked()
+                {
+                    state.ui.dlg.rebase_onto = name.clone();
+                    state.ui.dlg.rebase_onto_picker_open = false;
+                    state.ui.dlg.rebase_preview = None;
+                }
+            }
+        }
+    });
     ui.add_space(4.0);
 
-    // MODE
+    // MODE — Interactive replays a plan the developer edits, and a plan has no
+    // slot for `--onto`, so the segment is withheld rather than silently
+    // overridden while the option is on.
     group_title(ui, "MODE");
     ui.horizontal(|ui| {
         for (label, mode) in [
@@ -640,10 +661,20 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
             ("Standard", turbogit_domain::model::RebaseMode::Standard),
             ("Autosquash", turbogit_domain::model::RebaseMode::Autosquash),
         ] {
-            if ui
-                .selectable_label(state.ui.dlg.rebase_mode == mode, label)
-                .clicked()
-            {
+            let interactive_with_onto =
+                onto_enabled && mode == turbogit_domain::model::RebaseMode::Interactive;
+            let segment = ui.add_enabled(
+                !interactive_with_onto,
+                egui::Button::selectable(state.ui.dlg.rebase_mode == mode, label),
+            );
+            let segment = if interactive_with_onto {
+                segment.on_disabled_hover_text(
+                    "Interactive replays an edited plan; a plan has no slot for --onto",
+                )
+            } else {
+                segment
+            };
+            if segment.clicked() {
                 state.ui.dlg.rebase_mode = mode;
             }
         }
@@ -651,17 +682,30 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
     ui.add_space(4.0);
 
     // COMMITS TO REBASE — computed from the live repository before anything
-    // runs; cached per onto branch so it only recomputes on change.
+    // runs; cached per base so it recomputes only on change. With `--onto` the
+    // sequence that moves is the one ABOVE THE CUTOFF, so the cached base is
+    // the old base, not the plain target: showing the target's list here would
+    // describe a different rebase from the one about to run.
     let onto = state.ui.dlg.rebase_onto.trim().to_string();
+    let (new_verdict, old_verdict) = onto_base_verdicts(state, onto_enabled);
+    let effective_base = if onto_enabled {
+        if old_verdict == BaseVerdict::Usable {
+            state.ui.dlg.rebase_old_base.trim().to_string()
+        } else {
+            String::new()
+        }
+    } else {
+        onto.clone()
+    };
     let mut replay: Vec<turbogit_domain::model::RebasePlanEntry> = Vec::new();
-    if !onto.is_empty() {
-        if state.ui.dlg.rebase_preview_key.as_deref() != Some(onto.as_str()) {
+    if !effective_base.is_empty() {
+        if state.ui.dlg.rebase_preview_key.as_deref() != Some(effective_base.as_str()) {
             let preview = state
                 .selected_root
                 .as_ref()
-                .and_then(|root| state.rebase_plan(root, &onto));
+                .and_then(|root| state.rebase_plan(root, &effective_base));
             state.ui.dlg.rebase_preview = preview;
-            state.ui.dlg.rebase_preview_key = Some(onto.clone());
+            state.ui.dlg.rebase_preview_key = Some(effective_base.clone());
         }
         if let Some(plan) = state.ui.dlg.rebase_preview.clone() {
             group_title(ui, &format!("{} COMMITS TO REBASE", plan.len()));
@@ -693,7 +737,48 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
         "Update branches (--update-refs)",
     );
     ui.checkbox(&mut state.ui.dlg.rebase_keep_empty, "Keep empty commits");
+    let was_enabled = state.ui.dlg.rebase_onto_enabled;
+    ui.checkbox(
+        &mut state.ui.dlg.rebase_onto_enabled,
+        "Custom base (--onto)",
+    );
+    if state.ui.dlg.rebase_onto_enabled
+        && !was_enabled
+        && state.ui.dlg.rebase_mode == turbogit_domain::model::RebaseMode::Interactive
+    {
+        // Turning the option on while Interactive is selected would leave the
+        // dialog describing a rebase it cannot run, so the mode moves to the
+        // plain invocation the two bases drive.
+        state.ui.dlg.rebase_mode = turbogit_domain::model::RebaseMode::Standard;
+    }
     ui.add_space(6.0);
+
+    // --onto — the pair, destination first. The order is the whole point:
+    // `git rebase --onto <new base> <old base>` moves the sequence above the
+    // cutoff ONTO the new base, and swapping the two rebases the wrong commits.
+    if state.ui.dlg.rebase_onto_enabled {
+        let missing = "There is no such branch or hash";
+        group_title(ui, "NEW BASE");
+        onto_base_field(
+            ui,
+            "New base",
+            &mut state.ui.dlg.rebase_new_base,
+            new_verdict,
+            "Select a new base",
+            missing,
+        );
+        ui.add_space(4.0);
+        group_title(ui, "OLD BASE");
+        onto_base_field(
+            ui,
+            "Old base",
+            &mut state.ui.dlg.rebase_old_base,
+            old_verdict,
+            "Select an old base",
+            missing,
+        );
+        ui.add_space(6.0);
+    }
 
     // CROSS-REPO BANNER — sibling repos with the branch checked out or
     // tracking-shared will diverge from the rewritten history (issue 29).
@@ -707,6 +792,10 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
     // action slot is its own place, separated from the body by the footer rule.
     // Right-to-left: the start action lands rightmost, `Cancel` to its left.
     let protected = state.rebase_branch_is_protected();
+    let in_flight = state
+        .selected_root
+        .as_ref()
+        .and_then(|root| turbogit_services::integrate_service::owning_operation(root.as_path()));
     widgets::dialog_footer(ui, |ui| {
         {
             let label = match state.ui.dlg.rebase_mode {
@@ -714,15 +803,45 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                 turbogit_domain::model::RebaseMode::Standard => "Start rebase",
                 turbogit_domain::model::RebaseMode::Autosquash => "Start autosquash rebase",
             };
+            // The gate reads whichever base the rebase actually runs from: the
+            // two `--onto` fields while the option is on, the plain target
+            // otherwise. A half-filled pair withholds the action; it is never a
+            // confirmation.
+            let bases_ready = new_verdict == BaseVerdict::Usable
+                && old_verdict == BaseVerdict::Usable
+                && !state.ui.dlg.rebase_new_base.trim().is_empty()
+                && !state.ui.dlg.rebase_old_base.trim().is_empty();
+            let ready = if state.ui.dlg.rebase_onto_enabled {
+                bases_ready
+            } else {
+                !effective_base.is_empty()
+            };
             let start = ui
-                .add_enabled(!onto.is_empty() && !protected, egui::Button::new(label))
+                .add_enabled(
+                    ready && in_flight.is_none() && !protected,
+                    egui::Button::new(label),
+                )
                 .on_disabled_hover_text(if protected {
                     format!(
                         "'{}' is a protected branch — rebasing it is not allowed",
                         current.clone().unwrap_or_else(|| "…".to_string())
                     )
+                } else if let Some(operation) = in_flight {
+                    // Per root, by name: a rebase running in another repository
+                    // is not this dialog's business.
+                    format!(
+                        "A {} is already in progress in {}",
+                        operation.label(),
+                        root_display_name(state)
+                    )
+                } else if !ready {
+                    if state.ui.dlg.rebase_onto_enabled {
+                        "Fill in both base fields".to_string()
+                    } else {
+                        "Pick an onto branch first".to_string()
+                    }
                 } else {
-                    "Pick an onto branch first".to_string()
+                    String::new()
                 });
             if start.clicked() {
                 let root = state.selected_root.clone();
@@ -732,20 +851,33 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                 let branch = current.clone().unwrap_or_default();
                 let onto2 = onto.clone();
                 let replay2 = replay.clone();
+                let new_base = state.ui.dlg.rebase_new_base.trim().to_string();
+                let old_base = state.ui.dlg.rebase_old_base.trim().to_string();
                 // Interactive mode replays the listed commits through the plan
                 // path; Standard/Autosquash run a plain rebase with the
-                // mode-mapped flags. All three refuse a protected branch, and
-                // all three settle as one rebase (ADR-0020).
+                // mode-mapped flags; `--onto` runs the two-base move, whose
+                // flags come from the same mapping. All of them refuse a
+                // protected branch, and all settle as one rebase (ADR-0020).
                 if let Some(root) = root {
-                    let op = match mode {
-                        turbogit_domain::model::RebaseMode::Interactive => {
-                            Operation::rebase_interactive(&root, &branch, replay2, &settings, false)
-                        }
-                        turbogit_domain::model::RebaseMode::Standard => {
-                            Operation::rebase_onto(&root, &branch, &onto2, &opts, &settings)
-                        }
-                        turbogit_domain::model::RebaseMode::Autosquash => {
-                            Operation::rebase_autosquash(&root, &branch, &onto2, &opts, &settings)
+                    let op = if state.ui.dlg.rebase_onto_enabled {
+                        Operation::rebase_with_onto(
+                            &root, &branch, &new_base, &old_base, &opts, &settings,
+                        )
+                    } else {
+                        match mode {
+                            turbogit_domain::model::RebaseMode::Interactive => {
+                                Operation::rebase_interactive(
+                                    &root, &branch, replay2, &settings, false,
+                                )
+                            }
+                            turbogit_domain::model::RebaseMode::Standard => {
+                                Operation::rebase_onto(&root, &branch, &onto2, &opts, &settings)
+                            }
+                            turbogit_domain::model::RebaseMode::Autosquash => {
+                                Operation::rebase_autosquash(
+                                    &root, &branch, &onto2, &opts, &settings,
+                                )
+                            }
                         }
                     };
                     state.dispatch(op);
@@ -757,6 +889,123 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
             close(state);
         }
     });
+}
+
+/// What one `--onto` base field says about itself right now.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BaseVerdict {
+    /// Nothing entered — the field's own "Select a … base".
+    Empty,
+    /// Entered, and nothing in this repository answers to it.
+    Missing,
+    /// Entered and resolvable.
+    Usable,
+}
+
+/// The two base verdicts, re-read from the repository only when a field's value
+/// changed since the last look.
+///
+/// `git rev-parse` is a process, and this runs in the paint pass: uncached, a
+/// dialog sitting open would ask it twice a frame. The cache is keyed by the
+/// value itself, so editing a field re-asks and anything else does not. With
+/// the option off both fields are inert and answer `Usable`, which keeps the
+/// start gate a single expression.
+fn onto_base_verdicts(state: &mut AppState, onto_enabled: bool) -> (BaseVerdict, BaseVerdict) {
+    if !onto_enabled {
+        return (BaseVerdict::Usable, BaseVerdict::Usable);
+    }
+    let Some(root) = state.selected_root.clone() else {
+        return (BaseVerdict::Empty, BaseVerdict::Empty);
+    };
+    let new_value = state.ui.dlg.rebase_new_base.trim().to_string();
+    let old_value = state.ui.dlg.rebase_old_base.trim().to_string();
+    let new_cached = state
+        .ui
+        .dlg
+        .rebase_new_base_check
+        .as_ref()
+        .filter(|(key, _)| *key == new_value)
+        .map(|(_, ok)| *ok);
+    let old_cached = state
+        .ui
+        .dlg
+        .rebase_old_base_check
+        .as_ref()
+        .filter(|(key, _)| *key == old_value)
+        .map(|(_, ok)| *ok);
+    let new_ok = match new_cached {
+        Some(ok) => ok,
+        None => !new_value.is_empty() && state.revision_exists(&root, &new_value),
+    };
+    let old_ok = match old_cached {
+        Some(ok) => ok,
+        None => !old_value.is_empty() && state.revision_exists(&root, &old_value),
+    };
+    state.ui.dlg.rebase_new_base_check = Some((new_value.clone(), new_ok));
+    state.ui.dlg.rebase_old_base_check = Some((old_value.clone(), old_ok));
+    (
+        base_verdict_of(&new_value, new_ok),
+        base_verdict_of(&old_value, old_ok),
+    )
+}
+
+fn base_verdict_of(value: &str, resolves: bool) -> BaseVerdict {
+    if value.is_empty() {
+        BaseVerdict::Empty
+    } else if resolves {
+        BaseVerdict::Usable
+    } else {
+        BaseVerdict::Missing
+    }
+}
+
+/// One `--onto` base field: the entry itself and the error that belongs to it,
+/// painted inside the field rather than in a shared region — the user has to
+/// know which of the two is wrong, which is the reason the option is two fields
+/// and not one.
+fn onto_base_field(
+    ui: &mut Ui,
+    name: &str,
+    value: &mut String,
+    verdict: BaseVerdict,
+    empty_error: &str,
+    missing_error: &str,
+) {
+    // Bounded width: an INFINITY desired width inside a horizontal claims the
+    // whole window surface and swallows clicks below (the tag field's lesson).
+    let resp = ui.add(
+        egui::TextEdit::singleline(value)
+            .hint_text("branch or hash")
+            .desired_width(320.0),
+    );
+    resp.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, true, name.to_owned())
+    });
+    match verdict {
+        BaseVerdict::Usable => {}
+        BaseVerdict::Empty => {
+            widgets::inline_error(ui, empty_error);
+        }
+        BaseVerdict::Missing => {
+            widgets::inline_error(ui, missing_error);
+        }
+    }
+}
+
+/// The focused root's own name, which is what makes an in-progress refusal
+/// point at ONE repository instead of the whole workspace.
+fn root_display_name(state: &AppState) -> String {
+    state
+        .selected_root
+        .as_ref()
+        .map(|root| {
+            let path = root.as_path();
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string()
+        })
+        .unwrap_or_else(|| "this repository".to_string())
 }
 
 /// The cross-repo banner (screen 15): a warning-toned strip naming how many

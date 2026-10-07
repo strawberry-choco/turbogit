@@ -257,6 +257,15 @@ impl AppState {
             .ok()
     }
 
+    /// Whether `rev` names something real in `root` — a branch, a tag, a hash.
+    /// The rebase dialog's `--onto` fields ask this per field, so a wrong value
+    /// is refused by the field that holds it rather than by git after the
+    /// rewrite has started. An empty value is not a revision: `false`.
+    pub fn revision_exists(&self, root: &RootId, rev: &str) -> bool {
+        let rev = rev.trim();
+        !rev.is_empty() && self.executor.resolve_revision(root.as_path(), rev).is_ok()
+    }
+
     /// The plan one targeted history verb would run for `commit` (ticket 10):
     /// from its first parent to the tip, with that commit's own row set to
     /// `action`. The verb is the preflight's subject and the operation's, so
