@@ -18,8 +18,10 @@ use test_support::git_seed::{self, commit};
 use turbogit_app::activity::ActivityKind;
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::AppState;
-use turbogit_domain::model::{MergeOpts, RebaseAction, RebaseOpts, RebasePlanEntry, RootId};
+use turbogit_app::state::{AppState, UnmergedCommit, UnmergedCommits};
+use turbogit_domain::model::{
+    MergeOpts, RebaseAction, RebaseOpts, RebasePlanEntry, RootId, Upstream,
+};
 
 // --- git fixture ---------------------------------------------------------------
 
@@ -545,6 +547,22 @@ fn a_deleted_branch_arms_the_undo() {
         root: root.clone(),
         name: "doomed".into(),
         tip_sha: rev(&alpha, "doomed"),
+        // The disclosures the notification carries after the ref is gone are
+        // the pending record's — nothing can re-read a branch that was deleted.
+        upstream: Some(Upstream {
+            remote: "origin".into(),
+            branch: "doomed".into(),
+        }),
+        unmerged: Some(UnmergedCommits {
+            root: root.clone(),
+            branch: "doomed".into(),
+            merged_target: "main".into(),
+            tip_sha: Some(rev(&alpha, "doomed")),
+            commits: vec![UnmergedCommit {
+                id: "abc".into(),
+                subject: Some("the one that was lost".into()),
+            }],
+        }),
     });
 
     dispatch_and_settle(
@@ -562,6 +580,16 @@ fn a_deleted_branch_arms_the_undo() {
         .expect("the deletion armed the undo window");
     assert_eq!(undo.name, "doomed");
     assert_eq!(undo.root, registered_root(&state, &alpha));
+    assert_eq!(
+        undo.upstream.map(|u| u.branch),
+        Some("doomed".to_string()),
+        "the offer to remove the tracking remote branch survives the delete"
+    );
+    assert_eq!(
+        undo.unmerged.as_ref().map(|u| u.commits.len()),
+        Some(1),
+        "the list of what the delete discarded survives the delete"
+    );
 }
 
 /// An unrelated operation must not consume the pending deletion without arming
@@ -576,6 +604,8 @@ fn an_unrelated_operation_does_not_arm_the_undo() {
         root: root.clone(),
         name: "doomed".into(),
         tip_sha: rev(&alpha, "main"),
+        upstream: None,
+        unmerged: None,
     });
 
     dispatch_and_settle(&mut state, Operation::Fetch { roots: vec![root] });
