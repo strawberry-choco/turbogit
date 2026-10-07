@@ -85,6 +85,41 @@ impl Affected {
     }
 }
 
+/// One of the log's independently-read values, named by the read that produces
+/// it and the key it was read for.
+///
+/// The four are the four things the Log surface loads separately — the commit
+/// listing, one scoped listing inside it, a commit's changed-file list, and a
+/// commit's line counts — and the name is what lets a failure say which of
+/// them died instead of which pane the user was looking at. It is also the key
+/// of [`RootCaches`]'s failure records, so "the message for this read" is one
+/// lookup with no way to address the wrong entry: a key a caller can build by
+/// hand is a key a caller can build subtly differently wrong.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum LogRead {
+    /// The unscoped commit listing of one root.
+    Commits(RootId),
+    /// One scoped listing of one root: a file's history, a ref's, a search's.
+    Scope(RootId, LogScope),
+    /// One commit's changed-file list.
+    Changes(RootId, CommitId),
+    /// One commit's per-file line counts — the details pane's churn.
+    Details(RootId, CommitId),
+}
+
+impl LogRead {
+    /// The root this read belongs to, for the invalidation that drops a root's
+    /// failures with its windows.
+    fn root(&self) -> &RootId {
+        match self {
+            Self::Commits(root)
+            | Self::Scope(root, _)
+            | Self::Changes(root, _)
+            | Self::Details(root, _) => root,
+        }
+    }
+}
+
 /// The root-keyed caches behind one interface.
 #[derive(Default)]
 pub struct RootCaches {
@@ -111,6 +146,13 @@ pub struct RootCaches {
     log_ref_cache: HashMap<(RootId, String), LogWindow>,
     /// Pickaxe search windows keyed by (root, query) (issue 17).
     search_cache: HashMap<(RootId, String), LogWindow>,
+    /// The message each log read last failed with, keyed by the read and its
+    /// key. One map for the four reads, because the rule that governs them is
+    /// one rule: a failure is a fact about one read of one key, forgotten when
+    /// that same read answers or when the root it belongs to is invalidated.
+    /// A surface-wide flag instead would let one pane's crash black out
+    /// another's — which is the collapse [`crate::log_states`] exists to stop.
+    log_failed: HashMap<LogRead, String>,
     /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
     ahead_behind: HashMap<RootId, (usize, usize)>,
     /// Linked worktrees per root (issue 14).
@@ -322,30 +364,6 @@ impl RootHunkStats {
     }
 }
 
-/// Read the next batch of one scoped listing through the engine seam and fold
-/// it into its window, under the unscoped window's own rules
-/// (log-view-scaling 01). This is the SYNCHRONOUS read — the one a cold
-/// [`Self::ensure_log`] makes, because the caller paints what it returns in
-/// the same frame. A batch that extends a window is read off the render thread
-/// instead (log-view-scaling 02) and arrives through
-/// [`Self::settle_scoped_log_batch`].
-fn read_scoped_log_batch<K>(
-    map: &mut HashMap<K, LogWindow>,
-    key: &K,
-    scope: &LogScope,
-    exec: &dyn GitExecutor,
-    repo: &Path,
-) -> LogBatchSettle
-where
-    K: Clone + Eq + std::hash::Hash,
-{
-    let (rows, skip, mode) = scoped_batch_plan(scope, map.get(key).map(|w| w.commits.as_slice()));
-    let page = exec
-        .log(repo, &scope.batch_opts(rows, skip))
-        .unwrap_or_default();
-    settle_scoped_window(map, key, scope, mode, page)
-}
-
 /// Fold one fetched batch of one scoped listing into that scope's window and
 /// report what came of it (log-view-scaling 02). Written once for all three
 /// [`LogScope`]s, which differ only in key type — and in where their batch sits
@@ -554,6 +572,68 @@ impl RootCaches {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    // --- Log read failures ---------------------------------------------------
+
+    /// The message `read` last failed with, if it failed and nothing has since
+    /// answered or forgotten it. The state machine's whole input for an error
+    /// state ([`crate::log_states`]).
+    pub fn log_failure(&self, read: &LogRead) -> Option<&str> {
+        self.log_failed.get(read).map(String::as_str)
+    }
+
+    /// Whether `read` is recorded as failed — the same question as
+    /// [`Self::log_failure`] for a caller that only needs the yes.
+    pub fn has_log_failure(&self, read: &LogRead) -> bool {
+        self.log_failed.contains_key(read)
+    }
+
+    /// Record the message one log read answered with on failure. An event-fed
+    /// writer like [`Self::store_log`]: the read happened off the frame path,
+    /// and this is where its outcome lands.
+    pub fn record_log_failure(&mut self, read: LogRead, message: impl Into<String>) {
+        self.log_failed.insert(read, message.into());
+    }
+
+    /// Forget one read's failure because the same read has now answered.
+    pub fn clear_log_failure(&mut self, read: &LogRead) {
+        self.log_failed.remove(read);
+    }
+
+    /// Forget one log read's **answer and its failure together**, so the
+    /// surface that showed the failure asks again.
+    ///
+    /// The two are dropped as one because either alone leaves the read stuck:
+    /// clearing the failure of a scope whose empty window is still cached keeps
+    /// answering "no commits", and dropping the window while the failure record
+    /// stands keeps painting the error the retry was meant to clear. A
+    /// compute-on-miss reader then fills the window it just dropped.
+    pub fn forget_log_read(&mut self, read: &LogRead) {
+        self.log_failed.remove(read);
+        match read {
+            LogRead::Commits(root) => {
+                self.log_cache.remove(root);
+            }
+            LogRead::Scope(root, scope) => match scope {
+                LogScope::Path(target) => {
+                    self.log_path_cache.remove(&(root.clone(), target.clone()));
+                }
+                LogScope::Ref(ref_name) => {
+                    self.log_ref_cache.remove(&(root.clone(), ref_name.clone()));
+                }
+                LogScope::Search(query) => {
+                    self.search_cache.remove(&(root.clone(), query.clone()));
+                }
+            },
+            LogRead::Changes(root, cid) => {
+                self.files_cache.remove(&(root.clone(), cid.clone()));
+            }
+            LogRead::Details(root, cid) => {
+                self.file_stats_cache.remove(&(root.clone(), cid.clone()));
+            }
+        }
+        self.bump();
+    }
+
     // --- Compute-on-miss ---------------------------------------------------
 
     /// The changed files of `(root, commit)`, computed through the engine
@@ -569,8 +649,22 @@ impl RootCaches {
     ) -> &[Change] {
         let key = (root.clone(), commit.clone());
         if !self.files_cache.contains_key(&key) {
-            let files = exec.commit_files(&root.0, commit).unwrap_or_default();
-            self.files_cache.insert(key.clone(), files);
+            // A failure is held as an empty list AND recorded against the read:
+            // the empty entry is what stops the pane's every-frame ask from
+            // re-running a call that just failed, and the record is what lets
+            // the pane say `Error loading changes` rather than `No changed
+            // files.` about a commit whose file list was never read.
+            let read = LogRead::Changes(root.clone(), commit.clone());
+            match exec.commit_files(&root.0, commit) {
+                Ok(files) => {
+                    self.log_failed.remove(&read);
+                    self.files_cache.insert(key.clone(), files);
+                }
+                Err(e) => {
+                    self.log_failed.insert(read, e.to_string());
+                    self.files_cache.insert(key.clone(), Vec::new());
+                }
+            }
         }
         // Reborrow after the optional fill so the returned slice always
         // aliases the cache. The tuple key cannot be probed in borrowed form
@@ -620,32 +714,62 @@ impl RootCaches {
         root: &RootId,
         scope: &LogScope,
     ) -> LogBatchSettle {
-        let repo = root.0.clone();
-        let settle = match scope {
-            LogScope::Path(target) => read_scoped_log_batch(
+        // The read is here rather than inside the window fold because its
+        // outcome is a record the pane reads back: a scope whose listing failed
+        // settles an empty window AND keeps the message. That is the only way
+        // `Error calculating file history` can be told apart from a file with
+        // no history — and an empty window is still what stops the pane's
+        // every-frame ask from re-running a read that just failed.
+        let (rows, skip, mode) = scoped_batch_plan(scope, self.scoped_log(root, scope));
+        let read = LogRead::Scope(root.clone(), scope.clone());
+        let page = match exec.log(&root.0, &scope.batch_opts(rows, skip)) {
+            Ok(page) => {
+                self.log_failed.remove(&read);
+                page
+            }
+            Err(e) => {
+                self.log_failed.insert(read, e.to_string());
+                Vec::new()
+            }
+        };
+        let settle = self.settle_scope(root, scope, mode, page);
+        self.bump();
+        settle
+    }
+
+    /// Fold a batch into the window of the one scope that names it. The three
+    /// maps stay separate — a slow ref read must not land in a path window —
+    /// and this is the single place that picks between them.
+    fn settle_scope(
+        &mut self,
+        root: &RootId,
+        scope: &LogScope,
+        mode: LogBatchMode,
+        page: Vec<Commit>,
+    ) -> LogBatchSettle {
+        match scope {
+            LogScope::Path(target) => settle_scoped_window(
                 &mut self.log_path_cache,
                 &(root.clone(), target.clone()),
                 scope,
-                exec,
-                &repo,
+                mode,
+                page,
             ),
-            LogScope::Ref(ref_name) => read_scoped_log_batch(
+            LogScope::Ref(ref_name) => settle_scoped_window(
                 &mut self.log_ref_cache,
                 &(root.clone(), ref_name.clone()),
                 scope,
-                exec,
-                &repo,
+                mode,
+                page,
             ),
-            LogScope::Search(query) => read_scoped_log_batch(
+            LogScope::Search(query) => settle_scoped_window(
                 &mut self.search_cache,
                 &(root.clone(), query.clone()),
                 scope,
-                exec,
-                &repo,
+                mode,
+                page,
             ),
-        };
-        self.bump();
-        settle
+        }
     }
 
     /// Fold one batch of one scoped listing into THAT scope's window and report
@@ -674,29 +798,7 @@ impl RootCaches {
         mode: LogBatchMode,
         page: Vec<Commit>,
     ) -> LogBatchSettle {
-        let settle = match scope {
-            LogScope::Path(target) => settle_scoped_window(
-                &mut self.log_path_cache,
-                &(root.clone(), target.clone()),
-                scope,
-                mode,
-                page,
-            ),
-            LogScope::Ref(ref_name) => settle_scoped_window(
-                &mut self.log_ref_cache,
-                &(root.clone(), ref_name.clone()),
-                scope,
-                mode,
-                page,
-            ),
-            LogScope::Search(query) => settle_scoped_window(
-                &mut self.search_cache,
-                &(root.clone(), query.clone()),
-                scope,
-                mode,
-                page,
-            ),
-        };
+        let settle = self.settle_scope(root, scope, mode, page);
         self.bump();
         settle
     }
@@ -870,6 +972,10 @@ impl RootCaches {
                 self.ahead_behind.remove(root);
                 self.submodule_cache.remove(root);
                 self.hunk_stats.remove(root);
+                // A root's failures go with its windows: an operation that
+                // changed the repository must not leave a pane still reporting
+                // the read the operation made stale.
+                self.log_failed.retain(|read, _| read.root() != root);
             }
         }
     }
@@ -901,6 +1007,7 @@ impl RootCaches {
         self.worktree_cache.clear();
         self.submodule_cache.clear();
         self.hunk_stats.clear();
+        self.log_failed.clear();
     }
 
     /// True when every map is empty — the invalidation invariant's
@@ -917,6 +1024,7 @@ impl RootCaches {
             && self.worktree_cache.is_empty()
             && self.submodule_cache.is_empty()
             && self.hunk_stats.is_empty()
+            && self.log_failed.is_empty()
     }
 }
 
