@@ -5,7 +5,7 @@
 use egui::{Align, FontFamily, FontId, Layout, RichText, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType};
+use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType, UnmergedCommits};
 use turbogit_domain::model::{BranchKind, MergeStrategy};
 use turbogit_services::{
     branch_service, integrate_service, shelve_stash, sync_service, tag_service,
@@ -46,6 +46,10 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
         Dialog::CherryPickTarget => "Cherry-pick to branch".to_string(),
         // Issue 32 branches popup row actions.
         Dialog::RenameBranch => "Rename branch".to_string(),
+        // The reference's own words for this dialog, because the
+        // fact it states is about the branch's *merge* state, not about a
+        // deletion the developer already watched happen.
+        Dialog::BranchNotFullyMerged => "Branch Was Not Fully Merged".to_string(),
         Dialog::CompareBranches => {
             format!(
                 "Compare {} with {}",
@@ -69,6 +73,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
             Dialog::NewWorktree => super::worktrees::new_worktree_dialog(ui, state),
             Dialog::CherryPickTarget => cherry_pick_target(ui, state),
             Dialog::RenameBranch => rename_branch(ui, state),
+            Dialog::BranchNotFullyMerged => branch_not_fully_merged(ui, state),
             Dialog::CompareBranches => compare_branches(ui, state),
             _ => {}
         });
@@ -1219,6 +1224,85 @@ fn compare_branches(ui: &mut Ui, state: &mut AppState) {
         state.ui.dlg.compare_right = left.clone();
         if let Some(id) = root {
             state.ui.dlg.compare_commits = state.outgoing(&id, &right, &left);
+        }
+    }
+}
+
+/// What the unmerged-commits disclosure was asked to do — the deferred-intent
+/// shape the surfaces here use: the body paints and returns, the host applies.
+/// The viewer opened from the post-delete notification restores or closes; the
+/// one opened from the pre-flight confirm can only close, because the branch it
+/// describes still stands.
+pub(crate) enum UnmergedAction {
+    Nothing,
+    Restore,
+    Close,
+}
+
+/// The delete disclosure: a header naming **both** sides — the branch and what
+/// it was not merged into — over the list of what is lost. One body, opened by
+/// the pre-flight confirmation's link and by the post-delete notification's, so
+/// the two can never state the fact differently.
+///
+/// It reads nothing from git: the payload is the snapshot taken while the
+/// branch still existed, which is the only moment these commits were
+/// addressable by name.
+pub(crate) fn unmerged_disclosure(
+    ui: &mut Ui,
+    state: &AppState,
+    unmerged: &UnmergedCommits,
+) -> UnmergedAction {
+    ui.label(unmerged.header());
+    egui::ScrollArea::vertical()
+        .max_height(240.0)
+        .show(ui, |ui| {
+            for c in &unmerged.commits {
+                let short = widgets::short_commit_ref(&c.id);
+                let line = match &c.subject {
+                    Some(subject) => format!("{short}  {subject}"),
+                    // A commit whose message could not be read is still a
+                    // commit that is being lost: the hash says so, a blank gap
+                    // would read as an empty row.
+                    None => short,
+                };
+                ui.label(line);
+            }
+        });
+    let mut action = UnmergedAction::Nothing;
+    widgets::dialog_footer(ui, |ui| {
+        if ui.button("Close").clicked() {
+            action = UnmergedAction::Close;
+        }
+        // The reference's `Restore`, offered exactly where there is a branch to
+        // restore: reached from the confirmation the branch still stands.
+        if state.unmerged_restore_available(unmerged)
+            && kit_button(ui, KitButton::Primary, "Restore").clicked()
+        {
+            action = UnmergedAction::Restore;
+        }
+    });
+    action
+}
+
+/// The dialog the post-delete notification's link opens: the
+/// reference's "Branch Was Not Fully Merged" list, with the recovery its
+/// `&Restore` button names.
+fn branch_not_fully_merged(ui: &mut Ui, state: &mut AppState) {
+    let Some(unmerged) = state.ui.dlg.unmerged_view.clone() else {
+        widgets::empty_state(ui, "No unmerged commits to show.");
+        close(state);
+        return;
+    };
+    match unmerged_disclosure(ui, state, &unmerged) {
+        UnmergedAction::Nothing => {}
+        UnmergedAction::Close => {
+            state.ui.dlg.unmerged_view = None;
+            close(state);
+        }
+        UnmergedAction::Restore => {
+            state.restore_unmerged_branch(&unmerged);
+            state.ui.dlg.unmerged_view = None;
+            close(state);
         }
     }
 }
