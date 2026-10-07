@@ -120,14 +120,7 @@ pub(crate) fn preview_caret_line(state: &AppState) -> Option<(std::path::PathBuf
             DisplayRow::Pair(d, a) => d.iter().chain(a.iter()).collect(),
         })
         .filter(|r| r.hunk == state.ui.diff_current_hunk)
-        .find(|r| {
-            r.kind
-                == if want_add {
-                    RowKind::Add
-                } else {
-                    RowKind::Del
-                }
-        })
+        .find(|r| r.kind == if want_add { RowKind::Add } else { RowKind::Del })
         .map(|r| r.new_no.max(r.old_no))
         .filter(|line| *line > 0)
         .map(|line| (path, line))
@@ -169,7 +162,11 @@ pub(super) fn diff_options_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     );
     for value in DiffHighlighting::ALL {
         if ui
-            .radio_value(&mut state.ui.diff_policies.highlighting, value, value.label())
+            .radio_value(
+                &mut state.ui.diff_policies.highlighting,
+                value,
+                value.label(),
+            )
             .changed()
         {
             changed = true;

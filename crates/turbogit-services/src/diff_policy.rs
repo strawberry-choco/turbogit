@@ -30,15 +30,7 @@ use turbogit_domain::model::{DiffHighlighting, DiffWhitespace};
 /// actually write imports in, each requiring a space or a quote after the keyword
 /// so an identifier that merely starts with the keyword is not swept in.
 const IMPORT_PREFIXES: [&str; 9] = [
-    "use ",
-    "pub use ",
-    "mod ",
-    "import ",
-    "from ",
-    "#include",
-    "#import",
-    "@import",
-    "require(",
+    "use ", "pub use ", "mod ", "import ", "from ", "#include", "#import", "@import", "require(",
 ];
 
 /// Whether the line is an import statement.
@@ -120,9 +112,7 @@ pub fn considered_equal(ws: DiffWhitespace, dels: &[&str], adds: &[&str]) -> boo
                     .zip(adds)
                     .all(|(d, a)| whitespace_key(ws, d) == whitespace_key(ws, a))
         }
-        DiffWhitespace::IgnoreWhitespaceAndEmptyLines => {
-            run_key(ws, dels) == run_key(ws, adds)
-        }
+        DiffWhitespace::IgnoreWhitespaceAndEmptyLines => run_key(ws, dels) == run_key(ws, adds),
         DiffWhitespace::IgnoreImportsAndFormatting => {
             run_key(ws, dels) == run_key(ws, adds)
                 || (dels.iter().chain(adds).all(|l| is_import_line(l))
@@ -280,10 +270,7 @@ mod tests {
         let internal = (&["g amma"][..], &["gamma"][..]);
         let added_blank = (&[][..], &["  "][..]);
         let joined = (&["a b c"][..], &["a", "b c"][..]);
-        let import_swap = (
-            &["use std::fs;", "use std::io;"][..],
-            &["use std::io;"][..],
-        );
+        let import_swap = (&["use std::fs;", "use std::io;"][..], &["use std::io;"][..]);
         let literal_space = (&["let s = \"a b\";"][..], &["let s = \"a  b\";"][..]);
 
         let shows = |ws: W, dels: &[&str], adds: &[&str]| !considered_equal(ws, dels, adds);
@@ -313,11 +300,7 @@ mod tests {
             added_blank.0,
             added_blank.1
         ));
-        assert!(!shows(
-            W::IgnoreWhitespaceAndEmptyLines,
-            joined.0,
-            joined.1
-        ));
+        assert!(!shows(W::IgnoreWhitespaceAndEmptyLines, joined.0, joined.1));
         assert!(shows(
             W::IgnoreWhitespaceAndEmptyLines,
             import_swap.0,
