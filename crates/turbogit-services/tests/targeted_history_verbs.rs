@@ -353,3 +353,102 @@ fn a_reword_survives_the_preview_without_showing_its_new_text() {
          no slot in git's todo"
     );
 }
+
+// ---------------------------------------------------- post-hoc undo (09) --
+
+/// `true` when `r` does not resolve — the OPPOSITE contract from [`rev`], the
+/// way the UI suite's `git_absent` reads an expected-absent ref.
+fn ref_absent(dir: &Path, r: &str) -> bool {
+    !std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", r])
+        .current_dir(dir)
+        .output()
+        .expect("git must be on PATH")
+        .status
+        .success()
+}
+
+/// The post-hoc undo restores from the backup ref rather than reconstructing
+/// anything: the branch returns to the exact pre-rewrite tip, the regretted
+/// message is gone, and the spent backup is discarded so the next rewrite
+/// starts from a clean net.
+#[test]
+fn undoing_a_reword_restores_the_pre_rewrite_history_from_the_backup() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = three_deep(tmp.path());
+    let target = rev(&repo, "HEAD~1");
+
+    history_editor::reword_commit(
+        &engine(),
+        &repo,
+        &target,
+        "a message that will be regretted",
+        &VcsSettings::default(),
+        "feature",
+    )
+    .expect("the targeted reword runs");
+
+    // The undo is armed with the tip the rewrite finished on — the fact the
+    // guard compares against when it runs.
+    let after_reword = rev(&repo, "HEAD");
+    history_editor::undo_last_rewrite(&engine(), &repo, &after_reword)
+        .expect("the undo runs while the repository stands where the rewrite left it");
+
+    assert_eq!(
+        subjects(&repo),
+        vec!["feature-3", "feature-2", "feature-1", "base"],
+        "the branch is back on the pre-rewrite history, from the backup ref"
+    );
+    assert!(
+        ref_absent(&repo, engine().rewrite_backup_ref()),
+        "and the spent backup is discarded, not left dangling"
+    );
+}
+
+/// The guard is the substance: undo validity is checked AT UNDO TIME, not
+/// assumed at rewrite time. A repository that has moved since the rewrite —
+/// here, a second operation committed on top — refuses the undo and restores
+/// nothing, because resetting to the backup would destroy the newer work.
+#[test]
+fn an_undo_refuses_when_the_repository_has_moved_since_the_rewrite() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = three_deep(tmp.path());
+    let target = rev(&repo, "HEAD~1");
+
+    history_editor::reword_commit(
+        &engine(),
+        &repo,
+        &target,
+        "a message that will be regretted",
+        &VcsSettings::default(),
+        "feature",
+    )
+    .expect("the targeted reword runs");
+
+    // A second operation lands after the rewrite: HEAD is no longer where the
+    // rewrite left it, so the tip recorded then no longer names the branch tip.
+    let after_reword = rev(&repo, "HEAD");
+    commit(&repo, "d.txt", "feature-4");
+
+    let refused = history_editor::undo_last_rewrite(&engine(), &repo, &after_reword)
+        .expect_err("a moved repository must refuse the undo");
+    assert!(
+        refused.to_string().contains("changed"),
+        "the refusal says why: {refused}"
+    );
+    assert_eq!(
+        subjects(&repo),
+        vec![
+            "feature-4",
+            "feature-3",
+            "a message that will be regretted",
+            "feature-1",
+            "base"
+        ],
+        "and nothing was restored: the newer commit survives"
+    );
+    assert!(
+        !ref_absent(&repo, engine().rewrite_backup_ref()),
+        "and the backup is kept — the refusal is not a discard"
+    );
+}
