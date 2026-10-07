@@ -225,7 +225,12 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
             // A dead end turns into the likely next intent.
             if filtering
                 && in_scope.iter().all(|s| {
-                    section_match_count(s, &filter, remotes_revealed(tree, &s.root_id)) == 0
+                    section_match_count(
+                        s,
+                        &filter,
+                        remotes_revealed(tree, &s.root_id),
+                        props.view.options.show_tags,
+                    ) == 0
                 })
             {
                 no_match_state(ui, filter.trim(), &mut events);
@@ -243,14 +248,28 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
                 &mut target_y,
                 &mut events,
             );
-            for section in &in_scope {
-                paint_repo_section(
+            if props.view.options.group_by_repository {
+                for section in &in_scope {
+                    paint_repo_section(
+                        ui,
+                        props,
+                        tree,
+                        section,
+                        &filter,
+                        invisible,
+                        &scroll_target,
+                        &mut y_cursor,
+                        &mut target_y,
+                        &mut events,
+                    );
+                }
+            } else {
+                paint_ungrouped_sections(
                     ui,
                     props,
                     tree,
-                    section,
+                    &in_scope,
                     &filter,
-                    invisible,
                     &scroll_target,
                     &mut y_cursor,
                     &mut target_y,
@@ -273,8 +292,15 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
 /// Total visible branches/tags in a section under the current filter — used to
 /// decide the no-match state and to size group headers. `remotes` is this
 /// section's own reveal, so a hidden remote branch cannot suppress the
-/// no-match state.
-fn section_match_count(section: &RepoSection, filter: &str, remotes: bool) -> usize {
+/// no-match state. `show_tags` is the gear's toggle: a tag list that is not
+/// painted at all must not be counted as a match either, or the tree would show
+/// an empty frame instead of turning the dead end into the likely next intent.
+fn section_match_count(
+    section: &RepoSection,
+    filter: &str,
+    remotes: bool,
+    show_tags: bool,
+) -> usize {
     let locals = leaf_count(&filter_nodes(&section.locals, filter));
     let remotes = if remotes {
         section
@@ -285,11 +311,15 @@ fn section_match_count(section: &RepoSection, filter: &str, remotes: bool) -> us
     } else {
         0
     };
-    let tags = section
-        .tags
-        .iter()
-        .filter(|t| matches_query(&t.name, filter))
-        .count();
+    let tags = if show_tags {
+        section
+            .tags
+            .iter()
+            .filter(|t| matches_query(&t.name, filter))
+            .count()
+    } else {
+        0
+    };
     locals + remotes + tags
 }
 
@@ -349,6 +379,12 @@ fn paint_recent_group(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
+    // `Show Recent Branches` off paints no group at all — the rows are still in
+    // the model and still in Local, because the toggle hides a level rather than
+    // taking branches away.
+    if !props.view.options.show_recent {
+        return;
+    }
     // The scope chip narrows the pane to one repository; a group that spans
     // repositories narrows with it, or a filtered pane would act on a
     // repository it says it is not showing.
@@ -396,7 +432,7 @@ fn paint_recent_group(
 
 /// Paint one repo's section: header (unless invisible for single-repo), Local
 /// group, Remote area, and Tags group.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // the painter-thread this function shares
 fn paint_repo_section(
     ui: &mut Ui,
     props: &TreeProps<'_>,
@@ -415,20 +451,141 @@ fn paint_repo_section(
     repo_header(ui, section, !invisible, events);
     *y_cursor += REPO_HEADER_H;
 
-    // --- Local group ---
     let locals = filter_nodes(&section.locals, filter);
-    let local_count = leaf_count(&locals);
-    let local_header = section_header(ui, "Local", local_count, tree.groups.local, |_| {});
-    if local_header.clicked() {
+    paint_local_group(
+        ui,
+        props,
+        tree,
+        &[&locals],
+        scroll_target,
+        y_cursor,
+        target_y,
+        events,
+    );
+    paint_remote_area(
+        ui,
+        props,
+        tree,
+        section,
+        filter,
+        scroll_target,
+        y_cursor,
+        target_y,
+        events,
+    );
+    let tags = section_tags(section, filter);
+    paint_tags_group(
+        ui,
+        props,
+        tree,
+        &[&tags],
+        scroll_target,
+        y_cursor,
+        target_y,
+        events,
+    );
+}
+
+/// Paint every in-scope repository's branches as **one** set of groups: the
+/// `Group by Repository` level is the thing the toggle removed, so no band and
+/// one Local group, one Tags group, over all of them at once.
+///
+/// Nothing else about the list changes. Every branch keeps a row — the count on
+/// the merged header is the sum of the same leaves the bands used to carry — and
+/// the builder has already qualified the rows whose name another repository also
+/// answers with, so the row still says where it came from once the band that
+/// used to say it is gone.
+///
+/// The Remote area stays per repository: revealing one repository's remotes is
+/// that repository's own decision ([`TreeEvent::RemoteRevealToggled`] carries its
+/// root), so merging it would paint one header that two repositories disagree
+/// about.
+#[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
+fn paint_ungrouped_sections(
+    ui: &mut Ui,
+    props: &TreeProps<'_>,
+    tree: &mut TreeState,
+    sections: &[&RepoSection],
+    filter: &str,
+    scroll_target: &Option<String>,
+    y_cursor: &mut f32,
+    target_y: &mut Option<f32>,
+    events: &mut Vec<TreeEvent>,
+) {
+    let locals: Vec<Vec<BranchNode>> = sections
+        .iter()
+        .map(|s| filter_nodes(&s.locals, filter))
+        .collect();
+    let local_refs: &[&[BranchNode]] = &locals.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    paint_local_group(
+        ui,
+        props,
+        tree,
+        local_refs,
+        scroll_target,
+        y_cursor,
+        target_y,
+        events,
+    );
+    for section in sections {
+        paint_remote_area(
+            ui,
+            props,
+            tree,
+            section,
+            filter,
+            scroll_target,
+            y_cursor,
+            target_y,
+            events,
+        );
+    }
+    let tags: Vec<Vec<branches_tree::TagLeaf>> =
+        sections.iter().map(|s| section_tags(s, filter)).collect();
+    let tag_refs: &[&[branches_tree::TagLeaf]] =
+        &tags.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    paint_tags_group(
+        ui,
+        props,
+        tree,
+        tag_refs,
+        scroll_target,
+        y_cursor,
+        target_y,
+        events,
+    );
+}
+
+/// The `Local` group: one header sized by the leaves actually painted beneath
+/// it, then each forest handed in. One forest per repository is the grouped
+/// shape; one forest per repository under a single header is the un-grouped one,
+/// which is why the caller hands a list and not a section.
+#[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
+fn paint_local_group(
+    ui: &mut Ui,
+    props: &TreeProps<'_>,
+    tree: &mut TreeState,
+    forests: &[&[BranchNode]],
+    scroll_target: &Option<String>,
+    y_cursor: &mut f32,
+    target_y: &mut Option<f32>,
+    events: &mut Vec<TreeEvent>,
+) {
+    let count = forests.iter().map(|f| leaf_count(f)).sum();
+    let header = section_header(ui, "Local", count, tree.groups.local, |_| {});
+    if header.clicked() {
         events.push(TreeEvent::GroupToggled(TreeGroup::Local));
     }
     *y_cursor += SECTION_H;
-    if tree.groups.local {
+    if !tree.groups.local {
+        return;
+    }
+    for forest in forests {
         paint_nodes(
             ui,
             props,
             tree,
-            &locals,
+            forest,
             0,
             scroll_target,
             y_cursor,
@@ -436,8 +593,22 @@ fn paint_repo_section(
             events,
         );
     }
+}
 
-    // --- Remote area ---
+/// One repository's remote area: the expanded per-remote groups when its remotes
+/// are revealed, the collapsed rollup row when they are not.
+#[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
+fn paint_remote_area(
+    ui: &mut Ui,
+    props: &TreeProps<'_>,
+    tree: &mut TreeState,
+    section: &RepoSection,
+    filter: &str,
+    scroll_target: &Option<String>,
+    y_cursor: &mut f32,
+    target_y: &mut Option<f32>,
+    events: &mut Vec<TreeEvent>,
+) {
     if remotes_revealed(tree, &section.root_id) {
         // A repo revealed from its own rollup gets one header that puts it back.
         // The view-wide surface (`show_remotes`) has no such control and paints
@@ -478,22 +649,39 @@ fn paint_repo_section(
         remote_rollup_row(ui, tree, section, events);
         *y_cursor += BRANCH_ROW_H;
     }
+}
 
-    // --- Tags group ---
-    let mut tags: Vec<crate::ui::branches_tree::TagLeaf> = section
-        .tags
-        .iter()
-        .filter(|t| matches_query(&t.name, filter))
-        .cloned()
-        .collect();
-    tags.sort_by(|a, b| a.name.cmp(&b.name));
-    let tags_header = section_header(ui, "Tags", tags.len(), tree.groups.tags, |_| {});
-    if tags_header.clicked() {
+/// The `Tags` group, over the tag lists handed in — one per repository while
+/// repository grouping is on, all of them under one header when it is off.
+///
+/// `Show Tags` off paints neither the rows nor the header: the toggle is the
+/// group's visibility, and a header for a group that cannot open would be a
+/// control with nothing to control. The lists stay in the view model regardless.
+#[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
+fn paint_tags_group(
+    ui: &mut Ui,
+    props: &TreeProps<'_>,
+    tree: &mut TreeState,
+    lists: &[&[branches_tree::TagLeaf]],
+    scroll_target: &Option<String>,
+    y_cursor: &mut f32,
+    target_y: &mut Option<f32>,
+    events: &mut Vec<TreeEvent>,
+) {
+    if !props.view.options.show_tags {
+        return;
+    }
+    let count = lists.iter().map(|l| l.len()).sum();
+    let header = section_header(ui, "Tags", count, tree.groups.tags, |_| {});
+    if header.clicked() {
         events.push(TreeEvent::GroupToggled(TreeGroup::Tags));
     }
     *y_cursor += SECTION_H;
-    if tree.groups.tags {
-        for t in &tags {
+    if !tree.groups.tags {
+        return;
+    }
+    for list in lists {
+        for t in *list {
             if Some(t.name.as_str()) == scroll_target.as_deref() {
                 *target_y = Some(*y_cursor);
             }
@@ -501,6 +689,18 @@ fn paint_repo_section(
             tag_row(ui, t);
         }
     }
+}
+
+/// A repository's tags under the live filter, in the order the list shows them.
+fn section_tags(section: &RepoSection, filter: &str) -> Vec<branches_tree::TagLeaf> {
+    let mut tags: Vec<branches_tree::TagLeaf> = section
+        .tags
+        .iter()
+        .filter(|t| matches_query(&t.name, filter))
+        .cloned()
+        .collect();
+    tags.sort_by(|a, b| a.name.cmp(&b.name));
+    tags
 }
 
 /// Paint a forest of branch nodes (local or remote) with directory headers at

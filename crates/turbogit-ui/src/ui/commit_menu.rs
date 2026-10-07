@@ -10,7 +10,11 @@
 //! contract: this module decides no policy beyond the eleven gates, dispatches
 //! nothing, and never touches `AppState`. What it is told is plain facts about
 //! the commit and its repository ([`CommitFacts`]), so a gate that costs a git
-//! call has nowhere to hide.
+//! call has nowhere to hide. The two history verbs are the one place those facts
+//! are read by another module — [`crate::ui::rewrite_gating`] owns their closed
+//! vocabulary of blocked reasons, because the reference gates them on the
+//! repository's state and that enumeration belongs to one file rather than to
+//! whichever menu happens to offer the verb.
 //!
 //! No item is [`MenuItemKind::Primary`]: a commit has no single dominant verb,
 //! the first slot belongs to Copy hash, and brand ink on a copy action would be
@@ -19,8 +23,10 @@
 //! rather than positional.
 
 use turbogit_domain::model::Commit;
+use turbogit_services::integrate_service::OwnedOperation;
 
 use crate::ui::icons::Icon;
+use crate::ui::rewrite_gating::{self, RewriteVerb, Scope};
 use crate::ui::widgets::{MenuItemKind, MenuItemProps, MenuItemState, menu_item, menu_rule};
 
 /// What the user picked. Plain data — the surface owns what it means.
@@ -90,24 +96,21 @@ impl CommitMenuAction {
 /// the one the developer can resolve immediately; the structural guards — what
 /// kind of commit this is, which history it sits in, what branch is checked out
 /// — are stated after it.
-mod reason {
+///
+/// The two history verbs' own sentences live in
+/// [`crate::ui::rewrite_gating`], except [`reason::PROTECTED`], which stays here
+/// because Revert commit and the two rewrites refuse the same policy and must
+/// word it identically.
+pub(crate) mod reason {
     pub(crate) const DIRTY: &str = "Resolve the uncommitted changes first";
     pub(crate) const SINGLE_ROOT: &str = "only one repository is open";
     pub(crate) const PROTECTED: &str = "the current branch is protected";
-    pub(crate) const OFF_BRANCH: &str = "not on the current branch";
-    pub(crate) const MERGE_DROP: &str = "a merge commit cannot be dropped";
-    pub(crate) const MERGE_REWORD: &str = "a merge commit cannot be reworded";
-    // Stated in the service's own noun, so the item and the refusal the service
-    // would give name the commit the same way. The fallback toast in
-    // `AppState::open_rewrite_preflight` quotes that message verbatim.
-    pub(crate) const ROOT_DROP: &str = "a root commit cannot be dropped";
-    pub(crate) const ROOT_REWORD: &str = "a root commit cannot be reworded";
 }
 
 /// Plain facts about one commit's repository, each one read off state the log
-/// already caches. Merge-ness is not here because it is not a fact to be told:
-/// it is `commit.parents.len() > 1`, and a gate that could contradict the commit
-/// it is gating would be a second source of truth.
+/// already caches or off git's own marker files. Merge-ness is not here because
+/// it is not a fact to be told: it is `commit.parents.len() > 1`, and a gate that
+/// could contradict the commit it is gating would be a second source of truth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CommitFacts<'a> {
     /// The root's worktree has uncommitted changes.
@@ -121,6 +124,21 @@ pub struct CommitFacts<'a> {
     /// More than one repository root is in scope, which is the only condition
     /// under which a cross-repository cherry-pick has a destination.
     pub multi_root: bool,
+    /// The operation that currently holds this repository, if any.
+    ///
+    /// Read from git's own marker files by
+    /// [`turbogit_services::integrate_service::owning_operation`] rather than
+    /// from a cached snapshot, and deliberately so: an operation started by
+    /// another process, or by this app's own worker between two refreshes, has
+    /// to gate the verb the moment the menu opens. It is the one fact here that
+    /// touches the filesystem, it is per root — which is the whole of the
+    /// multi-root discrimination, a rebase in another repository is not this
+    /// root's business — and it is asked once per open menu per frame, not once
+    /// per row.
+    pub owner: Option<OwnedOperation>,
+    /// Which repositories the workspace has in scope for a verb that runs in
+    /// exactly one. See [`Scope`].
+    pub scope: Scope,
     /// The repository's own name. Borrowed rather than owned so a name the
     /// frame is already painting costs no allocation, and — the reason it is
     /// here at all — so an action aimed at one repository can name it, the way
@@ -132,7 +150,6 @@ pub struct CommitFacts<'a> {
 /// The eleven gates, in [`CommitMenuAction::ORDER`] — one function, one set of
 /// strings, from plain data only.
 pub fn commit_menu_items(commit: &Commit, facts: &CommitFacts<'_>) -> [MenuItemState; 11] {
-    let is_merge = commit.parents.len() > 1;
     let mut items = [MenuItemState::enabled(); 11];
 
     // Copying and patching read the commit alone: no worktree, no branch, no
@@ -162,42 +179,26 @@ pub fn commit_menu_items(commit: &Commit, facts: &CommitFacts<'_>) -> [MenuItemS
         items[CommitMenuAction::RevertCommit.index()] = MenuItemState::disabled(reason::PROTECTED);
     }
 
-    // The two history verbs are bounded identically: one rewrite path, so the
-    // same four reasons. The first two are what kind of commit this is — a merge
-    // is blocked because nothing routes `--rebase-merges` through the
-    // interactive path, a root commit because the plan is built over the first
-    // parent and it has none — so they are asked together, before anything about
-    // the repository or the branch. The remaining two are about where the commit
-    // sits: the plan is built to this branch's tip, so a commit off that branch
-    // has no row in it, and a protected branch refuses the rewrite outright.
+    // The two history verbs are bounded identically: one rewrite path, so one
+    // gate. [`rewrite_gating::blocked`] holds their vocabulary — the four
+    // operation states that own the repository, the commit's two structural
+    // bounds, the commit's place in history, the two cross-repository scope
+    // reasons and the branch policy — and returns AT MOST ONE reason, which is
+    // what keeps a blocked row saying one actionable sentence instead of
+    // reciting everything that happens to be true.
     //
-    // Root-ness is the fourth reason because an enabled item that can never work
-    // is a defect: `targeted_plan` refuses a root commit outright, and before
-    // this the developer only found out by clicking. It is a `parents` count
-    // like merge-ness, so it costs no git call and cannot contradict the commit.
+    // Root-ness and merge-ness are `parents` counts, like the commit they gate,
+    // so they cost no git call and cannot contradict it; an enabled item that
+    // can never work is a defect, and `targeted_plan` refuses a root commit
+    // outright, so the developer used to find out only by clicking.
     let rewriteable = [
-        (
-            CommitMenuAction::DropCommit,
-            reason::MERGE_DROP,
-            reason::ROOT_DROP,
-        ),
-        (
-            CommitMenuAction::RewordCommit,
-            reason::MERGE_REWORD,
-            reason::ROOT_REWORD,
-        ),
+        (CommitMenuAction::DropCommit, RewriteVerb::Drop),
+        (CommitMenuAction::RewordCommit, RewriteVerb::Reword),
     ];
-    for (action, merge_reason, root_reason) in rewriteable {
-        items[action.index()] = if is_merge {
-            MenuItemState::disabled(merge_reason)
-        } else if commit.parents.is_empty() {
-            MenuItemState::disabled(root_reason)
-        } else if !facts.on_current_branch {
-            MenuItemState::disabled(reason::OFF_BRANCH)
-        } else if facts.protected_branch {
-            MenuItemState::disabled(reason::PROTECTED)
-        } else {
-            MenuItemState::enabled()
+    for (action, verb) in rewriteable {
+        items[action.index()] = match rewrite_gating::blocked(commit, facts) {
+            Some(block) => MenuItemState::disabled(block.stated(verb)),
+            None => MenuItemState::enabled(),
         };
     }
     items

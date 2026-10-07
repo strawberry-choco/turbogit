@@ -251,6 +251,15 @@ fn a_fully_merged_delete_offers_no_unmerged_link() {
     assert_painted(&harness, "Delete local branch 'tidy'?");
     assert_not_painted(&harness, "unmerged commit");
 
+    // Dismiss the confirmation before asking again. `delete` drives the row's
+    // own menu, and while the modal is up `tidy`'s row is under it: of the three
+    // local branches it is the only one with no row in the Recent group above the
+    // dialog, so the second right-click would land on the dialog and open no menu
+    // at all. The ask-and-confirm path below is then the same one every other test
+    // in this file takes.
+    harness.get_by_label("Cancel").click();
+    settle_quiet(&mut harness);
+
     delete(&mut harness, "tidy");
     assert_painted(&harness, "Deleted 'tidy'");
     assert_not_painted(&harness, "unmerged commit");
