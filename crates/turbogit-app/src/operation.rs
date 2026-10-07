@@ -53,6 +53,11 @@ pub enum RebaseKind {
     Standard { onto: String },
     /// `git rebase --autosquash <onto>` — the dialog's Autosquash mode.
     Autosquash { onto: String },
+    /// `git rebase --onto <new_base> <old_base>` — the dialog's `--onto` mode:
+    /// move only the sequence ABOVE `old_base` onto `new_base`. Two fields, not
+    /// one, because the cutoff and the destination are different arguments and
+    /// swapping them rebases the wrong commits.
+    Onto { new_base: String, old_base: String },
     /// `git rebase -i <plan>` — the dialog's Interactive mode. `backup` writes
     /// the pre-rebase safety ref first, which is what the plan editor does and
     /// the dialog's own replay does not.
@@ -254,6 +259,30 @@ impl Operation {
         )
     }
 
+    /// `git rebase --onto <new base> <old base>` — the dialog's `--onto` mode.
+    /// The argument order here is the developer's order (destination first,
+    /// cutoff second); the service is what turns them into git's two argv
+    /// slots.
+    pub fn rebase_with_onto(
+        root: &RootId,
+        branch: &str,
+        new_base: &str,
+        old_base: &str,
+        opts: &RebaseOpts,
+        settings: &VcsSettings,
+    ) -> Self {
+        Self::rebase_with(
+            root,
+            branch,
+            settings,
+            opts,
+            RebaseKind::Onto {
+                new_base: new_base.to_string(),
+                old_base: old_base.to_string(),
+            },
+        )
+    }
+
     /// `git rebase -i <plan>`. `backup` writes the pre-rebase safety ref first,
     /// which is what the plan editor does and the dialog's replay does not.
     pub fn rebase_interactive(
@@ -308,6 +337,12 @@ impl Operation {
             Self::Rebase { kind, .. } => match kind {
                 RebaseKind::Standard { onto } => format!("Rebase onto {onto}"),
                 RebaseKind::Autosquash { onto } => format!("Autosquash rebase onto {onto}"),
+                // Both bases named: the label is what the toast and the activity
+                // feed leave behind, and a move that names only its destination
+                // cannot be told apart from the plain rebase that has one.
+                RebaseKind::Onto { new_base, old_base } => {
+                    format!("Rebase {old_base}.. onto {new_base}")
+                }
                 RebaseKind::Interactive { .. } => "Interactive rebase".to_string(),
                 RebaseKind::Branch { branch, onto } => format!("Rebase {branch} onto {onto}"),
             },
@@ -407,6 +442,11 @@ impl Operation {
                     RebaseKind::Standard { onto } | RebaseKind::Autosquash { onto } => {
                         turbogit_services::integrate_service::rebase_current(
                             vcs, path, &onto, &opts, &settings, &branch,
+                        )
+                    }
+                    RebaseKind::Onto { new_base, old_base } => {
+                        turbogit_services::integrate_service::rebase_with_onto(
+                            vcs, path, &new_base, &old_base, &opts, &settings, &branch,
                         )
                     }
                     RebaseKind::Interactive {
