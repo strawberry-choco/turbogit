@@ -29,7 +29,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::harness::{
-    KITTEST_DEFAULT_BOX, assert_painted, filled_rects, galley_origin, shell_harness_over_unstyled,
+    KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, filled_rects, galley_origin,
+    painted_galleys, shell_harness_over_unstyled,
 };
 
 use egui::{Color32, Pos2, Rect, Shape, accesskit::Role};
@@ -532,12 +533,17 @@ fn continue_merge_completes_when_no_conflicts_remain() {
 
     // Resolve every conflict in the file. After resolving conflict 1 the
     // active cursor stays on it (Auto-advance is off by default); we
-    // navigate to conflict 2 with Next and then resolve it.
+    // navigate to conflict 2 and then resolve it. That second side-take
+    // happens on a file that now carries merged changes (conflict 1 is
+    // resolved), so the Overwrite Changes pre-check holds it and the
+    // dangerous affirmative is what applies it (ticket 01b).
     h.get_by_label("Take ours 1").click();
     h.run();
     h.get_by_label("Next >").click();
     h.run();
     h.get_by_label("Take ours 2").click();
+    h.run();
+    h.get_by_label("Discard and Accept").click();
     h.run();
 
     // Apply writes the composed buffer to the working tree and stages it,
@@ -670,4 +676,194 @@ fn resolver_panes_and_controls_remain_reachable_at_small_window() {
             "{label} must remain reachable at 720x640; rect={rect:?}, viewport={viewport:?}"
         );
     }
+}
+
+// ------------------------------------------------- ticket 01 (parity) tests --
+
+/// Ticket 01b — the Overwrite Changes pre-check. `Take ours` / `Take theirs`
+/// are the resolver's Accept Yours / Accept Theirs; on a file that already
+/// carries merged changes (any conflict resolved, or the Result free-edited)
+/// they confirm first. The trigger is per FILE — the reference's
+/// "This file already contains merged changes" — assumed per file by the
+/// ticket (UNVERIFIED against the running product). The affirmative button is
+/// the dangerous sentence (`Discard and Accept`); the safe option does
+/// nothing.
+///
+/// Both title strings are asserted **inside the confirm's own window rect**:
+/// the resolver's file list and body reuse enough words that an unscoped
+/// substring assert would match them.
+#[test]
+fn accept_side_on_file_with_merged_changes_confirms_overwrite_first() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "overwrite-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_resolver(&mut h);
+
+    // Fresh file — no merged changes: Accept Yours resolves directly and no
+    // confirm paints.
+    h.get_by_label("Take ours 1").click();
+    h.run();
+    assert_eq!(h.state().ui.conflict_res[0], Some(0));
+    assert_not_painted(&h, "Overwrite Changes");
+    assert_not_painted(&h, "Discard and Accept");
+
+    // The file now carries merged changes: Accept Theirs (the compact row of
+    // the still-unresolved conflict 2) confirms first.
+    h.get_by_label("Take theirs").click();
+    h.run();
+    let confirm = h.get_by_role_and_label(Role::Window, "Overwrite Changes");
+    let rect = confirm.rect();
+    let galleys = painted_galleys(&h);
+    let scoped = |needle: &str| {
+        galleys
+            .iter()
+            .find(|g| g.text == needle)
+            .unwrap_or_else(|| panic!("`{needle}` was not painted by the confirm"))
+    };
+    for needle in ["Overwrite Changes", "Discard and Accept"] {
+        let g = scoped(needle);
+        assert!(
+            rect.contains(g.pos),
+            "`{needle}` must paint inside the confirm window (rect {rect:?}), got {g:?}"
+        );
+    }
+
+    // The safe option does nothing: the pending take is dropped, the
+    // conflict stays unresolved, the confirm closes.
+    h.get_by_label("Keep Merged Changes").click();
+    h.run();
+    assert_eq!(
+        h.state().ui.conflict_res[1],
+        None,
+        "the safe option must not resolve anything"
+    );
+    assert_not_painted(&h, "Overwrite Changes");
+
+    // The dangerous affirmative IS the accept: it applies the pending side.
+    h.get_by_label("Take theirs").click();
+    h.run();
+    h.get_by_label("Discard and Accept").click();
+    h.run();
+    assert_eq!(
+        h.state().ui.conflict_res[1],
+        Some(1),
+        "Discard and Accept must apply the accepted side"
+    );
+    assert_not_painted(&h, "Overwrite Changes");
+}
+
+/// Ticket 01b — the confirm's two options are *visually* distinguishable, not
+/// two identical rects: the dangerous affirmative wears the primary kit idle
+/// fill ([`Palette::ACCENT`], what `KitButton::Primary` already paints), and
+/// the safe option wears the raised-on-card surface (`Palette::SURFACE_2`).
+#[test]
+fn overwrite_confirm_affirmative_and_safe_option_paint_different_fills() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "overwrite-fills-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_resolver(&mut h);
+    h.get_by_label("Take ours 1").click();
+    h.run();
+    h.get_by_label("Take theirs").click();
+    h.run();
+
+    let discard_pos = galley_origin(&h, "Discard and Accept")
+        .unwrap_or_else(|| panic!("Discard and Accept was not painted"));
+    assert!(
+        filled_rects(&h)
+            .iter()
+            .any(|(r, c)| *c == Palette::ACCENT && r.contains(discard_pos)),
+        "Discard and Accept must idle-fill ACCENT behind {discard_pos:?}"
+    );
+    let keep_pos = galley_origin(&h, "Keep Merged Changes")
+        .unwrap_or_else(|| panic!("Keep Merged Changes was not painted"));
+    assert!(
+        filled_rects(&h)
+            .iter()
+            .any(|(r, c)| *c == Palette::SURFACE_2 && r.contains(keep_pos)),
+        "the safe option must idle-fill SURFACE_2 behind {keep_pos:?}"
+    );
+}
+
+/// Ticket 01a — the folded bulk control. TurboGit deliberately folds the
+/// reference's `Apply Non-Conflicting Changes` / `Resolve All Simple
+/// Conflicts` pair into one `Apply to all N remaining` control, so with a
+/// conflict present (the class the reference calls "simple") neither
+/// reference string ever paints. The scope option set to *ours* resolves
+/// every remaining conflict from the left side — the right side's hunk
+/// content stops painting while the left's remains, asserted from geometry
+/// (the Incoming header band marks the right column), because the resolution
+/// state is a marker, not a word.
+#[test]
+fn bulk_apply_scope_resolves_remaining_from_one_side_without_reference_strings() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "scope-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_resolver(&mut h);
+
+    // Resolve conflict 1 with the RIGHT side first: now the active choice
+    // is theirs, so only the scope option can make the bulk fill resolve
+    // the rest from the left. (On a fresh file this take resolves directly —
+    // no merged changes yet.)
+    h.get_by_label("Take theirs 1").click();
+    h.run();
+
+    // Scope the bulk apply to the left side, then fill the remaining one.
+    // egui's radio exposes both a Button and a RadioButton node under the
+    // same label — query by role.
+    h.get_by_role_and_label(Role::RadioButton, "Ours").click();
+    h.run();
+    h.get_by_label("Apply to all 1 remaining").click();
+    h.run();
+
+    assert_eq!(
+        h.state().ui.conflict_res,
+        vec![Some(1), Some(0)],
+        "scope ours must fill the remaining conflict from the left side, \
+         not from the active conflict's theirs choice"
+    );
+    assert_not_painted(&h, "Resolve All Simple Conflicts");
+    assert_not_painted(&h, "Apply non-conflicting");
+
+    // The resolution state is a marker, not a word: the sides each choice
+    // kept/dropped are asserted from geometry. Conflict 1 kept the right
+    // side (its `MAIN-one` hunk stops painting); conflict 2 kept the left
+    // (its `SIDE-nine` hunk stops painting).
+    assert!(
+        origin_of(&h, "MAIN-one").is_none(),
+        "the first conflict kept theirs, so its ours hunk must stop painting"
+    );
+    assert!(
+        origin_of(&h, "SIDE-nine").is_none(),
+        "the second conflict kept ours, so its theirs hunk must stop painting"
+    );
+
+    // What each side kept paints inside that side's own column. The band
+    // hairline is inset by the pane header's 8pt air while a side section's
+    // text is inset 6pt, so a kept hunk legitimately starts up to that much
+    // left of the band — the right edge is exact.
+    let local_band = header_band(&h, "Local (Yours)");
+    let incoming_band = header_band(&h, "Incoming (Theirs)");
+    let column_left = |band: Rect| band.left() - 8.0;
+    let kept_theirs = origin_of(&h, "SIDE-one")
+        .unwrap_or_else(|| panic!("conflict 1's kept theirs hunk must remain painted"));
+    assert!(
+        kept_theirs.x >= column_left(incoming_band) && kept_theirs.x <= incoming_band.right(),
+        "the kept theirs hunk must sit in the right column (band {incoming_band:?}), got {kept_theirs:?}"
+    );
+    let kept_ours = origin_of(&h, "MAIN-nine")
+        .unwrap_or_else(|| panic!("conflict 2's kept ours hunk must remain painted"));
+    assert!(
+        kept_ours.x >= column_left(local_band) && kept_ours.x <= local_band.right(),
+        "the kept ours hunk must sit in the left column (band {local_band:?}), got {kept_ours:?}"
+    );
 }
