@@ -984,7 +984,7 @@ mod tests {
     fn a_first_push_of_an_untracked_branch_records_the_upstream() {
         let root = target_root(&["origin"], &[], true, false);
         let got = direct_push_target(
-            &[root.clone()],
+            std::slice::from_ref(&root),
             Some(&selected_id(&root)),
             &HashSet::new(),
             &settings_with(&["main"]),
@@ -1035,13 +1035,24 @@ mod tests {
         // whole workspace, and nothing is subset away from it.
         let subset: HashSet<RootId> = [other.clone()].into_iter().collect();
         assert_eq!(
-            direct_push_target(&[ok.clone()], Some(&selected), &subset, &settings),
+            direct_push_target(
+                std::slice::from_ref(&ok),
+                Some(&selected),
+                &subset,
+                &settings
+            ),
             None,
             "a checked subset must not get a one-click push"
         );
         let whole: HashSet<RootId> = [selected.clone()].into_iter().collect();
         assert!(
-            direct_push_target(&[ok.clone()], Some(&selected), &whole, &settings).is_some(),
+            direct_push_target(
+                std::slice::from_ref(&ok),
+                Some(&selected),
+                &whole,
+                &settings
+            )
+            .is_some(),
             "checking the only root selects nothing away from it"
         );
     }
