@@ -644,7 +644,10 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
             if state.ui.branches_tree.selected.as_deref() == Some(old.as_str()) {
                 state.ui.branches_tree.selected = Some(new.clone());
             }
-            state.rename_branch(&root, &old, &new);
+            // The inline editor renames the local branch and never touches
+            // tracking: the upstream decision is the dialog's second field, and
+            // a row editor has no room to state its consequence.
+            state.rename_branch(&root, &old, &new, false);
         }
         TreeEvent::RenameCancelled => {
             state.ui.branches_tree.renaming = None;

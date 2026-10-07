@@ -213,6 +213,14 @@ pub struct DialogState {
     pub rename_branch_root: Option<RootId>,
     pub rename_branch_name: String,
     pub rename_branch_new: String,
+    /// The upstream the branch had when the dialog opened — `None` for a branch
+    /// that tracks nothing, which is what withholds the second field and its
+    /// consequence line.
+    pub rename_branch_upstream: Option<Upstream>,
+    /// The dialog's second field: stop tracking that upstream as part of the
+    /// rename. Off by default, because keeping the tracking is the case a
+    /// routine rename is in.
+    pub rename_branch_unset_upstream: bool,
     // Compare branches (issue 32, branches popup row action + footer): the
     // two sides and the snapshot of commits on `compare_left` missing from
     // `compare_right`, captured once when the dialog opens (E9).
@@ -3677,24 +3685,39 @@ impl AppState {
 
     /// Open the rename dialog for `name` in `id`, closing the popup so
     /// focus follows cleanly (mirrors the New Branch flow).
+    ///
+    /// The upstream is captured here rather than looked up at paint time: the
+    /// dialog's consequence line names the remote branch the rename leaves
+    /// behind, and after the rename lands that name is no longer in the list
+    /// the lookup would read.
     pub fn open_rename_branch(&mut self, id: &RootId, name: &str) {
+        let tracking = self
+            .multi
+            .by_id(id)
+            .and_then(|r| r.branches.iter().find(|b| b.name == name))
+            .and_then(|b| b.tracking.clone());
         self.ui.dlg.rename_branch_root = Some(id.clone());
         self.ui.dlg.rename_branch_name = name.to_string();
         self.ui.dlg.rename_branch_new = String::new();
+        self.ui.dlg.rename_branch_upstream = tracking;
+        self.ui.dlg.rename_branch_unset_upstream = false;
         self.ui.dialog = Some(Dialog::RenameBranch);
         self.ui.branches_popup = false;
     }
 
     /// Rename `old` to `new` in `id` through the engine seam and refresh
     /// the root. The current-branch rename is legal; git updates HEAD.
-    pub fn rename_branch(&mut self, id: &RootId, old: &str, new: &str) {
+    /// `unset_upstream` is the dialog's second field: the rename stays
+    /// local-only either way, and this decides whether the branch keeps
+    /// tracking the remote it was renamed away from.
+    pub fn rename_branch(&mut self, id: &RootId, old: &str, new: &str, unset_upstream: bool) {
         let root = id.clone();
         let old = old.to_string();
         let new = new.to_string();
         self.dispatch(Operation::custom(
             format!("Rename {old} → {new}"),
             Affected::Root(root.clone()),
-            move |v| v.branch_rename(root.as_path(), &old, &new),
+            move |v| branch_service::rename(v, root.as_path(), &old, &new, unset_upstream),
         ));
     }
 

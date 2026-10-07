@@ -1141,6 +1141,12 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
+    fn unset_branch_upstream(&self, root: &Path, branch: &str) -> TgResult<()> {
+        let args = ["branch", "--unset-upstream", branch];
+        self.run(root, &args)?;
+        Ok(())
+    }
+
     fn fetch(&self, root: &Path, remote: Option<&str>) -> TgResult<()> {
         let mut a: Vec<String> = vec!["fetch".to_string()];
         match remote {

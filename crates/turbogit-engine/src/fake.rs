@@ -322,6 +322,10 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
+    fn unset_branch_upstream(&self, _root: &Path, _branch: &str) -> TgResult<()> {
+        Ok(())
+    }
+
     fn fetch(&self, _root: &Path, _remote: Option<&str>) -> TgResult<()> {
         Ok(())
     }
