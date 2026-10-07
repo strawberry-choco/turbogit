@@ -192,7 +192,10 @@ fn every_error_and_empty_state_carries_its_own_recovery() {
         );
         escaped += usize::from(needs_one);
     }
-    assert_eq!(escaped, 8, "the recovery census: five errors, three empties");
+    assert_eq!(
+        escaped, 8,
+        "the recovery census: five errors, three empties"
+    );
     assert_eq!(
         LogState::NothingCommitted.recovery(),
         Some(LogRecovery::CommitLocalChanges),
@@ -255,7 +258,9 @@ fn a_failed_commit_read_names_commits_and_offers_refresh() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
-    state.caches.forget_log_read(&LogRead::Commits(root.clone()));
+    state
+        .caches
+        .forget_log_read(&LogRead::Commits(root.clone()));
     fail(&mut state, &LogRead::Commits(root.clone()), "offline");
     let list = log_states::commit_list(&state, true);
     assert_eq!(
@@ -293,7 +298,9 @@ fn an_unborn_repository_reads_as_nothing_committed_rather_than_as_an_error() {
     assert_eq!(list.label(), "No changes committed.");
     assert_eq!(list.recovery(), Some(LogRecovery::CommitLocalChanges));
     assert!(
-        !state.caches.has_log_failure(&LogRead::Commits(root.clone())),
+        !state
+            .caches
+            .has_log_failure(&LogRead::Commits(root.clone())),
         "a legitimate empty must not also be recorded as a failure"
     );
 }
@@ -309,7 +316,8 @@ fn a_filter_that_excludes_everything_is_not_an_empty_history() {
     state.ui.log_filter = "zzz-no-such-subject".to_owned();
     let list = log_states::commit_list(&state, true);
     assert_eq!(
-        list, LogState::FilteredOut,
+        list,
+        LogState::FilteredOut,
         "rows are loaded and hidden: the history exists"
     );
     assert_eq!(list.label(), "No commits matching filters");
@@ -468,7 +476,10 @@ fn a_failed_details_read_names_details_and_not_commits() {
         "no diff engine",
     );
     let details = log_states::commit_details(&state);
-    assert_eq!(details, LogState::DetailsFailed("no diff engine".to_owned()));
+    assert_eq!(
+        details,
+        LogState::DetailsFailed("no diff engine".to_owned())
+    );
     assert_eq!(details.label(), "Error loading commit details");
     assert_ne!(
         details.label(),
@@ -538,13 +549,21 @@ fn a_successful_read_clears_the_failure_it_follows() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
-    state.caches.forget_log_read(&LogRead::Commits(root.clone()));
+    state
+        .caches
+        .forget_log_read(&LogRead::Commits(root.clone()));
     fail(&mut state, &LogRead::Commits(root.clone()), "offline");
-    assert!(state.caches.has_log_failure(&LogRead::Commits(root.clone())));
+    assert!(
+        state
+            .caches
+            .has_log_failure(&LogRead::Commits(root.clone()))
+    );
     state.fetch_log(root.clone());
     state.drain_events();
     assert!(
-        !state.caches.has_log_failure(&LogRead::Commits(root.clone())),
+        !state
+            .caches
+            .has_log_failure(&LogRead::Commits(root.clone())),
         "the settled window answers, so the failure is history"
     );
     assert_eq!(log_states::commit_list(&state, false), LogState::Ready);
@@ -558,12 +577,20 @@ fn invalidating_a_root_drops_its_failures_with_its_windows() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
-    state.caches.forget_log_read(&LogRead::Commits(root.clone()));
+    state
+        .caches
+        .forget_log_read(&LogRead::Commits(root.clone()));
     fail(&mut state, &LogRead::Commits(root.clone()), "offline");
-    assert!(state.caches.has_log_failure(&LogRead::Commits(root.clone())));
+    assert!(
+        state
+            .caches
+            .has_log_failure(&LogRead::Commits(root.clone()))
+    );
     state.caches.invalidate(&Affected::Root(root.clone()));
     assert!(
-        !state.caches.has_log_failure(&LogRead::Commits(root.clone())),
+        !state
+            .caches
+            .has_log_failure(&LogRead::Commits(root.clone())),
         "a failure must not outlive the state that caused it"
     );
 }
@@ -576,7 +603,9 @@ fn refreshing_a_failed_listing_re_asks_the_engine_and_clears_the_state() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().join("project");
     let (mut state, root) = loaded(&project, 3);
-    state.caches.forget_log_read(&LogRead::Commits(root.clone()));
+    state
+        .caches
+        .forget_log_read(&LogRead::Commits(root.clone()));
     fail(&mut state, &LogRead::Commits(root.clone()), "offline");
     assert!(log_states::commit_list(&state, true).is_error());
 
@@ -604,7 +633,11 @@ fn refreshing_a_failed_scope_forgets_that_scope_and_not_the_whole_log() {
         &LogRead::Scope(root.clone(), scope.clone()),
         "gone",
     );
-    assert!(state.caches.has_log_failure(&LogRead::Scope(root.clone(), scope.clone())));
+    assert!(
+        state
+            .caches
+            .has_log_failure(&LogRead::Scope(root.clone(), scope.clone()))
+    );
 
     state.retry_log_read(&LogRead::Scope(root.clone(), scope.clone()));
     state.drain_events();
@@ -613,7 +646,9 @@ fn refreshing_a_failed_scope_forgets_that_scope_and_not_the_whole_log() {
         "the unscoped window is nobody else's business on a scope retry"
     );
     assert!(
-        !state.caches.has_log_failure(&LogRead::Scope(root.clone(), scope.clone())),
+        !state
+            .caches
+            .has_log_failure(&LogRead::Scope(root.clone(), scope.clone())),
         "the retry cleared the scope's failure"
     );
     assert_eq!(
@@ -653,10 +688,7 @@ fn a_multi_root_listing_never_collapses_to_one_root() {
     // Narrow the view to the unread root and the same machine reports the cold
     // first paint for it — the roots filter is one of the listing's inputs.
     state.ui.log_root_filter = Some(RootId(beta.into()));
-    assert_eq!(
-        log_states::commit_list(&state, true),
-        LogState::LoadingLog
-    );
+    assert_eq!(log_states::commit_list(&state, true), LogState::LoadingLog);
     // And the roots filter keeps BOTH roots' failures in view: a union that
     // showed one root's error as the other's would be the collapse again.
     state.ui.log_root_filter = None;

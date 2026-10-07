@@ -156,7 +156,10 @@ impl LogState {
     /// and as distinct from `Ready`, which is not an empty because it is not a
     /// message at all.
     pub fn is_empty_state(&self) -> bool {
-        matches!(self, Self::NothingCommitted | Self::FilteredOut | Self::FileHistory)
+        matches!(
+            self,
+            Self::NothingCommitted | Self::FilteredOut | Self::FileHistory
+        )
     }
 
     /// The way out this state offers, and the machine's second rule: `Some`
@@ -291,11 +294,10 @@ pub fn filtering(state: &AppState) -> LogState {
     }
     let roots = crate::log_display::visible_roots(state);
     for root in &roots {
-        if let Some(message) =
-            state
-                .caches
-                .log_failure(&LogRead::Scope(root.clone(), LogScope::Search(query.clone())))
-        {
+        if let Some(message) = state.caches.log_failure(&LogRead::Scope(
+            root.clone(),
+            LogScope::Search(query.clone()),
+        )) {
             return LogState::FilteringFailed(message.to_owned());
         }
     }

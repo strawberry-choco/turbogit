@@ -993,7 +993,10 @@ fn log_state_slot(ui: &mut Ui, state: &LogState) -> Option<LogRecovery> {
             widgets::empty_state(ui, reason);
         }
     } else if state.is_loading() {
-        widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Waiting(state.label()));
+        widgets::keyed_read_presentation(
+            ui,
+            widgets::KeyedReadPresentation::Waiting(state.label()),
+        );
     } else {
         widgets::empty_state(ui, state.label());
     }
@@ -1081,8 +1084,7 @@ fn hidden_jump_band(ui: &mut Ui, state: &mut AppState, root: RootId, cid: Commit
         // band exactly as they were: the listing still says what it said before
         // the jump, because that is the context the developer was working in.
         Some(false) => {
-            let parent = find_commit(state, &root, &cid)
-                .and_then(|c| c.parents.first().cloned());
+            let parent = find_commit(state, &root, &cid).and_then(|c| c.parents.first().cloned());
             state.ui.diff = Some(DiffTarget {
                 root,
                 left: parent,
