@@ -7,7 +7,7 @@ use crate::events::{AppEvent, LogBatchMode};
 use crate::granular;
 use crate::operation::{OpKind, Operation};
 use crate::root_caches::{
-    Affected, LogBatchSettle, LogScope, RootCaches, log_batch_plan as window_batch_plan,
+    Affected, LogBatchSettle, LogRead, LogScope, RootCaches, log_batch_plan as window_batch_plan,
     scoped_batch_plan,
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
@@ -1129,6 +1129,15 @@ pub struct UiState {
     pub log_filter: String,
     // Branches tab (issues 03+): search buffer and the focus/scroll intents.
     pub branches_filter: String,
+    /// The Branches surface's four persisted toggles, behind its settings gear.
+    /// Durable, not ephemeral: unlike [`BranchesGroups`], which says whether a
+    /// group is open *right now*, this says whether a group and a grouping level
+    /// exist for this project at all.
+    pub branches_view: crate::persistence::BranchesViewOptions,
+    /// The gear's toggle list is open. Session-only chrome state, the same kind
+    /// as [`Self::branches_scope_picker_open`]: a menu that was open when the app
+    /// quit does not come back open.
+    pub branches_settings_open: bool,
     /// Expand/collapse of Local / Remote / Tags.
     // The tree-remembered branch view state, one independent block per tree
     // surface (branch-tree-view extraction, plan D2): the Branches tool
@@ -1211,6 +1220,16 @@ pub struct UiState {
     /// takes it every frame, so a request is answered once and a selection that
     /// is already on screen never yanks the list.
     pub log_scroll_to: Option<CommitId>,
+    /// A jump whose target commit is loaded but not in the displayed window,
+    /// because the active filters are what hides it. Held across frames rather
+    /// than answered in the one frame that asked: the escape has to stay
+    /// reachable until the developer takes one, and the two escapes are the
+    /// point — silently widening or clearing a filter set to reveal one commit
+    /// destroys the context the user was working in.
+    ///
+    /// Cleared when the commit comes back into the window, when it is no longer
+    /// loaded at all, or when either escape is taken.
+    pub log_hidden_jump: Option<(RootId, CommitId)>,
     /// A dispatched rewrite waiting for the log to prove it landed, so the
     /// selection can follow the history instead of dangling (ticket 10).
     pub pending_reselect: Option<PendingReselect>,
@@ -1727,6 +1746,7 @@ impl AppState {
                 state.ui.bulk_history = ui.bulk_history;
                 state.ui.recent_custom_commands = ui.recent_custom_commands;
                 state.ui.sidebar_collapsed = ui.sidebar_collapsed;
+                state.ui.branches_view = ui.branches_view;
                 state.ui.diff_policies = ui.diff_policies;
             }
             None => {
@@ -1817,6 +1837,7 @@ impl AppState {
             bulk_history: self.ui.bulk_history.clone(),
             recent_custom_commands: self.ui.recent_custom_commands.clone(),
             sidebar_collapsed: self.ui.sidebar_collapsed.clone(),
+            branches_view: self.ui.branches_view,
             diff_policies: self.ui.diff_policies,
         };
         let _ = crate::persistence::save_ui_state(&self.project_dir, &ui);
@@ -2084,6 +2105,92 @@ impl AppState {
     /// Borrows the cache: do not touch app state while holding the slice.
     pub fn ensure_log(&mut self, root: &RootId, scope: LogScope) -> &[Commit] {
         self.caches.ensure_log(self.executor.as_ref(), root, &scope)
+    }
+
+    /// Answer a log state's `Refresh` recovery: forget the one read that failed
+    /// and ask it again, now.
+    ///
+    /// This is the whole of what the recovery control does, and it is a method
+    /// rather than a call site because *which* ask re-reads a given key differs
+    /// per read — a listing goes on the pump, a scope's cold window is a
+    /// compute-on-miss, and a commit's line counts are guarded by their own
+    /// cache entry. Forgetting first is what makes each of those asks real:
+    /// every one of them is a no-op against a cached answer, and the cached
+    /// answer after a failure is the empty one.
+    pub fn retry_log_read(&mut self, read: &LogRead) {
+        self.caches.forget_log_read(read);
+        match read {
+            LogRead::Commits(root) => self.fetch_log(root.clone()),
+            LogRead::Scope(root, scope) => {
+                self.ensure_log(root, scope.clone());
+            }
+            LogRead::Changes(root, cid) => {
+                self.ensure_files(root, cid);
+            }
+            LogRead::Details(root, cid) => {
+                self.fetch_file_stats(root.clone(), cid.clone());
+            }
+        }
+    }
+
+    /// The listing state's `Refresh`: re-ask exactly the reads that failed.
+    pub fn refresh_log_listing(&mut self) {
+        for read in crate::log_states::failed_listing_reads(self) {
+            self.retry_log_read(&read);
+        }
+    }
+
+    /// The details pane's `Refresh`.
+    pub fn refresh_commit_details(&mut self) {
+        if let Some(read) = crate::log_states::failed_details_read(self) {
+            self.retry_log_read(&read);
+        }
+    }
+
+    /// The changed-files pane's `Refresh`.
+    pub fn refresh_commit_changes(&mut self) {
+        if let Some(read) = crate::log_states::failed_changes_read(self) {
+            self.retry_log_read(&read);
+        }
+    }
+
+    /// The `Reset filters` recovery, shared by every state that offers it: the
+    /// filter set goes, and with it the cached answers and failures the filters
+    /// produced — a search that failed for one term must not be remembered as
+    /// having failed for the next one that happens to match the same text.
+    ///
+    /// The windows are dropped rather than kept, because the pane's own ask
+    /// fills only what is missing: a held empty result would otherwise be the
+    /// answer forever.
+    pub fn reset_log_filters(&mut self) {
+        let query = self.ui.log_filter.trim().to_owned();
+        let mut roots = crate::log_display::visible_roots(self);
+        // A ref scope names its own root, which the roots filter may hide, so
+        // the scope's read is forgotten under the root that ran it.
+        if let Some((root, _)) = &self.ui.log_ref_scope
+            && !roots.iter().any(|r| r == root)
+        {
+            roots.push(root.clone());
+        }
+        for root in &roots {
+            if !query.is_empty() {
+                self.caches.forget_log_read(&LogRead::Scope(
+                    root.clone(),
+                    LogScope::Search(query.clone()),
+                ));
+            }
+            if let Some(path) = &self.ui.log_path_scope {
+                self.caches
+                    .forget_log_read(&LogRead::Scope(root.clone(), LogScope::Path(path.clone())));
+            }
+            if let Some((_, name)) = &self.ui.log_ref_scope {
+                self.caches
+                    .forget_log_read(&LogRead::Scope(root.clone(), LogScope::Ref(name.clone())));
+            }
+        }
+        self.ui.log_filter.clear();
+        self.ui.log_path_scope = None;
+        self.ui.log_ref_scope = None;
     }
 
     /// The batch a scoped read of `root` asks for right now: the scope's own
@@ -3325,13 +3432,27 @@ impl AppState {
                     self.log_fetch_inflight.remove(&root);
                     match commits {
                         Ok(batch) => {
+                            // The read answered, so its failure is history. The
+                            // record is keyed by the read and its root, never by
+                            // the surface that painted it, which is what lets one
+                            // pane's failure stop reporting itself the moment the
+                            // same read succeeds.
+                            self.caches
+                                .clear_log_failure(&LogRead::Commits(root.clone()));
                             self.settle_log_batch(&root, mode, batch);
                             // A rewrite's selection follows the history here and
                             // nowhere else: this is the first moment the commit
                             // that took the acted-on one's place exists.
                             self.apply_pending_reselect(&root);
                         }
-                        Err(e) => self.last_error = Some(e.to_string()),
+                        Err(e) => {
+                            let message = e.to_string();
+                            self.caches.record_log_failure(
+                                LogRead::Commits(root.clone()),
+                                message.clone(),
+                            );
+                            self.last_error = Some(message);
+                        }
                     }
                 }
                 AppEvent::LogBatchLoaded {
@@ -3348,6 +3469,8 @@ impl AppState {
                         .remove(&(root.clone(), scope.clone()));
                     match commits {
                         Ok(batch) => {
+                            self.caches
+                                .clear_log_failure(&LogRead::Scope(root.clone(), scope.clone()));
                             if matches!(
                                 self.caches
                                     .settle_scoped_log_batch(&root, &scope, mode, batch),
@@ -3358,10 +3481,16 @@ impl AppState {
                                 self.load_more_scoped_log(&root, &scope);
                             }
                         }
-                        // A failed batch surfaces and leaves the held window
-                        // alone; the guard is already released, so the scope
-                        // can be asked again.
-                        Err(e) => self.last_error = Some(e.to_string()),
+                        // A failed batch surfaces, leaves the held window alone,
+                        // and is recorded against the ONE scope that failed: a
+                        // search read that died is `Error filtering commits`, not
+                        // the listing's problem and not the file's.
+                        Err(e) => {
+                            let message = e.to_string();
+                            self.caches
+                                .record_log_failure(LogRead::Scope(root, scope), message.clone());
+                            self.last_error = Some(message);
+                        }
                     }
                 }
                 AppEvent::RefsLoaded { root, deco } => {
@@ -3381,13 +3510,24 @@ impl AppState {
                     // Release the in-flight guard first (log-open perf, D2).
                     self.fetching_stats.remove(&(root.clone(), commit.clone()));
                     match stats {
-                        Ok(s) => self.caches.store_file_stats(root, commit, s.files),
+                        Ok(s) => {
+                            self.caches
+                                .clear_log_failure(&LogRead::Details(root.clone(), commit.clone()));
+                            self.caches.store_file_stats(root, commit, s.files)
+                        }
                         // A failed load stores "no counts" rather than staying
                         // unloaded: the pane asks every frame, so an unloaded
                         // entry would re-dispatch the failing call forever.
-                        // Rows render without numbers either way.
+                        // Rows render without numbers either way — and the
+                        // details pane says `Error loading commit details`,
+                        // which is the read that died, not the list beside it.
                         Err(e) => {
-                            self.last_error = Some(e.to_string());
+                            let message = e.to_string();
+                            self.caches.record_log_failure(
+                                LogRead::Details(root.clone(), commit.clone()),
+                                message.clone(),
+                            );
+                            self.last_error = Some(message);
                             self.caches.store_file_stats(root, commit, Vec::new());
                         }
                     }
