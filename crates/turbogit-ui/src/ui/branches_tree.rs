@@ -21,8 +21,9 @@
 //! - The checked-out branch is **marked `active`**; per-repo status is derived
 //!   from snapshot data (dirty / unpushed / unpulled).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_domain::model::{Branch, BranchKind, RecentCheckout, RefState, Root, RootId};
 
 /// How many recently checked-out branches the Recent group shows.
@@ -245,6 +246,16 @@ pub struct BranchView {
     pub all_repos_count: Option<usize>,
     /// True when exactly one repo is in scope (its section renders invisibly).
     pub single_repo: bool,
+    /// The four toggles this model was built under.
+    ///
+    /// Carried on the model rather than passed to the renderer separately, so
+    /// the labels the builder decided and the levels the renderer paints answer
+    /// to one reading of the same settings. `Group by Directory` is spent by the
+    /// time a model exists, because it decides leaf labels and nesting; the
+    /// repository, Recent and Tags choices are read by the renderer, which owns
+    /// which levels get painted. No toggle removes a branch from the model, only
+    /// from the list.
+    pub options: BranchesViewOptions,
 }
 
 /// Intermediate builder node; dirs and leaves share a label so they sort
@@ -348,6 +359,11 @@ fn convert(nodes: Vec<B>) -> Vec<BranchNode> {
 /// label inside a remote group never re-prints the remote (structural prefix
 /// stripping). For local branches pass `None`.
 ///
+/// `group_dirs` is the `Group by Directory` toggle: when it is off the name is
+/// **flattened, never truncated** — the leaf keeps the whole slash-prefixed name
+/// and no directory node is created, so the same branches stay in the list with
+/// one level fewer above them.
+///
 /// `root` is stamped on every leaf the forest holds. The renderer could take it
 /// from the enclosing section today, and would be wrong the moment it paints one
 /// of the lists that spans sections.
@@ -356,6 +372,7 @@ fn build_tree(
     current: &Option<String>,
     strip_prefix: Option<&str>,
     root: &RootId,
+    group_dirs: bool,
 ) -> Vec<BranchNode> {
     let mut forest: Vec<B> = Vec::new();
     for b in branches {
@@ -367,9 +384,13 @@ fn build_tree(
             }
             _ => name,
         };
-        let mut parts: Vec<&str> = stripped.split('/').collect();
-        let leaf_label = parts.pop().unwrap_or("").to_string();
-        let dirs: Vec<&str> = parts;
+        let (leaf_label, dirs): (String, Vec<&str>) = if group_dirs {
+            let mut parts: Vec<&str> = stripped.split('/').collect();
+            let leaf_label = parts.pop().unwrap_or("").to_string();
+            (leaf_label, parts)
+        } else {
+            (stripped.to_string(), Vec::new())
+        };
         let leaf = BranchLeaf {
             label: leaf_label,
             root: root.clone(),
@@ -410,7 +431,28 @@ pub fn leaf_count(nodes: &[BranchNode]) -> usize {
         .sum()
 }
 
-/// Build the full grouped view model.
+/// Build the full grouped view model with every toggle **on**.
+///
+/// The all-on model is the shape the surface had before any of the four were
+/// togglable, and it is what a caller that owns no gear renders — the Git Log
+/// pane's branches tree among them. The Branches surface calls
+/// [`build_branch_view_with`] with the project's persisted toggles instead.
+pub fn build_branch_view(
+    roots: &[Root],
+    tags_by_root: &HashMap<RootId, Vec<(String, RefState)>>,
+    recents_by_root: &HashMap<RootId, Vec<RecentCheckout>>,
+    show_remotes: &dyn Fn(&RootId) -> bool,
+) -> BranchView {
+    build_branch_view_with(
+        roots,
+        tags_by_root,
+        recents_by_root,
+        show_remotes,
+        &BranchesViewOptions::default(),
+    )
+}
+
+/// Build the full grouped view model under `options`.
 ///
 /// `roots` are the in-scope repositories; `tags_by_root` carries each repo's
 /// already-classified tag list (tags live outside the `Root` branch snapshot
@@ -421,11 +463,20 @@ pub fn leaf_count(nodes: &[BranchNode]) -> usize {
 /// remotes are showing, so a rolled-up repo is skipped while its tree is built
 /// rather than built and then hidden — which is why this is a predicate and not a
 /// flag.
-pub fn build_branch_view(
+///
+/// Only two of the four toggles reach the model, and both are the ones a label
+/// depends on: `Group by Directory` (see [`build_tree`]) and, through it, the
+/// repository qualifier that un-grouped rows need because the band that used to
+/// name the repository is gone. `Show Recent Branches` and `Show Tags` hide a
+/// whole group, which is a decision the renderer makes from
+/// [`BranchView::options`]; the data stays in the model either way, because a
+/// toggle never changes what the surface knows.
+pub fn build_branch_view_with(
     roots: &[Root],
     tags_by_root: &HashMap<RootId, Vec<(String, RefState)>>,
     recents_by_root: &HashMap<RootId, Vec<RecentCheckout>>,
     show_remotes: &dyn Fn(&RootId) -> bool,
+    options: &BranchesViewOptions,
 ) -> BranchView {
     let single_repo = roots.len() == 1;
     let all_repos_count = if roots.len() > 1 {
@@ -434,6 +485,24 @@ pub fn build_branch_view(
         None
     };
     let recent = build_recent_group(roots, recents_by_root);
+
+    // With no repository band to say which `alpha` a row came from, a row whose
+    // name several repositories also have has to say it itself. The rule is
+    // ambiguity, not the toggle: a name only one repository has stays bare, so
+    // un-grouping never renames a row that was never in doubt.
+    let qualify = !options.group_by_repository && roots.len() > 1;
+    let shared_locals = shared_names(roots, |root| {
+        root.branches
+            .iter()
+            .filter(|b| b.kind == BranchKind::Local)
+            .map(|b| b.name.clone())
+            .collect()
+    });
+    let shared_tags = shared_names(roots, |root| {
+        tags_by_root.get(&root.id).map_or(Vec::new(), |list| {
+            list.iter().map(|t| t.0.clone()).collect()
+        })
+    });
 
     let mut repos = Vec::with_capacity(roots.len());
     for root in roots {
@@ -454,7 +523,11 @@ pub fn build_branch_view(
             .cloned()
             .collect();
 
-        let locals_tree = build_tree(&locals, current, None, &root.id);
+        let mut locals_tree =
+            build_tree(&locals, current, None, &root.id, options.group_by_directory);
+        if qualify {
+            qualify_leaves(&mut locals_tree, &shared_locals, &repo_name);
+        }
 
         // Group remotes by the remote each row already carries — a
         // remote-tracking listing names its own remote, so nothing splits here.
@@ -473,9 +546,22 @@ pub fn build_branch_view(
             by_remote
                 .iter()
                 .map(|(remote, list)| {
-                    let children = build_tree(list, current, Some(remote), &root.id);
+                    let children = build_tree(
+                        list,
+                        current,
+                        Some(remote),
+                        &root.id,
+                        options.group_by_directory,
+                    );
                     RemoteGroup {
-                        label: remote.clone(),
+                        // Two repositories each with an `origin` paint one
+                        // identical header once the band that separated them is
+                        // gone, so the un-grouped header names the repository.
+                        label: if qualify {
+                            format!("{remote} · {repo_name}")
+                        } else {
+                            remote.clone()
+                        },
                         remote: remote.clone(),
                         root: root.id.clone(),
                         count: list.len(),
@@ -487,13 +573,20 @@ pub fn build_branch_view(
             Vec::new()
         };
 
-        let tags = tags_by_root
+        let mut tags = tags_by_root
             .get(&root.id)
             .cloned()
             .unwrap_or_default()
             .into_iter()
             .map(|(name, state)| TagLeaf { name, state })
-            .collect();
+            .collect::<Vec<_>>();
+        if qualify {
+            for tag in &mut tags {
+                if shared_tags.contains(&tag.name) {
+                    tag.name = format!("{} · {}", tag.name, repo_name);
+                }
+            }
+        }
 
         repos.push(RepoSection {
             root_id: root.id.clone(),
@@ -515,6 +608,37 @@ pub fn build_branch_view(
         recent,
         all_repos_count,
         single_repo,
+        options: *options,
+    }
+}
+
+/// The names more than one of `roots` answers with: a row carrying one of these
+/// cannot be told apart from its twin without its repository.
+fn shared_names(roots: &[Root], names: impl Fn(&Root) -> Vec<String>) -> HashSet<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut shared: HashSet<String> = HashSet::new();
+    for root in roots {
+        for name in names(root) {
+            if !seen.insert(name.clone()) {
+                shared.insert(name);
+            }
+        }
+    }
+    shared
+}
+
+/// Append the owning repository's name to every leaf whose branch name is
+/// ambiguous across the repositories in scope, at every directory depth.
+fn qualify_leaves(nodes: &mut [BranchNode], shared: &HashSet<String>, repo_name: &str) {
+    for node in nodes {
+        match node {
+            BranchNode::Leaf(leaf) => {
+                if shared.contains(&leaf.branch.name) {
+                    leaf.label = format!("{} · {}", leaf.label, repo_name);
+                }
+            }
+            BranchNode::Dir(dir) => qualify_leaves(&mut dir.children, shared, repo_name),
+        }
     }
 }
 
