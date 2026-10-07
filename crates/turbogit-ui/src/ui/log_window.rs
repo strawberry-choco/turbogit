@@ -952,6 +952,10 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
 // --- Pane 2: graph ------------------------------------------------------------------
 
 fn graph_pane(ui: &mut Ui, state: &mut AppState) {
+    // The post-hoc undo notification (ticket 09) rides above the list it
+    // undoes into: success title + Undo control while the guard holds it
+    // valid, the named impossible reason once the repository has moved.
+    super::rewrite_undo::banner(ui, state);
     // The pane's own header (R7), so the commit table is headed like every other
     // pane rather than by a search box that happens to sit on top of it. No
     // count chip: the window's row count is stated once, on the status line
