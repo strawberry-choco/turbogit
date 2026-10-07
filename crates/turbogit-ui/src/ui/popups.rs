@@ -22,6 +22,10 @@ pub enum Action {
     Refresh,
     Fetch,
     Pull,
+    /// The push that runs without the dialog, for the workspace the panel would
+    /// only confirm. Absent from the push row when the push is not one
+    /// unambiguous verb — see [`super::push_control`].
+    PushSimple,
     Push,
     Branches,
     NewBranch,
@@ -56,6 +60,7 @@ impl Action {
             Action::Refresh => "Refresh",
             Action::Fetch => "Fetch",
             Action::Pull => "Pull",
+            Action::PushSimple => "Push",
             Action::Push => "Push…",
             Action::Branches => "Branches…",
             Action::NewBranch => "New Branch…",
@@ -76,13 +81,16 @@ impl Action {
         }
     }
 
-    /// The VCS operations popup's action set: exactly the pre-existing list
-    /// (issue #22 keeps it unchanged while the palette grows).
+    /// The VCS operations popup's action set: the pre-existing list plus the
+    /// direct push verb, which the reference ranks as the DEFAULT of its three
+    /// push actions (issue #22 keeps everything else unchanged while the palette
+    /// grows).
     pub fn all() -> &'static [Action] {
         &[
             Action::Refresh,
             Action::Fetch,
             Action::Pull,
+            Action::PushSimple,
             Action::Push,
             Action::Branches,
             Action::NewBranch,
@@ -104,6 +112,7 @@ impl Action {
             Action::Refresh,
             Action::Fetch,
             Action::Pull,
+            Action::PushSimple,
             Action::Push,
             Action::Branches,
             Action::NewBranch,
@@ -146,6 +155,12 @@ pub fn run_action(state: &mut AppState, action: Action) {
                     move |v| v.pull(r.as_path(), rebase),
                 ));
             }
+        }
+        // The direct verb falls back to the panel when the workspace needs it:
+        // a palette entry that did nothing would be a dead verb, and the panel is
+        // the surface that can still answer.
+        Action::PushSimple => {
+            super::push_control::push_without_dialog(state);
         }
         Action::Push => state.ui.dialog = Some(Dialog::Push),
         Action::Branches => state.ui.branches_popup = true,
@@ -215,6 +230,16 @@ pub fn vcs_operations(ui: &mut Ui, state: &mut AppState) {
         .resizable(false)
         .show(&ctx, |ui| {
             for a in Action::all() {
+                // The two push verbs share one row rather than two list entries:
+                // which of them exists depends on the workspace, and a flat list
+                // cannot show that one of a pair is the safe default.
+                if *a == Action::PushSimple {
+                    super::push_control::popup_row(ui, state);
+                    continue;
+                }
+                if *a == Action::Push {
+                    continue;
+                }
                 if ui.button(a.label()).clicked() {
                     run_action(state, *a);
                 }

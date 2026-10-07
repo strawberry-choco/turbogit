@@ -1526,3 +1526,540 @@ fn lease_rejection_paints_lease_wording_not_remote_wording() {
         rec.recorded()
     );
 }
+
+// ------------------ inline `Define remote` and the named target states ------
+
+/// A temp repo on `main` with two commits and **no remote configured at all** —
+/// the case the panel answers with a link rather than a field.
+fn repo_without_remote(parent: &Path, name: &str) -> PathBuf {
+    let path = parent.join(name);
+    std::fs::create_dir_all(&path).unwrap();
+    git(&path, &["init", "-q", "-b", "main"]);
+    git(&path, &["config", "user.email", "test@example.com"]);
+    git(&path, &["config", "user.name", "Test"]);
+    for (file, message) in [("a.txt", "{name} first"), ("b.txt", "{name} second")] {
+        std::fs::write(path.join(file), "x\n").unwrap();
+        git(&path, &["add", "."]);
+        git(
+            &path,
+            &["commit", "-q", "-m", &message.replace("{name}", name)],
+        );
+    }
+    path
+}
+
+/// A `git init` with no commit and no remote.
+fn repo_with_no_commits(parent: &Path, name: &str) -> PathBuf {
+    let path = parent.join(name);
+    std::fs::create_dir_all(&path).unwrap();
+    git(&path, &["init", "-q", "-b", "main"]);
+    path
+}
+
+/// The centre-line y of the row painting the galley whose text is EXACTLY
+/// `text`, or `None` when nothing paints it.
+///
+/// Exact because `assert_painted` matches by substring: `New & Upstream`
+/// contains `New`, `New Branch…` contains `New`, and a frame full of branch
+/// names contains `origin`. Substring matching here would pass for labels that
+/// are not on the row being asked about.
+fn row_y(h: &Harness<'_, AppState>, text: &str) -> Option<f32> {
+    painted_galleys(h)
+        .into_iter()
+        .find(|g| g.text == text)
+        .map(|g| g.rect.center().y)
+}
+
+/// The target-state name the panel paints: the exact galley between the
+/// `Branch:` row and the `Force push (--force-with-lease)` row. The band is the
+/// dialog's own target panel, so a `New` painted by the branch popup or the
+/// sidebar cannot satisfy this.
+fn painted_target_state(h: &Harness<'_, AppState>) -> Option<String> {
+    let top = row_y(h, "Branch:")?;
+    let bottom = row_y(h, "Force push (--force-with-lease)")?;
+    const NAMES: [&str; 5] = [
+        "New",
+        "New & Upstream",
+        "Set upstream",
+        "Upstream",
+        "Empty repository",
+    ];
+    painted_galleys(h)
+        .into_iter()
+        .find(|g| {
+            NAMES.contains(&g.text.as_str())
+                && g.rect.center().y > top
+                && g.rect.center().y < bottom
+        })
+        .map(|g| g.text)
+}
+
+/// Open the VCS operations popup — the app's action surface, and the only place
+/// the two push verbs appear as controls.
+fn open_vcs_popup(h: &mut Harness<'_, AppState>) {
+    h.state_mut().ui.vcs_popup = true;
+    h.run();
+}
+
+/// Filled control-sized rects on the popup's push row. The row is located by its
+/// own label because `Push` and `Push…` also paint in the palette, the branch
+/// menu and the dialog footer, and the popup's chrome is a filled rect of its own.
+fn push_row_rects(h: &Harness<'_, AppState>) -> Vec<(egui::Rect, egui::Color32)> {
+    let y = row_y(h, "Push…").expect("the popup offers the dialog-opening verb");
+    filled_rects(h)
+        .into_iter()
+        .filter(|(rect, _)| {
+            (rect.center().y - y).abs() < 6.0 && rect.height() > 10.0 && rect.height() < 40.0
+        })
+        .collect()
+}
+
+/// The push control's node on the popup's push row, by position.
+fn push_verb<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Option<Node<'h>> {
+    let y = row_y(h, "Push…")?;
+    h.query_all_by_label(label)
+        .into_iter()
+        .find(|n| (n.rect().center().y - y).abs() < 6.0)
+}
+
+/// Move the open dialog onto the `ThisRepo` scope: the only scope with an
+/// explicit Remote/Branch target, and so the only one that paints the target
+/// panel at all.
+fn use_this_repo_scope(h: &mut Harness<'_, AppState>) {
+    h.state_mut().ui.dlg.push_scope = PushScope::ThisRepo;
+    h.run();
+}
+
+/// The single-line text field painted on the row whose centre-line is `y`.
+///
+/// Matched by ROW rather than by count or by window containment: the Commit
+/// window's message editor and file filter are TextInputs too, and the floating
+/// dialog's rect overlaps them, so "the first field" is the commit message and
+/// "the fields inside the window" is everything. Height-filtered because the
+/// message editor is a tall multiline field, not a row's input.
+/// Poll until `f` holds or the deadline passes, pumping a frame each poll so a
+/// worker thread's completion drains into state.
+fn wait_for_state(h: &mut Harness<'_, AppState>, ms: u64, f: impl Fn(&AppState) -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    loop {
+        h.run();
+        if f(h.state()) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The single-line text field painted on the row whose centre-line is `y`.
+///
+/// Matched by ROW rather than by count or by window containment: the Commit
+/// window's message editor and file filter are TextInputs too, and the floating
+/// dialog's rect overlaps them, so "the first field" is the commit message.
+/// Height-filtered because the message editor is a tall multiline field.
+fn field_on_row<'h>(h: &'h Harness<'_, AppState>, y: f32) -> Node<'h> {
+    let mut found = h
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .filter(|n| n.rect().height() < 30.0 && (n.rect().center().y - y).abs() < 6.0);
+    found
+        .next()
+        .unwrap_or_else(|| panic!("no single-line text field painted on the row at y {y}"))
+}
+
+#[test]
+fn a_repo_with_no_remote_offers_define_remote_where_the_name_would_be() {
+    let parent = tempfile::tempdir().unwrap();
+    let path = repo_without_remote(parent.path(), "orphan");
+    let mut h = harness(app_state(parent.path(), &[path.clone()]));
+    open_push_dialog(&mut h);
+    use_this_repo_scope(&mut h);
+
+    let remote_row = row_y(&h, "Remote:").expect("the panel labels its remote row");
+    let link = painted_galleys(&h)
+        .into_iter()
+        .find(|g| g.text == "Define remote")
+        .expect("`Define remote` must paint for a repository with no remote");
+    // In place of the remote name: same row, to the right of the label — not a
+    // disabled field with a separate button somewhere else.
+    assert!(
+        (link.rect.center().y - remote_row).abs() < 6.0,
+        "`Define remote` must share the Remote row; row y {remote_row}, link {:?}",
+        link.rect
+    );
+    assert!(
+        link.rect.min.x > row_right_of(&h, "Remote:"),
+        "the link stands where the name would be, not left of its label"
+    );
+    // …and no empty field is painted on that row: the row's only filled rect
+    // would be a `TextEdit` background.
+    assert!(
+        filled_rects(&h)
+            .into_iter()
+            .all(|(rect, _)| (rect.center().y - remote_row).abs() > 6.0),
+        "a remote-less panel paints a link, not a field"
+    );
+
+    // The bare repository's own truth: git still knows no remote at all.
+    assert_eq!(git(&path, &["remote"]).trim(), "");
+}
+
+/// The right edge of the galley painting exactly `text`.
+fn row_right_of(h: &Harness<'_, AppState>, text: &str) -> f32 {
+    painted_galleys(h)
+        .into_iter()
+        .find(|g| g.text == text)
+        .map(|g| g.rect.max.x)
+        .unwrap_or(0.0)
+}
+
+#[test]
+fn a_repo_with_a_remote_paints_the_name_and_no_link() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_ahead_of_origin(parent.path(), "named");
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
+    open_push_dialog(&mut h);
+    use_this_repo_scope(&mut h);
+
+    let remote_row = row_y(&h, "Remote:").expect("the panel labels its remote row");
+    let painted = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| (g.rect.center().y - remote_row).abs() < 6.0)
+        .map(|g| g.text)
+        .collect::<Vec<_>>();
+    assert!(
+        painted.iter().any(|t| t == "origin"),
+        "the configured remote's name paints on its own row; got {painted:?}"
+    );
+    assert!(
+        !painted.iter().any(|t| t == "Define remote"),
+        "the link is the remote-less case only; got {painted:?}"
+    );
+}
+
+#[test]
+fn the_target_state_names_new_then_new_and_upstream() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_ahead_of_origin(parent.path(), "naming");
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
+    open_push_dialog(&mut h);
+    use_this_repo_scope(&mut h);
+
+    // A branch the remote has never heard of: the push CREATES a ref.
+    h.state_mut().ui.dlg.push_branch = "fresh".into();
+    h.run();
+    assert_eq!(
+        painted_target_state(&h).as_deref(),
+        Some("New"),
+        "a branch absent from the remote is named `New`"
+    );
+
+    // Ticking the upstream box changes the NAME — not the name plus a suffix.
+    h.get_by_label("Set upstream (--set-upstream)").click();
+    h.run();
+    assert_eq!(
+        painted_target_state(&h).as_deref(),
+        Some("New & Upstream"),
+        "create-and-track is its own state, or the user cannot tell tracking was set"
+    );
+}
+
+#[test]
+fn a_branch_on_the_remote_is_named_as_upstream_not_new() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_ahead_of_origin(parent.path(), "exists");
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
+    open_push_dialog(&mut h);
+    use_this_repo_scope(&mut h);
+
+    // The fixture pushed `main` with `-u`, so `origin/main` is a remote row and
+    // the field carries that name: this push moves a ref that exists.
+    assert_eq!(
+        painted_target_state(&h).as_deref(),
+        Some("Upstream"),
+        "an existing remote branch is not `New`; painted: {:?}",
+        painted_text(&h)
+    );
+    h.get_by_label("Set upstream (--set-upstream)").click();
+    h.run();
+    assert_eq!(
+        painted_target_state(&h).as_deref(),
+        Some("Set upstream"),
+        "recording a tracking ref on an existing branch is its own state"
+    );
+}
+
+#[test]
+fn an_empty_repository_is_its_own_target_state_and_cannot_push() {
+    let parent = tempfile::tempdir().unwrap();
+    let path = repo_with_no_commits(parent.path(), "unborn");
+    let mut h = harness(app_state(parent.path(), &[path]));
+    open_push_dialog(&mut h);
+    use_this_repo_scope(&mut h);
+
+    assert_eq!(
+        painted_target_state(&h).as_deref(),
+        Some("Empty repository"),
+        "a repository with no commits names itself rather than reading as a new branch"
+    );
+    assert!(
+        painted_galleys(&h).iter().any(|g| g.text == "Cannot push"),
+        "the panel says the push cannot run; painted: {:?}",
+        painted_text(&h)
+    );
+}
+
+#[test]
+fn defining_a_remote_in_the_panel_saves_it_immediately() {
+    let parent = tempfile::tempdir().unwrap();
+    let path = repo_without_remote(parent.path(), "defining");
+    let remote = parent.path().join("defining-remote.git");
+    git(
+        &path,
+        &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
+    );
+
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&path)));
+    open_push_dialog(&mut h);
+    use_this_repo_scope(&mut h);
+    let remote_row = row_y(&h, "Remote:").expect("the panel labels its remote row");
+
+    h.get_by_label("Define remote").click();
+    h.run();
+
+    // The entry's own fields, told apart by ROW: name on the Remote row, URL
+    // below it, Branch below that. Nothing here reaches into widget internals.
+    // The name opens pre-filled with the conventional `origin` ON the Remote row
+    // — the substitution is the point — and the URL is the one thing the panel
+    // cannot know.
+    let on_remote_row: Vec<String> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| (g.rect.center().y - remote_row).abs() < 6.0)
+        .map(|g| g.text)
+        .collect();
+    assert!(
+        on_remote_row.iter().any(|t| t == "origin"),
+        "the name field arrives filled, on the row the link held; got {on_remote_row:?}"
+    );
+    {
+        let url_row = row_y(&h, "URL:").expect("the entry labels its URL row");
+        let url_field = field_on_row(&h, url_row);
+        url_field.focus();
+        url_field.type_text(remote.to_str().unwrap());
+    }
+    h.run();
+
+    h.get_by_label("Add Remote").click();
+
+    assert!(
+        wait_for_state(&mut h, 15_000, |s| {
+            s.multi
+                .roots
+                .iter()
+                .any(|r| r.remotes.iter().any(|remote| remote.name == "origin"))
+        }),
+        "the saved remote must land in the snapshot the panel reads its name from"
+    );
+    assert_eq!(
+        git(&path, &["remote"]).trim(),
+        "origin",
+        "the add is durable the moment it is saved — no settings dialog involved"
+    );
+    assert_eq!(
+        git(&path, &["config", "--get", "remote.origin.url"]).trim(),
+        remote.to_str().unwrap(),
+        "and at the URL that was typed"
+    );
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Push),
+        "saving a remote does not close the push the user was filling in"
+    );
+    assert_eq!(
+        h.state().ui.dlg.push_remote,
+        "origin",
+        "the Remote field takes the saved name, so the push targets it"
+    );
+    assert!(
+        !h.state().ui.dlg.push_define_remote,
+        "the entry closes on a saved remote"
+    );
+    assert!(
+        !painted_galleys(&h)
+            .iter()
+            .any(|g| g.text == "Define remote"),
+        "the link is gone once the repository has a remote"
+    );
+}
+
+#[test]
+fn a_rejected_remote_add_paints_the_reason_inline_and_keeps_the_panel_open() {
+    let parent = tempfile::tempdir().unwrap();
+    let path = repo_without_remote(parent.path(), "badname");
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&path)));
+    open_push_dialog(&mut h);
+    use_this_repo_scope(&mut h);
+
+    h.get_by_label("Define remote").click();
+    h.run();
+    {
+        let remote_row = row_y(&h, "Remote:").expect("the panel labels its remote row");
+        let name_field = field_on_row(&h, remote_row);
+        name_field.focus();
+        // git refuses a space in a remote name, which is the failure this path
+        // has to paint inline rather than swallow.
+        name_field.type_text("bad name");
+        let url_row = row_y(&h, "URL:").expect("the entry labels its URL row");
+        let url_field = field_on_row(&h, url_row);
+        url_field.focus();
+        url_field.type_text(parent.path().join("unused.git").to_str().unwrap());
+    }
+    h.run();
+    h.get_by_label("Add Remote").click();
+
+    assert!(
+        wait_for_painted(&mut h, "Could not add remote:", 15_000),
+        "the failure is inline, in the panel, with git's reason; painted: {:?}",
+        painted_text(&h)
+    );
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Push),
+        "a rejected add leaves the dialog open"
+    );
+    assert_eq!(git(&path, &["remote"]).trim(), "");
+}
+
+// -------------------------- the push-without-dialog path ---------------------
+
+/// A single-root workspace, an unprotected branch, a configured remote: two
+/// verbs on the strip, with distinct rects and distinct fills, and the plain one
+/// pushes without ever opening the panel.
+#[test]
+fn the_direct_and_dialog_verbs_are_two_fills_and_the_direct_one_pushes_alone() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_ahead_of_origin(parent.path(), "fast");
+    let settings = VcsSettings {
+        protected_branch_patterns: Vec::new(),
+        ..VcsSettings::default()
+    };
+    let (rec, settings) = recording_engine(settings);
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&repo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_vcs_popup(&mut h);
+
+    let rects = push_row_rects(&h);
+    assert_eq!(rects.len(), 2, "the push row paints two button rects");
+    let fills: Vec<egui::Color32> = rects.iter().map(|(_, fill)| *fill).collect();
+    assert!(
+        fills.contains(&Palette::ACCENT),
+        "the direct verb wears the primary fill, so the two verbs are told apart          before either label is read: {fills:?}"
+    );
+    assert_ne!(
+        fills[0], fills[1],
+        "…and the dialog-opening verb wears another"
+    );
+    assert_ne!(rects[0].0, rects[1].0, "…on two distinct rects");
+
+    push_verb(&h, "Push")
+        .expect("the direct verb is offered")
+        .click();
+    h.run();
+    assert_eq!(
+        h.state().ui.dialog,
+        None,
+        "the direct verb must not open the dialog"
+    );
+    assert!(
+        wait_until(15_000, || rec.recorded().iter().any(|c| {
+            matches!(c, test_support::RecordedCall::Push { remote, branch, .. }
+                if remote == "origin" && branch == "main")
+        })),
+        "the direct verb pushes the tracked branch at the resolved remote; got {:?}",
+        rec.recorded()
+    );
+
+    // The dialog verb is still there, and still opens the panel with its
+    // dry-run preview — the fast path is a shortcut, not a replacement.
+    open_vcs_popup(&mut h);
+    push_verb(&h, "Push…")
+        .expect("the dialog verb stays reachable")
+        .click();
+    h.run();
+    assert_eq!(h.state().ui.dialog, Some(Dialog::Push));
+    assert_painted(&h, "Preview dry-run");
+}
+
+/// Whether the push row paints NO primary-filled rect.
+fn no_direct_rect(h: &Harness<'_, AppState>) -> bool {
+    !push_row_rects(h)
+        .iter()
+        .any(|(_, fill)| *fill == Palette::ACCENT)
+}
+
+#[test]
+fn the_direct_verb_is_withheld_when_it_would_have_to_choose() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_ahead_of_origin(parent.path(), "guarded");
+    let open = VcsSettings {
+        protected_branch_patterns: Vec::new(),
+        ..VcsSettings::default()
+    };
+
+    // Protected branch: the dialog's force-push block and remediation banner are
+    // the only place this push can be decided.
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&repo.path)));
+    open_vcs_popup(&mut h);
+    assert!(
+        no_direct_rect(&h),
+        "a push on `main`, which the settings protect, gets no one-click verb"
+    );
+    assert_eq!(
+        push_row_rects(&h).len(),
+        1,
+        "…and the dialog verb is still there"
+    );
+
+    // Two roots: which one? That is the dialog's scope control.
+    let beta = repo_ahead_of_origin(parent.path(), "beta");
+    let mut h = harness(
+        app_state(parent.path(), &[repo.path.clone(), beta.path.clone()])
+            .with_settings(open.clone()),
+    );
+    open_vcs_popup(&mut h);
+    assert!(
+        no_direct_rect(&h),
+        "a multi-root workspace gets no one-click push"
+    );
+
+    // No remote at all: nothing to push to, and the panel is where `Define
+    // remote` lives.
+    let orphan = repo_without_remote(parent.path(), "orphan");
+    let mut h =
+        harness(app_state(parent.path(), std::slice::from_ref(&orphan)).with_settings(open));
+    open_vcs_popup(&mut h);
+    assert!(
+        no_direct_rect(&h),
+        "a remote-less repository gets no one-click push"
+    );
+
+    // The command palette reaches the same verb without the popup's enablement,
+    // so the verb itself has to answer for that case: the panel, not silence.
+    h.state_mut().ui.vcs_popup = false;
+    h.run();
+    assert!(
+        !turbogit_ui::ui::push_control::push_without_dialog(h.state_mut()),
+        "an unnameable push dispatches nothing"
+    );
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Push),
+        "…and hands the user the surface that can decide"
+    );
+}

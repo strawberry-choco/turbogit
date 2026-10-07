@@ -91,15 +91,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             // Explicit target fields above the options section (ADR-0007).
             // They only drive the `ThisRepo` scope path (issue #25).
             let scope_is_this_repo = state.ui.dlg.push_scope == PushScope::ThisRepo;
+            let mut no_target = false;
             if scope_is_this_repo {
-                ui.horizontal(|ui| {
-                    ui.label("Remote:");
-                    ui.text_edit_singleline(&mut state.ui.dlg.push_remote);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Branch:");
-                    ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
-                });
+                no_target = target_panel(ui, state);
             }
 
             ui.checkbox(
@@ -171,7 +165,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 // first so the visible order remains Cancel · Preview · Push.
                 let push = ui
                     .scope(|ui| {
-                        if force_blocked_this_repo {
+                        if force_blocked_this_repo || no_target {
                             ui.disable();
                         }
                         widgets::compact_button(ui, &label)
@@ -200,6 +194,119 @@ fn close(state: &mut AppState) {
     state.ui.dlg.push_preview_root = None;
     state.ui.dlg.push_preview_output = None;
     state.ui.dlg.push_scope_excluded.clear();
+    state.ui.dlg.push_define_remote = false;
+    state.ui.dlg.push_new_remote_name.clear();
+    state.ui.dlg.push_new_remote_url.clear();
+    state.ui.dlg.push_remote_add_error = None;
+}
+
+/// The target half of the panel: the remote, the branch, and the **named state**
+/// of the ref the push would write.
+///
+/// Returns `true` when the panel has no target at all — a repository with no
+/// remote and no commits — which is what disables the footer's Push.
+///
+/// Three things the previous four lines of fields did not do: it fabricated
+/// `origin` for a repository that has no remote, it offered a text field where
+/// the reference offers a link, and it left the user to infer from a branch name
+/// whether the push creates a ref or moves one that already exists.
+fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
+    // The root's facts are read once, owned: every arm below mutates
+    // `state.ui.dlg`, and a borrow of the manager held across one of those
+    // mutations is the compile error that would otherwise be a refactor.
+    let root = state
+        .selected_root
+        .as_ref()
+        .and_then(|id| state.multi.by_id(id))
+        .cloned();
+    let no_remote = root.as_ref().is_some_and(|r| r.remotes.is_empty());
+    let defining = no_remote && state.ui.dlg.push_define_remote;
+
+    ui.horizontal(|ui| {
+        ui.label("Remote:");
+        if !no_remote {
+            ui.text_edit_singleline(&mut state.ui.dlg.push_remote);
+        } else if defining {
+            ui.text_edit_singleline(&mut state.ui.dlg.push_new_remote_name);
+        } else if define_remote_link(ui).clicked() {
+            state.ui.dlg.push_define_remote = true;
+            if state.ui.dlg.push_new_remote_name.trim().is_empty() {
+                state.ui.dlg.push_new_remote_name = "origin".to_string();
+            }
+        }
+    });
+
+    if defining {
+        ui.horizontal(|ui| {
+            ui.label("URL:");
+            ui.text_edit_singleline(&mut state.ui.dlg.push_new_remote_url);
+        });
+        ui.horizontal(|ui| {
+            let name = state.ui.dlg.push_new_remote_name.trim().to_string();
+            let url = state.ui.dlg.push_new_remote_url.trim().to_string();
+            let add = widgets::compact_button_enabled(
+                ui,
+                "Add Remote",
+                !name.is_empty() && !url.is_empty(),
+            );
+            if add.clicked()
+                && let Some(root) = &root
+            {
+                state.define_remote_for_push(root.id.clone(), name, url);
+            }
+            if widgets::compact_button(ui, "Cancel").clicked() {
+                state.ui.dlg.push_define_remote = false;
+                state.ui.dlg.push_remote_add_error = None;
+            }
+        });
+    }
+    if let Some(detail) = state.ui.dlg.push_remote_add_error.clone() {
+        widgets::inline_error(ui, format!("Could not add remote: {detail}"));
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Branch:");
+        ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
+    });
+
+    let remote_field = state.ui.dlg.push_remote.clone();
+    let branch_field = state.ui.dlg.push_branch.clone();
+    let set_upstream = state.ui.dlg.push_set_upstream;
+    let target = root.as_ref().and_then(|r| {
+        sync_service::push_target_state(r, &remote_field, &branch_field, set_upstream)
+    });
+    let cannot_push = root
+        .as_ref()
+        .is_some_and(|r| r.remotes.is_empty() || sync_service::repository_is_empty(r));
+    if target.is_some() || cannot_push {
+        ui.horizontal(|ui| {
+            if let Some(target) = target {
+                ui.label(RichText::new(target.label()).color(target_ink(target)));
+            }
+            if cannot_push {
+                ui.label(RichText::new("Cannot push").color(Palette::STATE_WARNING));
+            }
+        });
+    }
+    cannot_push
+}
+
+/// The `Define remote` link. Its ink is the style's own hyperlink token, which
+/// [`crate::theme::configure_style`] sets — naming a `Palette` constant here
+/// would put a second link colour in the tree, and this is the only slot in the
+/// app that is a link rather than a button.
+fn define_remote_link(ui: &mut Ui) -> egui::Response {
+    let ink = ui.style().visuals.hyperlink_color;
+    ui.add(egui::Button::new(RichText::new("Define remote").color(ink)).frame(false))
+}
+
+/// The severity a target state reads with: an empty repository is a caution,
+/// every other name is the plain fact it is.
+fn target_ink(target: sync_service::PushTargetState) -> egui::Color32 {
+    match target {
+        sync_service::PushTargetState::EmptyRepository => Palette::STATE_WARNING,
+        _ => Palette::STATE_INFO,
+    }
 }
 
 /// Resolved roots in the dialog's current PUSH SCOPE, minus the user's
@@ -467,29 +574,35 @@ fn empty_signature() -> Signature {
     }
 }
 
-/// Prefill Remote/Branch from the selected root's tracking config. Only
-/// fills while the remote field is empty so user edits persist across redraws.
+/// Prefill Remote/Branch from the selected root's tracking config. Only fills
+/// while a field is empty so user edits persist across redraws.
+///
+/// The remote half stays EMPTY for a repository that has no remote. It used to
+/// fabricate `origin` there, which painted a name the repository does not have,
+/// pushed at a remote nothing configured, and buried the one case the
+/// `Define remote` link exists for.
 fn ensure_target_defaults(state: &mut AppState) {
-    if !state.ui.dlg.push_remote.is_empty() {
+    let Some(id) = state.selected_root.clone() else {
         return;
+    };
+    let Some(root) = state.multi.by_id(&id) else {
+        return;
+    };
+    let tracked = root
+        .branches
+        .iter()
+        .find(|b| b.kind == BranchKind::Local && root.current_branch.as_deref() == Some(&b.name))
+        .and_then(|b| b.tracking.clone());
+    let tracked_remote = tracked.as_ref().map(|t| t.remote.clone());
+    let tracked_branch = tracked.map(|t| t.branch);
+    let first_remote = root.remotes.first().map(|r| r.name.clone());
+    let current_branch = root.current_branch.clone().unwrap_or_default();
+
+    if state.ui.dlg.push_remote.is_empty() {
+        state.ui.dlg.push_remote = tracked_remote.or(first_remote).unwrap_or_default();
     }
-    if let Some(id) = state.selected_root.clone()
-        && let Some(root) = state.multi.by_id(&id)
-        && let Some(b) = root.branches.iter().find(|b| {
-            b.kind == BranchKind::Local && root.current_branch.as_deref() == Some(&b.name)
-        })
-    {
-        if let Some(t) = &b.tracking {
-            state.ui.dlg.push_remote = t.remote.clone();
-            state.ui.dlg.push_branch = t.branch.clone();
-        } else {
-            state.ui.dlg.push_remote = root
-                .remotes
-                .first()
-                .map(|r| r.name.clone())
-                .unwrap_or_else(|| "origin".into());
-            state.ui.dlg.push_branch = root.current_branch.clone().unwrap_or_default();
-        }
+    if state.ui.dlg.push_branch.is_empty() {
+        state.ui.dlg.push_branch = tracked_branch.unwrap_or(current_branch);
     }
 }
 
