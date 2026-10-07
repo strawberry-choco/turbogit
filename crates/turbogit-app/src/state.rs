@@ -2106,18 +2106,18 @@ impl AppState {
         }
         for root in &roots {
             if !query.is_empty() {
-                self.caches
-                    .forget_log_read(&LogRead::Scope(root.clone(), LogScope::Search(query.clone())));
+                self.caches.forget_log_read(&LogRead::Scope(
+                    root.clone(),
+                    LogScope::Search(query.clone()),
+                ));
             }
             if let Some(path) = &self.ui.log_path_scope {
                 self.caches
                     .forget_log_read(&LogRead::Scope(root.clone(), LogScope::Path(path.clone())));
             }
             if let Some((_, name)) = &self.ui.log_ref_scope {
-                self.caches.forget_log_read(&LogRead::Scope(
-                    root.clone(),
-                    LogScope::Ref(name.clone()),
-                ));
+                self.caches
+                    .forget_log_read(&LogRead::Scope(root.clone(), LogScope::Ref(name.clone())));
             }
         }
         self.ui.log_filter.clear();
@@ -3369,7 +3369,8 @@ impl AppState {
                             // the surface that painted it, which is what lets one
                             // pane's failure stop reporting itself the moment the
                             // same read succeeds.
-                            self.caches.clear_log_failure(&LogRead::Commits(root.clone()));
+                            self.caches
+                                .clear_log_failure(&LogRead::Commits(root.clone()));
                             self.settle_log_batch(&root, mode, batch);
                             // A rewrite's selection follows the history here and
                             // nowhere else: this is the first moment the commit
@@ -3378,8 +3379,10 @@ impl AppState {
                         }
                         Err(e) => {
                             let message = e.to_string();
-                            self.caches
-                                .record_log_failure(LogRead::Commits(root.clone()), message.clone());
+                            self.caches.record_log_failure(
+                                LogRead::Commits(root.clone()),
+                                message.clone(),
+                            );
                             self.last_error = Some(message);
                         }
                     }
