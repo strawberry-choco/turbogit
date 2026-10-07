@@ -1385,18 +1385,72 @@ impl GitExecutor for CliExecutor {
         if plan.is_empty() {
             return Ok(());
         }
+        // A row the plan editor could not identify never reaches git: there is
+        // no honest todo line for it, and replaying it as any real verb would
+        // be the silent coercion the `Unknown` fallback exists to prevent.
+        if let Some(entry) = plan.iter().find(|e| e.action == RebaseAction::Unknown) {
+            return Err(TgError::Other(format!(
+                "{} carries an unknown rebase action — retarget or remove its row \
+                 before starting the rebase",
+                entry.commit
+            )));
+        }
+        // "Update Ref" is not a per-commit verb in git's todo format — git's
+        // `update-ref` line takes a ref, not a commit — so the row's one bit
+        // of intent (the refs touching this replay follow the rewrite) becomes
+        // the command-level `--update-refs`, and the row itself replays as the
+        // pick it is.
+        let update_refs = plan.iter().any(|e| e.action == RebaseAction::UpdateRef);
+        // The command-level flag alone is not enough: git implements it by
+        // injecting `update-ref refs/heads/<branch>` lines into the todo it
+        // generates, and the todo below REPLACES git's via GIT_SEQUENCE_EDITOR,
+        // which would silently drop them. So the engine does the injection
+        // itself — every branch pointing at a planned commit is pinned after
+        // that row's line, updating to the replayed commit when the line runs.
+        let mut refs_at_row: Vec<Vec<String>> = vec![Vec::new(); plan.len()];
+        if update_refs {
+            // The branch being rebased is HEAD's own — git never "updates" it
+            // (it is rewritten wholesale), and an `update-ref` line naming it
+            // aborts the todo.
+            let current = self.current_branch(root).ok().flatten();
+            let (refs, _, _) = self.run(
+                root,
+                &[
+                    "for-each-ref",
+                    "--format=%(refname) %(objectname)",
+                    "refs/heads/",
+                ],
+            )?;
+            for line in refs.lines() {
+                let Some((refname, sha)) = line.split_once(' ') else {
+                    continue;
+                };
+                if Some(refname.trim_start_matches("refs/heads/")) == current.as_deref() {
+                    continue;
+                }
+                if let Some(i) = plan.iter().position(|e| e.commit == sha) {
+                    refs_at_row[i].push(refname.to_string());
+                }
+            }
+        }
         let todo: String = plan
             .iter()
-            .map(|e| {
+            .enumerate()
+            .map(|(i, e)| {
                 let verb = match e.action {
-                    RebaseAction::Pick => "pick",
+                    RebaseAction::Pick | RebaseAction::UpdateRef => "pick",
                     RebaseAction::Reword => "reword",
                     RebaseAction::Edit => "edit",
                     RebaseAction::Squash => "squash",
                     RebaseAction::Fixup => "fixup",
                     RebaseAction::Drop => "drop",
+                    RebaseAction::Unknown => unreachable!("refused above"),
                 };
-                format!("{} {}\n", verb, e.commit)
+                let mut line = format!("{} {}\n", verb, e.commit);
+                for refname in &refs_at_row[i] {
+                    line.push_str(&format!("update-ref {refname}\n"));
+                }
+                line
             })
             .collect();
         let base_rev = format!("{}~1", plan[0].commit);
@@ -1430,7 +1484,9 @@ impl GitExecutor for CliExecutor {
         let bin = turbogit_domain::model::git_binary(&self.settings);
         let todo_str = forward_slash_path(&tmp);
         let status = Command::new(&bin)
-            .args(["rebase", "-i", &base_rev])
+            .args(["rebase", "-i"])
+            .args(update_refs.then_some("--update-refs"))
+            .arg(&base_rev)
             .current_dir(root)
             .env("GIT_SEQUENCE_EDITOR", format!("cp {}", todo_str))
             .env("GIT_EDITOR", &editor)
