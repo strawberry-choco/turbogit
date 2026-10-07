@@ -254,9 +254,8 @@ fn an_equalized_difference_paints_one_unchanged_line() {
         equalized.line_ord, 0,
         "an equalized line is not a selectable change, so it owns no changed-line ordinal"
     );
-    assert_eq!(
+    assert!(
         diff.patch.to_string().contains("-gamma\n"),
-        true,
         "the patch the read answers with is untouched: the policy is a view decision"
     );
 }
@@ -376,16 +375,87 @@ fn a_policy_change_reparses_once_and_never_serves_the_other_policys_model() {
     );
 }
 
+/// The two policies are presentation, never data — but they are presentation that
+/// outlives the process. A reviewer who set the ladder before closing the window
+/// is entitled to find the same rows hidden after reopening it, so both values
+/// travel together through `.turbogit/ui.ron` and come back through the launch
+/// path a real restart uses.
+#[test]
+fn both_policies_come_back_from_the_project_on_the_next_launch() {
+    let project = tempfile::tempdir().unwrap();
+    let recents = tempfile::tempdir().unwrap();
+    let set = DiffPolicies {
+        whitespace: DiffWhitespace::IgnoreWhitespaceAndEmptyLines,
+        highlighting: DiffHighlighting::Characters,
+    };
+
+    let mut state = AppState::for_roots(project.path(), &[]);
+    state.ui.diff_policies = set;
+    state.persist_ui();
+
+    // Written down rather than merely held: a value serde dropped on the floor
+    // would still leave the session correct and the next launch wrong.
+    let written =
+        std::fs::read_to_string(project.path().join(".turbogit/ui.ron")).expect("ui.ron exists");
+    assert!(
+        written.contains("IgnoreWhitespaceAndEmptyLines") && written.contains("Characters"),
+        "both policies reached the file: {written}"
+    );
+    assert_eq!(
+        turbogit_app::persistence::load_ui_state(project.path()).diff_policies,
+        set,
+        "and both read back as the same pair"
+    );
+
+    let relaunched = AppState::launch_in(
+        Some(project.path().to_path_buf()),
+        Some(recents.path().to_path_buf()),
+    );
+    assert_eq!(
+        relaunched.ui.diff_policies, set,
+        "a launch restores the pair into the session the viewer reads"
+    );
+}
+
+/// `serde(default)` is what keeps a file written before the two policies existed
+/// loading at all — the same promise the sibling UI-only state makes, pinned the
+/// same way: an old `ui.ron` reads back as the shipped posture instead of failing
+/// the launch.
+#[test]
+fn a_ui_ron_written_before_the_policies_existed_loads_the_shipped_defaults() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(project.path().join(".turbogit")).unwrap();
+    std::fs::write(
+        project.path().join(".turbogit/ui.ron"),
+        "(tab: \"Commit\", recent_repos: [], draft_message: \"hi\")",
+    )
+    .unwrap();
+
+    let loaded = turbogit_app::persistence::load_ui_state(project.path());
+
+    assert_eq!(loaded.diff_policies, DiffPolicies::default());
+    assert_eq!(
+        loaded.diff_policies.whitespace,
+        DiffWhitespace::None,
+        "the shipped posture is the reference's `None`: white space is important"
+    );
+    assert_eq!(
+        loaded.diff_policies.highlighting,
+        DiffHighlighting::Lines,
+        "and highlighting keeps the rendering the surface had before the menu"
+    );
+}
+
 /// The highlight of the first changed addition row of a model.
 fn highlight_of(model: &turbogit_app::diff_model::DiffModel) -> Highlight {
     for row in &model.display {
         if let DisplayRow::Pair(_, Some(add)) = row {
             return add.highlight.clone();
         }
-        if let DisplayRow::Full(r) = row {
-            if r.kind == RowKind::Add {
-                return r.highlight.clone();
-            }
+        if let DisplayRow::Full(r) = row
+            && r.kind == RowKind::Add
+        {
+            return r.highlight.clone();
         }
     }
     panic!("the model has no changed row to read a highlight from");
