@@ -103,7 +103,7 @@ fn open_checked_out(count: usize) -> (TempDir, Harness<'static, AppState>) {
 /// named branch. A branch checked out recently paints **twice** — once in the
 /// Recent group and once in Local — so callers assert on the set of rects, not
 /// on the first match.
-fn row_rects<'t>(harness: &'t Harness<'_, AppState>, name: &str) -> Vec<egui::Rect> {
+fn row_rects(harness: &Harness<'_, AppState>, name: &str) -> Vec<egui::Rect> {
     harness
         .get_all_by_role(egui::accesskit::Role::Button)
         .filter(|n| n.accesskit_node().label() == Some(name.to_string()))

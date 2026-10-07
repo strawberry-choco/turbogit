@@ -72,7 +72,7 @@ fn names(state: &AppState, work: &Path) -> Vec<String> {
 #[test]
 fn checkouts_made_outside_the_app_are_already_in_the_history() {
     let (_tmp, work) = three_checkouts();
-    let mut state = AppState::for_roots(work.parent().unwrap(), &[work.clone()]);
+    let mut state = AppState::for_roots(work.parent().unwrap(), std::slice::from_ref(&work));
     state.warm_branch_recents();
 
     // Newest first, and nothing the app itself did: the group is HEAD's reflog.
@@ -86,7 +86,7 @@ fn checkouts_made_outside_the_app_are_already_in_the_history() {
 #[test]
 fn a_checkout_made_here_reaches_the_top_of_the_history_it_settled_on() {
     let (_tmp, work) = three_checkouts();
-    let mut state = AppState::for_roots(work.parent().unwrap(), &[work.clone()]);
+    let mut state = AppState::for_roots(work.parent().unwrap(), std::slice::from_ref(&work));
     state.warm_branch_recents();
     let root = state.multi.roots[0].id.clone();
 
@@ -112,7 +112,7 @@ fn a_repository_with_no_commits_yet_warms_to_an_empty_history() {
         &["init", "-q", "-b", "main", work.to_str().unwrap()],
     );
 
-    let mut state = AppState::for_roots(&project, &[work.clone()]);
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&work));
     state.warm_branch_recents();
 
     // The tab paints this repository's branches before its first commit, so an
