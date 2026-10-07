@@ -180,6 +180,16 @@ pub enum AppEvent {
         label: String,
         results: Vec<(RootId, TgResult<()>)>,
     },
+    /// A remote named and saved from inside the Push panel's `Define remote`
+    /// entry finished. Its own variant because the panel is the answer's
+    /// destination: a failure paints `Could not add remote: {0}` inline and the
+    /// dialog stays open, which a bulk report routed to the remotes manager
+    /// cannot say.
+    RemoteDefined {
+        root: RootId,
+        name: String,
+        result: TgResult<()>,
+    },
     /// A cascade-run monitor transition (issue 10): one row started,
     /// finished (with duration), or was halted by a stop. Drained into the
     /// live monitor rows in `ui.bulk_run`.
