@@ -19,6 +19,20 @@ pub enum ApplyDirection {
     Reverse,
 }
 
+/// One checkout [`GitExecutor::recent_checkouts`] answers with: the branch
+/// HEAD's reflog says it moved to, and the unix timestamp of the move. The
+/// timestamp is the reflog entry's own, so two checkouts inside the same
+/// second tie — the engine answers newest-first and the caller keeps that
+/// order for ties.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecentCheckout {
+    /// The branch the checkout moved to (a checkout of a tag or a sha lands
+    /// here too; joining against the branch snapshot is the caller's job).
+    pub name: String,
+    /// Unix timestamp of the checkout.
+    pub at: i64,
+}
+
 /// The git engine abstraction. All methods are synchronous; callers run them on
 /// worker threads (the engine never blocks the UI thread).
 ///
@@ -58,6 +72,17 @@ pub trait GitExecutor: Send + Sync {
 
     /// `git branch -vv` (+ remotes) for a root.
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>>;
+
+    /// Branches HEAD's reflog says were checked out in `root`, newest first —
+    /// the mechanism behind the branches surface's Recent group (parity
+    /// ticket 03, captured at `research/evidence/rebased/runtime/R3-SESSION-1.md`):
+    /// `git reflog --max-count 50 --grep-reflog "checkout:"`, each matching
+    /// entry parsed to the branch its checkout moved to. Deriving recents
+    /// here, rather than bookkeeping them in the app, is what makes them
+    /// survive restarts and reflect checkouts made outside the app. A repo
+    /// with no reflog yet answers empty — absence is a normal answer, not an
+    /// error.
+    fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>>;
 
     /// Current branch name (or `None` in detached HEAD).
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>>;
