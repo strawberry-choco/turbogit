@@ -588,6 +588,16 @@ pub const MARK_RADIUS: u8 = 2;
 /// and the diff pane's rect, and a selected list row's leading edge.
 pub const RAIL_WIDTH: f32 = 2.0;
 
+/// Width of the diff viewer's **text caret** — the bar that marks which pane of
+/// the comparison holds it (`Diff.FocusOppositePane`, `⌃⇧⇥`).
+///
+/// Deliberately not [`RAIL_WIDTH`], whose number it happens to share: a rail is a
+/// row's leading-edge *selection* mark painted by the one rail painter, and the
+/// caret is a glyph-position bar painted inside the text of one cell. Folding the
+/// two into one token would make every rail retint the diff's caret and vice
+/// versa, and neither is a rail.
+pub const CARET_WIDTH: f32 = 2.0;
+
 /// Accent (selection / primary action) color — the brand token.
 pub fn accent() -> Color32 {
     Palette::BRAND

@@ -117,13 +117,13 @@ fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str, staged: bool
     } else {
         DiffComparison::Local
     };
-    state.ui.diff_ignore_whitespace = false;
+    state.ui.diff_policies = turbogit_domain::model::DiffPolicies::default();
     let target = DiffTarget::new(
         root.to_path_buf(),
         None,
         None,
         state.ui.diff_comparison,
-        false,
+        turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from(rel)),
     );
     assert!(
