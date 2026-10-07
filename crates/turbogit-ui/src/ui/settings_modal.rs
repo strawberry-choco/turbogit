@@ -334,6 +334,16 @@ fn update_method_page(ui: &mut Ui, s: &mut VcsSettings) {
     ui.add_space(6.0);
     setting_row(
         ui,
+        "Auto-update on push rejection",
+        "After a rejected push, update silently with the method above instead of asking.",
+        |ui| {
+            ui.checkbox(&mut s.auto_update_on_push_rejected, "Update without asking");
+        },
+    );
+
+    ui.add_space(6.0);
+    setting_row(
+        ui,
         "Clean working tree",
         "Sweep uncommitted changes before an update runs.",
         |ui| {

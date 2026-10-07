@@ -50,7 +50,9 @@ pub mod log_window;
 pub mod multi_selection;
 pub mod popups;
 pub mod project_tree;
+pub mod push_control;
 pub mod push_dialog;
+pub mod push_rejected;
 pub mod remotes_dialog;
 pub mod reword_editor;
 pub mod rewrite_preflight;
@@ -117,6 +119,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         }
     }
     render_confirm(ui, state);
+    // The classified reply to a rejected push (ticket 13): unconditional, like
+    // every other floating surface, because the Push dialog has already closed
+    // by the time the rejection settles.
+    push_rejected::render(ui, state);
     settings_modal::show(ui, state);
     smart_rule_modal::show(ui, state);
     bulk_preflight::show(ui, state);

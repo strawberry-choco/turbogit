@@ -326,12 +326,22 @@ fn vcs_popup_renders_popup_chrome_with_exact_action_set() {
     let (chrome, chrome_idx) = popup_chrome(&harness, "VCS Operations popup");
 
     // The action set inside the popup is exactly Action::all() — nothing
-    // dropped, nothing added (the palette's extra shell actions live there).
+    // dropped, nothing added (the palette's extra shell actions live there) —
+    // with ONE exception that is a rule rather than an omission: the direct push
+    // verb is withheld, not disabled, when the workspace cannot name one
+    // unambiguous push. The expected set therefore consults the same predicate
+    // the popup paints from, so "dropped" still fails and "gated" does not.
     let mut inside = texts_inside_after(&harness, chrome, chrome_idx);
     inside.sort();
     inside.dedup();
     let mut expected: Vec<String> = vec!["VCS Operations".to_owned()];
-    expected.extend(Action::all().iter().map(|a| a.label().to_owned()));
+    let direct_offered = turbogit_ui::ui::push_control::direct_target(harness.state()).is_some();
+    expected.extend(
+        Action::all()
+            .iter()
+            .filter(|a| **a != Action::PushSimple || direct_offered)
+            .map(|a| a.label().to_owned()),
+    );
     expected.sort();
     assert_eq!(
         inside, expected,
