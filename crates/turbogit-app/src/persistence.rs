@@ -142,6 +142,12 @@ pub struct UiPersist {
     /// before the key existed loading cleanly.
     #[serde(default)]
     pub sidebar_collapsed: std::collections::HashSet<String>,
+    /// The Branches surface's four toggles, behind its settings gear.
+    /// `serde(default)` keeps files written before the gear existed loading
+    /// cleanly, and the default is the shape the surface had before any of
+    /// them were togglable.
+    #[serde(default)]
+    pub branches_view: BranchesViewOptions,
 }
 
 fn ui_path(project_dir: &Path) -> PathBuf {

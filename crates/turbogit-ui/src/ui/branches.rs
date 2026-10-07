@@ -16,6 +16,7 @@
 use egui::{Align, Layout, Pos2, Rect, RichText, Ui, UiBuilder};
 
 use turbogit_app::operation::Operation;
+use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
@@ -28,6 +29,7 @@ use crate::ui::branches_tree::{self, BranchNode, BranchView};
 use crate::ui::components::{
     self, KIT_BUTTON_H, KitButton, PAD_LIST, PAD_STRIP, SyncKind, TOOLBAR_H, kit_button,
 };
+use crate::ui::icons::Icon;
 use crate::ui::widgets;
 
 /// What the list area shows instead of a blank panel (issue 03, §2/§15).
@@ -177,18 +179,23 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     let tags_by_root = state.ui.branches_tags.clone();
     let recents_by_root = state.ui.branches_recents.clone();
     let branches_tree = &state.ui.branches_tree;
-    let view = branches_tree::build_branch_view(
+    let options = state.ui.branches_view;
+    let view = branches_tree::build_branch_view_with(
         &state.multi.roots,
         &tags_by_root,
         &recents_by_root,
         &|root| branch_tree_view::remotes_revealed(branches_tree, root),
+        &options,
     );
 
-    // Esc clears the filter first, then closes the context menu, then drops the
-    // selection (§9). Read at the very top of the frame, before any widget could
+    // Esc clears the gear's toggle list first, then the filter, then the context
+    // menu, then the selection (§9): the press belongs to the thing that was
+    // opened last. Read at the very top of the frame, before any widget could
     // consume it: one press closes the menu and disturbs nothing else.
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        if !state.ui.branches_filter.trim().is_empty() {
+        if state.ui.branches_settings_open {
+            state.ui.branches_settings_open = false;
+        } else if !state.ui.branches_filter.trim().is_empty() {
             state.ui.branches_filter.clear();
         } else if state.ui.branches_tree.context_menu.is_some() {
             state.ui.branches_tree.context_menu = None;
@@ -226,6 +233,30 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     );
     list_area(&mut list_ui, state, &view);
     ui.advance_cursor_after_rect(list_rect);
+
+    // The gear's toggle list, hosted once per frame at the end of the surface
+    // like every other menu here: the host owns the lifecycle, this surface owns
+    // only which menu is open.
+    if state.ui.branches_settings_open {
+        let mut dismiss = false;
+        let changed = widgets::menu_host::host_menu(
+            ui,
+            widgets::menu_host::MenuId::new("branches_settings", ""),
+            true,
+            &mut dismiss,
+            |ui| settings_toggles(ui, &mut state.ui.branches_view),
+        );
+        let changed = changed.unwrap_or(false);
+        if dismiss || changed {
+            state.ui.branches_settings_open = false;
+        }
+        if changed {
+            // A toggle is a preference the person chose, not a scratch value for
+            // this session: it is written down the frame it changes, the same
+            // way every other durable UI preference on this surface is.
+            state.persist_ui();
+        }
+    }
 }
 
 /// The local rows the keyboard path walks (plan D6): every in-scope repo's
@@ -282,6 +313,7 @@ fn handle_keys(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         || state.ui.confirm.is_some()
         || state.ui.branches_tree.renaming.is_some()
         || state.ui.branches_scope_picker_open
+        || state.ui.branches_settings_open
     {
         return;
     }
@@ -371,6 +403,24 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
         actions_ui.add_space(PAD_STRIP);
         scope_chip(&mut actions_ui, state);
     }
+    // The settings gear: this surface's own toggles, in the toolbar the surface
+    // already owns, because the four preferences belong to the list they change
+    // and not to the app-wide Settings modal.
+    actions_ui.add_space(PAD_STRIP);
+    let gear =
+        widgets::icon_button(&mut actions_ui, Icon::SETTINGS).on_hover_text("Branch list settings");
+    if gear.clicked() {
+        state.ui.branches_settings_open = !state.ui.branches_settings_open;
+        if state.ui.branches_settings_open {
+            // Opened under the button that owns it, from its own bottom-left, so
+            // the list hangs off the gear rather than over it.
+            widgets::menu_host::note_anchor(
+                &actions_ui,
+                widgets::menu_host::MenuId::new("branches_settings", ""),
+                gear.rect.left_bottom(),
+            );
+        }
+    }
     let actions_left = actions_ui.min_rect().min.x;
 
     let search_right = (actions_left - PAD_STRIP).max(row.min.x + PAD_STRIP);
@@ -391,6 +441,53 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
         search.request_focus();
         state.ui.branches_focus_search = false;
     }
+}
+
+/// The gear's whole content: the Branches surface's four grouping and
+/// visibility toggles, in the reference's own wording (`manage-branches.md:70`,
+/// the four `action.git.branches.*` bundle keys).
+///
+/// **The gear's own composition is the unverified part of this.** Whether the
+/// four are a menu of checkboxes or a popover with separators, whether they apply
+/// on click or on dismiss, and whether `Group by Repository` and `Group by
+/// Directory` compose or exclude each other are each captured as `UNVERIFIED`, so
+/// this is the simplest defensible reading: four checkboxes in the bundle's own
+/// order, each applying the frame it is clicked, and the two grouping levels
+/// **independent** — they are listed as independent toggles in the bundle, and
+/// each removes one level of the same list without renaming what is left.
+///
+/// Returns whether any toggle changed, so the caller can write the preference
+/// down and close the list.
+fn settings_toggles(ui: &mut Ui, options: &mut BranchesViewOptions) -> bool {
+    ui.spacing_mut().item_spacing = crate::theme::ITEM_SPACING;
+    let mut rows = [
+        (
+            &mut options.group_by_directory,
+            "Group by Directory",
+            "Nest branches under a header per `folder/` prefix",
+        ),
+        (
+            &mut options.group_by_repository,
+            "Group by Repository",
+            "One set of groups per repository in scope",
+        ),
+        (
+            &mut options.show_recent,
+            "Show Recent Branches",
+            "The branches HEAD moved onto most recently",
+        ),
+        (
+            &mut options.show_tags,
+            "Show Tags",
+            "Tags beside the branches, in their own group",
+        ),
+    ];
+    let mut changed = false;
+    for (flag, label, help) in rows.iter_mut() {
+        let response = ui.checkbox(*flag, *label).on_hover_text(*help);
+        changed |= response.changed();
+    }
+    changed
 }
 
 /// The pane's **scope chip**: "all N repos" when nothing is narrowed, or
