@@ -1218,10 +1218,21 @@ impl GitExecutor for CliExecutor {
     }
 
     fn pull(&self, root: &Path, rebase: bool) -> TgResult<()> {
-        let mut a: Vec<String> = vec!["pull".to_string()];
-        if rebase {
-            a.push("--rebase".to_string());
-        }
+        // git has refused to guess a reconciliation strategy for divergent
+        // branches since 2.27: with no `pull.rebase` in the repository's
+        // config, a bare `git pull` fails with "Need to specify how to
+        // reconcile divergent branches" — and the merge path is exactly the
+        // rejected-push recovery's update, so the refusal would surface as an
+        // update error. The port's `rebase` flag IS the answer; state it on the
+        // command line instead of inheriting it from whoever cloned the repo.
+        let a: [String; 2] = [
+            "pull".to_string(),
+            if rebase {
+                "--rebase".to_string()
+            } else {
+                "--no-rebase".to_string()
+            },
+        ];
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         self.run(root, &args)?;
         Ok(())
