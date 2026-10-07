@@ -3594,7 +3594,7 @@ impl AppState {
                             // hands off cleanly to the conflict experience with
                             // an explicit mid-operation state that survives
                             // switching tabs.
-                            if conflicts > 0 && matches!(kind, OpKind::Merge | OpKind::Rebase) {
+                            if conflicts > 0 && hands_off_conflicts(kind) {
                                 self.ui.merge_in_progress = true;
                                 self.ui.conflict_resolver_open = true;
                             }
@@ -3635,7 +3635,7 @@ impl AppState {
                             // that survives switching tabs. The reliable
                             // signal is the worktree's fresh conflict list
                             // (git's own stderr text is not stable here).
-                            let conflict = if matches!(kind, OpKind::Merge | OpKind::Rebase) {
+                            let conflict = if hands_off_conflicts(kind) {
                                 self.refresh(affected.clone());
                                 conflicted_count(self, &affected) > 0
                             } else {
@@ -4931,6 +4931,18 @@ fn push_target_names(
     }
 }
 
+/// Which operations hand the developer over to the conflict experience rather
+/// than reporting a clean finish.
+///
+/// The original merge/rebase (issue 09) and a ticket 16 in-flight resolution
+/// share one rule: git stops on the NEXT conflict with a non-zero exit and a
+/// worktree full of unmerged paths, and the answer to that is the resolver, not
+/// a failure toast. Stated once because the two settlement arms must not be able
+/// to disagree about which verbs hand off.
+fn hands_off_conflicts(kind: OpKind) -> bool {
+    matches!(kind, OpKind::Merge | OpKind::Rebase | OpKind::Resolve)
+}
+
 /// The success message a completed operation reports, chosen by the
 /// operation's identity (ADR-0020). The match is exhaustive on purpose: a new
 /// [`OpKind`] has to say here how it reports before it can be dispatched.
@@ -4938,6 +4950,10 @@ fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &s
     match kind {
         OpKind::Fetch => state.fetch_report(affected),
         OpKind::Merge | OpKind::Rebase => push_report(state, affected, label),
+        // A resolution reports the verb it ran and nothing more: an `Abort` that
+        // landed has no ahead/behind story, and appending "nothing to push" to
+        // "Abort merge" would describe the repository rather than the act.
+        OpKind::Resolve => label.to_string(),
         // A rewrite reports the work it did and nothing more: there is no
         // ahead/behind story to tell, and a reword's new message never reaches
         // the feed.

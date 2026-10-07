@@ -43,6 +43,14 @@ impl Palette {
     /// issue 03). `STATE_WARNING` at 12% over `SURFACE`, the same derivation
     /// the badge tints use, so an alert can never read as a foreign hue.
     pub const SURFACE_WARNING: Color32 = Color32::from_rgb(0x44, 0x3c, 0x2f);
+    /// The destructive verb's band inside the status bar's in-flight item:
+    /// `DANGER` at 12% over `SURFACE`, the same derivation
+    /// [`Self::SURFACE_WARNING`] records for the warning tone. It exists because
+    /// the bar announces an operation whose Abort throws the whole thing away,
+    /// and three identically-coloured controls make that one indistinguishable.
+    /// Named for the band it fills, so the kit's `Danger` *ink-on-transparent*
+    /// button and this *ink-on-tint* control stay two documented things.
+    pub const SURFACE_INFLIGHT_ABORT: Color32 = Color32::from_rgb(0x40, 0x33, 0x35);
     /// Primary borders (`--tg-line`).
     pub const LINE: Color32 = Color32::from_rgb(0x4e, 0x51, 0x57);
     /// Subtle row separators (`--tg-line-subtle`).
@@ -526,6 +534,11 @@ pub const CELL_GAP: f32 = 8.0;
 pub const DENSITY_COMPACT_BUTTON: Vec2 = Vec2::new(8.0, 4.0);
 /// Dense control padding (6×2) for the status bar.
 pub const DENSITY_DENSE_BUTTON: Vec2 = Vec2::new(6.0, 2.0);
+/// Air between the destructive verb and the two that carry on inside the status
+/// bar's in-flight item. Wider than any gap *within* the forward-going pair, and
+/// that contrast is the assertion: separated means separated from both, not just
+/// placed first.
+pub const STATUS_INFLIGHT_ABORT_GAP: f32 = 12.0;
 
 // Shape variants (S3): chip/control radii are explicit shared roles; the
 // pill variant is the full-height wrap the welcome chips and badges use.
