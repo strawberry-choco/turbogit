@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
-use turbogit_engine_api::{ApplyDirection, GitExecutor, RecentCheckout};
+use turbogit_engine_api::{ApplyDirection, GitExecutor};
 
 /// Git-for-Windows rejects Windows verbatim (`\\?\`) prefixed paths handed
 /// to `git worktree …`. Canonicalized roots carry that prefix (Rust
@@ -734,18 +734,31 @@ impl GitExecutor for CliExecutor {
         // which contains it). `--date=unix` is the one addition: the selector
         // then carries the entry's unix timestamp, which is what lets recents
         // be merged across roots by recency.
-        let (out, _, _) = self.run(
-            root,
-            &[
-                "reflog",
-                "--max-count",
-                "50",
-                "--date=unix",
-                "--grep-reflog",
-                "checkout:",
-            ],
-        )?;
-        Ok(parse_reflog_checkouts(&out))
+        let args = [
+            "reflog",
+            "--max-count",
+            "50",
+            "--date=unix",
+            "--grep-reflog",
+            "checkout:",
+        ];
+        match self.run(root, &args) {
+            Ok((out, _, _)) => Ok(parse_reflog_checkouts(&out)),
+            Err(TgError::Cli { code, stderr }) => {
+                // An unborn HEAD: git refuses the read outright ("fatal: your
+                // current branch 'main' does not have any commits yet"). A
+                // repository nobody has checked anything out in yet has an
+                // empty checkout history, which is an answer; every other
+                // failure — above all "not a git repository" — must propagate,
+                // or repo discovery mistakes an arbitrary directory for one.
+                if stderr.contains("does not have any commits yet") {
+                    Ok(Vec::new())
+                } else {
+                    Err(TgError::Cli { code, stderr })
+                }
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>> {

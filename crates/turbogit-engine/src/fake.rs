@@ -80,6 +80,10 @@ pub struct FakeExecutor {
     pub upstreams: HashMap<String, Upstream>,
     /// Branches returned per repo path.
     pub branches: HashMap<PathBuf, Vec<Branch>>,
+    /// Checkout history served by `recent_checkouts` per repo path, newest
+    /// first as a real reflog answers it. Absent = a repo whose HEAD has never
+    /// moved, which the port answers as an empty list rather than an error.
+    pub recents: HashMap<PathBuf, Vec<RecentCheckout>>,
     /// Current branch per repo path (`None` = detached).
     pub current_branch: HashMap<PathBuf, Option<String>>,
     /// Remotes per repo path.
@@ -124,6 +128,7 @@ impl FakeExecutor {
             revisions: HashMap::new(),
             upstreams: HashMap::new(),
             branches: HashMap::new(),
+            recents: HashMap::new(),
             current_branch: HashMap::new(),
             remotes: HashMap::new(),
             status: HashMap::new(),
@@ -182,6 +187,14 @@ impl GitExecutor for FakeExecutor {
             out.push(cur);
         }
         Ok(out)
+    }
+
+    fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>> {
+        // An empty answer is the normal case, exactly as the port states it for
+        // a repository whose reflog holds no checkout: a test that wants a
+        // Recent group seeds [`FakeExecutor::recents`], one that does not gets
+        // no group and no git binary.
+        Ok(self.recents.get(root).cloned().unwrap_or_default())
     }
 
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>> {

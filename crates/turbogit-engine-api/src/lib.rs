@@ -19,20 +19,6 @@ pub enum ApplyDirection {
     Reverse,
 }
 
-/// One checkout [`GitExecutor::recent_checkouts`] answers with: the branch
-/// HEAD's reflog says it moved to, and the unix timestamp of the move. The
-/// timestamp is the reflog entry's own, so two checkouts inside the same
-/// second tie — the engine answers newest-first and the caller keeps that
-/// order for ties.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecentCheckout {
-    /// The branch the checkout moved to (a checkout of a tag or a sha lands
-    /// here too; joining against the branch snapshot is the caller's job).
-    pub name: String,
-    /// Unix timestamp of the checkout.
-    pub at: i64,
-}
-
 /// The git engine abstraction. All methods are synchronous; callers run them on
 /// worker threads (the engine never blocks the UI thread).
 ///
