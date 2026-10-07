@@ -722,24 +722,46 @@ fn apply_resolution(state: &mut AppState) {
     }
 }
 
+/// The held state the resolver's two header verbs resolve.
+///
+/// Read from git rather than hard-wired to `merge`: the resolver opens on a
+/// merge handoff today, but a paused rebase leaves the same unmerged paths, and
+/// `git merge --abort` in a repository that is rebasing is a second failure on
+/// top of the one being recovered. Falls back to `Merge` when nothing is held
+/// anymore, which is what the header says and what the operation then reports.
+fn held_operation(
+    state: &turbogit_app::state::AppState,
+) -> turbogit_services::integrate_service::OwnedOperation {
+    state
+        .selected_root
+        .as_ref()
+        .and_then(|root| turbogit_services::integrate_service::owning_operation(root.as_path()))
+        .unwrap_or(turbogit_services::integrate_service::OwnedOperation::Merge)
+}
+
 fn abort_merge(state: &mut AppState) {
+    let owner = held_operation(state);
     if let Some(r) = state.selected_root.clone() {
-        state.dispatch(Operation::custom(
-            "Abort merge",
-            Affected::Root(r.clone()),
-            move |v| v.abort(r.as_path(), "merge"),
-        ));
+        // The named in-flight resolution (ticket 16), shared with the status
+        // bar's item and the palette entry: one verb, one operation, so the
+        // three routes cannot drift into three different dispatch shapes.
+        state.dispatch(Operation::Resolve {
+            root: r,
+            owner,
+            verb: turbogit_app::operation::LifecycleVerb::Abort,
+        });
     }
     state.ui.conflict_resolver_open = false;
 }
 
 fn continue_merge(state: &mut AppState) {
+    let owner = held_operation(state);
     if let Some(r) = state.selected_root.clone() {
-        state.dispatch(Operation::custom(
-            "Continue merge",
-            Affected::Root(r.clone()),
-            move |v| v.continue_op(r.as_path(), "merge"),
-        ));
+        state.dispatch(Operation::Resolve {
+            root: r,
+            owner,
+            verb: turbogit_app::operation::LifecycleVerb::Continue,
+        });
     }
     state.ui.conflict_resolver_open = false;
 }

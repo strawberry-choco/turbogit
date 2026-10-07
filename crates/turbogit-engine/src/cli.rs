@@ -1425,6 +1425,12 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
+    fn rebase_skip(&self, root: &Path) -> TgResult<()> {
+        let args = ["rebase", "--skip"];
+        self.run(root, &args)?;
+        Ok(())
+    }
+
     fn rewrite_backup_ref(&self) -> &str {
         REWRITE_BACKUP_REF
     }
