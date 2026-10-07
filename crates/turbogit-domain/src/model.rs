@@ -719,6 +719,13 @@ pub struct VcsSettings {
     /// CLI-produced text path.
     #[serde(default = "default_true")]
     pub in_process_diffs: bool,
+    /// Ticket 13: update silently when a push of the current branch is
+    /// rejected, using `update_method` — set by the Push dialog's
+    /// "Remember the update method choice" checkbox, so the opt-in is a
+    /// settings write-back the user can reverse in settings, never a per-push
+    /// accident. Off by default: a rejection asks.
+    #[serde(default)]
+    pub auto_update_on_push_rejected: bool,
 }
 
 fn default_true() -> bool {
@@ -746,6 +753,7 @@ impl Default for VcsSettings {
             no_commit_hooks: false,
             backend: GitBackend::default(),
             in_process_diffs: true,
+            auto_update_on_push_rejected: false,
         }
     }
 }

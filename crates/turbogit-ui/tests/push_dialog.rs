@@ -1442,3 +1442,87 @@ fn push_button_states_the_resolved_scope() {
     // Two roots × 2 commits ahead each = 4 commits, 2 repos.
     assert_painted(&h, "Push 4 commits to 2 repos");
 }
+
+// ------------------------------------------- ticket 13: rejection classes --
+
+/// `repo_ahead_of_origin` plus divergence, WITHOUT the follow-up fetch: the
+/// remote moved while the repo's remote-tracking ref still names the old tip.
+/// That is exactly a stale force-with-lease — the push (not the lease) would
+/// otherwise overwrite, so git refuses with `(stale info)`.
+fn repo_with_stale_lease(parent: &Path, name: &str) -> Repo {
+    let repo = repo_ahead_of_origin(parent, name);
+    let other = parent.join(format!("{name}-other"));
+    git(
+        parent,
+        &[
+            "clone",
+            repo.remote.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    git(&other, &["checkout", "main"]);
+    git(&other, &["config", "user.email", "test@example.com"]);
+    git(&other, &["config", "user.name", "Test"]);
+    std::fs::write(other.join("divergent.txt"), "d1\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "divergent"]);
+    git(&other, &["push", "-q", "origin", "main"]);
+    repo
+}
+
+/// Poll until `needle` is painted somewhere (worker threads settle
+/// asynchronously; every poll pumps a frame so events drain).
+fn wait_for_painted(h: &mut Harness<'_, AppState>, needle: &str, ms: u64) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    loop {
+        h.run();
+        if painted_text(h).iter().any(|t| t.contains(needle)) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A force-with-lease rejection is its own class: the painted notification
+/// carries the lease wording and NOT the ordinary rejected-by-remote wording.
+/// A single shared string cannot pass this — the classification must exist.
+#[test]
+fn lease_rejection_paints_lease_wording_not_remote_wording() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_with_stale_lease(parent.path(), "alpha");
+    // Force push is refused before git for protected branches, and the
+    // fixture's branch is `main` — clear the patterns so the push runs.
+    let settings = VcsSettings {
+        protected_branch_patterns: Vec::new(),
+        ..VcsSettings::default()
+    };
+    let (rec, settings) = recording_engine(settings);
+    let dyn_exec: Arc<dyn GitExecutor> = rec.clone();
+    let mut h = harness(app_state_with(
+        parent.path(),
+        std::slice::from_ref(&repo.path),
+        dyn_exec,
+        settings,
+    ));
+    open_push_dialog(&mut h);
+
+    h.get_by_label("Force push (--force-with-lease)").click();
+    h.run();
+    dialog_push_button(&h).click();
+
+    assert!(
+        wait_for_painted(&mut h, "Force-with-lease push", 20_000),
+        "the lease rejection must paint the lease-specific wording; painted: {:?}",
+        painted_text(&h)
+    );
+    assert_painted(&h, "the lease, not the push, is stale");
+    assert_not_painted(&h, "rejected by the remote");
+    assert!(
+        rec.contains_push("origin", "main", true),
+        "the force flag must reach the engine, got: {:?}",
+        rec.recorded()
+    );
+}
