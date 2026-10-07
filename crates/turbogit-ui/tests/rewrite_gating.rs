@@ -474,30 +474,55 @@ fn a_rebase_in_one_root_gates_that_root_and_not_the_other() {
     }
 }
 
+/// One of git's four held states, measured as a triple: the word the suite names
+/// it by, the marker it writes into `.git`, and the reason that must state it.
+struct HeldState {
+    name: &'static str,
+    mark: for<'a> fn(&'a Path),
+    reason: &'static str,
+}
+
 /// Each of the four operation states names ITS owner and no other's, on both
 /// rewrite verbs — the two verbs share one gate, so a reason that reached only
 /// one of them would leave the other clickable mid-operation.
 #[test]
 fn each_operation_state_names_its_own_owner_on_both_verbs() {
-    let states: [(&str, for<'a> fn(&'a Path), &str); 4] = [
-        ("cherry-pick", cherry_pick_in_flight, DURING_CHERRY_PICK),
-        ("rebase", rebase_in_flight, DURING_REBASE),
-        ("merge", merge_in_flight, DURING_MERGE),
-        ("revert", revert_in_flight, DURING_REVERT),
+    let states = [
+        HeldState {
+            name: "cherry-pick",
+            mark: cherry_pick_in_flight,
+            reason: DURING_CHERRY_PICK,
+        },
+        HeldState {
+            name: "rebase",
+            mark: rebase_in_flight,
+            reason: DURING_REBASE,
+        },
+        HeldState {
+            name: "merge",
+            mark: merge_in_flight,
+            reason: DURING_MERGE,
+        },
+        HeldState {
+            name: "revert",
+            mark: revert_in_flight,
+            reason: DURING_REVERT,
+        },
     ];
-    for (name, mark, reason) in states {
+    for state in states {
         for verb in ["Drop commit", "Reword commit"] {
             let p = project();
-            mark(&p.alpha);
+            (state.mark)(&p.alpha);
             let mut h = log_harness(&p);
             open_menu_on(&mut h, "alpha 1");
             assert_menu_item_gated(&mut h, "Copy hash", verb);
-            hover_until_reason(&mut h, verb, reason);
+            hover_until_reason(&mut h, verb, state.reason);
             assert!(
-                !occurrences(&h, reason).is_empty(),
-                "the {name} state must name itself on {verb}"
+                !occurrences(&h, state.reason).is_empty(),
+                "the {} state must name itself on {verb}",
+                state.name
             );
-            assert_only_reason(&h, reason);
+            assert_only_reason(&h, state.reason);
         }
     }
 }
