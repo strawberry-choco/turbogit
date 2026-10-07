@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{
     Commit, CommitId, ConflictVersions, LogOpts, MergeStrategy, RebaseAction, RebasePlanEntry,
-    RefState, Root, RootId,
+    RecentCheckout, RefState, Root, RootId,
 };
 use turbogit_services::history_editor::RebaseCaution;
 use turbogit_services::integrate_service::MergePreview;
@@ -73,6 +73,35 @@ impl AppState {
                 .map(|name| (name, RefState::Default))
                 .collect();
             self.ui.branches_tags.insert(id, tags);
+        }
+    }
+
+    /// The names of `root`'s recent checkouts, newest first, as HEAD's reflog
+    /// reports them. A repository with no reflog yet answers empty — the port
+    /// treats absence of history as a normal answer — and a repository that is
+    /// not there at all fails, which this reports the same way as an empty
+    /// history because no surface may show an error for "nothing yet".
+    pub fn recent_checkouts(&self, root: &RootId) -> Option<Vec<RecentCheckout>> {
+        self.executor.recent_checkouts(root.as_path()).ok()
+    }
+
+    /// Warm the per-root checkout history behind the Branches tab's Recent
+    /// group. Derived from the reflog rather than bookkept by the app, so it
+    /// survives a restart and already contains the checkouts made in a
+    /// terminal; a completed operation drops the affected roots' entries on the
+    /// refresh seam, so a checkout made here is at the top of the group on the
+    /// frame it settles.
+    pub fn warm_branch_recents(&mut self) {
+        let missing: Vec<RootId> = self
+            .multi
+            .roots
+            .iter()
+            .filter(|r| !self.ui.branches_recents.contains_key(&r.id))
+            .map(|r| r.id.clone())
+            .collect();
+        for id in missing {
+            let history = self.recent_checkouts(&id).unwrap_or_default();
+            self.ui.branches_recents.insert(id, history);
         }
     }
 

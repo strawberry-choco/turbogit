@@ -110,6 +110,7 @@ pub enum TreeEvent {
 /// Which expandable group header was toggled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TreeGroup {
+    Recent,
     Local,
     Tags,
 }
@@ -230,6 +231,18 @@ pub fn branch_tree(ui: &mut Ui, props: &TreeProps<'_>, tree: &mut TreeState) -> 
                 no_match_state(ui, filter.trim(), &mut events);
                 return;
             }
+            // The Recent group first: it is the tree's one view-level group, so
+            // it sits above the repository sections rather than inside each one.
+            paint_recent_group(
+                ui,
+                props,
+                tree,
+                &filter,
+                &scroll_target,
+                &mut y_cursor,
+                &mut target_y,
+                &mut events,
+            );
             for section in &in_scope {
                 paint_repo_section(
                     ui,
@@ -315,6 +328,72 @@ fn leaf_count(nodes: &[BranchNode]) -> usize {
     branches_tree::leaf_count(nodes)
 }
 
+/// Paint the Recent group — the tree's one view-level group, above every
+/// repository section.
+///
+/// It paints nothing when there is no history to show: an empty `Recent` band is
+/// a promise of five recently checked-out branches that this repository set has
+/// never made. The rows are the group's own flat list, never directory-nested —
+/// the node reads "up to five recently checked-out branches", so each row names a
+/// branch and is answered by the repository it was checked out in (its own
+/// [`branches_tree::BranchLeaf::root`]) rather than by the section it happens to
+/// be drawn above.
+#[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
+fn paint_recent_group(
+    ui: &mut Ui,
+    props: &TreeProps<'_>,
+    tree: &mut TreeState,
+    filter: &str,
+    scroll_target: &Option<String>,
+    y_cursor: &mut f32,
+    target_y: &mut Option<f32>,
+    events: &mut Vec<TreeEvent>,
+) {
+    // The scope chip narrows the pane to one repository; a group that spans
+    // repositories narrows with it, or a filtered pane would act on a
+    // repository it says it is not showing.
+    let rows: Vec<&branches_tree::BranchLeaf> = props
+        .view
+        .recent
+        .iter()
+        .filter(|r| match props.repo_filter {
+            Some(f) => &r.root == f,
+            None => true,
+        })
+        .filter(|r| branch_matches(&r.branch, filter))
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    let header = section_header(ui, "Recent", rows.len(), tree.groups.recent, |_| {});
+    if header.clicked() {
+        events.push(TreeEvent::GroupToggled(TreeGroup::Recent));
+    }
+    *y_cursor += SECTION_H;
+    if !tree.groups.recent {
+        return;
+    }
+    for row in rows {
+        if Some(row.branch.name.as_str()) == scroll_target.as_deref() {
+            *target_y = Some(*y_cursor);
+        }
+        *y_cursor += BRANCH_ROW_H;
+        // The leaf's label is the full branch name already: this group has no
+        // directory header to strip a prefix into and no remote header either.
+        branch_row(
+            ui,
+            props,
+            tree,
+            &row.root,
+            row.active,
+            &row.label,
+            &row.branch,
+            0.0,
+            events,
+        );
+    }
+}
+
 /// Paint one repo's section: header (unless invisible for single-repo), Local
 /// group, Remote area, and Tags group.
 #[allow(clippy::too_many_arguments)]
@@ -349,7 +428,6 @@ fn paint_repo_section(
             ui,
             props,
             tree,
-            section,
             &locals,
             0,
             scroll_target,
@@ -381,12 +459,11 @@ fn paint_repo_section(
             }
             remote_group_header(ui, props, tree, section, rg, events);
             *y_cursor += SECTION_H;
-            if !remote_collapsed(tree, props, &section.root_id, &rg.remote) {
+            if !remote_collapsed(tree, props, &rg.root, &rg.remote) {
                 paint_nodes(
                     ui,
                     props,
                     tree,
-                    section,
                     &children,
                     1,
                     scroll_target,
@@ -428,12 +505,15 @@ fn paint_repo_section(
 
 /// Paint a forest of branch nodes (local or remote) with directory headers at
 /// `depth` indentation.
+///
+/// No repository context is passed: every leaf carries its own owner
+/// ([`branches_tree::BranchLeaf::root`]), which is what lets the same forest
+/// painter serve the view-level Recent group.
 #[allow(clippy::too_many_arguments)]
 fn paint_nodes(
     ui: &mut Ui,
     props: &TreeProps<'_>,
     tree: &mut TreeState,
-    section: &RepoSection,
     nodes: &[BranchNode],
     depth: usize,
     scroll_target: &Option<String>,
@@ -453,7 +533,8 @@ fn paint_nodes(
                     ui,
                     props,
                     tree,
-                    section,
+                    &l.root,
+                    l.active,
                     &l.label,
                     &l.branch,
                     depth as f32 * step,
@@ -467,7 +548,6 @@ fn paint_nodes(
                     ui,
                     props,
                     tree,
-                    section,
                     &d.children,
                     depth + 1,
                     scroll_target,
@@ -839,13 +919,13 @@ fn branch_row(
     ui: &mut Ui,
     props: &TreeProps<'_>,
     tree: &mut TreeState,
-    section: &RepoSection,
+    id: &RootId,
+    is_current: bool,
     label: &str,
     branch: &Branch,
     indent: f32,
     events: &mut Vec<TreeEvent>,
 ) {
-    let id = &section.root_id;
     // Issue 11: the branch being renamed edits inline on its own row. Rename
     // is a local-branch verb, scoped to the owning repo.
     if props.allows_rename
@@ -853,13 +933,12 @@ fn branch_row(
         && tree.selected_root.as_ref() == Some(id)
         && tree.renaming.as_deref() == Some(branch.name.as_str())
     {
-        rename_editor(ui, tree, section, branch, events);
+        rename_editor(ui, tree, id, branch, events);
         return;
     }
 
     let now = props.now;
     let meta = row_meta(branch, now);
-    let is_current = section.current_branch.as_deref() == Some(branch.name.as_str());
     // Remote rows are reference material (issue 13): quieter, labelled with
     // their remote's name, and never carrying the current marker.
     let is_remote = branch.kind == BranchKind::Remote;
@@ -1087,7 +1166,7 @@ fn branch_row(
 
     if response.clicked() {
         events.push(TreeEvent::RowClicked {
-            root: section.root_id.clone(),
+            root: id.clone(),
             branch: branch.name.clone(),
         });
     } else if props.allows_context_menu && response.secondary_clicked() {
@@ -1101,7 +1180,7 @@ fn branch_row(
             .unwrap_or_else(|| rect.left_bottom());
         menu_host::note_anchor(ui, MenuId::new("branches", &target), pos);
         events.push(TreeEvent::ContextMenuRequested {
-            root: section.root_id.clone(),
+            root: id.clone(),
             branch: branch.name.clone(),
         });
     }
@@ -1109,7 +1188,7 @@ fn branch_row(
         // Double-click activates — selecting and switching stay separate
         // intents, and double-click is the explicit switch gesture.
         events.push(TreeEvent::RowActivated {
-            root: section.root_id.clone(),
+            root: id.clone(),
             branch: branch.name.clone(),
         });
     }
@@ -1179,7 +1258,7 @@ fn current_marker(ui: &mut Ui) -> Response {
 fn rename_editor(
     ui: &mut Ui,
     tree: &mut TreeState,
-    section: &RepoSection,
+    root: &RootId,
     branch: &Branch,
     events: &mut Vec<TreeEvent>,
 ) {
@@ -1208,7 +1287,7 @@ fn rename_editor(
         input.inner.request_focus();
         if kit_button(ui, KitButton::Secondary, "Apply rename").clicked() || enter {
             events.push(TreeEvent::RenameCommitted {
-                root: section.root_id.clone(),
+                root: root.clone(),
                 old: branch.name.clone(),
                 new: tree.rename_draft.trim().to_string(),
             });
