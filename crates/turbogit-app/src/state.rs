@@ -233,8 +233,11 @@ pub struct DialogState {
     /// routine rename is in.
     pub rename_branch_unset_upstream: bool,
     /// The payload of the unmerged-commits viewer — the record a delete
-    /// disclosure linked to, presented as a list. Present exactly while its
-    /// dialog is, the way [`Self::rewrite_preflight`] is.
+    /// disclosure linked to, presented as a list. Written by every path that
+    /// opens the dialog and dropped by both of its buttons; a window closed by
+    /// its ✕ leaves it set until the next link overwrites it, because the
+    /// generic host closes windows without consulting payloads, and nothing
+    /// reads it while the dialog is gone.
     pub unmerged_view: Option<UnmergedCommits>,
     // Compare branches (issue 32, branches popup row action + footer): the
     // two sides and the snapshot of commits on `compare_left` missing from
