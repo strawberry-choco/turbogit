@@ -2,7 +2,7 @@
 //! (`ui::branch_menu`).
 //!
 //! Two seams. The gating table is a pure function over one `Branch` and the
-//! repository's current branch — every row's ten outcomes are asserted
+//! repository's current branch — every row's eleven outcomes are asserted
 //! without rendering. The component itself is props-in / action-out: the
 //! designed item order, the three rules, the multi-repo wording, and the
 //! `BranchMenuAction` each clicked item returns, asserted through painted
@@ -217,6 +217,13 @@ fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
         MenuItemState::disabled("remote branches cannot be rebased")
     );
     assert_eq!(remote(BranchMenuAction::Compare), MenuItemState::enabled());
+    // Ticket 17: the file-level comparison is read-only too, so a remote-tracking
+    // row can be one of its sides — which is what makes `Get from Branch` reachable
+    // for a file that only exists on `origin/*`.
+    assert_eq!(
+        remote(BranchMenuAction::DiffWithWorkingTree),
+        MenuItemState::enabled()
+    );
     assert_eq!(remote(BranchMenuAction::Delete), MenuItemState::enabled());
 }
 
@@ -225,7 +232,7 @@ fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
 /// so this is the one check that they do not.
 #[test]
 fn the_designed_order_is_the_array_slots() {
-    assert_eq!(BranchMenuAction::ORDER.len(), 10);
+    assert_eq!(BranchMenuAction::ORDER.len(), 11);
     for (slot, action) in BranchMenuAction::ORDER.iter().enumerate() {
         assert_eq!(action.index(), slot, "{action:?} is painted in slot {slot}");
     }
@@ -319,7 +326,7 @@ fn menu_harness(
 /// history / update / edit — with Push's real accelerator in the shortcut
 /// column.
 #[test]
-fn the_menu_renders_the_ten_items_in_the_designed_order() {
+fn the_menu_renders_the_eleven_items_in_the_designed_order() {
     let target = local("feature/cascade-views", Some("origin/f"), 1, 0);
     let (harness, _returned) = menu_harness(target, || BranchMenuProps {
         repo_name: "alpha",
@@ -353,6 +360,7 @@ fn the_menu_renders_the_ten_items_in_the_designed_order() {
             "Merge into main",
             "Rebase onto main",
             "Compare with main",
+            "Show Diff with Working Tree",
             "Pull",
             "Push",
             "Ctrl+Shift+K",

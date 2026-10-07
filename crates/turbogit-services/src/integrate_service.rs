@@ -462,6 +462,154 @@ pub fn revert_commit(
     vcs.revert(root, commit)
 }
 
+// ------------------------------------------------- verb 5: Get from Branch ---
+//
+// The reference's fifth integration verb (`apply-changes-from-one-branch-to-
+// another.md:269-287`) is not a history operation at all: it compares ONE FILE
+// across two sides and copies the other side's whole contents into the working
+// tree. Neither `cherry-pick` nor `merge` covers "take that one file from over
+// there", and it is the only verb that can bring across a file the target branch
+// does not have.
+
+/// One rung of the **change-kind grammar** a file-level comparison reads: the
+/// same three-way rule the diff viewer states (Green = Added, Blue = Modified,
+/// Gray = Deleted), which is why it is a design-system rule rather than a
+/// per-call-site choice.
+///
+/// The two one-sided rungs are defined against the comparison's **base side**, and
+/// that is what makes `Swap Branches` a re-reading rather than a re-colouring: the
+/// set of differing paths never changes, but which side is the base does, so a row
+/// that was "on the other side only" becomes "on the base side only" and moves to
+/// the other end of the list. Spell the two sides literally as *branch* and
+/// *working tree* instead, and swapping them needs a second git read whose file set
+/// can disagree with the first one's.
+///
+/// The derived `Ord` is the list order — grey, then green, then blue. A swap
+/// exchanges the two one-sided rows' **positions** because of that order, which is
+/// the fact the parity suite asserts (a swap that left the rows in place and only
+/// re-tinted them would have inverted the grammar: grey would mean "missing from
+/// the base" rather than "missing from the branch you are standing on").
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BranchFileStatus {
+    /// Grey — the path exists on the base side and is absent on the other.
+    Deleted,
+    /// Green — the path exists on the other side and is absent on the base.
+    Added,
+    /// Blue — the path exists on both sides and its content differs.
+    Modified,
+}
+
+/// One row of that list: which rung it sits on, and the repository-relative path.
+///
+/// **Field order is the sort key.** `BranchFileStatus`'s own derived `Ord` is its
+/// declaration order — grey, green, blue — and declaring `status` ahead of `path`
+/// is what makes `Ord` for this row mean "rung first, path within the rung". The
+/// list the window paints is that order, and the two one-sided rows exchanging
+/// **positions** under `Swap Branches` is a fact about the ordering, not about the
+/// tint; reordering these fields would silently re-sort the window by path and turn
+/// the swap into the re-colouring the ticket names as the wrong answer.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BranchFileRow {
+    pub status: BranchFileStatus,
+    pub path: PathBuf,
+}
+
+/// The file-level list behind `Show Diff with Working Tree`: every path that
+/// differs between `branch` and the working tree of `root`, each on one of the
+/// three rungs.
+///
+/// One git read answers the whole window — `git diff <branch>` is literally the
+/// reference's "diff with working tree" (its left side is the branch, its right
+/// side is the untouched commit), and git's own `new file` / `deleted file`
+/// headers are what say which side a path is missing from. `base_is_branch` is
+/// the window's posture after `Swap Branches`: `true` reads the branch as the base
+/// (the flow's opening posture, where grey means "the branch has it, you do not"),
+/// `false` reads the working tree as the base and exchanges which paths land on
+/// which one-sided rung. Nothing else about the answer changes — the path set is
+/// the same either way, which is what makes the swap a re-reading of one fact
+/// rather than a second question to git.
+pub fn branch_file_changes(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    branch: &str,
+    base_is_branch: bool,
+) -> TgResult<Vec<BranchFileRow>> {
+    let patch = vcs.diff_patch(
+        root,
+        &DiffOpts {
+            left: Some(branch.to_string()),
+            ..Default::default()
+        },
+    )?;
+    let mut rows: Vec<BranchFileRow> = patch
+        .files
+        .iter()
+        .filter_map(|file| {
+            // git spells the two one-sided cases as headers on the section, so
+            // the rung is read off them and never re-derived from hunk counts —
+            // a mode-only change has hunks and is `Modified`, a rename has none
+            // and is `Modified` too, and both readings are right.
+            let status = if file.deleted_file() {
+                // Present on the branch side, gone from the worktree.
+                if base_is_branch {
+                    BranchFileStatus::Deleted
+                } else {
+                    BranchFileStatus::Added
+                }
+            } else if file.new_file() {
+                // Present in the worktree, unknown to the branch.
+                if base_is_branch {
+                    BranchFileStatus::Added
+                } else {
+                    BranchFileStatus::Deleted
+                }
+            } else {
+                BranchFileStatus::Modified
+            };
+            // A deleted path has no `b/` side to name it by, and a one-sided row
+            // is exactly the case that has to be named correctly.
+            let name = if file.deleted_file() {
+                &file.old_path
+            } else {
+                &file.new_path
+            };
+            Some(BranchFileRow {
+                path: PathBuf::from(name),
+                status,
+            })
+        })
+        .collect();
+    rows.sort();
+    Ok(rows)
+}
+
+/// `Get from Branch`: replace `path` in the working tree with **the entire
+/// contents it has on `branch`** — the reference's own description of the verb
+/// ("will copy the entire contents of the file to the current branch").
+///
+/// The read is the port's [`GitExecutor::show_file_bytes`], binary-safe, so an
+/// image or a CRLF-sensitive file crosses intact rather than through a UTF-8
+/// round trip. The write is a plain worktree write, which is where the verb's
+/// shape lands: the file arrives as an ordinary local change the developer then
+/// commits, rather than as a checked-out index entry the window had to explain.
+/// That is also why the surface offers this verb on the **blue** rung only — on a
+/// green row the branch has no copy of the file at all, and taking "the branch's
+/// contents" would be a delete wearing a take's label.
+pub fn get_file_from_branch(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    branch: &str,
+    path: &Path,
+) -> TgResult<()> {
+    let bytes = vcs.show_file_bytes(root, branch, path)?;
+    let target = root.join(path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&target, bytes)?;
+    Ok(())
+}
+
 /// Abort an in-progress `op` (merge / rebase / cherry-pick).
 pub fn abort(vcs: &dyn GitExecutor, root: &Path, op: &str) -> TgResult<()> {
     vcs.abort(root, op)

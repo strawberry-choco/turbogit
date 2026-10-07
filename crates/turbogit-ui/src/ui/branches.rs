@@ -1006,6 +1006,12 @@ fn apply_branch_action(
             }
         }
         BranchMenuAction::Compare => state.open_compare(root, &branch.name),
+        BranchMenuAction::DiffWithWorkingTree => {
+            // Ticket 17: the reference's verb-5 entry point. Opens the file-level
+            // comparison the app layer reads and snapshots; the window is per root,
+            // and the root the row belongs to is the root it compares.
+            state.open_get_from_branch(root, &branch.name);
+        }
         BranchMenuAction::Delete => match branch.kind {
             BranchKind::Remote => {
                 let (remote, name) = branch
