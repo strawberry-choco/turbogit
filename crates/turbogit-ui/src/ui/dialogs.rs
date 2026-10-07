@@ -5,13 +5,14 @@
 use egui::{Align, FontFamily, FontId, Layout, RichText, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType};
+use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType, UnmergedCommits};
 use turbogit_domain::model::{BranchKind, MergeStrategy};
 use turbogit_services::{
     branch_service, integrate_service, shelve_stash, sync_service, tag_service,
 };
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, data_font};
+use crate::ui::components::{KitButton, kit_button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::widgets::{self, group_title};
 
@@ -45,6 +46,10 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
         Dialog::CherryPickTarget => "Cherry-pick to branch".to_string(),
         // Issue 32 branches popup row actions.
         Dialog::RenameBranch => "Rename branch".to_string(),
+        // The reference's own words for this dialog, because the
+        // fact it states is about the branch's *merge* state, not about a
+        // deletion the developer already watched happen.
+        Dialog::BranchNotFullyMerged => "Branch Was Not Fully Merged".to_string(),
         Dialog::CompareBranches => {
             format!(
                 "Compare {} with {}",
@@ -68,6 +73,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
             Dialog::NewWorktree => super::worktrees::new_worktree_dialog(ui, state),
             Dialog::CherryPickTarget => cherry_pick_target(ui, state),
             Dialog::RenameBranch => rename_branch(ui, state),
+            Dialog::BranchNotFullyMerged => branch_not_fully_merged(ui, state),
             Dialog::CompareBranches => compare_branches(ui, state),
             _ => {}
         });
@@ -1089,28 +1095,72 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
 
 // ------------------------------------------------------- issue 32 dialogs --
 
-/// Rename a branch (issue 32 branches popup row action): one input preset
-/// with the old name, Rename dispatches through the engine seam and closes;
-/// a blank new name stays inert.
+/// Rename a branch: the new name, and — where the branch tracks something —
+/// the second field that stops it tracking, with the consequence both fields
+/// buy stated beside them.
+///
+/// The consequence line is not decoration. Renaming a local branch leaves the
+/// remote branch it tracked in place under its old name, and nothing in the
+/// dialog shows that; the checkbox only means anything once the sentence
+/// beside it says what the next push will do. A branch that tracks nothing has
+/// no second field and no remote left behind, so it gets neither.
 fn rename_branch(ui: &mut Ui, state: &mut AppState) {
     let old = state.ui.dlg.rename_branch_name.clone();
     let root = state.ui.dlg.rename_branch_root.clone();
+    let upstream = state.ui.dlg.rename_branch_upstream.clone();
     ui.label(format!("Rename '{old}' to:"));
     let edit = ui.text_edit_singleline(&mut state.ui.dlg.rename_branch_new);
     edit.request_focus();
+    if upstream.is_some() {
+        ui.checkbox(
+            &mut state.ui.dlg.rename_branch_unset_upstream,
+            "Unset upstream branch",
+        );
+    }
+    if let Some(up) = &upstream {
+        let clearing = state.ui.dlg.rename_branch_unset_upstream;
+        widgets::note(ui, None, |ui| {
+            ui.label(format!(
+                "Only the local branch is renamed — your next push creates and tracks a new \
+                 remote branch, and {} is left behind.",
+                up.git_ref()
+            ));
+            if clearing {
+                ui.label(
+                    "The upstream is cleared now, so the renamed branch tracks nothing until \
+                     you push.",
+                );
+            }
+        });
+    }
+    // Owned before the footer: the closure below mutates `state`, and a `&str`
+    // borrowed out of it earlier would still be live when the closure starts.
+    let new = state.ui.dlg.rename_branch_new.trim().to_string();
+    let named = !new.is_empty() && new != old;
     // The shared footer, preserving the painted order `Rename` · `Cancel`.
     widgets::dialog_footer(ui, |ui| {
         if ui.button("Cancel").clicked() {
             close(state);
         }
-        if ui.button("Rename").clicked() {
-            let new = state.ui.dlg.rename_branch_new.trim().to_string();
-            if !new.is_empty() && new != old {
-                if let Some(id) = &root {
-                    state.rename_branch(id, &old, &new);
-                }
-                close(state);
+        // Withheld, not greyed: a blank name has nothing to rename, so the
+        // control loses its fill and its action together. `KitButton::Primary`
+        // keeps the accent fill in its Disabled state, which would paint a
+        // promise the click cannot keep.
+        let rename = kit_button(
+            ui,
+            if named {
+                KitButton::Primary
+            } else {
+                KitButton::Quiet
+            },
+            "Rename",
+        );
+        if named && rename.clicked() {
+            let unset_upstream = state.ui.dlg.rename_branch_unset_upstream;
+            if let Some(id) = &root {
+                state.rename_branch(id, &old, &new, unset_upstream);
             }
+            close(state);
         }
     });
 }
@@ -1174,6 +1224,85 @@ fn compare_branches(ui: &mut Ui, state: &mut AppState) {
         state.ui.dlg.compare_right = left.clone();
         if let Some(id) = root {
             state.ui.dlg.compare_commits = state.outgoing(&id, &right, &left);
+        }
+    }
+}
+
+/// What the unmerged-commits disclosure was asked to do — the deferred-intent
+/// shape the surfaces here use: the body paints and returns, the host applies.
+/// The viewer opened from the post-delete notification restores or closes; the
+/// one opened from the pre-flight confirm can only close, because the branch it
+/// describes still stands.
+pub(crate) enum UnmergedAction {
+    Nothing,
+    Restore,
+    Close,
+}
+
+/// The delete disclosure: a header naming **both** sides — the branch and what
+/// it was not merged into — over the list of what is lost. One body, opened by
+/// the pre-flight confirmation's link and by the post-delete notification's, so
+/// the two can never state the fact differently.
+///
+/// It reads nothing from git: the payload is the snapshot taken while the
+/// branch still existed, which is the only moment these commits were
+/// addressable by name.
+pub(crate) fn unmerged_disclosure(
+    ui: &mut Ui,
+    state: &AppState,
+    unmerged: &UnmergedCommits,
+) -> UnmergedAction {
+    ui.label(unmerged.header());
+    egui::ScrollArea::vertical()
+        .max_height(240.0)
+        .show(ui, |ui| {
+            for c in &unmerged.commits {
+                let short = widgets::short_commit_ref(&c.id);
+                let line = match &c.subject {
+                    Some(subject) => format!("{short}  {subject}"),
+                    // A commit whose message could not be read is still a
+                    // commit that is being lost: the hash says so, a blank gap
+                    // would read as an empty row.
+                    None => short,
+                };
+                ui.label(line);
+            }
+        });
+    let mut action = UnmergedAction::Nothing;
+    widgets::dialog_footer(ui, |ui| {
+        if ui.button("Close").clicked() {
+            action = UnmergedAction::Close;
+        }
+        // The reference's `Restore`, offered exactly where there is a branch to
+        // restore: reached from the confirmation the branch still stands.
+        if state.unmerged_restore_available(unmerged)
+            && kit_button(ui, KitButton::Primary, "Restore").clicked()
+        {
+            action = UnmergedAction::Restore;
+        }
+    });
+    action
+}
+
+/// The dialog the post-delete notification's link opens: the
+/// reference's "Branch Was Not Fully Merged" list, with the recovery its
+/// `&Restore` button names.
+fn branch_not_fully_merged(ui: &mut Ui, state: &mut AppState) {
+    let Some(unmerged) = state.ui.dlg.unmerged_view.clone() else {
+        widgets::empty_state(ui, "No unmerged commits to show.");
+        close(state);
+        return;
+    };
+    match unmerged_disclosure(ui, state, &unmerged) {
+        UnmergedAction::Nothing => {}
+        UnmergedAction::Close => {
+            state.ui.dlg.unmerged_view = None;
+            close(state);
+        }
+        UnmergedAction::Restore => {
+            state.restore_unmerged_branch(&unmerged);
+            state.ui.dlg.unmerged_view = None;
+            close(state);
         }
     }
 }

@@ -69,6 +69,7 @@ pub mod widgets;
 pub mod worktrees;
 
 use crate::theme::Palette;
+use crate::ui::components::{KitButton, kit_button};
 use egui::{Color32, Context, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::state::{AppState, Dialog, PendingConfirm, ToastKind};
@@ -285,6 +286,16 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 if let Some(c) = &state.ui.branches_delete_consequence {
                     ui.label(c.clone());
                 }
+                // The count is a **link**, and it is here rather than only in
+                // the notification after the ref is gone: TurboGit asks first,
+                // so the evidence belongs at the moment of decision. Quiet, so
+                // the confirm keeps one filled control and OK stays the thing
+                // that looks pressable.
+                if let Some(unmerged) = state.ui.branches_delete_unmerged.clone()
+                    && kit_button(ui, KitButton::Quiet, &unmerged.link_label()).clicked()
+                {
+                    state.open_unmerged_commits(&unmerged);
+                }
                 ui.horizontal(|ui| {
                     if ui.button("OK").clicked() {
                         // Capture the tip for the undo window before the
@@ -292,20 +303,29 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                         if let Some(root) = state.selected_root.clone()
                             && let Some(tip_sha) = state.branch_tip(&root, name)
                         {
+                            // Read here rather than at settlement: the delete
+                            // removes the local ref, and with it the upstream
+                            // entry and the commits the branch alone reached.
+                            let upstream = state.branch_upstream(&root, name);
+                            let unmerged = state.ui.branches_delete_unmerged.clone();
                             state.ui.branches_delete_pending =
                                 Some(turbogit_app::state::BranchDeletePending {
                                     root,
                                     name: name.clone(),
                                     tip_sha,
+                                    upstream,
+                                    unmerged,
                                 });
                         }
                         state.run_confirmed(confirm.clone());
                         state.ui.confirm = None;
                         state.ui.branches_delete_consequence = None;
+                        state.ui.branches_delete_unmerged = None;
                     }
                     if ui.button("Cancel").clicked() {
                         state.ui.confirm = None;
                         state.ui.branches_delete_consequence = None;
+                        state.ui.branches_delete_unmerged = None;
                     }
                 });
             }
