@@ -205,14 +205,62 @@ fn menu_item_row(ui: &mut Ui, props: &MenuItemProps<'_>) -> Response {
         );
     }
 
-    let response = if let Some(reason) = props.disabled_reason {
-        response.on_disabled_hover_text(reason)
-    } else {
-        response
+    // A disabled row states ONE reason, in two places: the row's own hover text,
+    // and the shell's status bar — which is where the reference documents it
+    // ("hover over the action in the context menu and look for the message in the
+    // status bar"), and the reason this primitive raises the text into a slot the
+    // shell reads rather than keeping it inside the menu. See
+    // [`take_status_hint`] for the channel and its one-frame latency.
+    //
+    // The pointer test is the ROW'S RECT, not `response.hovered()`: a blocked row
+    // is painted inside a `disabled_child_scope`, and a `Ui` that is disabled
+    // reports no hover for its widgets — which is exactly why egui needs
+    // `on_disabled_hover_text` for the tooltip at all. Asking the rect is the one
+    // question that has the same answer for a live row and a blocked one.
+    let response = match props.disabled_reason {
+        Some(reason) => {
+            if ui.rect_contains_pointer(rect) {
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(status_hint_id(), reason.to_owned());
+                });
+                // The reason is painted by the NEXT frame — the shell lays the
+                // bottom panel out before the tool window that hosts this menu —
+                // so the frame has to be had.
+                ui.ctx().request_repaint();
+            }
+            response.on_disabled_hover_text(reason)
+        }
+        None => response,
     };
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, props.enabled, props.label));
     focus_ring(ui, &response);
     response
+}
+
+/// The slot a blocked menu row's reason is handed through to the status bar.
+///
+/// A fixed `Id`, not one derived from the menu or the row: there is exactly one
+/// status-bar text region, and the reason it shows is whichever blocked row the
+/// pointer is on. This is the same cross-region, cross-frame channel
+/// [`crate::ui::branch_widget`] uses for a row's hover band and
+/// [`super::menu_host`] uses for its `painted_last_frame` flag — egui's temp
+/// memory — and it exists because this primitive takes plain data and a `Ui` and
+/// no application state, while the status bar is painted by the shell.
+fn status_hint_id() -> egui::Id {
+    egui::Id::new("tg_status_bar_hint")
+}
+
+/// Take the reason a blocked menu row raised, leaving the slot empty.
+///
+/// **Take, not peek**, and that is the whole behaviour: the status bar reports
+/// what the pointer is on NOW, so moving off a blocked row goes silent one frame
+/// later instead of stranding the last reason on the line. Called once per frame
+/// by [`crate::ui::shell::render`] before the bottom panel is laid out, whether
+/// or not the status bar is showing — with the region hidden the reason is the
+/// row's hover text alone, exactly as the reference documents for a user who has
+/// not enabled a status text region.
+pub fn take_status_hint(ctx: &egui::Context) -> Option<String> {
+    ctx.data_mut(|d| d.remove_temp::<String>(status_hint_id()))
 }
 
 /// Paint the 1 px rule that separates one group of menu items from the

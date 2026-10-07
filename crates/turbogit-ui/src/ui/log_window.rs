@@ -71,6 +71,7 @@ use crate::ui::branches_tree::build_branch_view;
 use crate::ui::commit_menu::{CommitFacts, CommitMenuAction, commit_menu};
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
+use crate::ui::rewrite_gating;
 use crate::ui::widgets::{self, BadgeKind, MenuItemKind, MenuItemProps, RefKind, menu_item};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
@@ -88,6 +89,7 @@ use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
     SignatureState, forward_slash_path,
 };
+use turbogit_services::integrate_service;
 use turbogit_services::sync_service;
 
 // --- Pane metrics (spec §8.3) -------------------------------------------------
@@ -1246,8 +1248,9 @@ enum RowIntent {
 }
 
 /// The gates are evaluated per repository root, so a dirty root does not
-/// disable an action on a clean one. Everything here is state the log already
-/// holds; none of it costs a git call.
+/// disable an action on a clean one, and a rebase in flight in one repository
+/// does not gate another's. Everything here is state the log already holds or
+/// git's own marker files state about that one root; none of it costs a git call.
 fn commit_facts<'a>(state: &'a AppState, root: &'a RootId, cid: &str) -> CommitFacts<'a> {
     let snapshot = state.multi.by_id(root);
     CommitFacts {
@@ -1265,6 +1268,14 @@ fn commit_facts<'a>(state: &'a AppState, root: &'a RootId, cid: &str) -> CommitF
                 .log(root)
                 .is_some_and(|cs| cs.iter().any(|c| c.id == cid)),
         multi_root: state.multi.roots.len() > 1,
+        // The operation holding THIS root, asked of the root the menu was opened
+        // on and of no other — which is what makes the in-flight gate per root
+        // rather than a workspace-wide flag.
+        owner: integrate_service::owning_operation(root.as_path()),
+        // The workspace's checked-repository set, as seen from this commit's
+        // repository. The same set the status bar's `N repos in scope` counter
+        // reports and every fleet verb reads.
+        scope: rewrite_gating::scope_of(&state.ui.repo_selection, root),
         repo_name: root_display_name(root),
     }
 }
