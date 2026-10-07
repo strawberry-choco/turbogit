@@ -791,6 +791,10 @@ fn apply_branch_action(
             state.open_new_branch(NewBranchBase::Branch(branch.name.clone()), true, None);
         }
         BranchMenuAction::CheckoutAndPull => {
+            // Ticket 21a scoped the pull family to remote rows, which both
+            // engines list with `tracking: None` — so no real row currently
+            // enables this composite. The dispatch stays: the gate is the
+            // product decision under review, the wiring is not.
             // One composite operation, modelled on the branches popup's
             // checkout-then-pull. It must not also fire the standalone
             // checkout confirmation — that guard belongs to `Checkout`.
