@@ -88,8 +88,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // metadata rail that once split it was removed, issue 03). Nothing
     // claims the top window edge: the CentralPanel starts there, and the
     // tab strip is the first band inside it.
+    //
+    // The blocked-reason line is TAKEN here, before the bottom panel is laid
+    // out: whatever a menu row raised last frame is what this frame reports, and
+    // raising nothing means the line goes back to the workspace counters. The
+    // take runs whether the region is showing or not, so a hidden status bar
+    // cannot accumulate reasons behind itself.
+    let status_hint = widgets::take_status_hint(ui.ctx());
     if state.ui.show_status_bar {
-        render_status_bar(ui, state);
+        render_status_bar(ui, state, status_hint.as_deref());
     }
 
     egui::CentralPanel::default().show(ui, |ui| {
@@ -593,7 +600,16 @@ fn tab_item(
 /// count on the right; busy spinner at the far right. The version line
 /// came here with the topbar's deletion so it paints on Welcome and in
 /// the shell alike.
-fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
+///
+/// `hint` is the one thing the pointer is blocked on right now, raised by a
+/// disabled menu row on the previous frame (see
+/// [`crate::ui::widgets::take_status_hint`]). It is the status text region the
+/// reference documents as the home of "why can't I do this", and it paints as
+/// its own line at the head of the left cluster, ahead of the version line and
+/// the counters: a reason that arrives after three aggregate chips reads as
+/// another chip, and the developer is looking for the sentence about the item
+/// under the pointer.
+fn render_status_bar(ui: &mut Ui, state: &mut AppState, hint: Option<&str>) {
     let agg = AggregatedStatus::compute(&state.multi.roots, &|id| state.caches.ahead_behind(id));
 
     Panel::bottom("status_bar")
@@ -652,6 +668,9 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
             let right_rect = Rect::from_min_max(Pos2::new(split, band.min.y), band.max);
             ui.scope_builder(UiBuilder::new().max_rect(left_rect), |ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    if let Some(reason) = hint {
+                        status_hint(ui, reason);
+                    }
                     version_line(ui, state);
                     aggregated_status_chips(ui, &agg);
                     granular_status_chips(ui, state);
@@ -671,6 +690,24 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState) {
             });
             paint_edge_line(ui, widgets::Edge::Top);
         });
+}
+
+/// Paint the blocked-reason line: the sentence a disabled menu row states, in
+/// the primary ink — the only text in this cluster that is about the thing under
+/// the pointer rather than about the workspace — and followed by the same
+/// hairline separator the aggregate chips are divided by, so it reads as the
+/// line's head rather than as one more counter.
+fn status_hint(ui: &mut Ui, reason: &str) {
+    ui.label(
+        RichText::new(reason)
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
+            .color(Palette::INK),
+    );
+    ui.label(
+        RichText::new("·")
+            .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
+            .color(STATUS_BAR_INK),
+    );
 }
 
 /// Version / git-status line (issue #34): app version, resolved git
