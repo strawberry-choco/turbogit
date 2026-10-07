@@ -1,10 +1,10 @@
 //! The branch context menu: one right-click action list for a branch row.
 //!
-//! Ten items for one `(RootId, Branch)` target — the union of every branch
+//! Eleven items for one `(RootId, Branch)` target — the union of every branch
 //! action the surface offers — rendered through the shared
 //! [`crate::ui::widgets::menu_item`] primitive. Props in, action out — the
 //! same contract [`crate::ui::branch_tree_view`] holds: the component decides
-//! no policy, dispatches nothing, and never touches `AppState`. The ten
+//! no policy, dispatches nothing, and never touches `AppState`. The eleven
 //! gating rules live here once, in [`branch_menu_items`], so the wording and
 //! enablement of a blocked action can never drift between surfaces.
 
@@ -22,6 +22,11 @@ pub enum BranchMenuAction {
     Merge,
     Rebase,
     Compare,
+    /// The reference's entry into verb 5 (`apply-changes:269-287`): compare this
+    /// branch's files with the working tree, which is where `Get from Branch`
+    /// lives. Read-only, so — like [`Self::Compare`] — a remote-tracking row can be
+    /// one side of it.
+    DiffWithWorkingTree,
     Pull,
     Push,
     Rename,
@@ -30,13 +35,18 @@ pub enum BranchMenuAction {
 
 impl BranchMenuAction {
     /// The designed item order, top of the menu to bottom.
-    pub const ORDER: [Self; 10] = [
+    ///
+    /// The two read-only comparisons sit together in the middle group: neither
+    /// moves a ref, and the item that opens the file-level list belongs beside the
+    /// one that opens the commit-level list rather than down with the pull family.
+    pub const ORDER: [Self; 11] = [
         Self::Checkout,
         Self::NewBranchFrom,
         Self::CheckoutAndPull,
         Self::Merge,
         Self::Rebase,
         Self::Compare,
+        Self::DiffWithWorkingTree,
         Self::Pull,
         Self::Push,
         Self::Rename,
@@ -52,10 +62,11 @@ impl BranchMenuAction {
             Self::Merge => 3,
             Self::Rebase => 4,
             Self::Compare => 5,
-            Self::Pull => 6,
-            Self::Push => 7,
-            Self::Rename => 8,
-            Self::Delete => 9,
+            Self::DiffWithWorkingTree => 6,
+            Self::Pull => 7,
+            Self::Push => 8,
+            Self::Rename => 9,
+            Self::Delete => 10,
         }
     }
 }
@@ -67,14 +78,14 @@ impl BranchMenuAction {
 /// and stays.
 pub use crate::ui::widgets::MenuItemState;
 
-/// The ten gates, in [`BranchMenuAction::ORDER`] — one function, one set of
+/// The eleven gates, in [`BranchMenuAction::ORDER`] — one function, one set of
 /// strings. Every rule is a field read off the branch the listing already
 /// carries; none costs a git call.
-pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemState; 10] {
+pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemState; 11] {
     let is_current = current == Some(branch.name.as_str());
     let is_local = branch.kind == BranchKind::Local;
     let has_upstream = branch.tracking.is_some() && !branch.gone;
-    let mut items = [MenuItemState::enabled(); 10];
+    let mut items = [MenuItemState::enabled(); 11];
     items[BranchMenuAction::Checkout.index()] = if is_current {
         MenuItemState::disabled("already checked out")
     } else {
@@ -111,6 +122,15 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
     };
     // Comparing is read-only, so a remote-tracking row can be one side of it.
     items[BranchMenuAction::Compare.index()] = if is_current {
+        MenuItemState::disabled("this is the current branch")
+    } else {
+        MenuItemState::enabled()
+    };
+    // The same rule, for the same reason: comparing a branch with the working tree
+    // of that very branch is a list that can only come back empty, and a row that
+    // is HEAD has nothing to take from itself. Remote-tracking rows are legal,
+    // because `Get from Branch` reads a revision rather than moving a ref.
+    items[BranchMenuAction::DiffWithWorkingTree.index()] = if is_current {
         MenuItemState::disabled("this is the current branch")
     } else {
         MenuItemState::enabled()
@@ -157,7 +177,7 @@ pub struct BranchMenuProps<'a> {
     pub current_branch: Option<&'a str>,
 }
 
-/// Paint the ten items for one branch and report which was clicked.
+/// Paint the eleven items for one branch and report which was clicked.
 ///
 /// The menu is 296 px wide and grows to 320 px before the branch name
 /// middle-truncates — no wrapping inside a menu row. "Checkout and pull"
@@ -276,6 +296,19 @@ pub fn branch_menu(
         &states[BranchMenuAction::Compare.index()],
         Icon::GIT_COMPARE,
         &compare_label,
+        None,
+        None,
+        MenuItemKind::Default,
+    );
+    row(
+        ui,
+        BranchMenuAction::DiffWithWorkingTree,
+        &states[BranchMenuAction::DiffWithWorkingTree.index()],
+        // The comparison glyph again, deliberately: this item and the one above it
+        // are the two readings of the same question — commit-level and file-level —
+        // and a distinct icon would imply a distinct family.
+        Icon::GIT_COMPARE,
+        "Show Diff with Working Tree",
         None,
         None,
         MenuItemKind::Default,

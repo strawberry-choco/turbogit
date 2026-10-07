@@ -56,6 +56,14 @@ pub enum OpKind {
     /// durable record has to name the verb rather than the operation it
     /// resolved.
     Resolve,
+    /// [`Operation::GetFileFromBranch`] — the reference's fifth integration verb,
+    /// `Get from Branch`. Its own identity because what it settles is a worktree
+    /// file rather than a history: the record has to name the path and the branch
+    /// it came from, and the changes window that offered the verb has to re-read
+    /// the rung list the moment it lands (a file whose contents now match is no
+    /// longer a row, and a window that still lists it would offer to take it
+    /// again).
+    GetFileFromBranch,
     /// The [`Operation::Custom`] tail: dispatched, but nothing settles on it.
     Other,
 }
@@ -344,6 +352,23 @@ pub enum Operation {
         owner: OwnedOperation,
         verb: LifecycleVerb,
     },
+    /// `Get from Branch` — replace one working-tree file with **the entire
+    /// contents it has on `source`**. The reference's fifth integration verb,
+    /// reached from the file-level comparison `Show Diff with Working Tree` opens
+    /// and confirmed before it runs, because the file it overwrites is the
+    /// developer's own unsaved work in the working tree.
+    ///
+    /// A named variant rather than a [`Operation::Custom`] closure for the same
+    /// reason as [`Operation::Resolve`]: the verb has to settle, and settlement
+    /// here has two jobs a `Custom` op cannot be trusted with — the durable record
+    /// names the path it took and the branch it came from, and the changes window
+    /// that offered the verb re-reads its rung list once the take lands (ticket
+    /// 17). Per root by construction: one `root`, one `path`, never a fleet.
+    GetFileFromBranch {
+        root: RootId,
+        source: String,
+        path: PathBuf,
+    },
     /// Work whose label nothing inspects. Greppable, so the long tail stays
     /// visible instead of silently growing into free-text dispatch again.
     Custom {
@@ -581,6 +606,16 @@ impl Operation {
             }
             Self::Push { .. } => "Push".to_string(),
             Self::Resolve { owner, verb, .. } => verb.label_for(*owner),
+            // The file the developer read on the row, named with the branch it
+            // comes from: the verb's whole subject is one path across two sides,
+            // so a record that said only "Get from Branch" would not say which.
+            Self::GetFileFromBranch { source, path, .. } => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                format!("Get {name} from {source}")
+            }
             Self::Custom { label, .. } => label.clone(),
         }
     }
@@ -616,7 +651,13 @@ impl Operation {
             // the item is per root, so the refresh has to be per root too, or one
             // root's abort would redraw every root's caches while leaving the
             // announced marker's own sibling stale.
-            | Self::Resolve { root, .. } => Affected::Root(root.clone()),
+            | Self::Resolve { root, .. }
+            // `Get from Branch` writes one file in one root. The scope is the
+            // reference's per-root shape, not a fleet: the verb is reached from a
+            // row of one window opened against one branch of one repository, and
+            // widening it here would be the multi-root collapse the programme
+            // forbids (reverse gaps #1 and #16) wearing an invalidation rule.
+            | Self::GetFileFromBranch { root, .. } => Affected::Root(root.clone()),
         }
     }
 
@@ -646,6 +687,7 @@ impl Operation {
             } => OpKind::PushRecovery,
             Self::Push { .. } => OpKind::Push,
             Self::Resolve { .. } => OpKind::Resolve,
+            Self::GetFileFromBranch { .. } => OpKind::GetFileFromBranch,
             Self::Custom { .. } => OpKind::Other,
         }
     }
@@ -850,6 +892,14 @@ impl Operation {
                     // such flag for.
                     LifecycleVerb::Skip => vcs.rebase_skip(path),
                 }
+            }
+            Self::GetFileFromBranch { root, source, path } => {
+                turbogit_services::integrate_service::get_file_from_branch(
+                    vcs,
+                    root.as_path(),
+                    &source,
+                    &path,
+                )
             }
             Self::Custom { work, .. } => work(vcs),
         }
