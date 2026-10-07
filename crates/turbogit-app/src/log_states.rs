@@ -326,7 +326,7 @@ fn path_scope(state: &AppState, path: &std::path::Path) -> LogState {
     }
     match state.caches.path_log(&root, path) {
         None => LogState::LoadingCommits,
-        Some(rows) if rows.is_empty() => LogState::FileHistory,
+        Some([]) => LogState::FileHistory,
         Some(_) => LogState::Ready,
     }
 }

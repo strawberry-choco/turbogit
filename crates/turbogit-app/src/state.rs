@@ -2125,10 +2125,10 @@ impl AppState {
         let mut roots = crate::log_display::visible_roots(self);
         // A ref scope names its own root, which the roots filter may hide, so
         // the scope's read is forgotten under the root that ran it.
-        if let Some((root, _)) = &self.ui.log_ref_scope {
-            if !roots.iter().any(|r| r == root) {
-                roots.push(root.clone());
-            }
+        if let Some((root, _)) = &self.ui.log_ref_scope
+            && !roots.iter().any(|r| r == root)
+        {
+            roots.push(root.clone());
         }
         for root in &roots {
             if !query.is_empty() {
