@@ -340,9 +340,19 @@ warning in the widget.
 **The behaviours worth stealing:** the Recent node capped at **five** — **landed
 2026-10-07** by ticket 03 (`d99df82`), which took the cap and the reflog that
 feeds it (see §5.2); the `Show Recent Branches` toggle that gates the node here
-remains open (gap 3); delete that asks *after* and gives three recoveries with a
-restart-bounded lifetime; and the multi-root failure policy that offers to **roll
-back the roots that succeeded**, specifically "not to let branches diverge".
+remains open (gap 3); the rename dialog's second field, `Unset upstream branch` —
+**landed 2026-10-07** by ticket 05 (`51a777c`), with the consequence the user
+cannot see from a rename spelled beside it; delete that asks *after* and gives
+three recoveries with a restart-bounded lifetime — **the two disclosure links
+landed 2026-10-07** by ticket 07 (`91cf199`), on TurboGit's deliberate *asks
+before* shape rather than the reference's ask-after one, so the unmerged-commits
+link sits in the pre-flight confirmation *and* in the notification afterwards,
+both opening one viewer from one captured snapshot. What did **not** move is the
+window's **lifetime**: TurboGit keeps its own 10-second bound (§7.6 q6, reverse
+gap §6 #20) rather than the reference's "until the app restarts", and ticket 07
+deliberately left it alone. Still open on this surface: gap 4's multi-root failure
+policy that offers to **roll back the roots that succeeded**, specifically "not to
+let branches diverge".
 
 ### 4.3 `01-commit-tool-window` — [full evidence](../research/evidence/rebased/parity/01-commit-tool-window.md)
 
@@ -655,13 +665,14 @@ intentionally not pursued.
 | Search field + `⌃F` to refocus | `widgets::search_input` + fuzzy match | **has** |
 | Row menu: 15+ items | `branch_menu.rs` 10 items | **partial** — missing `Show Diff with Working Tree`, `New Worktree from {branch}`, `Update`, `Pull Into Selected Using Merge/Rebase` |
 | `New Branch` with `Checkout branch` checkbox + live prefix suggester | `Dialog::NewBranch` — name, start-from, "Switch to the new branch now" (default yes) | **partial** — no prefix suggester |
+| Rename with `Unset upstream branch` | `Dialog::RenameBranch` — the new name plus the `Unset upstream branch` checkbox (rendered only on a branch that tracks something) and a note naming both outcomes: the next push creates a new remote branch, the old one is left behind | **has 2026-10-07**: ticket 05 (`51a777c`). Row added at landing — this gap was carried as ticket 05 (§9), not as a row here. The decision reaches git through the new `GitExecutor::unset_branch_upstream` (cli / git2 / fake), and `branch_service::rename` runs it **after** the rename naming the **new** branch: `--unset-upstream` with no argument targets the *current* branch, and the old name stops resolving the moment `-m` moves the ref. The inline row editor keeps its one-field behaviour (`rename_branch(…, false)`), since a row editor has no room to state a consequence |
 | **Dirty checkout: Force vs Smart** | `CleanTreeMethod` per-invocation on `Operation::Merge` | **partial** — the mechanism exists; the *dialog* is not evidenced |
 | Silent auto-reset when nothing can be lost | — | **missing** |
 | **Drop Local Commits vs Rebase onto Remote** | `RebaseKind::Branch` | **partial** — one side of the choice |
 | **Delete: immediate, forced, no confirm** | `Operation::DeleteBranch` force + `PendingConfirm` | **partial** — **deliberate divergence**: TurboGit asks *before* |
 | **Restore, lifetime = until restart** | `BranchDeletePending` / `BranchDeleteUndo` | **partial** — lifetime not established |
-| Link to view unmerged commits (`Branch Was Not Fully Merged`) | — | **missing** |
-| Link to remove the tracking remote | `PendingConfirm::RemoveRemote`-ish | **partial** |
+| Link to view unmerged commits (`Branch Was Not Fully Merged`) | `UnmergedCommits` (`state.rs`) → `Dialog::BranchNotFullyMerged`, opened by `AppState::open_unmerged_commits` from the pre-flight confirmation **and** the post-delete banner | ~~**missing**~~ **has 2026-10-07**: ticket 07 (`91cf199`) — one snapshot record, captured by `AppState::unmerged_commits` **while the ref still exists**, is the payload of both links and of the viewer. That is what makes the two disclosures unable to state the fact differently, and what lets the viewer list commits by a branch name that no longer resolves. `Restore` inside it is gated on the branch actually being gone (`unmerged_restore_available`), so the copy opened from the confirmation lists without offering to restore. TurboGit's ask-first shape means the link appears **before** the loss, not only after |
+| Link to remove the tracking remote | `PendingConfirm::DeleteRemoteBranch`, reached from the post-delete banner's quiet link | ~~**partial**~~ **has 2026-10-07**: ticket 07 (`91cf199`) — the remote twin the local delete leaves behind is named by the `upstream` read into `BranchDeletePending` before the ref went away, so the offer is a fact about the delete rather than a lookup after it. Removing it is destructive, so the link routes through the same remote-delete confirmation the list's own `Delete` uses instead of pressing it |
 | Multi-root divergence warning + rollback offer | `PendingConfirm`, `Affected::All` | **missing** — the rollback offer |
 | `Configure synchronous branch control` | `SettingsCategory::MultiRoot` | **partial** |
 | Menu **ordering** | — | **unresolved** — no source; see §7 |
@@ -1289,7 +1300,7 @@ collected here so they are not mistaken for settled positions.
 | 4 | Multi-root divergence rollback offer | `02` |
 | 5 | `Checkout branch` default + prefix suggester | `02` |
 | 6 | Silent auto-reset when no commits can be lost | `02` |
-| 7 | Post-hoc delete disclosure: unmerged-commits link | `02` |
+| 7 | ~~Post-hoc delete disclosure: unmerged-commits link~~ — **resolved 2026-10-07**: ticket 07 (`91cf199`) landed **both** disclosure links (see §5.2). One `UnmergedCommits` snapshot, captured while the ref still exists, drives the link in the pre-flight confirmation and the link in the post-delete notification; both open `Dialog::BranchNotFullyMerged`, and the remote-twin link routes through `PendingConfirm::DeleteRemoteBranch`. **Deliberately not landed with it**: TurboGit still asks *before* deleting (its own divergence, §5.2 row "Delete: immediate, forced, no confirm"), and the undo window's **lifetime is untouched** — the 10-second bound stays as reverse gap §6 #20. Gaps 5 (`Checkout branch` + prefix suggester) and 6 (silent auto-reset) are **not** these tickets and stay open | `02` |
 | 8 | Post-commit `Edit Commit Message` window | `01` |
 | 9 | `Edit` and `Update Ref` plan verbs | `06` |
 | 10 | `Pick`-resets-row; per-commit undo notifications; repo-changed guard | `06` |
