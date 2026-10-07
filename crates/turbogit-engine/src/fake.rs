@@ -438,6 +438,12 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
+    /// Records the skip and answers `Ok`: a fake has no sequencer to advance, so
+    /// the assertion a caller can make is that the verb was asked for.
+    fn rebase_skip(&self, _root: &Path) -> TgResult<()> {
+        Ok(())
+    }
+
     fn merge_auto_merged_files(
         &self,
         _root: &Path,
