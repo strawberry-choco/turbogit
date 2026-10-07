@@ -25,10 +25,8 @@
 use crate::theme::Palette;
 use crate::ui::widgets;
 use egui::{RichText, Ui};
-use turbogit_app::operation::Operation;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::operation::PushRequest;
 use turbogit_app::state::{AppState, OutgoingRoot, PushPreview};
-use turbogit_domain::error::TgError;
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, Root, RootId, Signature, SignatureState,
 };
@@ -93,15 +91,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             // Explicit target fields above the options section (ADR-0007).
             // They only drive the `ThisRepo` scope path (issue #25).
             let scope_is_this_repo = state.ui.dlg.push_scope == PushScope::ThisRepo;
+            let mut no_target = false;
             if scope_is_this_repo {
-                ui.horizontal(|ui| {
-                    ui.label("Remote:");
-                    ui.text_edit_singleline(&mut state.ui.dlg.push_remote);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Branch:");
-                    ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
-                });
+                no_target = target_panel(ui, state);
             }
 
             ui.checkbox(
@@ -173,7 +165,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 // first so the visible order remains Cancel · Preview · Push.
                 let push = ui
                     .scope(|ui| {
-                        if force_blocked_this_repo {
+                        if force_blocked_this_repo || no_target {
                             ui.disable();
                         }
                         widgets::compact_button(ui, &label)
@@ -202,6 +194,119 @@ fn close(state: &mut AppState) {
     state.ui.dlg.push_preview_root = None;
     state.ui.dlg.push_preview_output = None;
     state.ui.dlg.push_scope_excluded.clear();
+    state.ui.dlg.push_define_remote = false;
+    state.ui.dlg.push_new_remote_name.clear();
+    state.ui.dlg.push_new_remote_url.clear();
+    state.ui.dlg.push_remote_add_error = None;
+}
+
+/// The target half of the panel: the remote, the branch, and the **named state**
+/// of the ref the push would write.
+///
+/// Returns `true` when the panel has no target at all — a repository with no
+/// remote and no commits — which is what disables the footer's Push.
+///
+/// Three things the previous four lines of fields did not do: it fabricated
+/// `origin` for a repository that has no remote, it offered a text field where
+/// the reference offers a link, and it left the user to infer from a branch name
+/// whether the push creates a ref or moves one that already exists.
+fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
+    // The root's facts are read once, owned: every arm below mutates
+    // `state.ui.dlg`, and a borrow of the manager held across one of those
+    // mutations is the compile error that would otherwise be a refactor.
+    let root = state
+        .selected_root
+        .as_ref()
+        .and_then(|id| state.multi.by_id(id))
+        .cloned();
+    let no_remote = root.as_ref().is_some_and(|r| r.remotes.is_empty());
+    let defining = no_remote && state.ui.dlg.push_define_remote;
+
+    ui.horizontal(|ui| {
+        ui.label("Remote:");
+        if !no_remote {
+            ui.text_edit_singleline(&mut state.ui.dlg.push_remote);
+        } else if defining {
+            ui.text_edit_singleline(&mut state.ui.dlg.push_new_remote_name);
+        } else if define_remote_link(ui).clicked() {
+            state.ui.dlg.push_define_remote = true;
+            if state.ui.dlg.push_new_remote_name.trim().is_empty() {
+                state.ui.dlg.push_new_remote_name = "origin".to_string();
+            }
+        }
+    });
+
+    if defining {
+        ui.horizontal(|ui| {
+            ui.label("URL:");
+            ui.text_edit_singleline(&mut state.ui.dlg.push_new_remote_url);
+        });
+        ui.horizontal(|ui| {
+            let name = state.ui.dlg.push_new_remote_name.trim().to_string();
+            let url = state.ui.dlg.push_new_remote_url.trim().to_string();
+            let add = widgets::compact_button_enabled(
+                ui,
+                "Add Remote",
+                !name.is_empty() && !url.is_empty(),
+            );
+            if add.clicked()
+                && let Some(root) = &root
+            {
+                state.define_remote_for_push(root.id.clone(), name, url);
+            }
+            if widgets::compact_button(ui, "Cancel").clicked() {
+                state.ui.dlg.push_define_remote = false;
+                state.ui.dlg.push_remote_add_error = None;
+            }
+        });
+    }
+    if let Some(detail) = state.ui.dlg.push_remote_add_error.clone() {
+        widgets::inline_error(ui, format!("Could not add remote: {detail}"));
+    }
+
+    ui.horizontal(|ui| {
+        ui.label("Branch:");
+        ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
+    });
+
+    let remote_field = state.ui.dlg.push_remote.clone();
+    let branch_field = state.ui.dlg.push_branch.clone();
+    let set_upstream = state.ui.dlg.push_set_upstream;
+    let target = root.as_ref().and_then(|r| {
+        sync_service::push_target_state(r, &remote_field, &branch_field, set_upstream)
+    });
+    let cannot_push = root
+        .as_ref()
+        .is_some_and(|r| r.remotes.is_empty() || sync_service::repository_is_empty(r));
+    if target.is_some() || cannot_push {
+        ui.horizontal(|ui| {
+            if let Some(target) = target {
+                ui.label(RichText::new(target.label()).color(target_ink(target)));
+            }
+            if cannot_push {
+                ui.label(RichText::new("Cannot push").color(Palette::STATE_WARNING));
+            }
+        });
+    }
+    cannot_push
+}
+
+/// The `Define remote` link. Its ink is the style's own hyperlink token, which
+/// [`crate::theme::configure_style`] sets — naming a `Palette` constant here
+/// would put a second link colour in the tree, and this is the only slot in the
+/// app that is a link rather than a button.
+fn define_remote_link(ui: &mut Ui) -> egui::Response {
+    let ink = ui.style().visuals.hyperlink_color;
+    ui.add(egui::Button::new(RichText::new("Define remote").color(ink)).frame(false))
+}
+
+/// The severity a target state reads with: an empty repository is a caution,
+/// every other name is the plain fact it is.
+fn target_ink(target: sync_service::PushTargetState) -> egui::Color32 {
+    match target {
+        sync_service::PushTargetState::EmptyRepository => Palette::STATE_WARNING,
+        _ => Palette::STATE_INFO,
+    }
 }
 
 /// Resolved roots in the dialog's current PUSH SCOPE, minus the user's
@@ -469,29 +574,35 @@ fn empty_signature() -> Signature {
     }
 }
 
-/// Prefill Remote/Branch from the selected root's tracking config. Only
-/// fills while the remote field is empty so user edits persist across redraws.
+/// Prefill Remote/Branch from the selected root's tracking config. Only fills
+/// while a field is empty so user edits persist across redraws.
+///
+/// The remote half stays EMPTY for a repository that has no remote. It used to
+/// fabricate `origin` there, which painted a name the repository does not have,
+/// pushed at a remote nothing configured, and buried the one case the
+/// `Define remote` link exists for.
 fn ensure_target_defaults(state: &mut AppState) {
-    if !state.ui.dlg.push_remote.is_empty() {
+    let Some(id) = state.selected_root.clone() else {
         return;
+    };
+    let Some(root) = state.multi.by_id(&id) else {
+        return;
+    };
+    let tracked = root
+        .branches
+        .iter()
+        .find(|b| b.kind == BranchKind::Local && root.current_branch.as_deref() == Some(&b.name))
+        .and_then(|b| b.tracking.clone());
+    let tracked_remote = tracked.as_ref().map(|t| t.remote.clone());
+    let tracked_branch = tracked.map(|t| t.branch);
+    let first_remote = root.remotes.first().map(|r| r.name.clone());
+    let current_branch = root.current_branch.clone().unwrap_or_default();
+
+    if state.ui.dlg.push_remote.is_empty() {
+        state.ui.dlg.push_remote = tracked_remote.or(first_remote).unwrap_or_default();
     }
-    if let Some(id) = state.selected_root.clone()
-        && let Some(root) = state.multi.by_id(&id)
-        && let Some(b) = root.branches.iter().find(|b| {
-            b.kind == BranchKind::Local && root.current_branch.as_deref() == Some(&b.name)
-        })
-    {
-        if let Some(t) = &b.tracking {
-            state.ui.dlg.push_remote = t.remote.clone();
-            state.ui.dlg.push_branch = t.branch.clone();
-        } else {
-            state.ui.dlg.push_remote = root
-                .remotes
-                .first()
-                .map(|r| r.name.clone())
-                .unwrap_or_else(|| "origin".into());
-            state.ui.dlg.push_branch = root.current_branch.clone().unwrap_or_default();
-        }
+    if state.ui.dlg.push_branch.is_empty() {
+        state.ui.dlg.push_branch = tracked_branch.unwrap_or(current_branch);
     }
 }
 
@@ -658,90 +769,49 @@ fn change_letter(status: ChangeStatus) -> &'static str {
     }
 }
 
-/// Dispatch the push on a worker thread. Issue #25: the resolved scope
-/// drives the engine call — `push_roots` for multi-repo scopes (with each
-/// root's per-call remote resolution and protected-branch gating), and
-/// `push` for the single-repo `ThisRepo` path with explicit Remote/Branch
-/// fields. Issue #24: subset selection narrows per root only when the
-/// selection is a suffix of the full outgoing list — non-suffix selections
-/// fall back to a full push (issue #24 fallback semantics).
+/// Dispatch the push on a worker thread as a typed [`Operation::Push`], so a
+/// rejection can be classified and replayed (ticket 13). Issue #25: the
+/// resolved scope drives the engine call — `push_roots` for multi-repo scopes
+/// (with each root's per-call remote resolution and protected-branch gating),
+/// and `push` for the single-repo `ThisRepo` path with explicit Remote/Branch
+/// fields. Issue #24: subset selection narrows per root only when the selection
+/// is a suffix of the full outgoing list — non-suffix selections fall back to a
+/// full push (issue #24 fallback semantics).
 fn execute_push(state: &mut AppState) {
-    let force = state.ui.dlg.force_push;
-    let tags = state.ui.dlg.push_tags;
-    let no_verify = state.ui.dlg.push_no_verify;
-    let set_upstream = state.ui.dlg.push_set_upstream;
-    let settings = state.settings.clone();
     let scope = scope_roots(state);
-    let subset = state.ui.dlg.push_subset.clone();
-    let narrowed_sha: Option<String> = match &subset {
+    let narrowed_sha: Option<String> = match &state.ui.dlg.push_subset {
         SubsetPushState::Suffix { oldest } => Some(oldest.clone()),
         _ => None,
     };
+    let Some(request) = push_request(state, &scope, narrowed_sha) else {
+        return;
+    };
+    state.dispatch_push(request, None);
+}
 
-    if state.ui.dlg.push_scope == PushScope::ThisRepo {
-        let remote = state.ui.dlg.push_remote.clone();
-        let branch = state.ui.dlg.push_branch.clone();
-        let sha = narrowed_sha.clone();
-        if let Some(root) = state.selected_root.clone() {
-            state.dispatch(Operation::custom(
-                "Push",
-                Affected::Root(root.clone()),
-                move |v| {
-                    sync_service::push(
-                        v,
-                        root.as_path(),
-                        &remote,
-                        &branch,
-                        force,
-                        tags,
-                        no_verify,
-                        set_upstream,
-                        sha.as_deref(),
-                        &settings,
-                    )
-                },
-            ));
-        }
+/// Build the [`PushRequest`] the resolved scope describes, or `None` when there
+/// is nothing to push. Shared with the no-dialog push verb (ticket 14), which
+/// runs the same request against the same scope rules.
+pub(crate) fn push_request(
+    state: &AppState,
+    scope: &[Root],
+    narrowed_sha: Option<String>,
+) -> Option<PushRequest> {
+    let mut request = if state.ui.dlg.push_scope == PushScope::ThisRepo {
+        let root = state.selected_root.clone()?;
+        PushRequest::single(
+            root,
+            state.ui.dlg.push_remote.clone(),
+            state.ui.dlg.push_branch.clone(),
+            &state.settings,
+        )
     } else {
-        // Multi-repo push (issue #25): push every root in the resolved scope
-        // via `push_roots`; per-root remote resolution and protected-branch
-        // gating happen inside that service. The roots must outlive the
-        // worker thread, so they move into the closure as owned data.
-        let owned_roots: Vec<Root> = scope.clone();
-        let owned_settings = settings;
-        let owned_sha = narrowed_sha;
-        state.dispatch(Operation::custom("Push", Affected::All, move |v| {
-            let roots_ref: Vec<&Root> = owned_roots.iter().collect();
-            let results = sync_service::push_roots(
-                v,
-                &roots_ref,
-                &owned_settings,
-                force,
-                tags,
-                no_verify,
-                set_upstream,
-                owned_sha.as_deref(),
-            );
-            let failures: Vec<String> = results
-                .into_iter()
-                .filter_map(|(id, r)| {
-                    r.err().map(|e| {
-                        let name =
-                            id.0.file_name()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_else(|| id.0.display().to_string());
-                        format!("{name}: {e}")
-                    })
-                })
-                .collect();
-            if failures.is_empty() {
-                Ok(())
-            } else {
-                Err(TgError::Other(format!(
-                    "push failed — {}",
-                    failures.join("; ")
-                )))
-            }
-        }));
-    }
+        PushRequest::scope(scope.to_vec(), &state.settings)
+    };
+    request.force = state.ui.dlg.force_push;
+    request.tags = state.ui.dlg.push_tags;
+    request.no_verify = state.ui.dlg.push_no_verify;
+    request.set_upstream = state.ui.dlg.push_set_upstream;
+    request.selected_oldest = narrowed_sha;
+    Some(request)
 }

@@ -171,12 +171,18 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     // shared step, keyed by repository, so whichever surface renders first
     // warms the cache for both).
     branch_tree_view::warm_tags(state);
+    // The Recent group's history is the other read the snapshot has no room for.
+    state.warm_branch_recents();
     // Build the repo-grouped view model once (pure; issue 01).
     let tags_by_root = state.ui.branches_tags.clone();
+    let recents_by_root = state.ui.branches_recents.clone();
     let branches_tree = &state.ui.branches_tree;
-    let view = branches_tree::build_branch_view(&state.multi.roots, &tags_by_root, &|root| {
-        branch_tree_view::remotes_revealed(branches_tree, root)
-    });
+    let view = branches_tree::build_branch_view(
+        &state.multi.roots,
+        &tags_by_root,
+        &recents_by_root,
+        &|root| branch_tree_view::remotes_revealed(branches_tree, root),
+    );
 
     // Esc clears the filter first, then closes the context menu, then drops the
     // selection (§9). Read at the very top of the frame, before any widget could
@@ -601,6 +607,10 @@ fn apply_tree_event(state: &mut AppState, event: TreeEvent) {
             state.ui.branches_tree.context_menu = Some((root, branch));
         }
         TreeEvent::GroupToggled(group) => match group {
+            TreeGroup::Recent => {
+                let on = state.ui.branches_tree.groups.recent;
+                state.ui.branches_tree.groups.recent = !on;
+            }
             TreeGroup::Local => {
                 let on = state.ui.branches_tree.groups.local;
                 state.ui.branches_tree.groups.local = !on;

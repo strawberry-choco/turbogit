@@ -208,6 +208,25 @@ impl BranchTip {
     }
 }
 
+/// One checkout the Git engine's reflog read answers with: the ref HEAD moved
+/// to, and the unix timestamp of the move.
+///
+/// It lives in the leaf crate with every other [`crate::model`] answer type
+/// because two layers name it — the port it answers and the branches view that
+/// groups by it — and neither of them may reach through the other to say the
+/// same thing in a tuple.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecentCheckout {
+    /// The ref the checkout moved to. A checkout of a tag or a raw sha lands
+    /// here too, because the reflog records the move whatever its target was;
+    /// joining the name against the branch snapshot is the caller's job.
+    pub name: String,
+    /// Unix timestamp of the checkout — the reflog entry's own, so two
+    /// checkouts inside the same second tie and the caller keeps the engine's
+    /// newest-first order for ties.
+    pub at: i64,
+}
+
 /// The three conflict markers this parser understands and both painters draw.
 /// They are git wire-format facts with no service policy in them, so they live
 /// in the leaf crate every other layer already sees: `services` parses them,
@@ -719,6 +738,13 @@ pub struct VcsSettings {
     /// CLI-produced text path.
     #[serde(default = "default_true")]
     pub in_process_diffs: bool,
+    /// Ticket 13: update silently when a push of the current branch is
+    /// rejected, using `update_method` — set by the Push dialog's
+    /// "Remember the update method choice" checkbox, so the opt-in is a
+    /// settings write-back the user can reverse in settings, never a per-push
+    /// accident. Off by default: a rejection asks.
+    #[serde(default)]
+    pub auto_update_on_push_rejected: bool,
 }
 
 fn default_true() -> bool {
@@ -746,6 +772,7 @@ impl Default for VcsSettings {
             no_commit_hooks: false,
             backend: GitBackend::default(),
             in_process_diffs: true,
+            auto_update_on_push_rejected: false,
         }
     }
 }
