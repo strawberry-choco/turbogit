@@ -7,6 +7,7 @@
 //! explicitly deferred).
 
 use crate::theme::Palette;
+use crate::ui::components;
 use crate::ui::kit::conflict_pane::Side;
 use egui::{RichText, ScrollArea, Ui};
 use turbogit_app::operation::Operation;
@@ -127,14 +128,6 @@ fn compose_impl(segs: &[(String, String, bool)], res: &[Option<u8>], placeholder
 fn resolve(state: &mut AppState, seg_idx: usize, choice: u8) {
     state.ui.conflict_res[seg_idx] = Some(choice);
     state.ui.conflict_text = compose_display(&state.ui.conflict_segs, &state.ui.conflict_res);
-}
-
-/// "N conflicts remaining" footer text (singular-aware).
-fn remaining_text(n: usize) -> String {
-    match n {
-        1 => "1 conflict remaining".to_string(),
-        n => format!("{n} conflicts remaining"),
-    }
 }
 
 /// Render the conflict section inside the Commit tab (only when conflicts exist).
@@ -327,7 +320,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(remaining_text(remaining)).color(Palette::INK_2));
+                    // Through the one shared pluralisation helper (rebased-parity ticket 02),
+                    // not this file's own conditional.
+                    ui.label(
+                        RichText::new(components::counted(remaining, "conflict") + " remaining")
+                            .color(Palette::INK_2),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Apply enables ONLY at zero remaining and writes the
                         // composed result through the engine's resolution flow.

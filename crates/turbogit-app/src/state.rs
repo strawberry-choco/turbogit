@@ -410,6 +410,20 @@ pub enum BulkApplyScope {
     Theirs,
 }
 
+/// The outcome a bulk apply has to name (parity ticket 02). The reference
+/// reports the NEGATIVE result (`No conflicts were resolved automatically`)
+/// instead of staying silent, and gives the positive one its own sentence —
+/// two strings for two outcomes. Within one file a bulk fill resolves either
+/// everything still unresolved or nothing, so there is no third outcome to
+/// name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ConflictBulkReport {
+    /// Every conflict the click had to resolve was resolved.
+    AllResolved,
+    /// There was nothing left to resolve — reported, not silent.
+    NoneResolved,
+}
+
 /// Expand/collapse state of the Branches tab's groups (issue 03): Local and
 /// Remote open by default, Tags collapsed — the design's sensible default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1068,6 +1082,11 @@ pub struct UiState {
     /// affirmative (`Discard and Accept`) applies it; the safe option clears
     /// this and does nothing.
     pub conflict_overwrite_pending: Option<(usize, u8)>,
+    /// What the last `Apply to all` click resolved (parity ticket 02): the
+    /// reference reports a bulk apply's NEGATIVE result instead of leaving it
+    /// silent, so the resolver names both outcomes under the control. Cleared
+    /// when another file opens, so a stale verdict never follows a new file.
+    pub conflict_bulk_report: Option<ConflictBulkReport>,
     pub shelves: Vec<Shelf>,
     // commit-tab inline diff preview (Epic C3)
     pub preview_change: Option<PathBuf>,

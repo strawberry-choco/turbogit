@@ -720,6 +720,7 @@ mod tests {
                     })
                     .collect(),
                 conflicted: vec![],
+                conflict_kinds: vec![],
             },
         }
     }
