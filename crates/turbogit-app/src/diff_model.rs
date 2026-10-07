@@ -42,20 +42,15 @@ pub enum RowKind {
 /// across the whole row, one band per changed run, or no band at all. A row the
 /// model does not consider a difference carries [`Highlight::Off`] and is never
 /// asked.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Highlight {
     /// The whole row is the highlight — TurboGit's pre-existing rendering.
     Row,
     /// Char-offset runs of the row's own text, one band each.
     Runs(Vec<Range<usize>>),
     /// Nothing is highlighted.
+    #[default]
     Off,
-}
-
-impl Default for Highlight {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 pub struct Row {
