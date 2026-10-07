@@ -315,8 +315,8 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
                 .request_focus();
             ui.separator();
             ui.spacing_mut().item_spacing.y = 2.0;
-            ui.spacing_mut().button_padding = egui::vec2(8.0, 2.0);
-            ui.spacing_mut().interact_size.y = 16.0;
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 1.0);
+            ui.spacing_mut().interact_size.y = 14.0;
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), list_h),
                 egui::Layout::top_down(egui::Align::Min),
