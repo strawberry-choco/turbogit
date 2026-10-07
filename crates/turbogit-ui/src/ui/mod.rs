@@ -50,6 +50,7 @@ pub mod log_window;
 pub mod multi_selection;
 pub mod popups;
 pub mod project_tree;
+pub mod push_control;
 pub mod push_dialog;
 pub mod push_rejected;
 pub mod remotes_dialog;

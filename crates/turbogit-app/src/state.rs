@@ -126,6 +126,17 @@ pub struct DialogState {
     // Push
     pub push_remote: String,
     pub push_branch: String,
+    /// The Push panel's inline `Define remote` entry, open in place of the
+    /// remote name for a repository with no remote. The reference never sends
+    /// the user to a settings dialog for this: the link and its name+URL entry
+    /// live where the remote name would be, and the add saves immediately.
+    pub push_define_remote: bool,
+    /// The entry's two fields.
+    pub push_new_remote_name: String,
+    pub push_new_remote_url: String,
+    /// Why the last inline add failed, in git's own words — the panel paints
+    /// `Could not add remote: {0}` from it and stays open.
+    pub push_remote_add_error: Option<String>,
     pub force_push: bool,
     /// The PUSH SCOPE segmented control (issue #25, screen 10): which roots
     /// the dialog pushes. Supersedes the old "Push current branch only"
@@ -2276,6 +2287,26 @@ impl AppState {
         });
     }
 
+    /// Save a remote named from inside the Push panel's `Define remote` entry.
+    ///
+    /// The same port op the remotes manager runs, but its outcome comes back to
+    /// the panel rather than to the bulk report: the reference's failure path is
+    /// inline — `Could not add remote: {0}` in the panel, dialog still open —
+    /// and the success path has to repaint the remote name where the link was.
+    pub fn define_remote_for_push(&mut self, root: RootId, name: String, url: String) {
+        let Some(path) = self.multi.by_id(&root).map(|r| r.path.clone()) else {
+            return;
+        };
+        let executor = self.executor.clone();
+        let tx = self.tx.clone();
+        self.ui.busy = true;
+        std::thread::spawn(move || {
+            let result =
+                turbogit_services::remote_service::add(executor.as_ref(), &path, &name, url.trim());
+            let _ = tx.send(AppEvent::RemoteDefined { root, name, result });
+        });
+    }
+
     /// Execute a confirmed destructive action (Epic C8). The UI gates these
     /// behind a confirmation dialog and only calls this on explicit OK.
     pub fn run_confirmed(&mut self, c: PendingConfirm) {
@@ -3479,6 +3510,50 @@ impl AppState {
                         crate::bulk_history::record_into(&mut self.ui.bulk_history, record);
                         self.persist_ui();
                     }
+                }
+                AppEvent::RemoteDefined { root, name, result } => {
+                    self.ui.busy = false;
+                    // The panel's own half of the outcome: on success the entry
+                    // closes and the new name takes the field the link replaced;
+                    // on failure the entry stays and `push_remote_add_error`
+                    // carries git's reason for `Could not add remote: {0}`.
+                    let (message, kind, activity) = match result {
+                        Ok(()) => {
+                            self.ui.dlg.push_define_remote = false;
+                            self.ui.dlg.push_new_remote_url.clear();
+                            self.ui.dlg.push_remote = name.clone();
+                            self.ui.dlg.push_remote_add_error = None;
+                            // The root's `remotes` list is what the panel reads
+                            // to decide between the name and the link, so the
+                            // entry cannot close on the panel's own say-so — the
+                            // snapshot has to be re-read first.
+                            self.refresh(Affected::Root(root.clone()));
+                            (
+                                format!("Add remote {name}"),
+                                ToastKind::Success,
+                                crate::activity::ActivityKind::Success,
+                            )
+                        }
+                        Err(e) => {
+                            let detail = e.to_string();
+                            self.ui.dlg.push_remote_add_error = Some(detail.clone());
+                            (
+                                format!("Add remote {name}: {detail}"),
+                                ToastKind::Error,
+                                crate::activity::ActivityKind::Error,
+                            )
+                        }
+                    };
+                    self.show_toast(Toast {
+                        kind,
+                        message: message.clone(),
+                    });
+                    self.ui.activity.push(crate::activity::ActivityEntry {
+                        at: chrono::Local::now(),
+                        repo: activity_repo_label(&Affected::Root(root)),
+                        message,
+                        kind: activity,
+                    });
                 }
                 AppEvent::BulkRunProgress { event } => {
                     // The pool event advances whichever run monitor is

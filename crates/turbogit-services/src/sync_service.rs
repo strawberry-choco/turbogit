@@ -356,6 +356,158 @@ pub fn classify_push_failure(
     PushOutcome::UpdateErrored { detail }
 }
 
+/// The push panel's **named target state**: what the panel says about the ref
+/// the push is about to write, so "this creates a branch" and "this moves a
+/// branch that exists" are never the same word.
+///
+/// Five states, one name each. The panel used to answer "where does this push
+/// go" with a Remote/Branch field pair plus a `--set-upstream` checkbox: the
+/// capability was there, the *disclosure* was not, and a user could not tell
+/// whether they were about to create a branch or overwrite one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PushTargetState {
+    /// Nothing on this branch yet — the repository has no commits.
+    EmptyRepository,
+    /// The remote branch does not exist: the push creates it.
+    New,
+    /// The remote branch does not exist and the push also records the upstream.
+    NewAndUpstream,
+    /// The remote branch exists; the push records the upstream for it.
+    SetUpstream,
+    /// The remote branch exists and is already the branch this push moves.
+    Upstream,
+}
+
+impl PushTargetState {
+    /// The word the panel paints. `New & Upstream` is its OWN string, never
+    /// `New` with a suffix appended: a panel that grows one label out of another
+    /// cannot be read as two distinct states.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::EmptyRepository => "Empty repository",
+            Self::New => "New",
+            Self::NewAndUpstream => "New & Upstream",
+            Self::SetUpstream => "Set upstream",
+            Self::Upstream => "Upstream",
+        }
+    }
+}
+
+/// Whether the repository holds no commit on any local branch — the panel's
+/// `Empty repository` case, and a push git would refuse.
+///
+/// NOT `Root::head`: the registration snapshot leaves `head` `None` for every
+/// repository, so a check on it reports every repo as empty and passes for the
+/// wrong reason.
+pub fn repository_is_empty(root: &Root) -> bool {
+    root.branches.iter().all(|b| b.kind != BranchKind::Local)
+}
+
+/// Name the target state of a push of `branch` to `remote` from `root`, with
+/// `set_upstream` as the panel's checkbox. `remote` is the panel's own field,
+/// not [`push_remote`]'s resolution: the state has to describe the ref the
+/// push would actually write, and an edited field changes that.
+///
+/// `None` is "there is nothing to name yet": no branch typed, or no remote to
+/// target. Both are the panel's own problem — the remote-less case paints the
+/// inline `Define remote` link in place of the remote name, and an empty branch
+/// field has no target to name — so this stays a total function over the states
+/// rather than inventing a sixth one for "not applicable".
+pub fn push_target_state(
+    root: &Root,
+    remote: &str,
+    branch: &str,
+    set_upstream: bool,
+) -> Option<PushTargetState> {
+    if repository_is_empty(root) {
+        return Some(PushTargetState::EmptyRepository);
+    }
+    if root.remotes.is_empty() || branch.trim().is_empty() || remote.trim().is_empty() {
+        return None;
+    }
+    // A remote branch row carries git's `<remote>/<branch>` spelling, which is
+    // the same assembly `Upstream::git_ref` uses for the argv positions.
+    let expected = if remote == "." {
+        branch.to_string()
+    } else {
+        format!("{remote}/{branch}")
+    };
+    // Two sources say the ref is out there, and the root snapshot carries only
+    // the second one until a remote listing is fetched: a listed remote row, or
+    // the branch's own tracking ref.
+    let on_remote = root
+        .branches
+        .iter()
+        .any(|b| b.kind == BranchKind::Remote && b.name == expected)
+        || root.branches.iter().any(|b| {
+            b.kind == BranchKind::Local
+                && b.name == branch
+                && b.tracking.as_ref().is_some_and(|t| t.remote == remote)
+        });
+    Some(match (on_remote, set_upstream) {
+        (false, false) => PushTargetState::New,
+        (false, true) => PushTargetState::NewAndUpstream,
+        (true, true) => PushTargetState::SetUpstream,
+        (true, false) => PushTargetState::Upstream,
+    })
+}
+
+/// A push that needs no dialog: the one root, its own remote and branch, with
+/// the upstream recorded when the branch has none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectPushTarget {
+    pub root: RootId,
+    pub remote: String,
+    pub branch: String,
+    pub set_upstream: bool,
+}
+
+/// The target of the no-dialog push, or `None` when the push MUST go through
+/// the dialog.
+///
+/// Four gates, each one a case where a single click cannot say what it will do:
+/// more than one root (which roots? — that is the dialog's scope control), a
+/// subset of roots checked in the tree (the dialog names the scope in its
+/// button), a protected branch (the dialog's force-push block and remediation
+/// banner live there), and no remote at all (nothing to push to; the dialog is
+/// where `Define remote` appears). A fast path offered outside its gates is
+/// worse than no fast path.
+pub fn direct_push_target(
+    roots: &[Root],
+    selected: Option<&RootId>,
+    selection: &HashSet<RootId>,
+    settings: &VcsSettings,
+) -> Option<DirectPushTarget> {
+    if roots.len() != 1 {
+        return None;
+    }
+    let root = roots.first()?;
+    if selected != Some(&root.id) {
+        return None;
+    }
+    // A checked set is either the whole workspace — nothing subset about it —
+    // or a selection this one-click verb cannot honour.
+    if !selection.is_empty() && (selection.len() != roots.len() || !selection.contains(&root.id)) {
+        return None;
+    }
+    if root.remotes.is_empty() || repository_is_empty(root) {
+        return None;
+    }
+    let branch = root.current_branch.as_ref()?;
+    if is_protected(settings, branch) {
+        return None;
+    }
+    Some(DirectPushTarget {
+        root: root.id.clone(),
+        remote: push_remote(root),
+        branch: branch.clone(),
+        // git's own `push.default = simple` refuses a first push of an
+        // untracked branch, so the fast path records the upstream exactly when
+        // there is nothing to record it against.
+        set_upstream: tracked_upstream(root).is_none(),
+    })
+}
+
 /// How wide a rejected push's recovery update reaches (ticket 13).
 ///
 /// The reference documents the EFFECT of the choice — "if this option is
@@ -681,6 +833,228 @@ mod tests {
         };
         let out = classify_push_failure(&err, true, PushPhase::Recovery, "origin", "main");
         assert_eq!(out, PushOutcome::UpdateConflicted);
+    }
+
+    // --- the named push target states --------------------------------------
+
+    /// A root on `main`… rather, on `feat`: `has_commits` decides whether the
+    /// local branch row exists at all, which is the panel's `Empty repository`
+    /// signal (`head` is `None` for every registered root and says nothing).
+    fn target_root(remotes: &[&str], on_remote: &[&str], has_commits: bool, tracked: bool) -> Root {
+        let path = PathBuf::from("/repo");
+        let mut branches: Vec<Branch> = if has_commits {
+            vec![Branch {
+                name: "feat".into(),
+                kind: BranchKind::Local,
+                tracking: tracked.then(|| Upstream {
+                    remote: "origin".into(),
+                    branch: "feat".into(),
+                }),
+                favorite: false,
+                protected: false,
+                exists: true,
+                ahead: 0,
+                behind: 0,
+                gone: false,
+                last_touched: None,
+                tip: None,
+                remote: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        branches.extend(on_remote.iter().map(|name| Branch {
+            name: (*name).to_string(),
+            kind: BranchKind::Remote,
+            tracking: None,
+            favorite: false,
+            protected: false,
+            exists: true,
+            ahead: 0,
+            behind: 0,
+            gone: false,
+            last_touched: None,
+            tip: None,
+            remote: None,
+        }));
+        Root {
+            id: RootId(path.clone().into()),
+            path,
+            remotes: remotes
+                .iter()
+                .map(|name| Remote {
+                    name: (*name).to_string(),
+                    fetch_url: Some(String::new()),
+                    push_url: None,
+                })
+                .collect(),
+            branches,
+            current_branch: has_commits.then(|| "feat".to_string()),
+            head: Some("abc".to_string()),
+            status: RootStatus::default(),
+        }
+    }
+
+    #[test]
+    fn a_branch_absent_on_the_remote_is_named_new_and_upstream_alongside_it() {
+        let root = target_root(&["origin"], &[], true, false);
+        assert_eq!(
+            push_target_state(&root, "origin", "feat", false),
+            Some(PushTargetState::New)
+        );
+        // The ticked box is a DIFFERENT name, not `New` plus a suffix.
+        assert_eq!(
+            push_target_state(&root, "origin", "feat", true),
+            Some(PushTargetState::NewAndUpstream)
+        );
+        assert_eq!(PushTargetState::NewAndUpstream.label(), "New & Upstream");
+    }
+
+    #[test]
+    fn a_branch_already_on_the_remote_is_upstream_or_set_upstream() {
+        let root = target_root(&["origin"], &["origin/feat"], true, true);
+        assert_eq!(
+            push_target_state(&root, "origin", "feat", false),
+            Some(PushTargetState::Upstream)
+        );
+        assert_eq!(
+            push_target_state(&root, "origin", "feat", true),
+            Some(PushTargetState::SetUpstream)
+        );
+    }
+
+    #[test]
+    fn an_empty_repository_names_itself_and_nothing_is_named_without_a_target() {
+        assert_eq!(
+            push_target_state(
+                &target_root(&["origin"], &[], false, false),
+                "origin",
+                "feat",
+                false
+            ),
+            Some(PushTargetState::EmptyRepository)
+        );
+        // No remote: the panel shows the `Define remote` link instead of a name.
+        assert_eq!(
+            push_target_state(&target_root(&[], &[], true, false), "origin", "feat", false),
+            None
+        );
+        // No branch typed: there is no ref to name.
+        assert_eq!(
+            push_target_state(
+                &target_root(&["origin"], &[], true, false),
+                "origin",
+                "  ",
+                false
+            ),
+            None
+        );
+    }
+
+    // --- the no-dialog push target ------------------------------------------
+
+    fn selected_id(root: &Root) -> RootId {
+        root.id.clone()
+    }
+
+    #[test]
+    fn a_single_unprotected_root_with_a_remote_takes_the_fast_path() {
+        let root = target_root(&["origin"], &["origin/main"], true, true);
+        let roots = [root.clone()];
+        let none_selected: HashSet<RootId> = HashSet::new();
+        let got = direct_push_target(
+            &roots,
+            Some(&selected_id(&root)),
+            &none_selected,
+            &settings_with(&["main", "master"]),
+        );
+        // `feat` is not protected here, and it tracks, so no upstream flag.
+        assert_eq!(
+            got,
+            Some(DirectPushTarget {
+                root: root.id.clone(),
+                remote: "origin".into(),
+                branch: "feat".into(),
+                set_upstream: false,
+            })
+        );
+    }
+
+    #[test]
+    fn a_first_push_of_an_untracked_branch_records_the_upstream() {
+        let root = target_root(&["origin"], &[], true, false);
+        let got = direct_push_target(
+            std::slice::from_ref(&root),
+            Some(&selected_id(&root)),
+            &HashSet::new(),
+            &settings_with(&["main"]),
+        )
+        .expect("single untracked root takes the fast path");
+        assert!(got.set_upstream, "git's own default refuses the push");
+    }
+
+    #[test]
+    fn the_fast_path_is_withheld_on_every_case_the_dialog_decides() {
+        let settings = settings_with(&["main"]);
+        let ok = target_root(&["origin"], &[], true, true);
+        let mut protected = ok.clone();
+        protected.current_branch = Some("main".into());
+        protected.branches[0].name = "main".into();
+        let no_remote = target_root(&[], &[], true, true);
+        let unborn = target_root(&["origin"], &[], false, true);
+        let detached = Root {
+            current_branch: None,
+            ..ok.clone()
+        };
+        let other = RootId(PathBuf::from("/other").into());
+        let two_roots = vec![
+            ok.clone(),
+            Root {
+                id: other.clone(),
+                ..ok.clone()
+            },
+        ];
+        let selected = ok.id.clone();
+        let none_selected: HashSet<RootId> = HashSet::new();
+
+        for (case, roots, chosen) in [
+            ("protected", vec![protected], Some(selected.clone())),
+            ("no remote", vec![no_remote], Some(selected.clone())),
+            ("no commits", vec![unborn], Some(selected.clone())),
+            ("detached", vec![detached], Some(selected.clone())),
+            ("multi-root", two_roots.clone(), Some(selected.clone())),
+        ] {
+            assert_eq!(
+                direct_push_target(&roots, chosen.as_ref(), &none_selected, &settings),
+                None,
+                "{case} must not get a one-click push"
+            );
+        }
+        // A checked set that names a DIFFERENT root is a subset the one-click
+        // verb cannot honour; a checked set that names the only root is the
+        // whole workspace, and nothing is subset away from it.
+        let subset: HashSet<RootId> = [other.clone()].into_iter().collect();
+        assert_eq!(
+            direct_push_target(
+                std::slice::from_ref(&ok),
+                Some(&selected),
+                &subset,
+                &settings
+            ),
+            None,
+            "a checked subset must not get a one-click push"
+        );
+        let whole: HashSet<RootId> = [selected.clone()].into_iter().collect();
+        assert!(
+            direct_push_target(
+                std::slice::from_ref(&ok),
+                Some(&selected),
+                &whole,
+                &settings
+            )
+            .is_some(),
+            "checking the only root selects nothing away from it"
+        );
     }
 
     #[test]
