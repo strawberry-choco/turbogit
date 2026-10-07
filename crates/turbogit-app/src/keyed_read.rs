@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::{BlameLine, DiffOpts, Patch};
+use turbogit_domain::model::{BlameLine, DiffOpts, DiffPolicies, Patch};
 use turbogit_services::diff_engine;
 
 use crate::diff_data::{PaneEntry, PaneSide};
@@ -226,12 +226,22 @@ fn settle_single<V>(
 }
 
 /// Settle one [`AppEvent::DiffReady`].
-pub(crate) fn settle_diff(state: &mut AppState, key: String, result: TgResult<Patch>) {
+///
+/// The policies travel with the answer rather than being read off the live state:
+/// the model is folded under the policy the *request* was made under, so a policy
+/// change that landed while the load was in flight cannot store a model under the
+/// key of the one it replaced.
+pub(crate) fn settle_diff(
+    state: &mut AppState,
+    key: String,
+    policies: DiffPolicies,
+    result: TgResult<Patch>,
+) {
     settle_single(
         state,
         Kind::Diff,
         &key,
-        result.map(DiffValue::build),
+        result.map(|patch| DiffValue::build(patch, policies)),
         |ui| &mut ui.diff_cache,
     );
 }
@@ -281,7 +291,10 @@ pub struct DiffTarget {
     pub right: Option<String>,
     /// The chip the working-tree comparisons read their sides from.
     pub comparison: DiffComparison,
-    pub ignore_whitespace: bool,
+    /// The viewer's two view policies. Part of what the read is keyed on: they
+    /// change the model, and a model built under another policy must never be
+    /// served for this target.
+    pub policies: DiffPolicies,
     /// The file, or `None` for the whole comparison.
     pub path: Option<PathBuf>,
 }
@@ -293,7 +306,7 @@ impl DiffTarget {
         left: Option<String>,
         right: Option<String>,
         comparison: DiffComparison,
-        ignore_whitespace: bool,
+        policies: DiffPolicies,
         path: Option<PathBuf>,
     ) -> Self {
         Self {
@@ -301,7 +314,7 @@ impl DiffTarget {
             left,
             right,
             comparison,
-            ignore_whitespace,
+            policies,
             path,
         }
     }
@@ -381,8 +394,8 @@ impl Keyed for DiffTarget {
     fn key(&self) -> String {
         let (left, right, staged) = self.sides();
         format!(
-            "{:?}|{:?}|{:?}|staged={staged}|ws={}|{:?}",
-            self.root, left, right, self.ignore_whitespace, self.path
+            "{:?}|{:?}|{:?}|staged={staged}|{:?}|{:?}|{:?}",
+            self.root, left, right, self.policies.whitespace, self.policies.highlighting, self.path
         )
     }
 
@@ -426,21 +439,24 @@ impl Keyed for DiffTarget {
                 == turbogit_domain::model::ChangeStatus::Unversioned
             && let Some(patch) = crate::diff_load::synthetic_untracked_patch(&self.root, rel)
         {
-            state.ui.diff_cache = Some((key, DiffValue::build(patch)));
+            state.ui.diff_cache = Some((key, DiffValue::build(patch, self.policies)));
             return;
         }
 
         state.reads.slot(Self::KIND).take(&key);
         let (left, right, staged) = self.sides();
+        // The engine is asked for the plain diff: the viewer's policies are view
+        // decisions folded into the model, never flags that change which bytes git
+        // answers with, because those bytes are what partial staging composes.
         let opts = DiffOpts {
             staged,
-            ignore_whitespace: self.ignore_whitespace,
             left,
             right,
             path: self.path.clone(),
             ..DiffOpts::default()
         };
         let root = self.root.clone();
+        let policies = self.policies;
         // Phase L1: when the setting asks for in-process diffs, the load
         // computes the patch with `similar`; `diff_text` itself falls back to
         // the same CLI call whenever the in-process path cannot produce it
@@ -452,7 +468,11 @@ impl Keyed for DiffTarget {
             } else {
                 executor.diff_patch(&root, &opts)
             };
-            let _ = tx.send(AppEvent::DiffReady { key, result: res });
+            let _ = tx.send(AppEvent::DiffReady {
+                key,
+                policies,
+                result: res,
+            });
         });
     }
 }
@@ -646,7 +666,7 @@ mod tests {
             left.map(str::to_owned),
             right.map(str::to_owned),
             comparison,
-            false,
+            turbogit_domain::model::DiffPolicies::default(),
             None,
         )
     }
@@ -806,7 +826,7 @@ mod tests {
             None,
             None,
             DiffComparison::Repo,
-            false,
+            turbogit_domain::model::DiffPolicies::default(),
             Some(PathBuf::from(name)),
         );
         let file = FileMeta {
@@ -902,7 +922,7 @@ mod tests {
             None,
             None,
             DiffComparison::Repo,
-            false,
+            turbogit_domain::model::DiffPolicies::default(),
             Some(PathBuf::from("art.png")),
         );
         let staged = DiffTarget::new(
@@ -910,7 +930,7 @@ mod tests {
             None,
             None,
             DiffComparison::Staged,
-            false,
+            turbogit_domain::model::DiffPolicies::default(),
             Some(PathBuf::from("art.png")),
         );
         assert_ne!(repo.key(), staged.key(), "two targets, one slot");

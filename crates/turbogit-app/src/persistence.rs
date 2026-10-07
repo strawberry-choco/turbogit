@@ -142,6 +142,14 @@ pub struct UiPersist {
     /// before the key existed loading cleanly.
     #[serde(default)]
     pub sidebar_collapsed: std::collections::HashSet<String>,
+    /// The diff viewer's two view policies. Like the branch view's toggles these
+    /// are **presentation, never data**: they change which rows the viewer counts
+    /// as different and how a difference is highlighted, not what git is asked or
+    /// what staging applies. Two developers reviewing one commit can only agree on
+    /// what counts as a change if the agreement survives a restart.
+    /// `serde(default)` keeps files written before the key existed loading cleanly.
+    #[serde(default)]
+    pub diff_policies: turbogit_domain::model::DiffPolicies,
 }
 
 fn ui_path(project_dir: &Path) -> PathBuf {

@@ -17,6 +17,7 @@ pub mod commit_across;
 pub mod conflict;
 pub mod conflict_propagation;
 pub mod diff_engine;
+pub mod diff_policy;
 pub mod history_editor;
 pub mod history_service;
 pub mod hunk_stats;

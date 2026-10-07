@@ -12,9 +12,13 @@
 //! the patch text, and handed out as the display model the keyed read's diff
 //! answer carries (ADR-0014, ADR-0021).
 
+use std::ops::Range;
 use std::sync::Arc;
 
-use turbogit_domain::model::{Patch, PatchHeaderLine, PatchLine, PatchLineKind};
+use turbogit_domain::model::{
+    DiffHighlighting, DiffPolicies, Patch, PatchHeaderLine, PatchLine, PatchLineKind,
+};
+use turbogit_services::diff_policy::{self, Chunk};
 use turbogit_services::hunk_stats::HunkSpan;
 
 // --- row model ---------------------------------------------------------------
@@ -29,6 +33,29 @@ pub enum RowKind {
     Context,
     Del,
     Add,
+}
+
+/// How one changed row is highlighted, decided by the viewer's
+/// [`DiffHighlighting`] before the model is built.
+///
+/// The three shapes are what a painter has to be able to tell apart: a band
+/// across the whole row, one band per changed run, or no band at all. A row the
+/// model does not consider a difference carries [`Highlight::Off`] and is never
+/// asked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Highlight {
+    /// The whole row is the highlight — TurboGit's pre-existing rendering.
+    Row,
+    /// Char-offset runs of the row's own text, one band each.
+    Runs(Vec<Range<usize>>),
+    /// Nothing is highlighted.
+    Off,
+}
+
+impl Default for Highlight {
+    fn default() -> Self {
+        Self::Off
+    }
 }
 
 pub struct Row {
@@ -50,6 +77,9 @@ pub struct Row {
     /// path classifies a hunk's staged state from this, which is what retired
     /// the second read of git's `@@` header.
     pub span: Option<HunkSpan>,
+    /// This row's highlighting under the viewer's [`DiffHighlighting`]. Only a
+    /// changed row is ever asked.
+    pub highlight: Highlight,
 }
 
 /// Build the renderable rows from the patch value: 1-based gutter numbers from
@@ -73,6 +103,7 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
             old_no: 0,
             new_no: 0,
             span: None,
+            highlight: Highlight::Off,
         });
     };
 
@@ -104,6 +135,7 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
                     old_no,
                     new_no,
                     span: None,
+                    highlight: Highlight::Off,
                 });
                 old_no += 1;
                 new_no += 1;
@@ -124,6 +156,7 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
                     new_start: h.new_start,
                     new_lines: h.new_count,
                 }),
+                highlight: Highlight::Off,
             });
             enclosing = hunk;
             hunk += 1;
@@ -151,6 +184,7 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
                     old_no: if this_old { old_no } else { 0 },
                     new_no: if this_new { new_no } else { 0 },
                     span: None,
+                    highlight: Highlight::Off,
                 });
                 if row_kind != RowKind::Context {
                     changed += 1;
@@ -349,8 +383,151 @@ pub fn line_counts(model: &DiffModel) -> (usize, usize) {
     (added, removed)
 }
 
-/// Fold a buffered run of consecutive Del/Add rows into paired display rows.
-fn flush_changed_run(pending: &mut Vec<Row>, display: &mut Vec<DisplayRow>) {
+/// The two halves of one changed pair's highlighting, under `hl`.
+///
+/// The run list [`diff_policy::highlight_runs`] answers with is named on its
+/// **second** argument's text, so the two sides are asked in opposite order —
+/// which compiles identically either way and silently swaps the highlights onto
+/// the wrong pane.
+fn pair_highlight(hl: DiffHighlighting, old: &str, new: &str) -> (Highlight, Highlight) {
+    match hl {
+        DiffHighlighting::None => (Highlight::Off, Highlight::Off),
+        DiffHighlighting::Lines | DiffHighlighting::SplitChanges => {
+            (Highlight::Row, Highlight::Row)
+        }
+        g => (
+            Highlight::Runs(diff_policy::highlight_runs(g, new, old)),
+            Highlight::Runs(diff_policy::highlight_runs(g, old, new)),
+        ),
+    }
+}
+
+/// A changed run the whitespace policy considers equal, as the rows it leaves:
+/// the new side's lines, standing as ordinary unchanged content.
+///
+/// A row the viewer does not consider a difference owns no changed-line ordinal
+/// and takes no highlight — which is what keeps it out of the sub-hunk selection
+/// the granular verbs compose, since a line the user was told to ignore cannot be
+/// the line they meant to stage.
+fn equalized_run(dels: Vec<Row>, adds: Vec<Row>) -> Vec<DisplayRow> {
+    let shared_old = dels.len() == adds.len();
+    adds.into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let old_no = if shared_old { dels[i].old_no } else { 0 };
+            DisplayRow::Full(Row {
+                kind: RowKind::Context,
+                text: row.text,
+                hunk: row.hunk,
+                line_ord: 0,
+                old_no,
+                new_no: row.new_no,
+                span: None,
+                highlight: Highlight::Off,
+            })
+        })
+        .collect()
+}
+
+/// Pair a run that survived the whitespace policy, by the highlighting policy.
+fn pair_run(dels: Vec<Row>, adds: Vec<Row>, hl: DiffHighlighting) -> Vec<DisplayRow> {
+    if hl == DiffHighlighting::SplitChanges {
+        split_run(dels, adds)
+    } else {
+        positional_run(dels, adds, hl)
+    }
+}
+
+/// The run partitioned into the smaller changes it is made of: a line that
+/// appears on both sides is carried through and belongs to no change, and every
+/// remaining block is highlighted one line at a time.
+fn split_run(dels: Vec<Row>, adds: Vec<Row>) -> Vec<DisplayRow> {
+    let mut slots_d: Vec<Option<Row>> = dels.into_iter().map(Some).collect();
+    let mut slots_a: Vec<Option<Row>> = adds.into_iter().map(Some).collect();
+    let del_texts: Vec<&str> = slots_d
+        .iter()
+        .map(|s| s.as_ref().map_or("", |r| r.text.as_str()))
+        .collect();
+    let add_texts: Vec<&str> = slots_a
+        .iter()
+        .map(|s| s.as_ref().map_or("", |r| r.text.as_str()))
+        .collect();
+    // The partition answers with run-relative indices only, so the borrow of the
+    // slots ends here and the walk below can take rows out of them.
+    let chunks = diff_policy::split_changes(&del_texts, &add_texts);
+    let mut out = Vec::new();
+    for chunk in chunks {
+        match chunk {
+            Chunk::Carried(d, a) => {
+                let add = slots_a[a].take();
+                if let Some(row) = slots_d[d].take() {
+                    out.push(DisplayRow::Full(Row {
+                        kind: RowKind::Context,
+                        text: row.text,
+                        hunk: row.hunk,
+                        line_ord: 0,
+                        old_no: row.old_no,
+                        new_no: add.map_or(0, |r| r.new_no),
+                        span: None,
+                        highlight: Highlight::Off,
+                    }));
+                }
+            }
+            Chunk::Block(pairs) => {
+                out.extend(pairs.into_iter().map(|(d, a)| {
+                    DisplayRow::Pair(
+                        d.and_then(|i| slots_d[i].take()),
+                        a.and_then(|i| slots_a[i].take()),
+                    )
+                }));
+            }
+        }
+    }
+    // Every line of the run is covered by exactly one op, so both slot lists are
+    // empty here; a leftover would be a bug in the partition, not a case to paint.
+    debug_assert!(slots_d.iter().all(Option::is_none) && slots_a.iter().all(Option::is_none));
+    out
+}
+
+/// One change across the whole run: the two sides paired line for line, each row
+/// carrying the highlighting its own side earned.
+fn positional_run(dels: Vec<Row>, adds: Vec<Row>, hl: DiffHighlighting) -> Vec<DisplayRow> {
+    let pairs = dels.len().max(adds.len());
+    let mut dels = dels.into_iter();
+    let mut adds = adds.into_iter();
+    (0..pairs)
+        .map(|_| {
+            let mut del = dels.next();
+            let mut add = adds.next();
+            let (dh, ah) = pair_highlight(
+                hl,
+                del.as_ref().map_or("", |r| r.text.as_str()),
+                add.as_ref().map_or("", |r| r.text.as_str()),
+            );
+            if let Some(row) = del.as_mut() {
+                row.highlight = dh;
+            }
+            if let Some(row) = add.as_mut() {
+                row.highlight = ah;
+            }
+            DisplayRow::Pair(del, add)
+        })
+        .collect()
+}
+
+/// Fold a buffered run of consecutive Del/Add rows into display rows.
+///
+/// **The order of the two policies is load-bearing** and compiles either way:
+/// the whitespace policy decides whether the run is a difference at all, and only
+/// a run that survives is cut up by the highlighting policy. Read the other way
+/// and a change the viewer was told to ignore still gets its lines partitioned
+/// into carried and changed rows — a difference that shows as nothing while
+/// still moving rows around.
+fn flush_changed_run(
+    pending: &mut Vec<Row>,
+    display: &mut Vec<DisplayRow>,
+    policies: DiffPolicies,
+) {
     if pending.is_empty() {
         return;
     }
@@ -363,12 +540,13 @@ fn flush_changed_run(pending: &mut Vec<Row>, display: &mut Vec<DisplayRow>) {
             adds.push(row);
         }
     }
-    let pairs = dels.len().max(adds.len());
-    let mut dels = dels.into_iter();
-    let mut adds = adds.into_iter();
-    for _ in 0..pairs {
-        display.push(DisplayRow::Pair(dels.next(), adds.next()));
+    let del_texts: Vec<&str> = dels.iter().map(|r| r.text.as_str()).collect();
+    let add_texts: Vec<&str> = adds.iter().map(|r| r.text.as_str()).collect();
+    if diff_policy::considered_equal(policies.whitespace, &del_texts, &add_texts) {
+        display.extend(equalized_run(dels, adds));
+        return;
     }
+    display.extend(pair_run(dels, adds, policies.highlighting));
 }
 
 /// Fold parsed rows plus the per-file section scan (spec R8) into the
@@ -377,7 +555,11 @@ fn flush_changed_run(pending: &mut Vec<Row>, display: &mut Vec<DisplayRow>) {
 /// rename header — when the scan found one — leads as its own full-width
 /// row. The per-frame paint plan (issue 20) filters this stream into the
 /// paged slot lists.
-fn build_model(rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
+///
+/// The viewer's policies are applied here and nowhere else: they are a property
+/// of the model, built once per content *and policy*, so no frame re-parses and
+/// no policy decision reaches the patch text the staging path composes from.
+fn build_model(rows: Vec<Row>, files: Vec<FileMeta>, policies: DiffPolicies) -> DiffModel {
     let mut display = Vec::new();
     let mut hunk_first_display = Vec::new();
 
@@ -393,6 +575,7 @@ fn build_model(rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
             old_no: 0,
             new_no: 0,
             span: None,
+            highlight: Highlight::Off,
         }));
     }
 
@@ -401,17 +584,17 @@ fn build_model(rows: Vec<Row>, files: Vec<FileMeta>) -> DiffModel {
         match row.kind {
             RowKind::Del | RowKind::Add => pending.push(row),
             RowKind::Meta | RowKind::RenameHeader | RowKind::Context => {
-                flush_changed_run(&mut pending, &mut display);
+                flush_changed_run(&mut pending, &mut display, policies);
                 display.push(DisplayRow::Full(row));
             }
             RowKind::Hunk => {
-                flush_changed_run(&mut pending, &mut display);
+                flush_changed_run(&mut pending, &mut display, policies);
                 hunk_first_display.push(display.len() as u32);
                 display.push(DisplayRow::Full(row));
             }
         }
     }
-    flush_changed_run(&mut pending, &mut display);
+    flush_changed_run(&mut pending, &mut display, policies);
     DiffModel {
         display,
         hunk_first_display,
@@ -433,9 +616,13 @@ impl DiffValue {
     /// Fold the patch value once, at the moment the content is settled — which
     /// is the whole point of the read owning it: the paint path never parses,
     /// and nothing compares patch text to decide (`ADR-0022`).
-    pub(crate) fn build(patch: Patch) -> Arc<Self> {
+    ///
+    /// `policies` folds into the same pass. The patch stays the patch: what the
+    /// policies change is which rows the viewer counts as different and how each
+    /// difference is highlighted, never the bytes partial staging composes from.
+    pub(crate) fn build(patch: Patch, policies: DiffPolicies) -> Arc<Self> {
         Arc::new(Self {
-            model: build_model(rows_from(&patch), files_from(&patch)),
+            model: build_model(rows_from(&patch), files_from(&patch), policies),
             patch,
         })
     }
@@ -513,7 +700,7 @@ mod tests {
                     similarity index 100%\n\
                     rename from old.rs\n\
                     rename to new.rs\n";
-        let model = build_model(parse(text), scan_files(text));
+        let model = build_model(parse(text), scan_files(text), DiffPolicies::default());
         assert!(model.pure_rename());
         assert_eq!(pane_kind(&scan_files(text)), PaneKind::Text);
         assert_eq!(model.hunk_count(), 0);
@@ -554,6 +741,7 @@ mod tests {
         let model = build_model(
             parse(RENAME_WITH_SIMILARITY),
             scan_files(RENAME_WITH_SIMILARITY),
+            DiffPolicies::default(),
         );
         assert_eq!(model.hunk_count(), 1);
         // The rename header leads as display row 0; the hunk header follows

@@ -1,13 +1,13 @@
 //! Diff rendering: the virtualized entry point plus the unified and
 //! side-by-side row painters (spec §8.4, ADR-0014).
 use super::actions::{
-    Axis, axis_group, commit_current_hunk, comparison_chips, granularity_toggle,
+    Axis, axis_group, commit_current_hunk, comparison_chips, diff_options_menu, granularity_toggle,
     hunk_gutter_actions, hunk_header_extras, hunk_nav, line_selected, paint_selection_bar,
     preview_status, viewer_hunk_staged_state,
 };
 use super::model::{
-    DiffModel, DisplayRow, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W, TEXT_X,
-    is_file_row, mono_font, pane_kind,
+    DiffModel, DisplayRow, Highlight, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W,
+    TEXT_X, is_file_row, mono_font, pane_kind,
 };
 use super::panes::{binary_placeholder, pane_byte_lens, render_image_pane};
 use crate::theme::Palette;
@@ -19,7 +19,7 @@ use egui::{
 use std::ops::Range;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
-use turbogit_app::state::{AppState, DiffComparison, Granularity};
+use turbogit_app::state::{AppState, DiffComparison, DiffPane, Granularity};
 use turbogit_domain::model::ChangeStatus;
 
 // --- entry point -------------------------------------------------------------
@@ -48,7 +48,7 @@ pub fn render_diff(
         left.clone(),
         right.clone(),
         state.ui.diff_comparison,
-        state.ui.diff_ignore_whitespace,
+        state.ui.diff_policies,
         path.clone(),
     );
     // One ask, one verdict: the read answers from the cache, or starts the
@@ -314,6 +314,10 @@ struct PaintPlan {
     hunk_lines: Vec<usize>,
     /// Per file row: the change counts of the section that row opens.
     file_rows: Vec<FileRowStats>,
+    /// Display index of the row the caret sits on — the first changed row of the
+    /// current hunk **on the pane that holds the caret**, so `⌃⇧⇥` visibly moves
+    /// it and `F4` can name the line it is standing on.
+    caret: Option<usize>,
 }
 
 impl PaintPlan {
@@ -334,6 +338,8 @@ impl PaintPlan {
 /// rather than recomputed per row (ticket 12).
 fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
     let hunk_count = model.hunk_count();
+    let want_add = matches!(state.ui.diff_pane, DiffPane::New);
+    let mut caret: Option<usize> = None;
     let mut plan = PaintPlan {
         sbs: Vec::with_capacity(model.display.len()),
         unified: Vec::new(),
@@ -341,6 +347,7 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
         hunk_hidden: vec![0; hunk_count],
         hunk_lines: vec![0; hunk_count],
         file_rows: Vec::new(),
+        caret: None,
     };
     // The section currently being totalled, and the counts of the one before
     // it — a file row opens its section, so the section's totals are only
@@ -402,6 +409,19 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
             DisplayRow::Pair(d, a) => {
                 let rows = d.iter().chain(a.iter());
                 let hunk = rows.clone().next().map(|r| r.hunk).unwrap_or_default();
+                // The caret is the first changed row of the current hunk on the
+                // side the active pane is showing. Only a Pair holds a changed
+                // row (the model's own invariant), so only a Pair can carry it.
+                if caret.is_none()
+                    && hunk == state.ui.diff_current_hunk
+                    && if want_add {
+                        a.is_some()
+                    } else {
+                        d.is_some()
+                    }
+                {
+                    caret = Some(di);
+                }
                 if collapsed.contains(&hunk) {
                     plan.hunk_hidden[hunk] += 1;
                 } else {
@@ -427,6 +447,7 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
         }
     }
     close(&mut plan, &mut open);
+    plan.caret = caret;
     plan
 }
 
@@ -442,6 +463,24 @@ fn hunk_needs_scroll(ui: &Ui, paint: egui::Id, idx: usize) -> bool {
     !done
 }
 // --- rendering ---------------------------------------------------------------
+
+/// Whether this row carries the caret.
+///
+/// A unified stream shows the two panes as two rows of one pair, so the pane the
+/// caret is on is named by the row's own kind: a deletion belongs to the `Before`
+/// side, an addition to the `After` one.
+fn holds_caret(state: &AppState, plan: &PaintPlan, display: usize, kind: RowKind) -> bool {
+    plan.caret == Some(display)
+        && match state.ui.diff_pane {
+            DiffPane::New => kind == RowKind::Add,
+            DiffPane::Old => kind == RowKind::Del,
+        }
+}
+
+/// x of the end of `text` as painted from `text_origin_x` — where the caret sits.
+fn text_end(painter: &egui::Painter, text_origin_x: f32, text: &str, font: &FontId) -> f32 {
+    text_origin_x + painter.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE).size().x
+}
 
 /// Pane-header labels documenting the active pair (spec §8.4).
 fn pane_labels(comparison: DiffComparison) -> (&'static str, &'static str) {
@@ -546,6 +585,65 @@ fn paint_char_highlight(
         ),
         CornerRadius::same(crate::theme::MARK_RADIUS),
         Palette::BRAND.gamma_multiply(0.35),
+    );
+}
+
+/// Paint one changed row's highlight, in whatever shape the highlighting policy
+/// decided it.
+///
+/// Three shapes and no more: the whole row, one band per changed run, or nothing.
+/// The run list is a property of the display model (`ADR-0014`) — the policy is
+/// folded when the diff settles, so this measures glyphs and never re-compares
+/// text. Measuring happens for realized rows only, which is exactly the set
+/// `show_rows` handed this frame.
+fn paint_highlight(
+    painter: &egui::Painter,
+    rect: &Rect,
+    text: &str,
+    text_origin_x: f32,
+    highlight: &Highlight,
+    bg: Color32,
+    font: &FontId,
+) {
+    match highlight {
+        Highlight::Row => {
+            painter.rect_filled(*rect, CornerRadius::ZERO, bg);
+        }
+        Highlight::Runs(runs) => {
+            let galley = painter.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE);
+            let Some(row) = galley.rows.first() else {
+                return;
+            };
+            let len = text.chars().count();
+            for run in runs {
+                let x0 = text_origin_x + row.x_offset(egui::epaint::text::CharIndex(run.start.min(len)));
+                let x1 = text_origin_x + row.x_offset(egui::epaint::text::CharIndex(run.end.min(len)));
+                if x1 <= x0 {
+                    continue;
+                }
+                painter.rect_filled(
+                    Rect::from_min_max(Pos2::new(x0, rect.top()), Pos2::new(x1, rect.bottom())),
+                    CornerRadius::same(crate::theme::MARK_RADIUS),
+                    bg,
+                );
+            }
+        }
+        Highlight::Off => {}
+    }
+}
+
+/// The caret bar marking which pane of the diff holds the reader's position
+/// (`Diff.FocusOppositePane`). It sits inside the text, at the caret line's last
+/// glyph — not on the row's leading edge, which is the selection rail's place, and
+/// the two are different tokens for that reason (`theme::CARET_WIDTH`).
+fn paint_caret(painter: &egui::Painter, rect: &Rect, x: f32) {
+    painter.rect_filled(
+        Rect::from_min_max(
+            Pos2::new(x, rect.top() + 2.0),
+            Pos2::new(x + crate::theme::CARET_WIDTH, rect.bottom() - 2.0),
+        ),
+        CornerRadius::ZERO,
+        Palette::ACCENT,
     );
 }
 
@@ -765,7 +863,16 @@ fn unified_row(
             );
         }
         RowKind::Del => {
-            painter.rect_filled(rect, CornerRadius::ZERO, Palette::DIFF_DEL_BG);
+            let caret = holds_caret(state, plan, display, RowKind::Del);
+            paint_highlight(
+                painter,
+                &rect,
+                &row.text,
+                rect.left() + TEXT_X,
+                &row.highlight,
+                Palette::DIFF_DEL_BG,
+                font,
+            );
             if line_selected(state, path, row.hunk, row.line_ord) {
                 paint_selection_bar(painter, &rect);
             }
@@ -777,17 +884,30 @@ fn unified_row(
                 Palette::DIFF_DEL_TEXT,
                 font,
             );
+            let text_origin = rect.left() + TEXT_X;
             paint_cell(
                 painter,
-                rect.left() + TEXT_X,
+                text_origin,
                 &rect,
                 &row.text,
                 Palette::DIFF_DEL_TEXT,
                 font,
             );
+            if caret {
+                paint_caret(painter, &rect, text_end(painter, text_origin, &row.text, font));
+            }
         }
         RowKind::Add => {
-            painter.rect_filled(rect, CornerRadius::ZERO, Palette::DIFF_ADD_BG);
+            let caret = holds_caret(state, plan, display, RowKind::Add);
+            paint_highlight(
+                painter,
+                &rect,
+                &row.text,
+                rect.left() + TEXT_X,
+                &row.highlight,
+                Palette::DIFF_ADD_BG,
+                font,
+            );
             if line_selected(state, path, row.hunk, row.line_ord) {
                 paint_selection_bar(painter, &rect);
             }
@@ -799,15 +919,19 @@ fn unified_row(
                 Palette::DIFF_ADD_TEXT,
                 font,
             );
+            let text_origin = rect.left() + TEXT_X;
             paint_cell(
                 painter,
-                rect.left() + TEXT_X,
+                text_origin,
                 &rect,
                 &row.text,
                 Palette::DIFF_ADD_TEXT,
                 font,
             );
-            paint_char_highlight(painter, state, &rect, rect.left() + TEXT_X, row, path);
+            paint_char_highlight(painter, state, &rect, text_origin, row, path);
+            if caret {
+                paint_caret(painter, &rect, text_end(painter, text_origin, &row.text, font));
+            }
         }
     }
 }
@@ -871,7 +995,30 @@ fn file_row(
             .max_rect(trailing)
             .layout(Layout::right_to_left(Align::Center)),
     );
-    zone.checkbox(&mut state.ui.diff_ignore_whitespace, "Ignore whitespace");
+    // The diff viewer's settings menu (`⌃⇧D`), in the trailing slot the boolean
+    // "Ignore whitespace" checkbox used to hold: that checkbox could ask one of
+    // the ten questions answered here, and it asked it of `git` rather than of the
+    // view. `⌃⇧D` opens this from the keyboard by arming the flag the shell sets.
+    let trigger = zone.button(
+        RichText::new("Diff options")
+            .font(crate::theme::chrome_font(crate::theme::TYPE_BODY)),
+    );
+    let mut popup = egui::Popup::menu(&trigger);
+    if state.ui.diff_options_open {
+        popup = popup.open(true);
+    }
+    let mut policies_changed = false;
+    match popup.show(|menu| diff_options_menu(menu, state)) {
+        // The popup closed itself — by a click outside or by `Escape` — so the
+        // keyboard route's arm goes with it, and `⌃⇧D` toggles cleanly next time.
+        None => state.ui.diff_options_open = false,
+        Some(shown) => policies_changed = shown.inner,
+    }
+    if policies_changed {
+        // A policy is presentation the reader agrees on, and the agreement has to
+        // survive the session it was picked in.
+        state.persist_ui();
+    }
     // The same `+N −M` stats treatment the commit window's preview header uses,
     // in the same accents: the counts are statistics, not diff row content.
     let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
@@ -925,17 +1072,20 @@ fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &
         font,
     );
 }
-/// One side-by-side cell: optional token background band, muted gutter
+/// One side-by-side cell: the highlight the policy chose for it, a muted gutter
 /// number, sign marker, and code text. Changed cells are clickable line
 /// toggles (Line granularity, spec R2 story 3); additions also take
-/// char-range drags (issue 19). `selected` paints the BRAND edge bar.
+/// char-range drags (issue 19). `selected` paints the BRAND edge bar and
+/// `caret` the pane's caret bar.
 /// Returns the cell's response so the row loop can track hover and
 /// toggle clicks.
 #[allow(clippy::too_many_arguments)]
 fn cell_band(
     ui: &mut Ui,
     width: f32,
-    fill: Option<Color32>,
+    highlight: &Highlight,
+    bg: Color32,
+    caret: bool,
     num: usize,
     sign: char,
     text: &str,
@@ -956,9 +1106,8 @@ fn cell_band(
             Sense::hover()
         },
     );
-    if let Some(bg) = fill {
-        painter.rect_filled(rect, CornerRadius::ZERO, bg);
-    }
+    let text_origin = rect.left() + NUM_W + 20.0;
+    paint_highlight(painter, &rect, text, text_origin, highlight, bg, font);
     if selected {
         paint_selection_bar(painter, &rect);
     }
@@ -984,14 +1133,10 @@ fn cell_band(
         text_color,
         font,
     );
-    paint_cell(
-        painter,
-        rect.left() + NUM_W + 20.0,
-        &rect,
-        text,
-        text_color,
-        font,
-    );
+    paint_cell(painter, text_origin, &rect, text, text_color, font);
+    if caret {
+        paint_caret(painter, &rect, text_end(painter, text_origin, text, font));
+    }
     resp
 }
 
@@ -1101,7 +1246,9 @@ fn render_side_by_side(
                         let old_cell = cell_band(
                             ui,
                             half,
-                            None,
+                            &Highlight::Off,
+                            Palette::DIFF_DEL_BG,
+                            false,
                             row.old_no,
                             ' ',
                             &row.text,
@@ -1115,7 +1262,9 @@ fn render_side_by_side(
                         let new_cell = cell_band(
                             ui,
                             half,
-                            None,
+                            &Highlight::Off,
+                            Palette::DIFF_ADD_BG,
+                            false,
                             row.new_no,
                             ' ',
                             &row.text,
@@ -1137,13 +1286,16 @@ fn render_side_by_side(
             DisplayRow::Pair(d, a) => {
                 let hunk = d.as_ref().map(|r| r.hunk).or(a.as_ref().map(|r| r.hunk));
                 let line_mode = state.ui.diff_granularity == Granularity::Line;
+                let caret_row = plan.caret == Some(di);
                 ui.horizontal(|ui| {
                     let del_cell = if let Some(d) = d {
                         let selected = line_selected(state, path, d.hunk, d.line_ord);
                         let cell = cell_band(
                             ui,
                             half,
-                            Some(Palette::DIFF_DEL_BG),
+                            &d.highlight,
+                            Palette::DIFF_DEL_BG,
+                            caret_row && matches!(state.ui.diff_pane, DiffPane::Old),
                             d.old_no,
                             '-',
                             &d.text,
@@ -1162,7 +1314,9 @@ fn render_side_by_side(
                         cell_band(
                             ui,
                             half,
-                            None,
+                            &Highlight::Off,
+                            Palette::DIFF_DEL_BG,
+                            false,
                             0,
                             ' ',
                             "",
@@ -1179,7 +1333,9 @@ fn render_side_by_side(
                         let cell = cell_band(
                             ui,
                             half,
-                            Some(Palette::DIFF_ADD_BG),
+                            &a.highlight,
+                            Palette::DIFF_ADD_BG,
+                            caret_row && matches!(state.ui.diff_pane, DiffPane::New),
                             a.new_no,
                             '+',
                             &a.text,
@@ -1203,7 +1359,9 @@ fn render_side_by_side(
                         cell_band(
                             ui,
                             half,
-                            None,
+                            &Highlight::Off,
+                            Palette::DIFF_ADD_BG,
+                            false,
                             0,
                             ' ',
                             "",
