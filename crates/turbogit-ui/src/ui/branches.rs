@@ -706,6 +706,28 @@ fn undo_banner(ui: &mut Ui, state: &mut AppState) {
                 .font(chrome_font(TYPE_CONTROL))
                 .color(Palette::T_SECONDARY),
         );
+        // The two disclosures the reference carries beyond a plain
+        // restore, both as *links* — quiet controls, so this row keeps exactly
+        // one filled control and the recovery stays the thing that looks
+        // pressable. Their facts come from the captured record, because the
+        // branch they describe no longer exists to be read.
+        if let Some(unmerged) = &undo.unmerged
+            && kit_button(ui, KitButton::Quiet, &unmerged.link_label()).clicked()
+        {
+            state.open_unmerged_commits(unmerged);
+        }
+        if let Some(upstream) = &undo.upstream {
+            // Deleting the local ref leaves its remote twin behind; removing it
+            // is destructive, so it routes through the remote-delete
+            // confirmation the list's own Delete already uses.
+            let label = format!("Remove the tracking remote branch {}", upstream.git_ref());
+            if kit_button(ui, KitButton::Quiet, &label).clicked() {
+                state.ui.confirm = Some(PendingConfirm::DeleteRemoteBranch {
+                    remote: upstream.remote.clone(),
+                    name: upstream.branch.clone(),
+                });
+            }
+        }
         if kit_button(ui, KitButton::Secondary, "Undo delete").clicked() {
             let root = undo.root.clone();
             let n = undo.name.clone();
@@ -901,6 +923,10 @@ fn apply_branch_action(
                 // The one piece of information that makes deletion feel safe:
                 // what is lost, in human terms (issue 12, design §6.6).
                 state.ui.branches_delete_consequence = delete_consequence(state, root, branch);
+                // The same question answered as a *list*, captured
+                // with the consequence so the confirmation can link to it before
+                // anything is deleted — the reference only tells you afterwards.
+                state.ui.branches_delete_unmerged = state.unmerged_commits(root, &branch.name);
                 state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch {
                     name: branch.name.clone(),
                 });
