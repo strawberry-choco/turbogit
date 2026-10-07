@@ -292,11 +292,7 @@ pub enum PushOutcome {
 /// an update STOPS on a conflict it just produced. A refusal over conflicts
 /// that were already in the worktree prints none of these, which is the
 /// distinction between `UpdateConflicted` and `UpdateUnresolved`.
-const CONFLICT_STOP_MARKERS: [&str; 3] = [
-    "CONFLICT",
-    "Automatic merge failed",
-    "could not apply",
-];
+const CONFLICT_STOP_MARKERS: [&str; 3] = ["CONFLICT", "Automatic merge failed", "could not apply"];
 
 /// git's marker for the remote refusing the update itself (hooks, perms).
 const REMOTE_REJECTED_MARKER: &str = "[remote rejected]";
@@ -358,6 +354,32 @@ pub fn classify_push_failure(
         other => other.to_string(),
     };
     PushOutcome::UpdateErrored { detail }
+}
+
+/// How wide a rejected push's recovery update reaches (ticket 13).
+///
+/// The reference documents the EFFECT of the choice — "if this option is
+/// cleared, only the affected repositories will be updated" — and never its
+/// default, so the conservative reading is the one shipped: a push rejection in
+/// one repository must not integrate other repositories' branches behind the
+/// user.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UpdateChoice {
+    /// Only the repositories the rejected push acted on.
+    #[default]
+    AffectedOnly,
+    /// Every registered repository.
+    AllRepositories,
+}
+
+impl UpdateChoice {
+    /// The segmented control's label for the choice.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AffectedOnly => "Update affected repositories only",
+            Self::AllRepositories => "Update all repositories",
+        }
+    }
 }
 
 /// Fetch from the given remote (or all remotes when `remote` is `None`).

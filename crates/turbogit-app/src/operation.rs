@@ -83,7 +83,11 @@ pub enum RebaseKind {
 pub enum PushTargets {
     /// The `ThisRepo` scope: one root with the dialog's explicit Remote/Branch
     /// fields.
-    Single { root: RootId, remote: String, branch: String },
+    Single {
+        root: RootId,
+        remote: String,
+        branch: String,
+    },
     /// Every other scope: the resolved roots, each with its per-call remote
     /// resolution inside `push_roots`.
     Scope(Vec<Root>),
@@ -108,6 +112,65 @@ pub enum RecoveryMode {
 pub struct RecoveryPlan {
     pub mode: RecoveryMode,
     pub roots: Vec<RootId>,
+}
+
+/// Everything one push needs to run, as one value.
+///
+/// The dialog's inputs travel with the operation instead of being captured
+/// into a closure, because two consumers replay them: a rejected push re-pushes
+/// verbatim (ticket 13), and the no-dialog push verb builds the same request
+/// without ever opening the dialog (ticket 14).
+#[derive(Clone, Debug)]
+pub struct PushRequest {
+    pub targets: PushTargets,
+    pub force: bool,
+    pub tags: bool,
+    pub no_verify: bool,
+    pub set_upstream: bool,
+    pub selected_oldest: Option<String>,
+    pub settings: VcsSettings,
+}
+
+impl PushRequest {
+    /// The `ThisRepo` scope: one root, pushed to the dialog's explicit
+    /// Remote/Branch fields.
+    pub fn single(root: RootId, remote: String, branch: String, settings: &VcsSettings) -> Self {
+        Self::for_targets(
+            PushTargets::Single {
+                root,
+                remote,
+                branch,
+            },
+            settings,
+        )
+    }
+
+    /// Every scope but `ThisRepo`: the resolved roots, each pushed through
+    /// `push_roots`' per-root remote resolution.
+    pub fn scope(roots: Vec<Root>, settings: &VcsSettings) -> Self {
+        Self::for_targets(PushTargets::Scope(roots), settings)
+    }
+
+    fn for_targets(targets: PushTargets, settings: &VcsSettings) -> Self {
+        Self {
+            targets,
+            force: false,
+            tags: false,
+            no_verify: false,
+            set_upstream: false,
+            selected_oldest: None,
+            settings: settings.clone(),
+        }
+    }
+
+    /// The roots this push acts on — what a recovery may update before the
+    /// re-push, and what the rejection notification names.
+    pub fn roots(&self) -> Vec<RootId> {
+        match &self.targets {
+            PushTargets::Single { root, .. } => vec![root.clone()],
+            PushTargets::Scope(roots) => roots.iter().map(|r| r.id.clone()).collect(),
+        }
+    }
 }
 
 /// One-shot work against the Git engine.
@@ -184,19 +247,13 @@ pub enum Operation {
         message: String,
         settings: VcsSettings,
     },
-    /// `git push` from the Push dialog — the single-root path with explicit
-    /// Remote/Branch fields, or the resolved multi-root scope — optionally
-    /// preceded by the rejected-push recovery. This is the dialog's dispatch
-    /// unit rather than a [`Operation::Custom`] closure because the rejection
-    /// classification (ticket 13) settles on the operation's identity.
+    /// `git push` from the Push dialog, from the no-dialog push verb, or from
+    /// a rejected push's retry. This is the dispatch unit rather than a
+    /// [`Operation::Custom`] closure because the rejection classification
+    /// (ticket 13) settles on the operation's identity, and because a retry
+    /// must replay the original request verbatim.
     Push {
-        targets: PushTargets,
-        force: bool,
-        tags: bool,
-        no_verify: bool,
-        set_upstream: bool,
-        selected_oldest: Option<String>,
-        settings: VcsSettings,
+        request: PushRequest,
         /// Present exactly when this is a recovery: the update/fetch to run
         /// before the re-push. Its presence is what makes the operation a
         /// [`OpKind::PushRecovery`] rather than a [`OpKind::Push`].
@@ -225,76 +282,23 @@ impl Operation {
         }
     }
 
-    /// The dialog's single-root push (the `ThisRepo` scope path).
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_single(
-        root: RootId,
-        remote: String,
-        branch: String,
-        force: bool,
-        tags: bool,
-        no_verify: bool,
-        set_upstream: bool,
-        selected_oldest: Option<String>,
-        settings: &VcsSettings,
-    ) -> Self {
+    /// The push `request` runs as dispatched — no [`RecoveryPlan`], so it is
+    /// an [`OpKind::Push`]. Flag state rides on the request (ticket 14's
+    /// dialog-free verb needs the same defaults as the dialog's).
+    pub fn push(request: PushRequest) -> Self {
         Self::Push {
-            targets: PushTargets::Single { root, remote, branch },
-            force,
-            tags,
-            no_verify,
-            set_upstream,
-            selected_oldest,
-            settings: settings.clone(),
+            request,
             recover: None,
         }
     }
 
-    /// The dialog's multi-root push (every scope but `ThisRepo`).
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_scope(
-        roots: Vec<Root>,
-        force: bool,
-        tags: bool,
-        no_verify: bool,
-        set_upstream: bool,
-        selected_oldest: Option<String>,
-        settings: &VcsSettings,
-    ) -> Self {
+    /// The same push preceded by a recovery (ticket 13): the update or fetch
+    /// runs first, then the push replays verbatim. The recovery's presence is
+    /// what makes this an [`OpKind::PushRecovery`].
+    pub fn push_with_recovery(request: PushRequest, plan: RecoveryPlan) -> Self {
         Self::Push {
-            targets: PushTargets::Scope(roots),
-            force,
-            tags,
-            no_verify,
-            set_upstream,
-            selected_oldest,
-            settings: settings.clone(),
-            recover: None,
-        }
-    }
-
-    /// A rejected push's recovery: `mode` runs first, then the same push
-    /// again, over the same targets the failed push used.
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_recovery(
-        targets: PushTargets,
-        force: bool,
-        tags: bool,
-        no_verify: bool,
-        set_upstream: bool,
-        selected_oldest: Option<String>,
-        settings: &VcsSettings,
-        recover: RecoveryPlan,
-    ) -> Self {
-        Self::Push {
-            targets,
-            force,
-            tags,
-            no_verify,
-            set_upstream,
-            selected_oldest,
-            settings: settings.clone(),
-            recover: Some(recover),
+            request,
+            recover: Some(plan),
         }
     }
 
@@ -478,8 +482,8 @@ impl Operation {
             // ("Update all repositories"), so its invalidation is always the
             // widest scope it could have touched.
             Self::Push {
-                targets, recover, ..
-            } => match (targets, recover) {
+                request, recover, ..
+            } => match (&request.targets, recover) {
                 (PushTargets::Single { root, .. }, None) => Affected::Root(root.clone()),
                 _ => Affected::All,
             },
@@ -516,7 +520,9 @@ impl Operation {
             Self::RewordCommit { .. } => OpKind::RewordCommit,
             // The recovery plan's presence is the phase: settlement matches
             // on this identity, not on the label.
-            Self::Push { recover: Some(_), .. } => OpKind::PushRecovery,
+            Self::Push {
+                recover: Some(_), ..
+            } => OpKind::PushRecovery,
             Self::Push { .. } => OpKind::Push,
             Self::Custom { .. } => OpKind::Other,
         }
@@ -622,16 +628,16 @@ impl Operation {
                 &settings,
                 &branch,
             ),
-            Self::Push {
-                targets,
-                force,
-                tags,
-                no_verify,
-                set_upstream,
-                selected_oldest,
-                settings,
-                recover,
-            } => {
+            Self::Push { request, recover } => {
+                let PushRequest {
+                    targets,
+                    force,
+                    tags,
+                    no_verify,
+                    set_upstream,
+                    selected_oldest,
+                    settings,
+                } = request;
                 // Recovery first (ticket 13): the update or fetch runs before
                 // the re-push, so its failure classifies as an update outcome
                 // and the push is never attempted over a half-updated tree.
@@ -660,20 +666,22 @@ impl Operation {
                     }
                 }
                 match targets {
-                    PushTargets::Single { root, remote, branch } => {
-                        turbogit_services::sync_service::push(
-                            vcs,
-                            root.as_path(),
-                            &remote,
-                            &branch,
-                            force,
-                            tags,
-                            no_verify,
-                            set_upstream,
-                            selected_oldest.as_deref(),
-                            &settings,
-                        )
-                    }
+                    PushTargets::Single {
+                        root,
+                        remote,
+                        branch,
+                    } => turbogit_services::sync_service::push(
+                        vcs,
+                        root.as_path(),
+                        &remote,
+                        &branch,
+                        force,
+                        tags,
+                        no_verify,
+                        set_upstream,
+                        selected_oldest.as_deref(),
+                        &settings,
+                    ),
                     PushTargets::Scope(roots) => {
                         let refs: Vec<&Root> = roots.iter().collect();
                         let results = turbogit_services::sync_service::push_roots(
@@ -691,9 +699,7 @@ impl Operation {
                         // the aggregated text and the toast can name the root.
                         let failures: Vec<String> = results
                             .into_iter()
-                            .filter_map(|(id, r)| {
-                                r.err().map(|e| format!("{}: {e}", id.name()))
-                            })
+                            .filter_map(|(id, r)| r.err().map(|e| format!("{}: {e}", id.name())))
                             .collect();
                         if failures.is_empty() {
                             Ok(())

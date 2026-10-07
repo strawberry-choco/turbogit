@@ -1526,4 +1526,3 @@ fn lease_rejection_paints_lease_wording_not_remote_wording() {
         rec.recorded()
     );
 }
-
