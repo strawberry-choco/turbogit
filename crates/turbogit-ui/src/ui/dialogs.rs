@@ -12,6 +12,7 @@ use turbogit_services::{
 };
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, data_font};
+use crate::ui::components::{KitButton, kit_button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::widgets::{self, group_title};
 
@@ -1089,28 +1090,72 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
 
 // ------------------------------------------------------- issue 32 dialogs --
 
-/// Rename a branch (issue 32 branches popup row action): one input preset
-/// with the old name, Rename dispatches through the engine seam and closes;
-/// a blank new name stays inert.
+/// Rename a branch: the new name, and — where the branch tracks something —
+/// the second field that stops it tracking, with the consequence both fields
+/// buy stated beside them.
+///
+/// The consequence line is not decoration. Renaming a local branch leaves the
+/// remote branch it tracked in place under its old name, and nothing in the
+/// dialog shows that; the checkbox only means anything once the sentence
+/// beside it says what the next push will do. A branch that tracks nothing has
+/// no second field and no remote left behind, so it gets neither.
 fn rename_branch(ui: &mut Ui, state: &mut AppState) {
     let old = state.ui.dlg.rename_branch_name.clone();
     let root = state.ui.dlg.rename_branch_root.clone();
+    let upstream = state.ui.dlg.rename_branch_upstream.clone();
     ui.label(format!("Rename '{old}' to:"));
     let edit = ui.text_edit_singleline(&mut state.ui.dlg.rename_branch_new);
     edit.request_focus();
+    if upstream.is_some() {
+        ui.checkbox(
+            &mut state.ui.dlg.rename_branch_unset_upstream,
+            "Unset upstream branch",
+        );
+    }
+    if let Some(up) = &upstream {
+        let clearing = state.ui.dlg.rename_branch_unset_upstream;
+        widgets::note(ui, None, |ui| {
+            ui.label(format!(
+                "Only the local branch is renamed — your next push creates and tracks a new \
+                 remote branch, and {} is left behind.",
+                up.git_ref()
+            ));
+            if clearing {
+                ui.label(
+                    "The upstream is cleared now, so the renamed branch tracks nothing until \
+                     you push.",
+                );
+            }
+        });
+    }
+    // Owned before the footer: the closure below mutates `state`, and a `&str`
+    // borrowed out of it earlier would still be live when the closure starts.
+    let new = state.ui.dlg.rename_branch_new.trim().to_string();
+    let named = !new.is_empty() && new != old;
     // The shared footer, preserving the painted order `Rename` · `Cancel`.
     widgets::dialog_footer(ui, |ui| {
         if ui.button("Cancel").clicked() {
             close(state);
         }
-        if ui.button("Rename").clicked() {
-            let new = state.ui.dlg.rename_branch_new.trim().to_string();
-            if !new.is_empty() && new != old {
-                if let Some(id) = &root {
-                    state.rename_branch(id, &old, &new);
-                }
-                close(state);
+        // Withheld, not greyed: a blank name has nothing to rename, so the
+        // control loses its fill and its action together. `KitButton::Primary`
+        // keeps the accent fill in its Disabled state, which would paint a
+        // promise the click cannot keep.
+        let rename = kit_button(
+            ui,
+            if named {
+                KitButton::Primary
+            } else {
+                KitButton::Quiet
+            },
+            "Rename",
+        );
+        if named && rename.clicked() {
+            let unset_upstream = state.ui.dlg.rename_branch_unset_upstream;
+            if let Some(id) = &root {
+                state.rename_branch(id, &old, &new, unset_upstream);
             }
+            close(state);
         }
     });
 }
