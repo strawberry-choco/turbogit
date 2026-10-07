@@ -95,7 +95,7 @@ pub fn build_recent_group(
             ));
         }
     }
-    placed.sort_by(|a, b| b.0.cmp(&a.0));
+    placed.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     placed.truncate(RECENT_CAP);
     placed.into_iter().map(|(_, row)| row).collect()
 }
@@ -134,9 +134,15 @@ pub struct DirNode {
 }
 
 /// A node in a branch group's tree: a directory group or a leaf.
+///
+/// The leaf is boxed, exactly as the builder forest's own [`B::Leaf`] variant
+/// boxes it: [`BranchLeaf`] carries a whole [`Branch`], so an inline leaf makes
+/// every directory node pay the largest variant's size. The tree is built and
+/// walked per frame, and no caller owns a leaf — the rows are read through the
+/// node they sit in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BranchNode {
-    Leaf(BranchLeaf),
+    Leaf(Box<BranchLeaf>),
     Dir(DirNode),
 }
 
@@ -325,7 +331,7 @@ fn convert(nodes: Vec<B>) -> Vec<BranchNode> {
     nodes
         .into_iter()
         .map(|n| match n {
-            B::Leaf(l) => BranchNode::Leaf(*l),
+            B::Leaf(l) => BranchNode::Leaf(l),
             B::Dir(label, children) => BranchNode::Dir(DirNode {
                 label,
                 count: count_leaves(&children),

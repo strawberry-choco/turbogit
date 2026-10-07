@@ -336,7 +336,9 @@ fn leaf_count(nodes: &[BranchNode]) -> usize {
 /// never made. The rows are the group's own flat list, never directory-nested —
 /// the node reads "up to five recently checked-out branches", so each row names a
 /// branch and is answered by the repository it was checked out in (its own
-/// [`RowOwner`]) rather than by the section it happens to be drawn above.
+/// [`branches_tree::BranchLeaf::root`]) rather than by the section it happens to
+/// be drawn above.
+#[allow(clippy::too_many_arguments)] // same painter-thread as `paint_repo_section`
 fn paint_recent_group(
     ui: &mut Ui,
     props: &TreeProps<'_>,
@@ -426,7 +428,6 @@ fn paint_repo_section(
             ui,
             props,
             tree,
-            section,
             &locals,
             0,
             scroll_target,
@@ -463,7 +464,6 @@ fn paint_repo_section(
                     ui,
                     props,
                     tree,
-                    section,
                     &children,
                     1,
                     scroll_target,
@@ -505,12 +505,15 @@ fn paint_repo_section(
 
 /// Paint a forest of branch nodes (local or remote) with directory headers at
 /// `depth` indentation.
+///
+/// No repository context is passed: every leaf carries its own owner
+/// ([`branches_tree::BranchLeaf::root`]), which is what lets the same forest
+/// painter serve the view-level Recent group.
 #[allow(clippy::too_many_arguments)]
 fn paint_nodes(
     ui: &mut Ui,
     props: &TreeProps<'_>,
     tree: &mut TreeState,
-    section: &RepoSection,
     nodes: &[BranchNode],
     depth: usize,
     scroll_target: &Option<String>,
@@ -545,7 +548,6 @@ fn paint_nodes(
                     ui,
                     props,
                     tree,
-                    section,
                     &d.children,
                     depth + 1,
                     scroll_target,
