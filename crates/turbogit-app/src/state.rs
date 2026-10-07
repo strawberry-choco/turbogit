@@ -224,6 +224,21 @@ pub struct DialogState {
     pub rename_branch_root: Option<RootId>,
     pub rename_branch_name: String,
     pub rename_branch_new: String,
+    /// The upstream the branch had when the dialog opened — `None` for a branch
+    /// that tracks nothing, which is what withholds the second field and its
+    /// consequence line.
+    pub rename_branch_upstream: Option<Upstream>,
+    /// The dialog's second field: stop tracking that upstream as part of the
+    /// rename. Off by default, because keeping the tracking is the case a
+    /// routine rename is in.
+    pub rename_branch_unset_upstream: bool,
+    /// The payload of the unmerged-commits viewer — the record a delete
+    /// disclosure linked to, presented as a list. Written by every path that
+    /// opens the dialog and dropped by both of its buttons; a window closed by
+    /// its ✕ leaves it set until the next link overwrites it, because the
+    /// generic host closes windows without consulting payloads, and nothing
+    /// reads it while the dialog is gone.
+    pub unmerged_view: Option<UnmergedCommits>,
     // Compare branches (issue 32, branches popup row action + footer): the
     // two sides and the snapshot of commits on `compare_left` missing from
     // `compare_right`, captured once when the dialog opens (E9).
@@ -535,6 +550,10 @@ pub enum Dialog {
     RenameBranch,
     /// Compare two branches' commit lists (issue 32, spec E9).
     CompareBranches,
+    /// The commits a branch delete discarded, reached from that delete's
+    /// disclosure link — before the ref moves and after. Its payload is
+    /// [`DialogState::unmerged_view`].
+    BranchNotFullyMerged,
     /// Manage remotes (issue 33, screen 13 "Manage remotes…"): list, add,
     /// edit URLs, rename, remove, and set branch upstreams — plus the
     /// multi-root apply across a selection.
@@ -744,6 +763,64 @@ pub enum PendingConfirm {
     },
 }
 
+/// The commits a branch delete discards: the ones on the branch that are not on
+/// the reference it was never merged into.
+///
+/// **Captured before the ref moves, and carried as a snapshot.** After the
+/// delete the branch is gone, and re-deriving the list would need a revision
+/// that no longer exists; the reference's own viewer shows a *list*, so the
+/// list is what has to survive. `merged_target` is named alongside it because
+/// "not fully merged" is meaningless without saying *into what*.
+#[derive(Clone, Debug)]
+pub struct UnmergedCommits {
+    pub root: RootId,
+    /// The branch whose delete this was asked for.
+    pub branch: String,
+    /// What `branch` was not fully merged into, named — the current branch,
+    /// which is the reference the delete's own count is taken against.
+    pub merged_target: String,
+    /// The commits, newest-first, as the engine answered them.
+    pub commits: Vec<UnmergedCommit>,
+    /// The branch tip at capture time, so the viewer's Restore can recreate the
+    /// ref without a second read of a branch that may already be gone.
+    pub tip_sha: Option<String>,
+}
+
+impl UnmergedCommits {
+    /// The disclosure link's label: the **count**, in its own plural. Both
+    /// places the link appears — the pre-flight confirmation and the
+    /// notification after the ref is gone — spell it here, so a number cannot
+    /// disagree with the number the confirmation promised.
+    pub fn link_label(&self) -> String {
+        match self.commits.len() {
+            1 => "View 1 unmerged commit".to_owned(),
+            n => format!("View {n} unmerged commits"),
+        }
+    }
+
+    /// The viewer's header sentence: the branch, **and what it was not merged
+    /// into** — the reference's own two-parameter shape, because "not fully
+    /// merged" without a target is not a fact anyone can act on.
+    pub fn header(&self) -> String {
+        format!(
+            "The branch '{}' was not fully merged to {}. Below is the list of unmerged commits.",
+            self.branch, self.merged_target
+        )
+    }
+}
+
+/// One commit a delete discards: its identity plus the subject read while the
+/// branch still existed. The subject is carried, not looked up, because every
+/// listing the app caches is reachable from a ref the delete just moved — the
+/// discarded commits are exactly the ones that are not in it.
+#[derive(Clone, Debug)]
+pub struct UnmergedCommit {
+    pub id: CommitId,
+    /// `None` when the engine could not name the commit; the viewer then shows
+    /// the hash alone rather than inventing a line.
+    pub subject: Option<String>,
+}
+
 /// A local branch deletion awaiting completion, with its tip captured so the
 /// undo affordance can restore it (issue 12).
 #[derive(Clone, Debug)]
@@ -751,6 +828,11 @@ pub struct BranchDeletePending {
     pub root: RootId,
     pub name: String,
     pub tip_sha: String,
+    /// The upstream it tracked, if any — what the post-delete offer to remove
+    /// the remote branch needs, and what no longer exists once the branch is gone.
+    pub upstream: Option<Upstream>,
+    /// What the delete discards, for the disclosure that outlives the ref.
+    pub unmerged: Option<UnmergedCommits>,
 }
 
 /// A deleted branch restorable for a short window (issue 12).
@@ -760,6 +842,13 @@ pub struct BranchDeleteUndo {
     pub name: String,
     pub tip_sha: String,
     pub created_at: std::time::Instant,
+    /// The deleted branch tracked this, so the notification can offer to remove
+    /// the remote branch the local delete left behind. `None` for a branch that
+    /// tracked nothing — the offer is a fact about the delete, not chrome.
+    pub upstream: Option<Upstream>,
+    /// The commits the delete discarded, with the reference they were not
+    /// merged into. The link to look at them is the only way they are reachable.
+    pub unmerged: Option<UnmergedCommits>,
 }
 
 /// Which targeted history verb a rewrite undo restores (ticket 09). Coverage is
@@ -1024,6 +1113,12 @@ pub struct UiState {
     /// the delete confirmation, the pending-delete tip captured for undo, and
     /// the short-window undo affordance itself.
     pub branches_delete_consequence: Option<String>,
+    /// The commits the pending delete would discard, captured with the
+    /// consequence above so the confirmation can link to the list **before**
+    /// anything is deleted — the reference only tells you afterwards, and
+    /// TurboGit asks first. The link opens the same viewer the post-delete
+    /// notification's link opens, so one body states the fact once.
+    pub branches_delete_unmerged: Option<UnmergedCommits>,
     pub branches_delete_pending: Option<BranchDeletePending>,
     pub branches_undo: Option<BranchDeleteUndo>,
     /// Rewrite dispatch awaiting settlement to arm the post-hoc undo (ticket 09).
@@ -3307,7 +3402,11 @@ impl AppState {
                                 self.ui.conflict_resolver_open = true;
                             }
                             // Issue 12: a confirmed local-branch deletion arms
-                            // the short-window undo with the captured tip.
+                            // the short-window undo with the captured tip. The
+                            // disclosure the notification carries — what was
+                            // unmerged, and what remote was left tracking
+                            // nothing — is the pending record's, because the
+                            // branch it describes no longer exists to be read.
                             if let Some(pending) = self.ui.branches_delete_pending.take()
                                 && kind == OpKind::DeleteBranch
                             {
@@ -3316,12 +3415,16 @@ impl AppState {
                                     name: pending.name,
                                     tip_sha: pending.tip_sha,
                                     created_at: std::time::Instant::now(),
+                                    upstream: pending.upstream,
+                                    unmerged: pending.unmerged,
                                 });
+                                self.ui.branches_delete_unmerged = None;
                             }
                         }
                         Err(e) => {
                             let msg = e.to_string();
                             self.ui.branches_delete_pending = None;
+                            self.ui.branches_delete_unmerged = None;
                             // A rewrite that failed arms no undo (ticket 09):
                             // the offer exists for a landed rewrite only.
                             self.ui.rewrite_undo_pending = None;
@@ -3899,24 +4002,39 @@ impl AppState {
 
     /// Open the rename dialog for `name` in `id`, closing the popup so
     /// focus follows cleanly (mirrors the New Branch flow).
+    ///
+    /// The upstream is captured here rather than looked up at paint time: the
+    /// dialog's consequence line names the remote branch the rename leaves
+    /// behind, and after the rename lands that name is no longer in the list
+    /// the lookup would read.
     pub fn open_rename_branch(&mut self, id: &RootId, name: &str) {
+        let tracking = self
+            .multi
+            .by_id(id)
+            .and_then(|r| r.branches.iter().find(|b| b.name == name))
+            .and_then(|b| b.tracking.clone());
         self.ui.dlg.rename_branch_root = Some(id.clone());
         self.ui.dlg.rename_branch_name = name.to_string();
         self.ui.dlg.rename_branch_new = String::new();
+        self.ui.dlg.rename_branch_upstream = tracking;
+        self.ui.dlg.rename_branch_unset_upstream = false;
         self.ui.dialog = Some(Dialog::RenameBranch);
         self.ui.branches_popup = false;
     }
 
     /// Rename `old` to `new` in `id` through the engine seam and refresh
     /// the root. The current-branch rename is legal; git updates HEAD.
-    pub fn rename_branch(&mut self, id: &RootId, old: &str, new: &str) {
+    /// `unset_upstream` is the dialog's second field: the rename stays
+    /// local-only either way, and this decides whether the branch keeps
+    /// tracking the remote it was renamed away from.
+    pub fn rename_branch(&mut self, id: &RootId, old: &str, new: &str, unset_upstream: bool) {
         let root = id.clone();
         let old = old.to_string();
         let new = new.to_string();
         self.dispatch(Operation::custom(
             format!("Rename {old} → {new}"),
             Affected::Root(root.clone()),
-            move |v| v.branch_rename(root.as_path(), &old, &new),
+            move |v| branch_service::rename(v, root.as_path(), &old, &new, unset_upstream),
         ));
     }
 
@@ -3938,6 +4056,50 @@ impl AppState {
         self.ui.dlg.compare_commits = commits;
         self.ui.dialog = Some(Dialog::CompareBranches);
         self.ui.branches_popup = false;
+    }
+
+    /// Open the unmerged-commits viewer for a delete's captured disclosure
+    /// — the reference's "Branch Was Not Fully Merged" dialog. The
+    /// record is the payload: the branch it names may already be gone, so the
+    /// dialog reads nothing new — it presents what the delete took.
+    pub fn open_unmerged_commits(&mut self, unmerged: &UnmergedCommits) {
+        self.ui.dlg.unmerged_view = Some(unmerged.clone());
+        self.ui.dialog = Some(Dialog::BranchNotFullyMerged);
+    }
+
+    /// Whether the viewer's `Restore` is a promise it can keep: the branch is
+    /// not standing, and its tip was captured. Read from the listed branches,
+    /// not from a flag — the same question the list itself answers, so a viewer
+    /// opened before the delete cannot offer to restore a branch that is still
+    /// there.
+    pub fn unmerged_restore_available(&self, unmerged: &UnmergedCommits) -> bool {
+        unmerged.tip_sha.is_some()
+            && self.multi.by_id(&unmerged.root).is_some_and(|r| {
+                !r.branches
+                    .iter()
+                    .any(|b| b.name == unmerged.branch && b.kind == BranchKind::Local)
+            })
+    }
+
+    /// Recreate a deleted branch at the tip its disclosure captured. The viewer's `Restore` and the notification's `Undo delete` are one
+    /// recovery, so they dispatch identically — and the notification's offer is
+    /// spent by this click, because a banner undoing a branch that exists again
+    /// is a second route to nothing.
+    pub fn restore_unmerged_branch(&mut self, unmerged: &UnmergedCommits) {
+        if !self.unmerged_restore_available(unmerged) {
+            return;
+        }
+        let Some(tip_sha) = unmerged.tip_sha.clone() else {
+            return;
+        };
+        let root = unmerged.root.clone();
+        let name = unmerged.branch.clone();
+        self.ui.branches_undo = None;
+        self.dispatch(Operation::custom(
+            format!("Restore branch {name}"),
+            Affected::Root(root.clone()),
+            move |v| v.branch_create(root.as_path(), &name, false, Some(&tip_sha)),
+        ));
     }
 
     /// Protected-row hover quick-action: open the merge dialog preset to

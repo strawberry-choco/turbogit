@@ -12,16 +12,17 @@
 //! before. Batching, TTLs and a keyed-read slot are separate work; nothing
 //! here changes *what* is asked or *when*.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{
     Commit, CommitId, ConflictVersions, LogOpts, MergeStrategy, RebaseAction, RebasePlanEntry,
-    RecentCheckout, RefState, Root, RootId,
+    RecentCheckout, RefState, Root, RootId, Upstream,
 };
 use turbogit_services::history_editor::RebaseCaution;
 use turbogit_services::integrate_service::MergePreview;
 
-use crate::state::AppState;
+use crate::state::{AppState, UnmergedCommit, UnmergedCommits};
 
 impl AppState {
     /// Commits on `branch` that are not on the current branch — the number a
@@ -31,6 +32,75 @@ impl AppState {
         self.executor
             .commit_count_between(root.as_path(), "HEAD", branch)
             .ok()
+    }
+
+    /// The commits a delete of `branch` would discard, with the reference they
+    /// were not merged into — the record every one of the delete's disclosures
+    /// reads: the link in the pre-flight confirmation, the link in the
+    /// notification afterwards, and the viewer both of them open.
+    ///
+    /// **Taken against the current branch, which is what the count the
+    /// confirmation already states is taken against.** The reference's wording
+    /// is "unmerged to its upstream branch *or* to the current branch";
+    /// retargeting this on an upstream-tracking branch would move the number a
+    /// confirmation has already promised, so the pair stays one rule.
+    /// `None` when there is no current branch to be unmerged *into*, which is
+    /// the same answer the consequence line gives.
+    ///
+    /// The subjects come from one bounded log of the branch, read **now** — the
+    /// list outlives the ref it describes, and a viewer that looked them up
+    /// after the delete would be asking for a branch that is gone.
+    pub fn unmerged_commits(&self, root: &RootId, branch: &str) -> Option<UnmergedCommits> {
+        let merged_target = self
+            .multi
+            .by_id(root)
+            .and_then(|r| r.current_branch.clone())?;
+        let shas = self
+            .executor
+            .outgoing_commits(root.as_path(), branch, "HEAD")
+            .ok()?;
+        if shas.is_empty() {
+            return None;
+        }
+        let subjects: HashMap<CommitId, String> = self
+            .executor
+            .log(
+                root.as_path(),
+                &LogOpts {
+                    max_count: Some(shas.len()),
+                    branch: Some(branch.to_string()),
+                    ..Default::default()
+                },
+            )
+            .map(|log| {
+                log.iter()
+                    .map(|c| (c.id.clone(), c.subject().to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(UnmergedCommits {
+            root: root.clone(),
+            branch: branch.to_string(),
+            merged_target,
+            tip_sha: self.branch_tip(root, branch),
+            commits: shas
+                .iter()
+                .map(|sha| UnmergedCommit {
+                    id: sha.clone(),
+                    subject: subjects.get(sha).cloned(),
+                })
+                .collect(),
+        })
+    }
+
+    /// The upstream `branch` tracks, read from git rather than from the cached
+    /// listing, because the delete captures it at the moment it is asked for and
+    /// the notification needs it after the branch is gone.
+    pub fn branch_upstream(&self, root: &RootId, branch: &str) -> Option<Upstream> {
+        self.executor
+            .branch_upstream(root.as_path(), branch)
+            .ok()
+            .flatten()
     }
 
     /// The sha `branch` points at, captured so a deletion can be undone inside

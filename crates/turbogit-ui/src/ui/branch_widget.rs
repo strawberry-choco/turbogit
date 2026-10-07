@@ -796,6 +796,10 @@ fn apply_branch_row_action(state: &mut AppState, id: &RootId, intent: BranchRowA
                 });
             }
             PopupEntry::Recent { name, .. } | PopupEntry::Local { name, .. } => {
+                // The pre-flight disclosure is captured here too: whichever
+                // surface asked — the branch list or this popup — the
+                // confirmation links to the same list of what is discarded.
+                state.ui.branches_delete_unmerged = state.unmerged_commits(id, name.as_str());
                 state.ui.confirm = Some(PendingConfirm::DeleteLocalBranch { name: name.clone() });
             }
             PopupEntry::Tag { .. } => {}
