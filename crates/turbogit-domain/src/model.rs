@@ -412,6 +412,24 @@ pub struct Change {
     pub orig_path: Option<PathBuf>,
 }
 
+/// The **file-level clash kind** of one conflicted path — which sides of the
+/// merge touched it, as `git status`'s short-format unmerged pairs report them
+/// (`DD` both deleted, `AA` both added, `UU` both modified, `DU` deleted by us,
+/// `UD` deleted by them, `AU` added by us, `UA` added by them). This is a
+/// different axis from the per-hunk marker vocabulary an editor names
+/// (`Modified line` / `Conflicting lines`): one is about the FILE, one about a
+/// BLOCK inside it (rebased-parity ticket 02).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConflictKind {
+    BothDeleted,
+    BothAdded,
+    BothModified,
+    DeletedByUs,
+    DeletedByThem,
+    AddedByUs,
+    AddedByThem,
+}
+
 /// A named, user-organized bucket of local changes (IntelliJ changelist model).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Changelist {
@@ -426,9 +444,27 @@ pub struct Changelist {
 pub struct RootStatus {
     pub changes: Vec<Change>,
     pub conflicted: Vec<PathBuf>,
+    /// Each conflicted path's file-level clash kind, in the same order as
+    /// [`RootStatus::conflicted`]. Filled by the engine's status parse from the
+    /// same `u` line that fills `conflicted` — one push site, so the two
+    /// cannot drift — and empty from engines (or seeded fakes) that do not
+    /// report kinds; [`RootStatus::conflict_kind`] then answers `None`, and a
+    /// surface that cannot name the kind must not invent one.
+    #[serde(default)]
+    pub conflict_kinds: Vec<(PathBuf, ConflictKind)>,
 }
 
 impl RootStatus {
+    /// The file-level clash kind of one conflicted path, as the engine's
+    /// status parse classified it. `None` when the path is not conflicted or
+    /// the engine does not report kinds.
+    pub fn conflict_kind(&self, path: &Path) -> Option<ConflictKind> {
+        self.conflict_kinds
+            .iter()
+            .find(|(p, _)| p == path)
+            .map(|(_, kind)| *kind)
+    }
+
     pub fn modified(&self) -> usize {
         self.changes
             .iter()

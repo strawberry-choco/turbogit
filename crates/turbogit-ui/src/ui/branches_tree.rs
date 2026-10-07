@@ -484,6 +484,7 @@ mod tests {
             status: RootStatus {
                 changes,
                 conflicted: vec![],
+                conflict_kinds: vec![],
             },
         }
     }
