@@ -7,8 +7,8 @@
 use std::path::PathBuf;
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
-    BlameLine, ChangeStats, Commit, CommitId, CommitRef, Patch, RootId, RootStatus, Submodule,
-    Worktree,
+    BlameLine, ChangeStats, Commit, CommitId, CommitRef, Patch, RootId, RootStatus, Stash,
+    Submodule, Worktree,
 };
 
 use crate::root_caches::{Affected, LogScope};
@@ -177,6 +177,14 @@ pub enum AppEvent {
     SubmodulesLoaded {
         root: RootId,
         submodules: TgResult<Vec<Submodule>>,
+    },
+    /// The stash listing of a root was loaded (surface 07's Stash pane). An
+    /// empty listing is a normal answer and is stored; a failure keeps the cache
+    /// cold, so the pane asks again instead of painting "no stashes" over a
+    /// repository git refused to read.
+    StashesLoaded {
+        root: RootId,
+        stashes: TgResult<Vec<Stash>>,
     },
     /// A confirmed bulk operation (issue 09) finished: one result per
     /// planned root. Drained into an aggregate toast + activity entry and

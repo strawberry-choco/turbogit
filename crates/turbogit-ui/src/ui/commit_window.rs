@@ -1,5 +1,5 @@
-//! The Commit tool window: one tree that mirrors Git's index, beside two
-//! placeholder sub-tabs.
+//! The Commit tool window: one tree that mirrors Git's index, beside the Shelf
+//! and Stash panes.
 //!
 //! Layout: a sub-tab strip (Local Changes / Shelf / Stash) above two zones — a
 //! fixed-width Commit panel of collapsible groups with count badges on the
@@ -12,10 +12,11 @@
 //! For multi-root projects each group nests per-root sub-groups with count
 //! badges and a select-all checkbox; single-root projects list files flat.
 //! Commit stays disabled until a non-empty message AND at least one included
-//! change exist. Shelf / Stash are clickable tabs whose panes are labeled
-//! placeholders until Phase J (ADR-0008); the "Advanced options..." control
-//! renders per the mockup but is deliberately inert in v1 (ADR-0010).
-//! User-created changelists remain backlog.
+//! change exist. Shelf and Stash are real panes — each root's own shelf records
+//! and its own `git stash` listing, with the keep/remove verb pairs on every row
+//! — which supersedes ADR-0008's labelled placeholders. The "Advanced
+//! options..." control renders per the mockup but is deliberately inert in v1
+//! (ADR-0010). User-created changelists remain backlog.
 //!
 //! Design system v2: the changes card is headed by the one shared pane header
 //! ([`widgets::pane_header`]) — a tracked title, a count chip for the *file*
@@ -34,9 +35,11 @@
 //! column, not widening the column.
 
 use crate::theme::Palette;
+use crate::ui::column_table::{self, PaneTable};
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
+use crate::ui::widgets::PaneColumn;
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Key, Layout, Margin, Pos2, Rect, RichText,
     Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
@@ -198,13 +201,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     sub_tab_strip(ui, state);
     match state.ui.commit_subtab {
         CommitSubTab::LocalChanges => local_changes_body(ui, state),
-        // Phase-J scope: clickable tabs with labeled placeholder panes
-        // (ADR-0008) instead of hidden or disabled-looking tabs. The
-        // Unversioned Files sub-tab was removed in the one-tree redesign
-        // (issue 04); its data now lives in the Local Changes tree's bottom
-        // group.
-        CommitSubTab::Shelf => placeholder_pane(ui, "Shelf"),
-        CommitSubTab::Stash => placeholder_pane(ui, "Stash"),
+        // ADR-0008 made these two labelled placeholders because the panes had
+        // nothing behind them. They have panes now: a shelf list and a stash
+        // list, each with its verbs wired to the dispatch that does the work.
+        CommitSubTab::Shelf => shelf_pane(ui, state),
+        CommitSubTab::Stash => stash_pane(ui, state),
     }
 
     // Conflict resolution tools (ours / theirs / 3-way merge editor); the
@@ -334,15 +335,189 @@ fn two_zone(
 
 /// Labeled placeholder for a sub-tab whose feature has not landed yet
 /// (ADR-0008): explicit on-screen copy instead of a hidden or disabled tab.
-fn placeholder_pane(ui: &mut Ui, name: &str) {
-    ui.vertical_centered(|ui| {
-        ui.add_space(48.0);
-        ui.colored_label(Color32::GRAY, format!("{name} arrives in a later phase."));
-        ui.add_space(4.0);
-        ui.colored_label(
-            Color32::GRAY,
-            "This pane is a deliberate placeholder (Phase J).",
-        );
+// ------------------------------------------------------ shelf & stash panes --
+//
+// Two panes, one column-table grammar each (ADR-0008's placeholders superseded
+// the frame they were drawn for). The reference keeps them separate by default
+// and the distinction is the point of having two: **a shelf** is this app's own
+// named bucket of *selected* changes — its record lives in `.turbogit/shelf.ron`
+// and its content is the stash entry the shelve parked — while **a stash** is
+// git's stack of *every* uncommitted change, read from `git stash list`. The
+// verbs say which mechanism a row belongs to and what happens to the copy: the
+// keep/remove pair is named, not tooltiped.
+
+/// The Shelf pane's columns, one table read by both the shared column-header row
+/// and every row below it, for the reason `WORKTREE_COLUMNS` records.
+const SHELF_COLUMNS: [PaneColumn; 4] = [
+    PaneColumn::start("SHELF", 8.0),
+    PaneColumn::start("FILES", 320.0),
+    PaneColumn::start("SHELVED", 392.0),
+    PaneColumn::end("ACTIONS", 0.0),
+];
+
+/// The Stash pane's columns. Same shape, different facts: git's own ref is the
+/// identity the verbs hand the engine, so it leads.
+const STASH_COLUMNS: [PaneColumn; 3] = [
+    PaneColumn::start("STASH", 8.0),
+    PaneColumn::start("MESSAGE", 112.0),
+    PaneColumn::end("ACTIONS", 0.0),
+];
+
+fn shelf_pane(ui: &mut Ui, state: &mut AppState) {
+    column_table::column_table_pane(
+        ui,
+        state,
+        PaneTable {
+            title: "SHELVES",
+            columns: &SHELF_COLUMNS,
+            // The shelf store is app state rather than a git read, so it always
+            // answers; this line is the pane's own absence word, never a promise
+            // of an arrival that cannot be pending.
+            loading: "No shelf store for this project yet.",
+            empty: "Nothing is shelved in this repository. Use “Shelve…” to park the selected \
+                    changes and take the working tree back to clean.",
+            cached: |state, id| Some(state.shelves_for(id)),
+            actions: &mut |ui, state| {
+                if widgets::ghost_button(ui, None, "Shelve\u{2026}")
+                    .on_hover_text("Shelve selected changes")
+                    .clicked()
+                {
+                    state.ui.dialog = Some(Dialog::Shelve);
+                }
+            },
+            row: &mut shelf_row,
+        },
+    );
+}
+
+fn stash_pane(ui: &mut Ui, state: &mut AppState) {
+    // **A cached git value, asked for through the app.** The pane never touches
+    // the executor: it asks, the app admits at most one listing per root in
+    // flight, and the frame before the answer arrives paints the loading word
+    // rather than an absence git has not confirmed (reverse gap #10).
+    if let Some(id) = state.selected_root.clone() {
+        if state.caches.stashes(&id).is_none() {
+            state.fetch_stashes(id);
+        }
+    }
+    column_table::column_table_pane(
+        ui,
+        state,
+        PaneTable {
+            title: "STASHES",
+            columns: &STASH_COLUMNS,
+            loading: "Loading stashes\u{2026}",
+            empty: "Nothing is stashed in this repository. Use “Stash…” to park every uncommitted \
+                    change, in or out of this application.",
+            cached: |state, id| state.caches.stashes(id).map(|rows| rows.to_vec()),
+            actions: &mut |ui, state| {
+                if widgets::ghost_button(ui, None, "Stash\u{2026}")
+                    .on_hover_text("Stash all changes")
+                    .clicked()
+                {
+                    state.ui.dialog = Some(Dialog::Stash);
+                }
+            },
+            row: &mut stash_row,
+        },
+    );
+}
+
+/// One shelf row: its name, the files it holds, when it was shelved, and the
+/// three verbs.
+///
+/// **The two unshelve verbs are one pair with opposite defaults**, named so the
+/// consequence travels in the label — `Unshelve` keeps the shelf (the captured
+/// default: `Remove successfully applied files from the shelf` is **off**), and
+/// `Unshelve and Remove` destroys the shelved copy with it. A single control with
+/// a checkbox would lose exactly the distinction the reference spells out with
+/// two menu items, so they are two rects with two fills.
+fn shelf_row(ui: &mut Ui, state: &mut AppState, shelf: &turbogit_domain::model::Shelf) {
+    let root = shelf.root.clone();
+    let name = shelf.name.clone();
+    let files = components::counted(shelf.changes.len(), "file");
+    let shelved = shelf.created_at.format("%Y-%m-%d %H:%M").to_string();
+    ui.horizontal(|ui| {
+        widgets::column_cell(ui, &SHELF_COLUMNS, 0, |ui| {
+            ui.label(RichText::new(&shelf.name).color(Palette::INK));
+        });
+        widgets::column_cell(ui, &SHELF_COLUMNS, 1, |ui| {
+            ui.label(RichText::new(files).color(Palette::INK_2));
+        });
+        widgets::column_cell(ui, &SHELF_COLUMNS, 2, |ui| {
+            ui.label(RichText::new(shelved).color(Palette::INK_2));
+        });
+        // Right-to-left, so the painted left-to-right order is keep, destroy,
+        // delete: the reference's own menu order, and the safe verb first.
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if components::kit_button(ui, components::KitButton::Quiet, "Delete Shelf")
+                .clicked()
+            {
+                state.ui.confirm = Some(PendingConfirm::DeleteShelf {
+                    root: root.clone(),
+                    name: name.clone(),
+                });
+            }
+            if components::kit_button(ui, components::KitButton::Danger, "Unshelve and Remove")
+                .clicked()
+            {
+                state.unshelve(root.clone(), name.clone(), true);
+            }
+            if components::kit_button(ui, components::KitButton::Secondary, "Unshelve").clicked() {
+                state.unshelve(root.clone(), name.clone(), false);
+            }
+        });
+    });
+}
+
+/// One stash row: git's ref, the entry's message, and the three verbs.
+///
+/// `Apply Stash (keeps)` and `Pop Stash (removes)` are the pair the reference
+/// disambiguates **only by tooltip**, which the parity spec records as a
+/// discoverability trap; here the consequence is in the label and the fill, and
+/// `Delete Stash` uses the shelf pane's one verb with its own explicit object
+/// rather than a third word for removal.
+fn stash_row(ui: &mut Ui, state: &mut AppState, stash: &turbogit_domain::model::Stash) {
+    let root = stash.root.clone();
+    let index = stash.index;
+    let stash_ref = turbogit_services::shelve_stash::stash_ref(index);
+    ui.horizontal(|ui| {
+        widgets::column_cell(ui, &STASH_COLUMNS, 0, |ui| {
+            ui.label(RichText::new(&stash_ref).color(Palette::INK));
+        });
+        widgets::column_cell(ui, &STASH_COLUMNS, 1, |ui| {
+            ui.label(RichText::new(&stash.message).color(Palette::INK_2));
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if components::kit_button(ui, components::KitButton::Quiet, "Delete Stash").clicked() {
+                state.ui.confirm = Some(PendingConfirm::DeleteStash {
+                    root: root.clone(),
+                    index,
+                });
+            }
+            if components::kit_button(ui, components::KitButton::Danger, "Pop Stash (removes)")
+                .clicked()
+            {
+                let label = format!("Pop stash {stash_ref}");
+                let work_root = root.clone();
+                state.dispatch(Operation::custom(
+                    label,
+                    Affected::Root(root.clone()),
+                    move |v| v.stash_pop(work_root.as_path(), index),
+                ));
+            }
+            if components::kit_button(ui, components::KitButton::Secondary, "Apply Stash (keeps)")
+                .clicked()
+            {
+                let label = format!("Apply stash {stash_ref}");
+                let work_root = root.clone();
+                state.dispatch(Operation::custom(
+                    label,
+                    Affected::Root(root.clone()),
+                    move |v| v.stash_apply(work_root.as_path(), index),
+                ));
+            }
+        });
     });
 }
 
