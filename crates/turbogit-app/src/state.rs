@@ -2816,8 +2816,15 @@ impl AppState {
             .shelves
             .retain(|s| &s.root != root || s.name != name);
         if self.ui.shelves.len() != before {
-            let _ =
-                turbogit_services::shelve_stash::save_shelves(&self.project_dir, &self.ui.shelves);
+            // Report a refused rewrite instead of discarding it: the store will
+            // not truncate itself over rows it has not read, and a silent `let _`
+            // there would leave the pane and the file disagreeing with nobody
+            // the wiser.
+            if let Err(e) =
+                turbogit_services::shelve_stash::save_shelves(&self.project_dir, &self.ui.shelves)
+            {
+                self.last_error = Some(e.to_string());
+            }
         }
     }
 

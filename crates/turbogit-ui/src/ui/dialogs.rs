@@ -1303,7 +1303,13 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
             };
             let shelf = shelve_stash::make_shelf(&name, &changes, root.clone());
             state.ui.shelves.push(shelf);
-            let _ = shelve_stash::save_shelves(&state.project_dir, &state.ui.shelves);
+            // The store refuses to rewrite itself while it holds rows this build
+            // cannot read, so the user has to be told the shelf index did not
+            // land — the git side below still parks the content. Silently
+            // swallowing this was how an unreadable store got truncated.
+            if let Err(e) = shelve_stash::save_shelves(&state.project_dir, &state.ui.shelves) {
+                state.last_error = Some(e.to_string());
+            }
             // The shelf record above is the IDE's own list; the git side is
             // to park the working changes, with nothing chosen to discard.
             state.dispatch(Operation::shelve(root, Vec::new(), name));

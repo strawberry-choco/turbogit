@@ -6,6 +6,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::*;
 use turbogit_engine_api::GitExecutor;
@@ -111,27 +112,136 @@ pub fn shelf_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".turbogit").join("shelf.ron")
 }
 
+/// The wire's **absent** marker for [`StoredShelf::root`]: a row written before
+/// ticket 12 has no `root` key at all, and serde needs some value for it.
+///
+/// An empty path is used rather than `Option<RootId>` because RON 0.12 reads an
+/// `Option` only in its `Some(..)` spelling, while this build writes `Shelf`'s
+/// root as a plain value — so an `Option` here fails to read back the very file
+/// this build wrote. The marker never escapes the wire: [`StoredShelf::into_shelf`]
+/// replaces it, and a [`Shelf`] always carries a real root.
+fn absent_root() -> RootId {
+    RootId(Arc::from(Path::new("")))
+}
+
+/// The store's **on-disk row shape**: a [`Shelf`] whose `root` may be absent.
+///
+/// It is a mirror rather than a flag day, because the two shapes are genuinely
+/// different facts. [`Shelf::root`] is required — an unshelve parks or restores
+/// work in exactly one repository, so a rootless shelf is not a thing the app can
+/// act on — while a row written by a build before ticket 12 simply predates the
+/// field. Reading the file into `Shelf` directly would make every legacy store
+/// unparseable *as a whole*, which is how one old row used to take the launch
+/// load down with it.
+///
+/// Constructing the `Shelf` here by name, with no `..` rest pattern, is the drift
+/// guard: when `Shelf` grows a field this mirror does not carry, the store fails
+/// to compile rather than silently reading it back as a default.
+#[derive(serde::Deserialize)]
+struct StoredShelf {
+    name: String,
+    changes: Vec<Change>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default = "absent_root")]
+    root: RootId,
+}
+
+impl StoredShelf {
+    /// Bind a row to its root: the one it recorded, or — for a row written before
+    /// `root` existed — `project_dir`, the directory that holds this very store.
+    ///
+    /// That is the only root a legacy row could have meant: the store lives at
+    /// `<project_dir>/.turbogit/shelf.ron`, and [`crate::multi_root::scan_for_roots`]
+    /// registers `project_dir` itself as a root whenever it is a repository, which
+    /// is the single-root case every legacy store was written by. Binding it there
+    /// keeps the row listable and unshelve-able instead of dropping it.
+    ///
+    /// The cost is honest and bounded: in a **multi-root** project whose
+    /// `project_dir` is not itself a repository, a legacy row lands on a root no
+    /// pane lists, so it reads as missing rather than as applied to the wrong
+    /// tree — and it is never destroyed, because [`save_shelves`] will not
+    /// truncate a store over rows it has not read.
+    fn into_shelf(self, project_dir: &Path) -> Shelf {
+        let root = if self.root.as_path().as_os_str().is_empty() {
+            RootId(Arc::from(project_dir))
+        } else {
+            self.root
+        };
+        Shelf {
+            name: self.name,
+            changes: self.changes,
+            created_at: self.created_at,
+            root,
+        }
+    }
+}
+
+/// A file with nothing in it is an **empty shelf**, not an unreadable one: it
+/// carries no records for a write to destroy. Without this, a 0-byte
+/// `shelf.ron` — what an interrupted `fs::write` leaves behind — would refuse
+/// every later shelve on a store that in fact holds nothing.
+fn is_blank(text: &str) -> bool {
+    text.trim().is_empty()
+}
+
 /// Read the shelf store back. A file that is not there is an empty shelf — the
 /// store is created by the first shelve, not at launch.
 ///
-/// A file this build cannot parse is an **error, not an empty list**: those rows
-/// are the user's shelved work, and a pane that answered "nothing is shelved"
+/// A row written before ticket 12 added [`Shelf::root`] is read, not dropped: see
+/// [`StoredShelf`].
+///
+/// A file this build cannot parse at all is an **error, not an empty list**: those
+/// rows are the user's shelved work, and a pane that answered "nothing is shelved"
 /// over a store it failed to read would be reporting an absence it has not
-/// established.
+/// established. Such a file is also un-writable — see [`save_shelves`].
 pub fn load_shelves(project_dir: &Path) -> TgResult<Vec<Shelf>> {
     let path = shelf_path(project_dir);
     if !path.exists() {
         return Ok(Vec::new());
     }
     let text = fs::read_to_string(&path)?;
-    ron::from_str(&text).map_err(|e| turbogit_domain::error::TgError::Serde(e.to_string()))
+    if is_blank(&text) {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<StoredShelf> =
+        ron::from_str(&text).map_err(|e| turbogit_domain::error::TgError::Serde(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.into_shelf(project_dir))
+        .collect())
 }
 
 /// Serialize `shelves` to `shelf.ron` under `.turbogit/`.
+///
+/// **A write is a truncation**, so it first establishes that the file it is about
+/// to erase holds nothing it has not read. This is the store's own invariant, not
+/// caller discipline: both app-side writers pass the in-memory slice and neither
+/// can be trusted to remember the guard — before it existed, a launch load that
+/// failed left that slice empty and the next shelve or shelf removal wrote it over
+/// the user's whole shelf index, stranding work whose name was the only way
+/// [`unshelve`] could find it again.
+///
+/// So: when a store exists and this build cannot read it — unparsable, or
+/// unreadable at all — this refuses with an error and the file is left
+/// byte-for-byte alone. The caller reports it; nothing is lost.
 pub fn save_shelves(project_dir: &Path, shelves: &[Shelf]) -> TgResult<()> {
+    let path = shelf_path(project_dir);
+    let unreadable = path.exists()
+        && match fs::read_to_string(&path) {
+            // Cannot establish what the file holds, so assume it holds records.
+            Err(_) => true,
+            Ok(text) => !is_blank(&text) && ron::from_str::<Vec<StoredShelf>>(&text).is_err(),
+        };
+    if unreadable {
+        return Err(turbogit_domain::error::TgError::Other(format!(
+            "Refused to rewrite the shelf store at {}, which this build cannot read; \
+             its records would be lost. Repair or remove that file to shelve again.",
+            path.display()
+        )));
+    }
     fs::create_dir_all(project_dir.join(".turbogit"))?;
     let text = ron::ser::to_string_pretty(shelves, ron::ser::PrettyConfig::new())
         .map_err(|e| turbogit_domain::error::TgError::Serde(e.to_string()))?;
-    fs::write(shelf_path(project_dir), text)?;
+    fs::write(path, text)?;
     Ok(())
 }
