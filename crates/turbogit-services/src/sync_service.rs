@@ -247,11 +247,145 @@ pub fn subset_push_state(outgoing: &[String], selected: &[String]) -> SubsetPush
     SubsetPushState::Suffix { oldest: oldest_sha }
 }
 
+/// Ticket 13: which phase a push-path operation was in when it failed. The
+/// push itself, or the recovery work (update / fetch) a rejection affordance
+/// ran before its re-push. The phase decides whether an unmarked failure is
+/// read as a rejection or as the update's own error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PushPhase {
+    /// The push command failed.
+    Push,
+    /// The recovery's update or fetch failed (or its re-push did).
+    Recovery,
+}
+
+/// Ticket 13: the classified push outcome — six classes, four of which carry
+/// a next step (update-and-retry, fetch-and-retry, resolve) and two of which
+/// carry none. The classification is read from the git stderr the port
+/// already surfaces on `TgError::Cli`; the wording the UI paints per class is
+/// TurboGit's own, only the taxonomy is adopted from the parity evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PushOutcome {
+    /// The remote branch has work this push did not account for. Next step:
+    /// update, then push again.
+    Rejected { remote: String, branch: String },
+    /// The remote itself refused the update (hook, permissions, …). Next
+    /// step: fetch, then push again.
+    RejectedByRemote { remote: String, branch: String },
+    /// A `--force-with-lease` push failed on its lease: the recorded
+    /// expectation of the remote tip is stale, not the push. Next step:
+    /// fetch (refresh the lease), then push again.
+    LeaseRejected { remote: String, branch: String },
+    /// The recovery update stopped on conflicts. Next step: resolve them,
+    /// then push again.
+    UpdateConflicted,
+    /// The update could not run because conflicts from an earlier recovery
+    /// attempt are still unresolved. No next step this dialog can honour
+    /// beyond the message: resolve first.
+    UpdateUnresolved,
+    /// The recovery's update or fetch errored (or was cancelled). No next
+    /// step: the failure is git's own to describe.
+    UpdateErrored { detail: String },
+}
+
+/// Fresh-conflict markers in git's update output: the strings it prints when
+/// an update STOPS on a conflict it just produced. A refusal over conflicts
+/// that were already in the worktree prints none of these, which is the
+/// distinction between `UpdateConflicted` and `UpdateUnresolved`.
+const CONFLICT_STOP_MARKERS: [&str; 3] = ["CONFLICT", "Automatic merge failed", "could not apply"];
+
+/// git's marker for the remote refusing the update itself (hooks, perms).
+const REMOTE_REJECTED_MARKER: &str = "[remote rejected]";
+
+/// git's marker for a rejected ref update. Both an ordinary non-fast-forward
+/// and a stale lease print it, so it is the LAST rejection marker checked.
+const REJECTED_MARKER: &str = "[rejected]";
+
+/// Classify a failed push-path operation into one of the six outcome classes
+/// (ticket 13). `err` is the error the executor surfaced; its text carries
+/// the verbatim git stderr on `TgError::Cli`. `conflicts_present` says
+/// whether the affected root's freshly refreshed status still lists
+/// conflicted paths — the worktree, not the stderr, is the reliable signal
+/// that conflicts exist (the same rule the merge/rebase settlement uses).
+///
+/// Order matters: the conflict rules win over the rejection markers because a
+/// recovery that stopped on conflicts never reached its re-push, so a
+/// rejection marker in the text belongs to the update, not to a push.
+/// A recovery-phase failure that matches no marker at all is the update's own
+/// error; a push-phase failure that matches no marker is still a push that
+/// did not succeed, so it lands in the generic `Rejected` class and the
+/// verbatim detail stays in the toast and the activity feed.
+pub fn classify_push_failure(
+    err: &TgError,
+    conflicts_present: bool,
+    phase: PushPhase,
+    remote: &str,
+    branch: &str,
+) -> PushOutcome {
+    let text = err.to_string();
+    if conflicts_present {
+        if CONFLICT_STOP_MARKERS.iter().any(|m| text.contains(m)) {
+            return PushOutcome::UpdateConflicted;
+        }
+        return PushOutcome::UpdateUnresolved;
+    }
+    if text.contains("(stale info)") {
+        return PushOutcome::LeaseRejected {
+            remote: remote.to_string(),
+            branch: branch.to_string(),
+        };
+    }
+    if text.contains(REMOTE_REJECTED_MARKER) {
+        return PushOutcome::RejectedByRemote {
+            remote: remote.to_string(),
+            branch: branch.to_string(),
+        };
+    }
+    if text.contains(REJECTED_MARKER) || phase == PushPhase::Push {
+        return PushOutcome::Rejected {
+            remote: remote.to_string(),
+            branch: branch.to_string(),
+        };
+    }
+    // The `git exited with code N:` prefix is the error wrapper's, not git's
+    // own detail; strip it so the class carries what git actually said.
+    let detail = match err {
+        TgError::Cli { stderr, .. } => stderr.trim().to_string(),
+        other => other.to_string(),
+    };
+    PushOutcome::UpdateErrored { detail }
+}
+
+/// How wide a rejected push's recovery update reaches (ticket 13).
+///
+/// The reference documents the EFFECT of the choice — "if this option is
+/// cleared, only the affected repositories will be updated" — and never its
+/// default, so the conservative reading is the one shipped: a push rejection in
+/// one repository must not integrate other repositories' branches behind the
+/// user.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UpdateChoice {
+    /// Only the repositories the rejected push acted on.
+    #[default]
+    AffectedOnly,
+    /// Every registered repository.
+    AllRepositories,
+}
+
+impl UpdateChoice {
+    /// The segmented control's label for the choice.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AffectedOnly => "Update affected repositories only",
+            Self::AllRepositories => "Update all repositories",
+        }
+    }
+}
+
 /// Fetch from the given remote (or all remotes when `remote` is `None`).
 pub fn fetch(vcs: &dyn GitExecutor, root: &Path, remote: Option<&str>) -> TgResult<()> {
     vcs.fetch(root, remote)
 }
-
 /// Pull into `root`, merging or rebasing per `rebase`.
 pub fn pull(vcs: &dyn GitExecutor, root: &Path, rebase: bool) -> TgResult<()> {
     vcs.pull(root, rebase)
@@ -419,6 +553,134 @@ mod tests {
         assert!(!is_protected(&s, "hotfix"), "suffix must start at */");
         let wild = settings_with(&["*"]);
         assert!(is_protected(&wild, "anything/at/all"));
+    }
+
+    // --- ticket 13: the six push-rejection outcome classes -----------------
+
+    /// git's own rejection line for an ordinary (local) refusal.
+    fn rejected_stderr() -> String {
+        "To /repo/remote.git\n ! [rejected]        main -> main (non-fast-forward)\n".into()
+    }
+
+    #[test]
+    fn ordinary_rejection_classifies_as_rejected() {
+        let err = TgError::Cli {
+            code: 1,
+            stderr: rejected_stderr(),
+        };
+        let out = classify_push_failure(&err, false, PushPhase::Push, "origin", "main");
+        assert_eq!(
+            out,
+            PushOutcome::Rejected {
+                remote: "origin".into(),
+                branch: "main".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn remote_rejected_marker_classifies_as_rejected_by_remote() {
+        let err = TgError::Cli {
+            code: 1,
+            stderr: " ! [remote rejected]  main -> main (pre-receive hook declined)\n".into(),
+        };
+        let out = classify_push_failure(&err, false, PushPhase::Push, "origin", "main");
+        assert_eq!(
+            out,
+            PushOutcome::RejectedByRemote {
+                remote: "origin".into(),
+                branch: "main".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn stale_lease_marker_classifies_as_lease_rejected() {
+        let err = TgError::Cli {
+            code: 1,
+            stderr: " ! [rejected]        main -> main (stale info)\n".into(),
+        };
+        let out = classify_push_failure(&err, false, PushPhase::Push, "origin", "main");
+        assert_eq!(
+            out,
+            PushOutcome::LeaseRejected {
+                remote: "origin".into(),
+                branch: "main".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn conflicted_recovery_update_classifies_as_update_conflicted() {
+        let err = TgError::Cli {
+            code: 1,
+            stderr: "Auto-merging base.txt\nCONFLICT (content): Merge conflict in base.txt\n\
+                   Automatic merge failed; fix conflicts and then commit the result.\n"
+                .into(),
+        };
+        let out = classify_push_failure(&err, true, PushPhase::Recovery, "origin", "main");
+        assert_eq!(out, PushOutcome::UpdateConflicted);
+    }
+
+    #[test]
+    fn refusal_with_conflicts_still_in_the_tree_classifies_as_update_unresolved() {
+        // git refuses to update over an unfinished merge — conflicts are in
+        // the worktree but the failure text carries no fresh-conflict marker.
+        let err = TgError::Cli {
+            code: 128,
+            stderr: "error: You have not concluded your merge (MERGE_HEAD exists).\n".into(),
+        };
+        let out = classify_push_failure(&err, true, PushPhase::Recovery, "origin", "main");
+        assert_eq!(out, PushOutcome::UpdateUnresolved);
+    }
+
+    #[test]
+    fn recovery_failure_without_conflicts_classifies_as_update_errored() {
+        let err = TgError::Cli {
+            code: 128,
+            stderr: "fatal: '/repo/remote.git' does not appear to be a git repository\n".into(),
+        };
+        let out = classify_push_failure(&err, false, PushPhase::Recovery, "origin", "main");
+        assert_eq!(
+            out,
+            PushOutcome::UpdateErrored {
+                detail: "fatal: '/repo/remote.git' does not appear to be a git repository".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_rejected_repush_after_a_clean_update_is_a_rejection_not_an_update_failure() {
+        let err = TgError::Cli {
+            code: 1,
+            stderr: rejected_stderr(),
+        };
+        let out = classify_push_failure(&err, false, PushPhase::Recovery, "origin", "main");
+        assert!(matches!(out, PushOutcome::Rejected { .. }));
+    }
+
+    #[test]
+    fn a_push_phase_failure_never_lands_in_an_update_class() {
+        let err = TgError::Cli {
+            code: 128,
+            stderr: "fatal: Could not read from remote repository\n".into(),
+        };
+        let out = classify_push_failure(&err, false, PushPhase::Push, "origin", "main");
+        assert!(matches!(out, PushOutcome::Rejected { .. }));
+    }
+
+    #[test]
+    fn update_classes_win_over_rejection_markers_when_conflicts_stay() {
+        // A recovery that stopped on conflicts AND left them in the tree must
+        // not be mistaken for the re-push's own rejection.
+        let err = TgError::Cli {
+            code: 1,
+            stderr: "CONFLICT (content): Merge conflict in base.txt\n\
+                   Automatic merge failed; fix conflicts and then commit the result.\n"
+                .into(),
+        };
+        let out = classify_push_failure(&err, true, PushPhase::Recovery, "origin", "main");
+        assert_eq!(out, PushOutcome::UpdateConflicted);
     }
 
     #[test]
