@@ -16,11 +16,12 @@
 //! (`diff_engine::merge_segments`) is unchanged.
 
 use crate::theme::Palette;
+use crate::ui::components::{self, KitButton};
 use crate::ui::kit::conflict_pane::{self, Side};
 use egui::{Key, Modifiers, RichText, TextEdit, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Toast};
+use turbogit_app::state::{AppState, BulkApplyScope, Toast};
 use turbogit_domain::model::{
     CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, RootId,
 };
@@ -117,19 +118,26 @@ fn conflict_block(
 ) {
     let res_i = ci;
     let active = state.ui.conflict_resolver_active_idx == res_i;
-
-    // Marker strips frame the discrete conflict block. The three literals come
-    // from `turbogit_domain` — the crate that also parses them — so the painter
-    // cannot name a different marker than the parser does.
-    conflict_pane::equal_panes(ui, |cols| {
-        conflict_pane::marker_strip(&mut cols[0], CONFLICT_MARKER_OURS);
-        conflict_pane::marker_strip(&mut cols[1], CONFLICT_MARKER_SEPARATOR);
-        conflict_pane::marker_strip(&mut cols[2], CONFLICT_MARKER_THEIRS);
-    });
-    // Tinted yours/theirs + editable Result.
     let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
+
+    // A resolved block keeps only the side(s) its resolution kept and drops
+    // the marker strips — the absent side is the resolution's visual marker,
+    // not a word, so a resolved block reads differently at a glance.
+    if chosen.is_none() {
+        // Marker strips frame the discrete conflict block. The three literals come
+        // from `turbogit_domain` — the crate that also parses them — so the painter
+        // cannot name a different marker than the parser does.
+        conflict_pane::equal_panes(ui, |cols| {
+            conflict_pane::marker_strip(&mut cols[0], CONFLICT_MARKER_OURS);
+            conflict_pane::marker_strip(&mut cols[1], CONFLICT_MARKER_SEPARATOR);
+            conflict_pane::marker_strip(&mut cols[2], CONFLICT_MARKER_THEIRS);
+        });
+    }
+    // Tinted yours/theirs + editable Result.
     conflict_pane::equal_panes(ui, |cols| {
-        conflict_pane::side_section(&mut cols[0], ours, Side::Local);
+        if chosen != Some(CHOICE_THEIRS) {
+            conflict_pane::side_section(&mut cols[0], ours, Side::Local);
+        }
         if active {
             result_text_edit(&mut cols[1], state);
         } else {
@@ -144,16 +152,18 @@ fn conflict_block(
             };
             conflict_pane::result_cell(&mut cols[1], result_text);
         }
-        conflict_pane::side_section(&mut cols[2], theirs, Side::Incoming);
+        if chosen != Some(CHOICE_OURS) {
+            conflict_pane::side_section(&mut cols[2], theirs, Side::Incoming);
+        }
     });
     if active {
         // Per-conflict action row (only for the active conflict).
         ui.horizontal(|ui| {
             if ui.button(format!("Take ours {block}")).clicked() {
-                resolve(state, res_i, CHOICE_OURS);
+                accept_side(state, res_i, CHOICE_OURS);
             }
             if ui.button(format!("Take theirs {block}")).clicked() {
-                resolve(state, res_i, CHOICE_THEIRS);
+                accept_side(state, res_i, CHOICE_THEIRS);
             }
             if ui
                 .button(format!("Take both {block}"))
@@ -166,13 +176,7 @@ fn conflict_block(
             // resolution — Undo always takes the conflict back to
             // unresolved. The undo stack records the prior choice so
             // future revisions can step through history.
-            let can_undo = state
-                .ui
-                .conflict_res
-                .get(res_i)
-                .copied()
-                .flatten()
-                .is_some();
+            let can_undo = chosen.is_some();
             if ui
                 .add_enabled(can_undo, egui::Button::new(format!("Undo {block}")))
                 .clicked()
@@ -185,10 +189,10 @@ fn conflict_block(
         ui.horizontal(|ui| {
             ui.label(format!("Conflict {block}"));
             if ui.button("Take ours").clicked() {
-                resolve(state, res_i, CHOICE_OURS);
+                accept_side(state, res_i, CHOICE_OURS);
             }
             if ui.button("Take theirs").clicked() {
-                resolve(state, res_i, CHOICE_THEIRS);
+                accept_side(state, res_i, CHOICE_THEIRS);
             }
             if ui.button("Take both").clicked() {
                 resolve(state, res_i, CHOICE_BOTH_THEIRS_FIRST);
@@ -196,6 +200,27 @@ fn conflict_block(
         });
     }
     ui.add_space(4.0);
+}
+
+/// Whether the selected file already carries merged changes: any conflict
+/// resolved, or the Result pane free-edited. Per FILE, not per conflict —
+/// matching the reference's "This file already contains merged changes"
+/// (parity ticket 01; the per-file vs per-conflict trigger is UNVERIFIED
+/// against the running product and assumed per file).
+fn file_has_merged_changes(state: &AppState) -> bool {
+    state.ui.conflict_resolver_edited || state.ui.conflict_res.iter().any(|r| r.is_some())
+}
+
+/// One take-ours / take-theirs click (the resolver's Accept Yours / Accept
+/// Theirs). On a file that already carries merged changes this confirms
+/// first — the pending take is only applied by the confirm's dangerous
+/// affirmative (`Discard and Accept`); elsewhere it resolves directly.
+fn accept_side(state: &mut AppState, seg_idx: usize, choice: u8) {
+    if file_has_merged_changes(state) {
+        state.ui.conflict_overwrite_pending = Some((seg_idx, choice));
+    } else {
+        resolve(state, seg_idx, choice);
+    }
 }
 
 /// Record one block resolution: update the active choice, push the prior
@@ -260,6 +285,7 @@ pub(crate) fn open_resolver(state: &mut AppState, root: &Path, path: &Path) {
         state.ui.conflict_resolver_edited = false;
         state.ui.conflict_resolver_active_idx = 0;
         state.ui.conflict_resolver_selected = Some(path.to_path_buf());
+        state.ui.conflict_overwrite_pending = None;
         state.ui.conflict_resolver_open = true;
     } else {
         state.ui.toast = Some(Toast::error("Could not read conflicted file."));
@@ -310,6 +336,54 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if !keep_open {
         state.ui.conflict_resolver_open = false;
     }
+    render_overwrite_confirm(ui, state);
+}
+
+/// The `Overwrite Changes` confirm (parity ticket 01). The affirmative is the
+/// dangerous sentence (`Discard and Accept`) and wears the primary kit fill;
+/// the safe option (`Keep Merged Changes`) does nothing. Naming carries the
+/// safety — the button order is UNVERIFIED against the reference and kept in
+/// dangerous-then-safe reading order.
+fn render_overwrite_confirm(ui: &mut Ui, state: &mut AppState) {
+    let Some((seg, choice)) = state.ui.conflict_overwrite_pending else {
+        return;
+    };
+    let side = if choice == CHOICE_THEIRS {
+        "theirs"
+    } else {
+        "yours"
+    };
+    let mut open = true;
+    egui::Window::new("Overwrite Changes")
+        .open(&mut open)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .resizable(false)
+        .show(ui.ctx(), |ui| {
+            ui.label("This file already has merged changes.");
+            ui.label(format!(
+                "Accepting the {side} side will discard and overwrite them."
+            ));
+            ui.horizontal(|ui| {
+                if components::kit_button(ui, KitButton::Primary, "Discard and Accept").clicked() {
+                    state.ui.conflict_overwrite_pending = None;
+                    resolve(state, seg, choice);
+                }
+                if overwrite_safe_button(ui, "Keep Merged Changes").clicked() {
+                    state.ui.conflict_overwrite_pending = None;
+                }
+            });
+        });
+    if !open {
+        state.ui.conflict_overwrite_pending = None;
+    }
+}
+
+/// The confirm's safe option. Not a kit variant — the four kit fills have no
+/// `SURFACE_2` idle — so this is an egui button filled with the raised-on-card
+/// token, which aliases `SURFACE_2`: the two confirm options stay visibly
+/// different rects without minting a fifth kit kind.
+fn overwrite_safe_button(ui: &mut Ui, label: &str) -> egui::Response {
+    ui.add(egui::Button::new(RichText::new(label)).fill(Palette::RAISED_ON_CARD))
 }
 fn render_file_list(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf]) {
     ui.label(
@@ -339,6 +413,47 @@ fn render_file_list(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf]) {
     ui.label(RichText::new(format!("{n_auto} files")).color(Palette::INK_2));
     for path in &state.ui.auto_merged_files {
         ui.label(path.display().to_string());
+    }
+}
+
+/// The bulk control: `Apply to all N remaining` with its scope option — the
+/// deliberate fold of the reference's `Apply Non-Conflicting Changes` /
+/// `Resolve All Simple Conflicts` pair into one control (parity ticket 01),
+/// the side scope being an option on it rather than two more buttons. It
+/// sits in the file column under the lists because the footer row is the
+/// window's tightest fit: an added footer row lays out past the window's
+/// clip rect, where it still exists but can be neither seen nor clicked.
+/// Shown exactly while a conflict remains — the active choice is propagated
+/// to the others (when the active conflict is itself unresolved, the prior
+/// choice or ours is used).
+fn render_bulk_control(ui: &mut Ui, state: &mut AppState) {
+    let n_remaining = state.ui.conflict_res.iter().filter(|r| r.is_none()).count();
+    if n_remaining == 0 {
+        return;
+    }
+    ui.add_space(8.0);
+    ui.separator();
+    ui.label(RichText::new("Fill remaining with").color(Palette::INK_2));
+    ui.radio_value(
+        &mut state.ui.conflict_resolver_scope,
+        BulkApplyScope::ActiveChoice,
+        "Active choice",
+    );
+    ui.radio_value(
+        &mut state.ui.conflict_resolver_scope,
+        BulkApplyScope::Ours,
+        "Ours",
+    );
+    ui.radio_value(
+        &mut state.ui.conflict_resolver_scope,
+        BulkApplyScope::Theirs,
+        "Theirs",
+    );
+    if ui
+        .button(format!("Apply to all {n_remaining} remaining"))
+        .clicked()
+    {
+        apply_to_all_remaining(state);
     }
 }
 
@@ -377,11 +492,19 @@ fn render_resolver_body(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf
     ui.label(RichText::new(counter).color(Palette::INK_2));
     ui.separator();
 
-    // Left file list (auto-sized) + right panes.
+    // Left file list (auto-sized) + right panes. The column layout is
+    // spelled out: `allocate_ui` alone inherits the caller's layout, so
+    // inside this horizontal row the file list would lay out left-to-right
+    // and overflow its 240pt strip, starving the panes of width.
     ui.horizontal(|ui| {
-        ui.allocate_ui(egui::vec2(240.0, ui.available_height()), |ui| {
-            render_file_list(ui, state, conflicted);
-        });
+        ui.allocate_ui_with_layout(
+            egui::vec2(240.0, ui.available_height()),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                render_file_list(ui, state, conflicted);
+                render_bulk_control(ui, state);
+            },
+        );
         ui.vertical(|ui| {
             render_panes(ui, state);
         });
@@ -390,7 +513,6 @@ fn render_resolver_body(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf
     ui.separator();
     // Footer
     let total = state.ui.conflict_res.len();
-    let n_remaining = state.ui.conflict_res.iter().filter(|r| r.is_none()).count();
     let active = state.ui.conflict_resolver_active_idx;
     ui.horizontal(|ui| {
         let label = format!("Conflict {}", active + 1);
@@ -410,17 +532,6 @@ fn render_resolver_body(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf
         if ui.button("Edit manually").clicked() {
             state.ui.conflict_resolver_edited = true;
         }
-        // Show the button whenever at least one OTHER unresolved conflict
-        // exists beyond the active one (the active choice gets propagated
-        // to those). When the active conflict is itself unresolved, the
-        // prior choice (or ours) is used; otherwise the active choice.
-        if n_remaining > 0
-            && ui
-                .button(format!("Apply to all {n_remaining} remaining"))
-                .clicked()
-        {
-            apply_to_all_remaining(state);
-        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
                 .add_enabled(unresolved == 0, egui::Button::new("Apply"))
@@ -434,28 +545,6 @@ fn render_resolver_body(ui: &mut Ui, state: &mut AppState, conflicted: &[PathBuf
             );
         });
     });
-    for path in conflicted {
-        let label = path.display().to_string();
-        let is_selected = state.ui.conflict_resolver_selected.as_ref() == Some(path);
-        let resp = ui.selectable_label(is_selected, label.clone());
-        if resp.clicked()
-            && let Some(root) = state.selected_path()
-        {
-            open_resolver(state, &root, path);
-        }
-    }
-
-    ui.add_space(8.0);
-    let n_auto = state.ui.auto_merged_files.len();
-    ui.label(
-        RichText::new("AUTO-MERGED")
-            .size(crate::theme::TYPE_CONTROL)
-            .color(Palette::INK_2),
-    );
-    ui.label(RichText::new(format!("{n_auto} files")).color(Palette::INK_2));
-    for path in &state.ui.auto_merged_files {
-        ui.label(path.display().to_string());
-    }
 }
 
 fn render_panes(ui: &mut Ui, state: &mut AppState) {
@@ -496,18 +585,23 @@ fn render_panes(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// "Apply to all N remaining": copies the active conflict's last-applied
-/// choice (or ours as a fallback) to every still-unresolved conflict.
+/// "Apply to all N remaining": fills every still-unresolved conflict with
+/// the scoped choice — the active conflict's last-applied choice (ours as a
+/// fallback), or the side the scope option pins.
 fn apply_to_all_remaining(state: &mut AppState) {
     let active = state.ui.conflict_resolver_active_idx;
-    let choice = state
-        .ui
-        .conflict_resolver_undo
-        .get(active)
-        .copied()
-        .flatten()
-        .or_else(|| state.ui.conflict_res.get(active).copied().flatten())
-        .unwrap_or(CHOICE_OURS);
+    let choice = match state.ui.conflict_resolver_scope {
+        BulkApplyScope::Ours => CHOICE_OURS,
+        BulkApplyScope::Theirs => CHOICE_THEIRS,
+        BulkApplyScope::ActiveChoice => state
+            .ui
+            .conflict_resolver_undo
+            .get(active)
+            .copied()
+            .flatten()
+            .or_else(|| state.ui.conflict_res.get(active).copied().flatten())
+            .unwrap_or(CHOICE_OURS),
+    };
     for i in 0..state.ui.conflict_res.len() {
         if state.ui.conflict_res[i].is_none() {
             state.ui.conflict_resolver_undo[i] = state.ui.conflict_res[i];
