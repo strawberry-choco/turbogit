@@ -74,7 +74,10 @@ pub use controls::{
 };
 pub use feedback::{KeyedReadPresentation, accent_bar, inline_error, keyed_read_presentation};
 pub use inputs::{filter_matches, search_input, text_input};
-pub use menu::{MenuItemKind, MenuItemProps, MenuItemState, menu_item, menu_rule, menu_surface};
+pub use menu::{
+    MenuItemKind, MenuItemProps, MenuItemState, menu_item, menu_rule, menu_surface,
+    take_status_hint,
+};
 // The host's two lifecycle entry points stay module-qualified
 // (`menu_host::note_anchor`, `menu_host::host_menu`) — on this façade a bare
 // `show` or `host_menu` would name no widget.

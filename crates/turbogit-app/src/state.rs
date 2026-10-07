@@ -206,6 +206,21 @@ pub struct DialogState {
     pub rebase_keep_empty: bool,
     pub rebase_update_refs: bool,
     pub rebase_autosquash: bool,
+    /// `--onto`: reveals the two ordered base fields below the option rows.
+    /// Off means the dialog is a plain rebase onto [`Self::rebase_onto`].
+    pub rebase_onto_enabled: bool,
+    /// `--onto`'s FIRST field: the base the sequence lands on. The order of the
+    /// pair is load-bearing — the two are not interchangeable and one "base"
+    /// field cannot express the move — so they are two fields, never one.
+    pub rebase_new_base: String,
+    /// `--onto`'s SECOND field: the cutoff. Everything ABOVE it on the current
+    /// branch moves; it and everything below stay.
+    pub rebase_old_base: String,
+    /// The `(value, resolves)` pair each `--onto` field's existence check was
+    /// last run for, so one `git rev-parse` answers a value once rather than
+    /// every frame.
+    pub rebase_new_base_check: Option<(String, bool)>,
+    pub rebase_old_base_check: Option<(String, bool)>,
     /// Last computed commits-to-rebase list (the "N COMMITS TO REBASE"
     /// box), cached with [`Self::rebase_preview_key`] so it recomputes only
     /// when the onto branch changes.

@@ -12,6 +12,7 @@ use std::sync::Arc;
 use turbogit_domain::model::{Commit, CommitId, RootId, Signature, SignatureState};
 
 use turbogit_ui::ui::commit_menu::{CommitFacts, CommitMenuAction, commit_menu_items};
+use turbogit_ui::ui::rewrite_gating::Scope;
 use turbogit_ui::ui::widgets::MenuItemState;
 
 // --- fixtures --------------------------------------------------------------
@@ -37,11 +38,16 @@ fn commit(subject: &str, parents: usize) -> Commit {
     }
 }
 
+/// The unblocked baseline: nothing holds the repository, and the only
+/// repository in scope is the commit's own — the two facts the rewrite gate
+/// reads from git's markers and the workspace tree rather than from the commit.
 const CLEAN: CommitFacts = CommitFacts {
     dirty: false,
     protected_branch: false,
     on_current_branch: true,
     multi_root: true,
+    owner: None,
+    scope: Scope::Own,
     repo_name: "alpha",
 };
 
@@ -249,6 +255,8 @@ fn the_worktree_guard_speaks_before_the_structural_ones() {
         protected_branch: true,
         on_current_branch: false,
         multi_root: false,
+        owner: None,
+        scope: Scope::Own,
         repo_name: "alpha",
     };
     assert_eq!(
