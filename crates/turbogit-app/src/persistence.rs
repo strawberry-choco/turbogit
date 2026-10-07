@@ -74,6 +74,43 @@ pub fn add_mapping(project_dir: &Path, dir: &Path, vcs: Vcs) -> TgResult<()> {
     save(project_dir, &state)
 }
 
+/// The Branches surface's four view toggles, behind its settings gear.
+///
+/// These are **grouping and visibility**, never data: nothing here changes what
+/// git is asked or what an action does, only how the same branches are arranged
+/// and how much of the arrangement is shown. They are the popup's only
+/// persisted state on either side of the parity comparison
+/// (`manage-branches.md:70`), which is why they live with the other durable UI
+/// state rather than in the tree's ephemeral expand/collapse block —
+/// [`crate::state::BranchesGroups`] answers "is this group open right now",
+/// this answers "does this group exist for me at all".
+///
+/// All four default to **on**, which is the shape the surface had before any of
+/// them were togglable: directory grouping, repository grouping, the Recent
+/// group and the Tags group were each unconditional.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BranchesViewOptions {
+    /// Group branches by their `/` prefix, showing each leaf without it.
+    pub group_by_directory: bool,
+    /// Group branches under a band per repository.
+    pub group_by_repository: bool,
+    /// Show the Recent group at all.
+    pub show_recent: bool,
+    /// Show the Tags group at all.
+    pub show_tags: bool,
+}
+
+impl Default for BranchesViewOptions {
+    fn default() -> Self {
+        Self {
+            group_by_directory: true,
+            group_by_repository: true,
+            show_recent: true,
+            show_tags: true,
+        }
+    }
+}
+
 /// Lightweight UI-only state persisted across sessions (Epic J4): active tab,
 /// recently opened repositories, and the draft commit message.
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]

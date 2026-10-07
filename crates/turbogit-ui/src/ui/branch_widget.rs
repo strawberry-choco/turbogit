@@ -240,11 +240,15 @@ pub fn popup_entries(
     out
 }
 
-/// Record a checked-out branch as most-recent (deduped, capped at 5).
+/// Record a checked-out branch as most-recent (deduped, capped).
+///
+/// The popup's own bookkeeping, unchanged by the tab's reflog-derived group —
+/// but the cap is the same documented number, so it is read from
+/// [`branches_tree::RECENT_CAP`] rather than restated here as a fifth literal.
 pub fn push_recent(recents: &mut Vec<String>, name: &str) {
     recents.retain(|n| n != name);
     recents.insert(0, name.to_string());
-    recents.truncate(5);
+    recents.truncate(crate::ui::branches_tree::RECENT_CAP);
 }
 
 /// Bottom info strip for multi-root projects (§8.5).
