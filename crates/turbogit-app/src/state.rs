@@ -758,6 +758,29 @@ pub enum PendingConfirm {
     RevertCommit {
         commit: String,
     },
+    /// Remove one shelf's record from the Shelf pane (surface 07). Both halves
+    /// of the name travel with it — the root, because a shelf belongs to one
+    /// repository and never to the project, and the name, because that is the
+    /// identity the shelf store is keyed by.
+    ///
+    /// **CONFIRMED HERE, THOUGH THE REFERENCE MAY NOT BE.** Whether the
+    /// reference's shelf `Delete` and stash `Drop` carry a confirmation was never
+    /// observed at runtime (its docs describe only the menu path, and `Ask for
+    /// confirmation to drop commits` covers rebase drops). The documented
+    /// fallback is TurboGit's existing confirming stance, recorded as a
+    /// divergence: if the sitting later shows the reference confirms, this becomes
+    /// a match and only the ADR note changes.
+    DeleteShelf {
+        root: RootId,
+        name: String,
+    },
+    /// Remove one stash entry (`git stash drop`) from the Stash pane — the same
+    /// confirming stance as [`Self::DeleteShelf`]. The index is the entry's
+    /// position in `git stash list`, which is what the pane's row names.
+    DeleteStash {
+        root: RootId,
+        index: usize,
+    },
     /// Checkout with a dirty working tree (issue 07): the plain-language
     /// bring-along / set-aside / cancel dialog, with conflict implications
     /// stated before acting.
@@ -1349,6 +1372,13 @@ pub struct UiState {
     /// when another file opens, so a stale verdict never follows a new file.
     pub conflict_bulk_report: Option<ConflictBulkReport>,
     pub shelves: Vec<Shelf>,
+    /// The `(root, name)` an in-flight `Unshelve and Remove` wants dropped from
+    /// [`Self::shelves`] once the git side lands. Arm at dispatch, take on the
+    /// matching [`crate::operation::OpKind::Unshelve`] completion, clear on its
+    /// failure — the same one-shot record the branch-delete undo uses, for the
+    /// one verb pair on this surface whose two halves live on different sides of
+    /// the boundary.
+    pub shelf_removal_pending: Option<(RootId, String)>,
     // commit-tab inline diff preview (Epic C3)
     pub preview_change: Option<PathBuf>,
     // diff viewer (Epic E: async cache + layout)
@@ -1628,6 +1658,10 @@ pub struct AppState {
     fetching_stats: HashSet<(RootId, CommitId)>,
     /// In-flight submodule-list fetches per root (issue 14).
     fetching_submodules: HashSet<RootId>,
+    /// In-flight stash-listing fetches per root (surface 07): the Stash pane
+    /// asks every frame while its root's answer is missing, so the guard holds
+    /// one worker per root and releases on the `StashesLoaded` settlement.
+    fetching_stashes: HashSet<RootId>,
     /// Last dispatch instant of the background incoming check (issue #27);
     /// `None` while disabled or never polled.
     pub(crate) incoming_poll_last: Option<std::time::Instant>,
@@ -1666,6 +1700,16 @@ impl AppState {
         let executor = build_executor(&settings);
         let git_version =
             turbogit_engine::resolve_git_version(&settings).unwrap_or_else(|_| "unknown".into());
+        // The shelf store is this application's own record, and the Shelf pane
+        // lists it: a shelf written in an earlier session has to be there to
+        // unshelve. A store that will not parse reports itself instead of
+        // painting an empty pane over the user's shelved work.
+        let mut ui = ui;
+        let mut last_error = None;
+        match turbogit_services::shelve_stash::load_shelves(&project_dir) {
+            Ok(shelves) => ui.shelves = shelves,
+            Err(e) => last_error = Some(e.to_string()),
+        }
         Self {
             project_dir,
             executor,
@@ -1675,7 +1719,7 @@ impl AppState {
             rx,
             selected_root: None,
             clone_url: String::new(),
-            last_error: None,
+            last_error,
             git_version,
             ui,
             caches: RootCaches::default(),
@@ -1695,6 +1739,7 @@ impl AppState {
             fetching_refs: HashSet::new(),
             fetching_stats: HashSet::new(),
             fetching_submodules: HashSet::new(),
+            fetching_stashes: HashSet::new(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
         }
@@ -2081,6 +2126,22 @@ impl AppState {
                 root,
                 submodules: res,
             });
+        });
+    }
+
+    /// Fetch (and cache) the stash listing for a root (surface 07's Stash
+    /// pane), mirroring [`Self::fetch_submodules`]: one read per root in
+    /// flight, answered off the render thread on the same seam an operation
+    /// dispatches on. A root whose listing is already cached is not re-read —
+    /// an operation that could have moved the stash stack drops the entry with
+    /// the rest of that root's caches, and the pane asks again after that.
+    pub fn fetch_stashes(&mut self, root: RootId) {
+        if self.caches.stashes(&root).is_some() || !self.fetching_stashes.insert(root.clone()) {
+            return;
+        }
+        self.pump_read(move |executor, tx| {
+            let res = turbogit_services::shelve_stash::list(executor.as_ref(), root.as_path());
+            let _ = tx.send(AppEvent::StashesLoaded { root, stashes: res });
         });
     }
 
@@ -2677,6 +2738,81 @@ impl AppState {
                     },
                 ));
             }
+            // Surface 07: a shelf's record is app state, so it goes the frame the
+            // verb is confirmed; its *content* is a stash entry, so that half is
+            // git work and is dispatched. A git-side failure leaves the content
+            // listed under Stash, where it is still recoverable — which is the
+            // outcome the immediate record removal depends on, not an oversight.
+            PendingConfirm::DeleteShelf { root, name } => {
+                let git_root = root.clone();
+                let git_name = name.clone();
+                self.dispatch(Operation::custom(
+                    format!("Delete shelf '{name}'"),
+                    Affected::Root(root.clone()),
+                    move |v| {
+                        turbogit_services::shelve_stash::discard_shelf_content(
+                            v,
+                            git_root.as_path(),
+                            &git_name,
+                        )
+                    },
+                ));
+                self.remove_shelf(&root, &name);
+            }
+            PendingConfirm::DeleteStash { root, index } => {
+                self.dispatch(Operation::custom(
+                    format!("Delete stash {}", turbogit_services::shelve_stash::stash_ref(index)),
+                    Affected::Root(root.clone()),
+                    move |v| v.stash_drop(root.as_path(), index),
+                ));
+            }
+        }
+    }
+
+    // -------------------------------------------------- shelf verbs (07) ----
+
+    /// The Shelf pane's rows: **this root's** shelves, newest first. A shelf is
+    /// not a project-wide bucket — its content was parked in one repository's
+    /// stash list, and an unshelve that ran in another one would apply work to
+    /// the wrong tree.
+    pub fn shelves_for(&self, root: &RootId) -> Vec<Shelf> {
+        let mut rows: Vec<Shelf> = self
+            .ui
+            .shelves
+            .iter()
+            .filter(|s| &s.root == root)
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        rows
+    }
+
+    /// Put one shelf's content back in its root's working tree.
+    ///
+    /// `remove` is the destructive sibling of the pair — `Unshelve and Remove` —
+    /// and the shelf's own record goes with it, but only once the git side has
+    /// landed: the record is armed as a pending removal here and settlement
+    /// drops it on the [`OpKind::Unshelve`] success arm. The pending is armed
+    /// **before** the dispatch because under the inline pump the completion is
+    /// queued synchronously inside `dispatch`, so a record armed afterwards
+    /// would already have been settled past.
+    pub fn unshelve(&mut self, root: RootId, name: impl Into<String>, remove: bool) {
+        let name = name.into();
+        if remove {
+            self.ui.shelf_removal_pending = Some((root.clone(), name.clone()));
+        }
+        self.dispatch(Operation::unshelve(root, name, remove));
+    }
+
+    /// Drop one shelf's record — the app-side half of `Unshelve and Remove` and
+    /// of a confirmed shelf delete. The store is rewritten with what is left, so
+    /// the pane and the file never disagree about a shelf that has gone.
+    pub fn remove_shelf(&mut self, root: &RootId, name: &str) {
+        let before = self.ui.shelves.len();
+        self.ui.shelves.retain(|s| &s.root != root || s.name != name);
+        if self.ui.shelves.len() != before {
+            let _ =
+                turbogit_services::shelve_stash::save_shelves(&self.project_dir, &self.ui.shelves);
         }
     }
 
@@ -3617,6 +3753,18 @@ impl AppState {
                                 });
                                 self.ui.branches_delete_unmerged = None;
                             }
+                            // Surface 07: `Unshelve and Remove` is the only verb
+                            // on this surface whose removal spans both sides of
+                            // the boundary — the stash entry goes in git, the
+                            // shelf record goes here. The record drops only on
+                            // this arm: a pop that failed left the shelved
+                            // content in the stash list, and the row that points
+                            // at it has to stay painted.
+                            if kind == OpKind::Unshelve
+                                && let Some((root, name)) = self.ui.shelf_removal_pending.take()
+                            {
+                                self.remove_shelf(&root, &name);
+                            }
                         }
                         Err(e) => {
                             let msg = e.to_string();
@@ -3717,6 +3865,12 @@ impl AppState {
                             }
                             self.show_toast(Toast::error(format!("{label}: {e}")));
                             self.last_error = Some(msg);
+                            // An unshelve that never landed keeps its shelf row,
+                            // so the record it armed for removal is dropped here
+                            // rather than left to a later, unrelated success.
+                            if kind == OpKind::Unshelve {
+                                self.ui.shelf_removal_pending = None;
+                            }
                             // Activity log (issue #04): failures are entries too
                             // — the toast vanishes, the feed remembers.
                             self.ui.activity.push(crate::activity::ActivityEntry {
@@ -3783,6 +3937,16 @@ impl AppState {
                     self.fetching_submodules.remove(&root);
                     match submodules {
                         Ok(s) => self.caches.store_submodules(root, s),
+                        Err(e) => self.last_error = Some(e.to_string()),
+                    }
+                }
+                AppEvent::StashesLoaded { root, stashes } => {
+                    self.fetching_stashes.remove(&root);
+                    match stashes {
+                        // An empty listing stores an answered-empty cache, which
+                        // is what keeps the pane on its "Nothing is stashed here"
+                        // line instead of reading git every frame.
+                        Ok(s) => self.caches.store_stashes(root, s),
                         Err(e) => self.last_error = Some(e.to_string()),
                     }
                 }
@@ -4943,6 +5107,9 @@ fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &s
         // the feed.
         OpKind::DeleteBranch
         | OpKind::Shelve
+        // The unshelve's label already names which half of the keep/remove pair
+        // ran, which is the whole of what this verb has to report.
+        | OpKind::Unshelve
         | OpKind::WorktreeAdd
         | OpKind::WorktreeRemove
         | OpKind::DropCommit
