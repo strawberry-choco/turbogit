@@ -445,7 +445,8 @@ struct Shortcut {
     push: bool,
     refresh: bool,
     find: bool,
-}/// The live badge count for a shell tab (issue 14): the focused root's
+}
+/// The live badge count for a shell tab (issue 14): the focused root's
 /// cached worktree / submodule list length when loaded and non-zero,
 /// `None` otherwise (no badge for tabs without a count).
 fn tab_badge_count(state: &AppState, tab: Tab) -> Option<usize> {

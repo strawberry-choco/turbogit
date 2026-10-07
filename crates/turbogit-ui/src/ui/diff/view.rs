@@ -414,11 +414,7 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
                 // row (the model's own invariant), so only a Pair can carry it.
                 if caret.is_none()
                     && hunk == state.ui.diff_current_hunk
-                    && if want_add {
-                        a.is_some()
-                    } else {
-                        d.is_some()
-                    }
+                    && if want_add { a.is_some() } else { d.is_some() }
                 {
                     caret = Some(di);
                 }
@@ -479,7 +475,11 @@ fn holds_caret(state: &AppState, plan: &PaintPlan, display: usize, kind: RowKind
 
 /// x of the end of `text` as painted from `text_origin_x` — where the caret sits.
 fn text_end(painter: &egui::Painter, text_origin_x: f32, text: &str, font: &FontId) -> f32 {
-    text_origin_x + painter.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE).size().x
+    text_origin_x
+        + painter
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x
 }
 
 /// Pane-header labels documenting the active pair (spec §8.4).
@@ -616,8 +616,10 @@ fn paint_highlight(
             };
             let len = text.chars().count();
             for run in runs {
-                let x0 = text_origin_x + row.x_offset(egui::epaint::text::CharIndex(run.start.min(len)));
-                let x1 = text_origin_x + row.x_offset(egui::epaint::text::CharIndex(run.end.min(len)));
+                let x0 =
+                    text_origin_x + row.x_offset(egui::epaint::text::CharIndex(run.start.min(len)));
+                let x1 =
+                    text_origin_x + row.x_offset(egui::epaint::text::CharIndex(run.end.min(len)));
                 if x1 <= x0 {
                     continue;
                 }
@@ -894,7 +896,11 @@ fn unified_row(
                 font,
             );
             if caret {
-                paint_caret(painter, &rect, text_end(painter, text_origin, &row.text, font));
+                paint_caret(
+                    painter,
+                    &rect,
+                    text_end(painter, text_origin, &row.text, font),
+                );
             }
         }
         RowKind::Add => {
@@ -930,7 +936,11 @@ fn unified_row(
             );
             paint_char_highlight(painter, state, &rect, text_origin, row, path);
             if caret {
-                paint_caret(painter, &rect, text_end(painter, text_origin, &row.text, font));
+                paint_caret(
+                    painter,
+                    &rect,
+                    text_end(painter, text_origin, &row.text, font),
+                );
             }
         }
     }
@@ -1000,8 +1010,7 @@ fn file_row(
     // the ten questions answered here, and it asked it of `git` rather than of the
     // view. `⌃⇧D` opens this from the keyboard by arming the flag the shell sets.
     let trigger = zone.button(
-        RichText::new("Diff options")
-            .font(crate::theme::chrome_font(crate::theme::TYPE_BODY)),
+        RichText::new("Diff options").font(crate::theme::chrome_font(crate::theme::TYPE_BODY)),
     );
     let mut popup = egui::Popup::menu(&trigger);
     if state.ui.diff_options_open {
