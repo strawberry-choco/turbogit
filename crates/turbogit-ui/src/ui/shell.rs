@@ -292,6 +292,35 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         apply_hunk_nav(state, super::hunk_nav::Dir::Prev);
     }
 
+    // The diff viewer's three verbs (spec §4.11): `⌃⇧D` opens its settings menu,
+    // `⌃⇧⇥` moves the caret to the opposite pane (`Diff.FocusOppositePane`), `F4`
+    // jumps to the caret's line on the source surface with that line preserved.
+    // All three are meaningless with no diff previewed, so that is their gate —
+    // the same gate `apply_hunk_nav` reads, not a new one.
+    let diff_keys = ui.input(|i| {
+        (
+            i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::D),
+            i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::Tab),
+            i.key_pressed(Key::F4) && !i.modifiers.any(),
+        )
+    });
+    let diff_preview_open =
+        state.ui.tab == Tab::Commit && !state.show_welcome() && state.ui.preview_change.is_some();
+    if diff_preview_open {
+        if diff_keys.0 {
+            state.ui.diff_options_open = !state.ui.diff_options_open;
+        }
+        if diff_keys.1 {
+            state.ui.diff_pane = state.ui.diff_pane.opposite();
+            // The caret is painted from the model, so moving it is a repaint, not
+            // a re-read: nothing about the comparison changed.
+            ui.ctx().request_repaint();
+        }
+        if diff_keys.2 {
+            jump_to_source(state);
+        }
+    }
+
     // Char-range staging (issue 19): Enter stages the armed selection, Esc
     // clears it. Plain keys only, and never while a text field (commit
     // message, filter) owns the keyboard — then they type into it.
@@ -382,14 +411,41 @@ fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
     }
 }
 
+/// `F4` — Jump to Source, with the caret preserved.
+///
+/// The line is **derived** from the display model on the pane that holds the caret
+/// (`preview_caret_line`), which is what makes the jump land where the
+/// reader was looking instead of at the top of the file. Blame is this app's
+/// source surface — one row per line of the file, with the commit that introduced
+/// it — and it lives in the log workspace, so the tab moves with the jump and the
+/// line travels in `blame_caret_line` for the surface to aim at.
+///
+/// Working-tree preview only, and so blame at `HEAD`: the pair being read here is
+/// the working tree's, and the committed side is the only side with an author per
+/// line. A pane with no numbered row at the caret — an insertion read as the
+/// `Before` side — has no line to jump to, and the key does nothing.
+fn jump_to_source(state: &mut AppState) {
+    let Some(root) = state.selected_root.clone() else {
+        return;
+    };
+    let Some((path, line)) = super::diff::preview_caret_line(state) else {
+        return;
+    };
+    state.ui.blame = Some(turbogit_app::state::BlameTarget {
+        root,
+        path,
+        rev: "HEAD".to_owned(),
+    });
+    state.ui.blame_caret_line = Some(line);
+    switch_tab(state, Tab::Log);
+}
+
 struct Shortcut {
     commit: bool,
     push: bool,
     refresh: bool,
     find: bool,
-}
-
-/// The live badge count for a shell tab (issue 14): the focused root's
+}/// The live badge count for a shell tab (issue 14): the focused root's
 /// cached worktree / submodule list length when loaded and non-zero,
 /// `None` otherwise (no badge for tabs without a count).
 fn tab_badge_count(state: &AppState, tab: Tab) -> Option<usize> {

@@ -38,7 +38,7 @@ fn cached_preview_patch(state: &AppState, path: &std::path::Path) -> Option<Patc
         None,
         None,
         state.ui.diff_comparison,
-        state.ui.diff_ignore_whitespace,
+        state.ui.diff_policies,
         Some(path.to_path_buf()),
     );
     state.peek(target).map(|value| value.patch.clone())

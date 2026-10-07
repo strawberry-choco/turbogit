@@ -2000,6 +2000,9 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
                 path,
                 rev: cid.to_owned(),
             });
+            // Reached from the file menu, not from a diff caret: no line travels,
+            // so no stale line may survive into this view.
+            state.ui.blame_caret_line = None;
         }
         FileAction::ScopeHistory(path) => {
             state.ui.log_path_scope = Some(path);
@@ -2084,6 +2087,9 @@ fn apply_file_action(state: &mut AppState, root: &RootId, cid: &CommitId, action
                 path,
                 rev: cid.to_owned(),
             });
+            // Reached from the file menu, not from a diff caret: no line travels,
+            // so no stale line may survive into this view.
+            state.ui.blame_caret_line = None;
         }
         FileAction::ScopeHistory(path) => {
             state.ui.log_path_scope = Some(path);

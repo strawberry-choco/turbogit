@@ -248,7 +248,7 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
         None,
         None,
         DiffComparison::Local,
-        false,
+        turbogit_domain::model::DiffPolicies::default(),
         Some(path),
     );
     harness
@@ -256,6 +256,7 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
         .tx
         .send(AppEvent::DiffReady {
             key: target.key(),
+            policies: turbogit_domain::model::DiffPolicies::default(),
             result: Err(TgError::Other("diff read failed".into())),
         })
         .expect("send diff failure");
@@ -436,28 +437,45 @@ fn hunk_navigation_counts_and_steps_across_two_hunks() {
     assert_eq!(h.state().ui.diff_current_hunk, 0);
 }
 
-// --- Cycle 4: ignore whitespace -----------------------------------------------
+// --- Cycle 4: the whitespace policy ------------------------------------------
 
+/// The `Ignore Differences` policy reaches the **comparison**, not only its
+/// colouring: under `Ignore whitespaces` the two sides are the same line, so the
+/// old side's row stops being painted and one unchanged row stands where the pair
+/// was. The boolean checkbox this replaces asked the question of `git` (a `-w`
+/// flag), which answered with an empty comparison; the policy is a view decision
+/// folded into the display model, and the raw patch staging composes from keeps
+/// both lines (`crates/turbogit-app/tests/diff_policies.rs` pins that half).
 #[test]
-fn ignore_whitespace_toggle_affects_the_diff() {
+fn whitespace_policy_stops_painting_the_line_pair_it_calls_equal() {
+    use turbogit_domain::model::DiffWhitespace;
     let (_tmp, repo) = repo_whitespace();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo.join("ws.txt"));
 
-    assert!(!h.state().ui.diff_ignore_whitespace);
+    // The menu the five values live in replaces the checkbox, on the file row.
+    assert_painted(&h, "Diff options");
+    assert_eq!(h.state().ui.diff_policies.whitespace, DiffWhitespace::None);
+    assert_painted(&h, "gamma");
     assert_painted(&h, "g amma");
 
-    h.get_by_label("Ignore whitespace").click();
+    h.state_mut().ui.diff_policies.whitespace = DiffWhitespace::IgnoreWhitespace;
     settle(&mut h);
-    assert!(h.state().ui.diff_ignore_whitespace);
-    assert_not_painted(&h, "g amma");
-    assert_painted(&h, "(no differences)");
+    assert_not_painted(&h, "gamma");
+    assert_painted(&h, "g amma");
 
-    // Toggling back restores the full diff.
-    h.get_by_label("Ignore whitespace").click();
+    // `Trim whitespaces` is a *different* answer to this same diff: internal
+    // whitespace is significant there, so the pair comes back. Two values that
+    // behaved alike would be one value with two names.
+    h.state_mut().ui.diff_policies.whitespace = DiffWhitespace::TrimWhitespace;
     settle(&mut h);
-    assert!(!h.state().ui.diff_ignore_whitespace);
+    assert_painted(&h, "gamma");
+
+    // And back to the default, the full diff is painted again.
+    h.state_mut().ui.diff_policies.whitespace = DiffWhitespace::None;
+    settle(&mut h);
+    assert_painted(&h, "gamma");
     assert_painted(&h, "g amma");
 }
 
