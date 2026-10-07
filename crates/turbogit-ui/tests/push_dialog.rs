@@ -1672,7 +1672,7 @@ fn field_on_row<'h>(h: &'h Harness<'_, AppState>, y: f32) -> Node<'h> {
 fn a_repo_with_no_remote_offers_define_remote_where_the_name_would_be() {
     let parent = tempfile::tempdir().unwrap();
     let path = repo_without_remote(parent.path(), "orphan");
-    let mut h = harness(app_state(parent.path(), &[path.clone()]));
+    let mut h = harness(app_state(parent.path(), std::slice::from_ref(&path)));
     open_push_dialog(&mut h);
     use_this_repo_scope(&mut h);
 

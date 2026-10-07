@@ -2301,12 +2301,8 @@ impl AppState {
         let tx = self.tx.clone();
         self.ui.busy = true;
         std::thread::spawn(move || {
-            let result = turbogit_services::remote_service::add(
-                executor.as_ref(),
-                &path,
-                &name,
-                &url.trim(),
-            );
+            let result =
+                turbogit_services::remote_service::add(executor.as_ref(), &path, &name, url.trim());
             let _ = tx.send(AppEvent::RemoteDefined { root, name, result });
         });
     }
