@@ -337,10 +337,12 @@ Smart branch chains into conflicts. Delete → immediate, then a notification wi
 three independent links. Multi-root divergence → a `Branches have diverged`
 warning in the widget.
 
-**The behaviours worth stealing:** the Recent node capped at **five**; delete that
-asks *after* and gives three recoveries with a restart-bounded lifetime; and the
-multi-root failure policy that offers to **roll back the roots that succeeded**,
-specifically "not to let branches diverge".
+**The behaviours worth stealing:** the Recent node capped at **five** — **landed
+2026-10-07** by ticket 03 (`d99df82`), which took the cap and the reflog that
+feeds it (see §5.2); the `Show Recent Branches` toggle that gates the node here
+remains open (gap 3); delete that asks *after* and gives three recoveries with a
+restart-bounded lifetime; and the multi-root failure policy that offers to **roll
+back the roots that succeeded**, specifically "not to let branches diverge".
 
 ### 4.3 `01-commit-tool-window` — [full evidence](../research/evidence/rebased/parity/01-commit-tool-window.md)
 
@@ -644,7 +646,7 @@ intentionally not pursued.
 
 | Rebased | TurboGit | Verdict |
 |---|---|---|
-| Four nodes: Recent / Local / Remote / Tags | `branches_tree.rs` repo sections + Local/Remote/Tags | **partial** — **no `Recent` node in the Branches tab**; Recent exists in the status-bar popup only |
+| Four nodes: Recent / Local / Remote / Tags | `branches_tree.rs::build_recent_group` (Recent, first view-level group, above the repo sections) + repo sections + Local/Remote/Tags | ~~**partial** — **no `Recent` node in the Branches tab**; Recent exists in the status-bar popup only~~ **has 2026-10-07**: ticket 03 (`d99df82`) — all four nodes now exist. The Recent group reads git's HEAD reflog through the new `recent_checkouts` port at the engine seam rather than app-side bookkeeping, so it survives a restart and reflects a checkout made in a terminal; three rules shape it in order — join against each repository's *live local* branches (a deleted name or a raw sha yields no clickable row), merge across repositories on the checkout's own timestamp, then cap at `RECENT_CAP = 5`, the cap shared with the status-bar popup so the two cannot drift. **Still open**: the group is unconditional — the `Show Recent Branches` toggle is gap 3, and the popup keeps its separate in-process `recent_branches` list |
 | Directory grouping on `/` | `DirNode` from slash-separated names | **has** — but **not user-toggleable** (Rebased's is) |
 | `Group by Repository` | repo-level `RepoSection` | **has** |
 | Gear with 4 toggles | `BranchesGroups { local, remote, tags }` + `TreeState::show_remotes` | **partial** — no gear, no `Show Recent Branches` toggle |
@@ -1281,7 +1283,7 @@ collected here so they are not mistaken for settled positions.
 
 | # | Gap | Surface |
 |---|---|---|
-| 1 | Recent node (cap 5) missing from the Branches tab | `02` |
+| 1 | ~~Recent node (cap 5) missing from the Branches tab~~ — **resolved 2026-10-07**: ticket 03 (`d99df82`) landed the `Recent` group as the branches tree's first view-level group, derived from HEAD's reflog at the engine seam, joined to live local branches and capped at five (see §5.2). **Still open** — the group is unconditional; gating it is gap 3's `Show Recent Branches` toggle | `02` |
 | 2 | Favourite-the-main-branch-by-default | `02` |
 | 3 | Gear with four grouping toggles | `02` |
 | 4 | Multi-root divergence rollback offer | `02` |
