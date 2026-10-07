@@ -92,15 +92,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 /// two that have none. An empty-handed notification offers no button it cannot
 /// honour.
 fn controls(ui: &mut Ui, state: &mut AppState, rejection: &PushRejection) {
-    if let Some(action) = next_step(&rejection.outcome) {
-        if widgets::compact_primary_button(ui, action.verb()).clicked() {
-            // Cloned out of `state` BEFORE anything mutates: the dispatch
-            // rewrites `push_in_flight` and the dismissal drops the rejection,
-            // and neither can happen through a live borrow of the other.
-            run_next_step(state, rejection, action);
-            state.ui.push_rejection = None;
-            return;
-        }
+    if let Some(action) = next_step(&rejection.outcome)
+        && widgets::compact_primary_button(ui, action.verb()).clicked()
+    {
+        // Cloned out of `state` BEFORE anything mutates: the dispatch
+        // rewrites `push_in_flight` and the dismissal drops the rejection,
+        // and neither can happen through a live borrow of the other.
+        run_next_step(state, rejection, action);
+        state.ui.push_rejection = None;
+        return;
     }
     if widgets::compact_button(ui, "Dismiss").clicked() {
         state.ui.push_rejection = None;
