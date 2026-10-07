@@ -391,6 +391,25 @@ pub enum CommitSubTab {
     Stash,
 }
 
+/// What the conflict resolver's single bulk control (`Apply to all N
+/// remaining`) fills the still-unresolved conflicts with. The reference ships
+/// two bulk buttons that differ only in whether they touch simple conflicts
+/// (`Apply Non-Conflicting Changes` vs `Resolve All Simple Conflicts`); that
+/// adjacent pair is a mis-click generator, so TurboGit folds both classes
+/// into this one control and the side scope — the active choice vs one side —
+/// is an option on it instead (parity ticket 01).
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BulkApplyScope {
+    /// The active conflict's recorded choice, ours as fallback — the control's
+    /// original behaviour.
+    #[default]
+    ActiveChoice,
+    /// Our (left) side for every remaining conflict.
+    Ours,
+    /// Their (right) side for every remaining conflict.
+    Theirs,
+}
+
 /// Expand/collapse state of the Branches tab's groups (issue 03): Local and
 /// Remote open by default, Tags collapsed — the design's sensible default.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1038,6 +1057,17 @@ pub struct UiState {
     /// Currently selected file in the resolver's left list (defaults to
     /// the first conflicted file when the resolver opens).
     pub conflict_resolver_selected: Option<PathBuf>,
+    /// What the `Apply to all N remaining` control fills the still-unresolved
+    /// conflicts with (parity ticket 01). Session-scoped and sticky across
+    /// files on purpose — `open_resolver` deliberately does not reset it, so
+    /// a user bulk-resolving several files the same way keeps their scope.
+    pub conflict_resolver_scope: BulkApplyScope,
+    /// Pending `Overwrite Changes` confirm (parity ticket 01): the
+    /// `(conflict ordinal, choice)` a take-ours/take-theirs click wants to
+    /// apply while the file already carries merged changes. The dangerous
+    /// affirmative (`Discard and Accept`) applies it; the safe option clears
+    /// this and does nothing.
+    pub conflict_overwrite_pending: Option<(usize, u8)>,
     pub shelves: Vec<Shelf>,
     // commit-tab inline diff preview (Epic C3)
     pub preview_change: Option<PathBuf>,
