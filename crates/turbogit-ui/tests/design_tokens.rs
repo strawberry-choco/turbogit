@@ -2225,6 +2225,7 @@ const TOKEN_INVENTORY: &[&str] = &[
     "SURFACE_2",
     "SURFACE_3",
     "SURFACE_WARNING",
+    "SURFACE_INFLIGHT_ABORT",
     "LINE",
     "LINE_SUBTLE",
     // --- Palette: the ink ramp
@@ -2291,6 +2292,7 @@ const TOKEN_INVENTORY: &[&str] = &[
     "CELL_GAP",
     "DENSITY_COMPACT_BUTTON",
     "DENSITY_DENSE_BUTTON",
+    "STATUS_INFLIGHT_ABORT_GAP",
     // --- Module-level: shape
     "CHIP_RADIUS",
     "CONTROL_RADIUS",
