@@ -138,6 +138,11 @@ pub enum RecordedCall {
         branch: String,
         upstream: String,
     },
+    /// Clear a branch's upstream tracking.
+    UnsetBranchUpstream {
+        root: PathBuf,
+        branch: String,
+    },
 }
 
 /// Delegating [`GitExecutor`] that records push / dry-run calls.
@@ -422,6 +427,17 @@ impl GitExecutor for RecordingExecutor {
                 upstream: upstream.to_string(),
             });
         self.inner.set_branch_upstream(root, branch, upstream)
+    }
+
+    fn unset_branch_upstream(&self, root: &Path, branch: &str) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::UnsetBranchUpstream {
+                root: root.to_path_buf(),
+                branch: branch.to_string(),
+            });
+        self.inner.unset_branch_upstream(root, branch)
     }
 
     fn stash_list(&self, root: &Path) -> TgResult<Vec<Stash>> {

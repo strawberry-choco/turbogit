@@ -174,6 +174,14 @@ pub trait GitExecutor: Send + Sync {
     /// (`git branch --set-upstream-to=<upstream> <branch>`).
     fn set_branch_upstream(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<()>;
 
+    /// Clear `branch`'s upstream tracking (`git branch --unset-upstream <branch>`).
+    ///
+    /// The branch argument is not optional here even though git accepts one:
+    /// `--unset-upstream` without it silently targets the **current** branch,
+    /// so a rename-then-unset on a non-checked-out branch would clear the
+    /// tracking of whatever branch the developer happens to be standing on.
+    fn unset_branch_upstream(&self, root: &Path, branch: &str) -> TgResult<()>;
+
     /// `git fetch` (one remote or all).
     fn fetch(&self, root: &Path, remote: Option<&str>) -> TgResult<()>;
 

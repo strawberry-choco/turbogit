@@ -949,6 +949,10 @@ impl GitExecutor for Git2Executor {
         self.cli.set_branch_upstream(root, branch, upstream)
     }
 
+    fn unset_branch_upstream(&self, root: &Path, branch: &str) -> TgResult<()> {
+        self.cli.unset_branch_upstream(root, branch)
+    }
+
     fn fetch(&self, root: &Path, remote: Option<&str>) -> TgResult<()> {
         self.cli.fetch(root, remote)
     }
