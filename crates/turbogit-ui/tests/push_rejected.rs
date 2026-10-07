@@ -567,7 +567,7 @@ fn each_next_step_control_does_the_work_it_names() {
     let parent = tempfile::tempdir().unwrap();
     let (repo, remote) = repo_ahead_of_origin(parent.path(), "alpha");
     let mut h = shell_harness_over_unstyled(
-        AppState::for_roots(parent.path(), &[repo.clone()]),
+        AppState::for_roots(parent.path(), std::slice::from_ref(&repo)),
         KITTEST_DEFAULT_BOX,
         1024,
     );
@@ -629,7 +629,8 @@ fn the_silent_update_opt_in_repushes_without_asking() {
     };
     settings.auto_update_on_push_rejected = false;
     let mut h = shell_harness_over_unstyled(
-        AppState::for_roots(parent.path(), &[repo.clone()]).with_settings(settings.clone()),
+        AppState::for_roots(parent.path(), std::slice::from_ref(&repo))
+            .with_settings(settings.clone()),
         KITTEST_DEFAULT_BOX,
         1024,
     );
