@@ -660,6 +660,20 @@ pub fn middle_truncate(name: &str, max_chars: usize) -> String {
     format!("{head_s}…{tail_s}")
 }
 
+// --- §14.4b count pluralisation ----------------------------------------------
+
+/// One count-pluralised phrase (`2 conflicts`, `1 file`). The rebased-parity
+/// spec mandates a SINGLE shared helper for pluralisation — per-call-site
+/// conditionals drift, and the reference's progress strings distinguish
+/// `1#Conflict|2#Conflicts` deliberately.
+pub fn counted(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("{n} {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
 // --- §14.5 buttons: exactly four variants -----------------------------------
 
 /// The four kit button variants — primary (blue), secondary (raised), quiet

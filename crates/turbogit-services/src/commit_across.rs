@@ -137,6 +137,7 @@ mod tests {
                     orig_path: None,
                 }],
                 conflicted: vec![],
+                conflict_kinds: vec![],
             },
         );
         engine.status.insert(
@@ -168,6 +169,7 @@ mod tests {
                     orig_path: None,
                 }],
                 conflicted: vec!["merged.txt".into()],
+                conflict_kinds: vec![],
             },
         );
         let rows = plan(&engine, &["/r/conflict".into()]);

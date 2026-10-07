@@ -149,6 +149,43 @@ fn seed_merge_with_auto_merged(repo: &Path, branch: &str) {
     git_unchecked(repo, &["merge", "--no-edit", "side"]); // expected: auto clean, conf conflict
 }
 
+/// Seed a merge with TWO different file-level clash kinds: `conf.txt` is
+/// BOTH MODIFIED (UU: both branches rewrote it) and `victim.txt` is DELETED
+/// BY THEM (UD: ours rewrote it, theirs deleted it — a modify/delete clash).
+/// The resolver's file list must name each kind on its row so the merge can
+/// be triaged by reading the list (rebased-parity ticket 02, verification 1).
+fn seed_two_conflict_kinds(repo: &Path, branch: &str) {
+    std::fs::write(
+        repo.join("conf.txt"),
+        "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("victim.txt"), "kept by ours\n").unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "base files"]);
+    git(repo, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(
+        repo.join("conf.txt"),
+        "SIDE-one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nSIDE-nine\nten\n",
+    )
+    .unwrap();
+    git(repo, &["rm", "-q", "victim.txt"]); // theirs deletes
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "side commit"]);
+    git(repo, &["checkout", "-q", branch]);
+    std::fs::write(
+        repo.join("conf.txt"),
+        "MAIN-one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nMAIN-nine\nten\n",
+    )
+    .unwrap();
+    // Ours REWRITES victim.txt — an untouched file's deletion merges cleanly
+    // and no UD row would exist to name.
+    std::fs::write(repo.join("victim.txt"), "rewritten by ours\n").unwrap();
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "main commit"]);
+    git_unchecked(repo, &["merge", "--no-edit", "side"]); // expected: UU + UD
+}
+
 /// Headless harness over the given repository roots.
 fn app_state(roots: &[PathBuf]) -> AppState {
     let dir = roots
@@ -267,8 +304,16 @@ fn header_band(harness: &Harness<'_, AppState>, label: &str) -> Rect {
 
 /// Open the redesigned conflict resolver for the seeded conflicted file
 /// via the Commit tool window's new "Resolve…" entry point.
+///
+/// The Commit tab's conflict section hosts one `Resolve…` PER conflicted
+/// file, so a two-kind seed makes the label ambiguous; the FIRST entry opens
+/// the resolver on the first conflicted file, which is every suite here
+/// wants.
 fn open_resolver(h: &mut Harness<'_, AppState>) {
-    h.get_by_label("Resolve…").click();
+    h.get_all_by_role(Role::Button)
+        .find(|n| n.accesskit_node().label().is_some_and(|l| l == "Resolve…"))
+        .expect("a Resolve… entry point must be reachable")
+        .click();
     h.run();
 }
 
@@ -489,6 +534,150 @@ fn left_list_splits_auto_merged_from_conflicted() {
     assert_painted(&h, "AUTO-MERGED");
     assert_painted(&h, "conf.txt");
     assert_painted(&h, "auto.txt");
+}
+
+/// Ticket 02, verification 1: a merge with one `both modified` and one
+/// `deleted by them` file paints both status words on their own rows.
+/// Scoped by each row's `Node::rect()`: "modified"/"deleted" also appear in
+/// the change-kind colouring elsewhere in the Commit window behind the
+/// resolver, so an unscoped substring assert would match the wrong row.
+#[test]
+fn file_list_rows_paint_their_file_level_conflict_kind() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "kinds-repo");
+    let branch = repo.branch();
+    seed_two_conflict_kinds(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_resolver(&mut h);
+
+    for (path, kind_word) in [
+        ("conf.txt", "both modified"),
+        ("victim.txt", "deleted by them"),
+    ] {
+        let rect = h
+            .get_all_by_role(Role::Button)
+            .find(|n| {
+                n.accesskit_node()
+                    .label()
+                    .is_some_and(|label| label.contains(kind_word))
+            })
+            .unwrap_or_else(|| panic!("no file-list row carries the {kind_word} kind for {path}"))
+            .rect();
+        assert!(
+            painted_galleys(&h)
+                .iter()
+                .any(|g| g.text.contains(kind_word) && rect.contains(g.pos)),
+            "`{kind_word}` must paint inside the {path} row at {rect:?}"
+        );
+    }
+}
+
+/// Ticket 02, verification 2 (negative): a bulk apply with nothing left to
+/// resolve reports the NEGATIVE result instead of staying silent — the
+/// outcome that regresses silently.
+#[test]
+fn bulk_apply_reports_the_negative_result_when_nothing_resolves() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "bulk-negative-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_resolver(&mut h);
+
+    // Resolve both conflicts individually, so the bulk apply has nothing
+    // left to do — then click it and expect it to say so. The second take
+    // lands on a file that already carries merged changes, so the Overwrite
+    // Changes pre-check holds it (ticket 01) and the dangerous affirmative
+    // is what applies it.
+    h.get_by_label("Take ours 1").click();
+    h.run();
+    h.get_by_label("Next >").click();
+    h.run();
+    h.get_by_label("Take ours 2").click();
+    h.run();
+    h.get_by_label("Discard and Accept").click();
+    h.run();
+
+    // The control stays clickable at zero remaining — that is how the
+    // negative result is reportable at all.
+    h.get_by_label("Apply to all 0 remaining").click();
+    h.run();
+
+    assert_painted(&h, "No conflicts were resolved automatically");
+    assert_not_painted(&h, "All conflicts were resolved automatically");
+}
+
+/// Ticket 02, verification 2 (positive): a bulk apply that resolves
+/// everything reports the positive result — a distinct string for a
+/// distinct outcome.
+#[test]
+fn bulk_apply_reports_all_resolved_when_everything_resolves() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "bulk-positive-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_resolver(&mut h);
+
+    h.get_by_label("Apply to all 2 remaining").click();
+    h.run();
+
+    assert_painted(&h, "All conflicts were resolved automatically");
+    assert_not_painted(&h, "No conflicts were resolved automatically");
+}
+
+/// Ticket 02, verification 3: the finish control's fill is WITHHELD — no
+/// fill rect for its slot, not a tinted one — while anything is unresolved,
+/// and paints `Palette::ACCENT` once everything is resolved. Assert the
+/// rect's absence/presence at the control's own slot, never a colour change:
+/// a disabled control in this design is withheld, not greyed.
+#[test]
+fn finish_control_fill_is_withheld_until_every_conflict_is_resolved() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "finish-fill-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_resolver(&mut h);
+
+    let accent_fill_on_finish = |h: &Harness<'_, AppState>| {
+        let slot = h.get_by_label("Apply").rect();
+        filled_rects(h)
+            .iter()
+            .any(|(r, c)| *c == Palette::ACCENT && r.contains(slot.center()))
+    };
+
+    // None resolved: withheld — no fill paints for the finish slot.
+    assert!(
+        !accent_fill_on_finish(&h),
+        "the finish control must paint no fill while nothing is resolved"
+    );
+
+    // Partially resolved: still withheld.
+    h.get_by_label("Take ours 1").click();
+    h.run();
+    assert!(
+        !accent_fill_on_finish(&h),
+        "the finish control must paint no fill while conflicts remain"
+    );
+
+    // All resolved: the finish control paints its ACCENT fill. The second
+    // take is held by the Overwrite Changes pre-check (ticket 01); the
+    // dangerous affirmative applies it.
+    h.get_by_label("Next >").click();
+    h.run();
+    h.get_by_label("Take ours 2").click();
+    h.run();
+    h.get_by_label("Discard and Accept").click();
+    h.run();
+    assert!(
+        accent_fill_on_finish(&h),
+        "the finish control must paint its ACCENT fill once every conflict is resolved"
+    );
 }
 
 /// RED: Abort merge restores the pre-merge state — the conflicted file
