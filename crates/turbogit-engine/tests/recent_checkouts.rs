@@ -49,7 +49,11 @@ fn checkout_history_answers_newest_first_and_skips_other_reflog_entries() {
     // because nothing ever moved *onto* it, and the two commits are not
     // checkouts at all.
     let names: Vec<&str> = out.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(names, vec!["c", "b", "a"], "checkout moves only, newest first");
+    assert_eq!(
+        names,
+        vec!["c", "b", "a"],
+        "checkout moves only, newest first"
+    );
     assert!(
         out.windows(2).all(|w| w[0].at >= w[1].at),
         "timestamps must not run backwards: {out:?}"

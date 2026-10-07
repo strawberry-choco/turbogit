@@ -499,7 +499,12 @@ fn branch_tree_harness(
                 turbogit_ui::theme::install_fonts(ui.ctx());
                 fonts_installed = true;
             }
-            let view = build_branch_view(&fx.roots, &fx.tags, &|_root: &RootId| false);
+            let view = build_branch_view(
+                &fx.roots,
+                &fx.tags,
+                &std::collections::HashMap::new(),
+                &|_root: &RootId| false,
+            );
             let props = TreeProps {
                 view: &view,
                 filter: "",

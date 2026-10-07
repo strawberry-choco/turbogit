@@ -48,7 +48,10 @@ fn checked_out_project(count: usize) -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let alpha = project.join("alpha");
-    git(&project, &["-c", "init.defaultBranch=main", "init", "alpha"]);
+    git(
+        &project,
+        &["-c", "init.defaultBranch=main", "init", "alpha"],
+    );
     std::fs::write(alpha.join("README.md"), "x\n").unwrap();
     git(&alpha, &["add", "."]);
     git(&alpha, &["commit", "-m", "init"]);

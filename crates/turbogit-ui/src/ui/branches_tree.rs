@@ -23,13 +23,95 @@
 
 use std::collections::HashMap;
 
-use turbogit_domain::model::{Branch, BranchKind, RefState, Root, RootId};
+use turbogit_domain::model::{Branch, BranchKind, RecentCheckout, RefState, Root, RootId};
+
+/// How many recently checked-out branches the Recent group shows.
+///
+/// The single place the documented cap is written: "Recent branches node shows
+/// up to five recently checked-out branches" (`manage-branches.md:61`). It is
+/// a display cap on a longer history, not a cache size — the engine answers
+/// HEAD's whole checkout window — and both branch-recents surfaces read it, so
+/// the number cannot drift between the tab and the status-bar popup.
+pub const RECENT_CAP: usize = 5;
+
+/// Build the Recent group from the repositories' reflog-derived checkout
+/// histories.
+///
+/// `recents` maps a repository to the checkout answers its HEAD's reflog gave,
+/// newest first — git's own history, which is why the group survives a restart
+/// and shows a checkout made in a terminal. Three rules shape the list, in this
+/// order:
+///
+/// - **join** against the repository's *local* branch snapshot. The reflog names
+///   whatever HEAD moved onto, tags and raw shas included, and a branch deleted
+///   since; only a name a click can act on becomes a row.
+/// - **merge** across repositories by the checkout's own timestamp, so the group
+///   is the repository set's most recent activity and not its first
+///   repository's. The sort is stable, so equal timestamps (git's clock is
+///   second-resolution) keep the repositories' listed order.
+/// - **cap** at [`RECENT_CAP`] *after* the join and the merge — a history of
+///   deleted branches shortens the group rather than padding it, and a longer
+///   live history stops at five with nothing reserved for the sixth.
+///
+/// The label is the **full** branch name and there are no directory nodes: the
+/// group is a list of branches, not a re-statement of the directory tree, and a
+/// row whose repository is not the one being painted would be a lie if it read
+/// like one.
+pub fn build_recent_group(
+    roots: &[Root],
+    recents: &HashMap<RootId, Vec<RecentCheckout>>,
+) -> Vec<BranchLeaf> {
+    // Ordered by the move that earned the place, so the timestamp is dropped
+    // once the cap has been taken: a row's ordering is not a fact a renderer or
+    // an action ever needs.
+    let mut placed: Vec<(i64, BranchLeaf)> = Vec::new();
+    for root in roots {
+        // The engine answers newest-first, so the first move seen for a branch
+        // is its newest one and every later move of the same name is the same
+        // row.
+        for move_ in recents.get(&root.id).map_or(&[][..], Vec::as_slice) {
+            if placed
+                .iter()
+                .any(|(_, r)| r.root == root.id && r.branch.name == move_.name)
+            {
+                continue;
+            }
+            let Some(branch) = root
+                .branches
+                .iter()
+                .find(|b| b.kind == BranchKind::Local && b.name == move_.name && b.exists)
+            else {
+                continue;
+            };
+            placed.push((
+                move_.at,
+                BranchLeaf {
+                    label: branch.name.clone(),
+                    root: root.id.clone(),
+                    branch: branch.clone(),
+                    active: root.current_branch.as_deref() == Some(branch.name.as_str()),
+                    favorite: branch.favorite,
+                },
+            ));
+        }
+    }
+    placed.sort_by(|a, b| b.0.cmp(&a.0));
+    placed.truncate(RECENT_CAP);
+    placed.into_iter().map(|(_, row)| row).collect()
+}
 
 /// One branch row in the grouped tree, after prefix stripping.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BranchLeaf {
     /// Display label with the containing directory/remote prefix stripped.
     pub label: String,
+    /// The repository this row belongs to.
+    ///
+    /// Carried by the row and not inherited from the enclosing
+    /// [`RepoSection`], because the Recent group is one list whose rows come
+    /// from several repositories: an action taken on a row in that group would
+    /// otherwise act on the wrong repository's branch of the same name.
+    pub root: RootId,
     /// The source branch — keeps the full name, kind, tracking, favorite…
     pub branch: Branch,
     /// Whether this is the repo's checked-out branch.
@@ -71,7 +153,19 @@ pub struct TagLeaf {
 /// One remote's group of branches (only emitted when `show_remotes`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoteGroup {
+    /// The remote's own name, git's spelling: the collapse key and the prefix
+    /// the leaves are stripped of.
     pub remote: String,
+    /// The repository this group belongs to — the same rule as
+    /// [`BranchLeaf::root`], and for the same reason: one repository's collapsed
+    /// `origin` must not collapse another's.
+    pub root: RootId,
+    /// What the header prints. The remote's name on its own while the
+    /// repository is the grouping level, and the repository named alongside it
+    /// once repository grouping is turned off — two repositories each with an
+    /// `origin` otherwise paint two identical headers with nothing to tell them
+    /// apart.
+    pub label: String,
     /// Number of branches in this group (the count invariant).
     pub count: usize,
     pub children: Vec<BranchNode>,
@@ -133,6 +227,14 @@ impl RepoSection {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BranchView {
     pub repos: Vec<RepoSection>,
+    /// The Recent group: the model's one list that is not a section's.
+    ///
+    /// Repository grouping puts a band and three groups per repository, and that
+    /// is the reference's shape; this is TurboGit's differentiator, the same
+    /// affordance answered across the whole repository set, ordered by when each
+    /// move actually happened rather than by which repository was asked first.
+    /// Empty paints no group.
+    pub recent: Vec<BranchLeaf>,
     /// `Some(n)` when more than one repo is in scope — the "all N repos" chip.
     pub all_repos_count: Option<usize>,
     /// True when exactly one repo is in scope (its section renders invisibly).
@@ -239,10 +341,15 @@ fn convert(nodes: Vec<B>) -> Vec<BranchNode> {
 /// removed from each branch name *before* the hierarchy is built, so the leaf
 /// label inside a remote group never re-prints the remote (structural prefix
 /// stripping). For local branches pass `None`.
+///
+/// `root` is stamped on every leaf the forest holds. The renderer could take it
+/// from the enclosing section today, and would be wrong the moment it paints one
+/// of the lists that spans sections.
 fn build_tree(
     branches: &[Branch],
     current: &Option<String>,
     strip_prefix: Option<&str>,
+    root: &RootId,
 ) -> Vec<BranchNode> {
     let mut forest: Vec<B> = Vec::new();
     for b in branches {
@@ -259,6 +366,7 @@ fn build_tree(
         let dirs: Vec<&str> = parts;
         let leaf = BranchLeaf {
             label: leaf_label,
+            root: root.clone(),
             branch: b.clone(),
             active: current.as_deref() == Some(name) && b.kind == BranchKind::Local,
             favorite: b.favorite,
@@ -300,13 +408,17 @@ pub fn leaf_count(nodes: &[BranchNode]) -> usize {
 ///
 /// `roots` are the in-scope repositories; `tags_by_root` carries each repo's
 /// already-classified tag list (tags live outside the `Root` branch snapshot
-/// and are supplied pre-read). `show_remotes` is asked per repository whether
-/// that repo's remotes are showing, so a rolled-up repo is skipped while its
-/// tree is built rather than built and then hidden — which is why this is a
-/// predicate and not a flag.
+/// and are supplied pre-read). `recents_by_root` carries each repo's
+/// reflog-derived checkout history for the same reason — the branch snapshot has
+/// no recency in it — and feeds the view-level Recent group; passing an empty map
+/// paints no group. `show_remotes` is asked per repository whether that repo's
+/// remotes are showing, so a rolled-up repo is skipped while its tree is built
+/// rather than built and then hidden — which is why this is a predicate and not a
+/// flag.
 pub fn build_branch_view(
     roots: &[Root],
     tags_by_root: &HashMap<RootId, Vec<(String, RefState)>>,
+    recents_by_root: &HashMap<RootId, Vec<RecentCheckout>>,
     show_remotes: &dyn Fn(&RootId) -> bool,
 ) -> BranchView {
     let single_repo = roots.len() == 1;
@@ -315,6 +427,7 @@ pub fn build_branch_view(
     } else {
         None
     };
+    let recent = build_recent_group(roots, recents_by_root);
 
     let mut repos = Vec::with_capacity(roots.len());
     for root in roots {
@@ -335,7 +448,7 @@ pub fn build_branch_view(
             .cloned()
             .collect();
 
-        let locals_tree = build_tree(&locals, current, None);
+        let locals_tree = build_tree(&locals, current, None, &root.id);
 
         // Group remotes by the remote each row already carries — a
         // remote-tracking listing names its own remote, so nothing splits here.
@@ -354,9 +467,11 @@ pub fn build_branch_view(
             by_remote
                 .iter()
                 .map(|(remote, list)| {
-                    let children = build_tree(list, current, Some(remote));
+                    let children = build_tree(list, current, Some(remote), &root.id);
                     RemoteGroup {
+                        label: remote.clone(),
                         remote: remote.clone(),
+                        root: root.id.clone(),
                         count: list.len(),
                         children,
                     }
@@ -391,6 +506,7 @@ pub fn build_branch_view(
 
     BranchView {
         repos,
+        recent,
         all_repos_count,
         single_repo,
     }
@@ -403,7 +519,8 @@ mod tests {
 
     use chrono::{DateTime, Utc};
     use turbogit_domain::model::{
-        Branch, BranchKind, BranchTip, Change, ChangeStatus, Root, RootId, RootStatus, Upstream,
+        Branch, BranchKind, BranchTip, Change, ChangeStatus, RecentCheckout, Root, RootId,
+        RootStatus, Upstream,
     };
 
     use super::*;
@@ -528,7 +645,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
 
         let section = &view.repos[0];
         // Remotes collapse: no per-remote groups, but the rollup count is exact.
@@ -558,7 +680,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| true);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| true,
+        );
 
         let section = &view.repos[0];
         assert_eq!(section.remote_groups.len(), 2);
@@ -582,7 +709,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
         let section = &view.repos[0];
 
         // One directory node "feature" with two leaves, count == 2.
@@ -612,7 +744,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| true);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| true,
+        );
         let section = &view.repos[0];
         let origin = &section.remote_groups[0];
 
@@ -644,7 +781,12 @@ mod tests {
             Some("top"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
         let section = &view.repos[0];
 
         fn check(nodes: &[BranchNode]) {
@@ -682,7 +824,7 @@ mod tests {
             RootId(Arc::from(PathBuf::from("/alpha"))),
             vec![("v1.0".to_string(), RefState::Default)],
         );
-        let view = build_branch_view(&[repo], &tags, &|_| true);
+        let view = build_branch_view(&[repo], &tags, &std::collections::HashMap::new(), &|_| true);
         let section = &view.repos[0];
 
         let sum: usize = section.remote_groups.iter().map(|g| g.count).sum();
@@ -702,7 +844,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
         let section = &view.repos[0];
         let labels = leaf_labels(&section.locals);
         assert!(
@@ -727,7 +874,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| true);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| true,
+        );
         let section = &view.repos[0];
         let origin = &section.remote_groups[0];
         let labels: Vec<String> = leaf_labels(&origin.children);
@@ -754,7 +906,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
         let section = &view.repos[0];
         let main = section
             .locals
@@ -788,7 +945,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
         let section = &view.repos[0];
         // The favorite "zebra" sits first among locals (above main/feature-a).
         match &section.locals[0] {
@@ -811,7 +973,12 @@ mod tests {
             Some("main"),
             false,
         );
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| true);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| true,
+        );
         let section = &view.repos[0];
         let origin = &section.remote_groups[0];
         // "starred" leads its group though "plain" sorts first alphabetically.
@@ -830,10 +997,30 @@ mod tests {
         let unpushed = root_with("/u", &[local("main", false, 2, 0)], Some("main"), false);
         let unpulled = root_with("/p", &[local("main", false, 0, 3)], Some("main"), false);
 
-        let view_clean = build_branch_view(&[clean], &HashMap::new(), &|_| false);
-        let view_dirty = build_branch_view(&[dirty], &HashMap::new(), &|_| false);
-        let view_push = build_branch_view(&[unpushed], &HashMap::new(), &|_| false);
-        let view_pull = build_branch_view(&[unpulled], &HashMap::new(), &|_| false);
+        let view_clean = build_branch_view(
+            &[clean],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
+        let view_dirty = build_branch_view(
+            &[dirty],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
+        let view_push = build_branch_view(
+            &[unpushed],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
+        let view_pull = build_branch_view(
+            &[unpulled],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
 
         assert_eq!(view_clean.repos[0].status, RepoStatus::Clean);
         assert_eq!(view_dirty.repos[0].status, RepoStatus::Dirty);
@@ -846,7 +1033,12 @@ mod tests {
     #[test]
     fn single_repo_emits_invisible_section_and_no_all_repos_count() {
         let repo = root_with("/alpha", &[local("main", false, 0, 0)], Some("main"), false);
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
         assert!(view.single_repo, "one repo → invisible section");
         assert_eq!(
             view.all_repos_count, None,
@@ -860,7 +1052,12 @@ mod tests {
     fn multi_repo_exposes_all_n_count_and_per_repo_sections() {
         let a = root_with("/alpha", &[local("main", false, 0, 0)], Some("main"), false);
         let b = root_with("/beta", &[local("main", false, 0, 0)], Some("main"), false);
-        let view = build_branch_view(&[a, b], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[a, b],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
         assert!(!view.single_repo);
         assert_eq!(view.all_repos_count, Some(2));
         assert_eq!(view.repos.len(), 2);
@@ -881,7 +1078,9 @@ mod tests {
                 ("v2.0".to_string(), RefState::LocalOnly),
             ],
         );
-        let view = build_branch_view(&[repo], &tags, &|_| false);
+        let view = build_branch_view(&[repo], &tags, &std::collections::HashMap::new(), &|_| {
+            false
+        });
         assert_eq!(
             view.repos[0].tags,
             vec![
@@ -912,11 +1111,150 @@ mod tests {
             time: ts(1000),
         });
         let repo = root_with("/alpha", &[b], Some("main"), false);
-        let view = build_branch_view(&[repo], &HashMap::new(), &|_| false);
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
         let leaf = match &view.repos[0].locals[0] {
             BranchNode::Leaf(l) => l,
             _ => panic!("leaf"),
         };
         assert_eq!(leaf.branch.tip.as_ref().unwrap().short_hash, "deadbeef");
+    }
+
+    // --- the Recent group: capped at five, joined, merged by recency ----------
+
+    /// A checkout history for the named branches, listed newest-first the way
+    /// the engine answers it and one second apart.
+    fn checkouts(names: &[&str]) -> Vec<RecentCheckout> {
+        names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| RecentCheckout {
+                name: n.to_string(),
+                at: 1_000 - i as i64,
+            })
+            .collect()
+    }
+
+    fn recent_names(rows: &[BranchLeaf]) -> Vec<&str> {
+        rows.iter().map(|r| r.branch.name.as_str()).collect()
+    }
+
+    #[test]
+    fn recent_group_is_capped_at_five_newest_first() {
+        let branches: Vec<Branch> = (1..=7)
+            .map(|i| local(&format!("r{i}"), false, 0, 0))
+            .collect();
+        let repo = root_with("/alpha", &branches, Some("r7"), false);
+        let mut recents = HashMap::new();
+        recents.insert(
+            repo.id.clone(),
+            checkouts(&["r7", "r6", "r5", "r4", "r3", "r2", "r1"]),
+        );
+
+        let rows = build_recent_group(&[repo], &recents);
+        // "Recent branches node shows up to five recently checked-out branches"
+        // (manage-branches.md:61). The four older moves are not in the group and
+        // no overflow affordance is reserved for them: the escape is unverified.
+        assert_eq!(recent_names(&rows), vec!["r7", "r6", "r5", "r4", "r3"]);
+    }
+
+    #[test]
+    fn recent_group_drops_names_that_are_not_local_branches() {
+        // The reflog records every move, including onto a tag, a raw sha, or a
+        // branch since deleted; joining against the snapshot is what keeps the
+        // group listing branches a click can act on.
+        let repo = root_with(
+            "/alpha",
+            &[local("main", false, 0, 0), local("kept", false, 0, 0)],
+            Some("main"),
+            false,
+        );
+        let mut recents = HashMap::new();
+        recents.insert(
+            repo.id.clone(),
+            checkouts(&["gone", "v1.0", "kept", "main"]),
+        );
+
+        let rows = build_recent_group(&[repo], &recents);
+        assert_eq!(recent_names(&rows), vec!["kept", "main"]);
+    }
+
+    #[test]
+    fn recent_group_never_lists_a_branch_twice_and_keeps_its_newest_move() {
+        let repo = root_with(
+            "/alpha",
+            &[local("a", false, 0, 0), local("b", false, 0, 0)],
+            Some("a"),
+            false,
+        );
+        let mut recents = HashMap::new();
+        recents.insert(repo.id.clone(), checkouts(&["a", "b", "a"]));
+
+        let rows = build_recent_group(&[repo], &recents);
+        assert_eq!(recent_names(&rows), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn recent_group_merges_repositories_by_checkout_time_not_by_repository() {
+        // Recent is a view-level group: the one place in this tree that spans
+        // repositories, which is what makes it a differentiator over the
+        // reference's per-repository shape.
+        let alpha = root_with("/alpha", &[local("a1", false, 0, 0)], Some("a1"), false);
+        let beta = root_with("/beta", &[local("b1", false, 0, 0)], Some("b1"), false);
+        let mut recents = HashMap::new();
+        // `beta`'s move is the newer one although `alpha` is listed first.
+        recents.insert(
+            alpha.id.clone(),
+            vec![RecentCheckout {
+                name: "a1".to_string(),
+                at: 500,
+            }],
+        );
+        recents.insert(
+            beta.id.clone(),
+            vec![RecentCheckout {
+                name: "b1".to_string(),
+                at: 900,
+            }],
+        );
+
+        let rows = build_recent_group(&[alpha, beta], &recents);
+        assert_eq!(recent_names(&rows), vec!["b1", "a1"]);
+        assert_eq!(rows[0].root, RootId(Arc::from(PathBuf::from("/beta"))));
+        assert_eq!(rows[1].root, RootId(Arc::from(PathBuf::from("/alpha"))));
+    }
+
+    #[test]
+    fn recent_group_paints_three_rows_for_three_moves_of_history() {
+        let repo = root_with(
+            "/alpha",
+            &[
+                local("r1", false, 0, 0),
+                local("r2", false, 0, 0),
+                local("r3", false, 0, 0),
+            ],
+            Some("r3"),
+            false,
+        );
+        let mut recents = HashMap::new();
+        recents.insert(repo.id.clone(), checkouts(&["r3", "r2", "r1"]));
+
+        let rows = build_recent_group(&[repo], &recents);
+        // The under-cap case: a cap implemented as five reserved slots shows
+        // empty rows here.
+        assert_eq!(rows.len(), 3, "a short history paints a short group");
+    }
+
+    #[test]
+    fn recent_group_is_empty_when_nothing_was_ever_checked_out() {
+        let repo = root_with("/alpha", &[local("main", false, 0, 0)], Some("main"), false);
+        assert!(
+            build_recent_group(&[repo], &HashMap::new()).is_empty(),
+            "a repository whose reflog holds no checkout has no Recent group"
+        );
     }
 }

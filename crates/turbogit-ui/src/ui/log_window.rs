@@ -809,8 +809,15 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
             }
         }
     }
-    // This pane shows remotes for every repository alike.
-    let view = build_branch_view(&roots, &tags_by_root, &|_| state.ui.log_tree.show_remotes);
+    // This pane shows remotes for every repository alike, and no Recent group:
+    // the checkout history is the Branches tab's question, so this read is not
+    // asked and the group the model would carry for it stays empty.
+    let view = build_branch_view(
+        &roots,
+        &tags_by_root,
+        &std::collections::HashMap::new(),
+        &|_| state.ui.log_tree.show_remotes,
+    );
 
     // The shared tree component with the pane's narrower capability set
     // (plan D7): no inline rename, no per-row actions, no repo-scope picker.
@@ -857,6 +864,13 @@ fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
             state.ui.log_selected_file = None;
         }
         TreeEvent::GroupToggled(group) => match group {
+            // Unreachable today — this pane never warms a checkout history, so it
+            // never paints a Recent header to click — but the flag flips like the
+            // others rather than the arm lying about which group it opened.
+            TreeGroup::Recent => {
+                let on = state.ui.log_tree.groups.recent;
+                state.ui.log_tree.groups.recent = !on;
+            }
             TreeGroup::Local => {
                 let on = state.ui.log_tree.groups.local;
                 state.ui.log_tree.groups.local = !on;
