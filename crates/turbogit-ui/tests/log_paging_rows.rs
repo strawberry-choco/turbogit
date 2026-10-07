@@ -276,10 +276,12 @@ fn an_empty_window_says_so_outside_the_paged_rows() {
         "the list starts populated"
     );
 
-    // A search term nothing matches: the window is empty.
+    // A search term nothing matches: the window is empty because of the
+    // filters, which is the machine's `No commits matching filters` empty —
+    // distinct from a repository that has no history at all.
     harness.state_mut().ui.log_filter = "no-such-commit-anywhere".to_owned();
     settle(&mut harness);
-    assert_painted(&harness, "No commits match.");
+    assert_painted(&harness, "No commits matching filters");
     // And it is not one of the list's rows: the list was handed an empty row
     // count, so it cannot have laid the message out as one.
     assert_painted(&harness, "0 shown");

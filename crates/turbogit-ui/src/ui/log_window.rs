@@ -80,9 +80,10 @@ use egui::{
 };
 use std::ops::Range;
 use std::path::PathBuf;
+use turbogit_app::log_states::{self, LogRecovery, LogState};
 use turbogit_app::root_caches::{LogScope, file_stat};
 use turbogit_app::state::{
-    AppState, BlameTarget, Dialog, DiffTarget, NewBranchBase, PendingConfirm, Toast,
+    AppState, BlameTarget, Dialog, DiffTarget, NewBranchBase, PendingConfirm, Tab, Toast,
 };
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
@@ -963,6 +964,135 @@ fn roots_filter_section(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
+// --- The log machine's message slots ----------------------------------------------
+
+/// Paint one named state of the log machine in a pane's message slot: the
+/// state's own sentence, the reason its read answered with under an error, and
+/// the recovery control **the state carries**.
+///
+/// The control is not the pane's to choose, which is why this takes a
+/// [`LogState`] and hands back the [`LogRecovery`] the developer took rather
+/// than taking a label and painting a button beside it. A surface that could
+/// paint an error without its way out is the generic "something went wrong ·
+/// Retry" this machine replaces: `Error filtering commits` escapes by resetting
+/// the filters, `Error loading commits` escapes by asking again, and
+/// `No changes committed.` is not a failure at all but a trip to the Commit
+/// surface.
+///
+/// The three treatments are the shared presenters, so a state cannot drift into
+/// an error ink of its own: [`widgets::inline_error`] for a failure, the keyed
+/// read's waiting treatment for a read on the pump, [`widgets::empty_state`]
+/// for an empty.
+fn log_state_slot(ui: &mut Ui, state: &LogState) -> Option<LogRecovery> {
+    if state.is_default() {
+        return None;
+    }
+    if state.is_error() {
+        widgets::inline_error(ui, state.label());
+        if let Some(reason) = state.reason() {
+            widgets::empty_state(ui, reason);
+        }
+    } else if state.is_loading() {
+        widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Waiting(state.label()));
+    } else {
+        widgets::empty_state(ui, state.label());
+    }
+    let recovery = state.recovery()?;
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        if components::kit_button(ui, components::KitButton::Secondary, recovery.label()).clicked()
+        {
+            chosen = Some(recovery);
+        }
+    });
+    chosen
+}
+
+/// Apply the recovery one state's control handed back. Which read a `Refresh`
+/// re-asks is the painting pane's own fact — the listing, the details, the
+/// changed files are three different reads of three different keys — so it
+/// arrives as `refresh` and nothing else about the machine is decided here.
+fn apply_log_recovery(
+    state: &mut AppState,
+    recovery: LogRecovery,
+    refresh: impl FnOnce(&mut AppState),
+) {
+    match recovery {
+        LogRecovery::Refresh => refresh(state),
+        LogRecovery::ResetFilters => state.reset_log_filters(),
+        // "No history at all" is a call to action, and the action is the Commit
+        // surface — the same window, not a dialog over it.
+        LogRecovery::CommitLocalChanges => state.ui.tab = Tab::Commit,
+    }
+}
+
+/// The commit a jump asked for that is loaded but hidden — as its root and its
+/// id, which is everything both escapes need and nothing else.
+///
+/// A target that is NOT loaded is nobody's filter problem, so this answers
+/// `None` for it: a band offering to reset the filters for a commit that does
+/// not exist would be a second kind of lie.
+fn hidden_jump_target(state: &AppState, cid: &str) -> Option<RootId> {
+    visible_root_ids(state)
+        .iter()
+        .find(|root| find_commit(state, root, cid).is_some())
+        .cloned()
+}
+
+/// The two non-destructive escapes from "the commit you asked for is hidden by
+/// your filters".
+///
+/// The reference offers two, and neither discards the filter set as a side
+/// effect of a jump: silently widening or clearing a filter set to reveal one
+/// commit destroys the context the developer was working in. `View and reset
+/// filters` is the WIDENING escape and the filters go because the developer
+/// named it; `View in Diff` is the LOOK-ELSEWHERE escape and touches no filter
+/// at all — TurboGit's Log is one tab with one filter set, so it has no second
+/// tab to open the commit in, and the diff surface is where one commit goes
+/// when the listing should stay exactly as it is.
+fn hidden_jump_band(ui: &mut Ui, state: &mut AppState, root: RootId, cid: CommitId) {
+    widgets::empty_state(
+        ui,
+        "The commit you asked for does not match the current filters.",
+    );
+    let mut escape: Option<bool> = None;
+    ui.horizontal(|ui| {
+        if components::kit_button(ui, components::KitButton::Primary, "View and reset filters")
+            .clicked()
+        {
+            escape = Some(true);
+        }
+        if components::kit_button(ui, components::KitButton::Secondary, "View in Diff").clicked() {
+            escape = Some(false);
+        }
+    });
+    match escape {
+        None => {}
+        // The widening escape does what its label says and nothing else: the
+        // filters go, the commit becomes a row, and the jump is asked for again
+        // so the list lands on it.
+        Some(true) => {
+            state.reset_log_filters();
+            state.ui.log_hidden_jump = None;
+            state.ui.selected_commit = Some(cid.clone());
+            state.ui.log_scroll_to = Some(cid);
+        }
+        // The look-elsewhere escape leaves the filter set, the chips and the
+        // band exactly as they were: the listing still says what it said before
+        // the jump, because that is the context the developer was working in.
+        Some(false) => {
+            let parent = find_commit(state, &root, &cid)
+                .and_then(|c| c.parents.first().cloned());
+            state.ui.diff = Some(DiffTarget {
+                root,
+                left: parent,
+                right: Some(cid),
+                path: None,
+            });
+        }
+    }
+}
+
 // --- Pane 2: graph ------------------------------------------------------------------
 
 fn graph_pane(ui: &mut Ui, state: &mut AppState) {
@@ -1025,6 +1155,17 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
         }
     });
 
+    // The search is a read of its own, so it wears a state of its own — in the
+    // filter bar's slot, not the list's. A pickaxe read that failed is
+    // `Error filtering commits` with a `Reset filters` escape, and it says that
+    // WHILE the commit rows stay on screen: a search that quietly answers
+    // nothing is indistinguishable from a search that found nothing, which is
+    // the one failure of this surface the user cannot see for themselves.
+    let filter_state = log_states::filtering(state);
+    if let Some(recovery) = log_state_slot(ui, &filter_state) {
+        apply_log_recovery(state, recovery, AppState::refresh_log_listing);
+    }
+
     // The display window, held: the whole loaded window sorted, live-filtered
     // and unioned with the pickaxe hits, derived when the loaded window or one
     // of the four inputs moved and read as it stands this frame
@@ -1039,6 +1180,18 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
     // aims at it — the same resolution ADR-0014 reached for the diff viewer's
     // hunk navigation.
     let scroll_to = state.ui.log_scroll_to.take();
+    // The hidden-jump band is a fact about the window as it stands NOW, so it
+    // goes the moment the commit it names is on screen again — a filter the
+    // developer has since narrowed or widened by hand must not keep the escapes
+    // painted for a jump that has already been satisfied.
+    if let Some((_, cid)) = state.ui.log_hidden_jump.clone()
+        && commit_index(display.rows(), &cid).is_some()
+    {
+        state.ui.log_hidden_jump = None;
+    }
+    // A jump the built rows cannot show is recorded here and answered after the
+    // scroll area, where `state` is free again (deferred mutations, plan §1.3).
+    let mut missed_jump: Option<String> = None;
     let colors = display.lanes();
     let date_mode = state.settings.date_format;
     let multi_root = shows_root_gutter(state);
@@ -1105,29 +1258,38 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
             // scroll target: one set before the area begins is stashed for an
             // outer area instead. `show_rows` also hands over the range it
             // built, which is what the target's offset is measured from.
-            if let Some(id) = scroll_to.as_deref()
-                && let Some(index) = commit_index(display.rows(), id)
-            {
-                let pitch = crate::theme::FILE_ROW_HEIGHT + ui.spacing().item_spacing.y;
-                let offset = row_offset_from_built(index, visible.clone(), pitch);
-                // The row's band and the viewport, both read off THIS Ui, so the
-                // two are in one coordinate space and cannot need a mapping
-                // between them: the row sits at the built window's top plus the
-                // offset, and the viewport is the clip rect.
-                let row_centre = ui.max_rect().top() + offset + crate::theme::FILE_ROW_HEIGHT / 2.0;
-                let viewport = ui.clip_rect();
-                let view_top = viewport.top() - ui.max_rect().top();
-                if !row_is_in_view(
-                    offset,
-                    crate::theme::FILE_ROW_HEIGHT,
-                    view_top,
-                    viewport.height(),
-                ) {
-                    let viewport_centre = viewport.top() + viewport.height() / 2.0;
-                    ui.scroll_with_delta(Vec2::new(
-                        0.0,
-                        centre_scroll_delta(row_centre, viewport_centre),
-                    ));
+            if let Some(id) = scroll_to.as_deref() {
+                match commit_index(display.rows(), id) {
+                    None => {
+                        // The commit is not one of the rows this window holds.
+                        // Whether the filters are why is decided after the
+                        // scroll area, not here: the answer needs `state`.
+                        missed_jump = Some(id.to_owned());
+                    }
+                    Some(index) => {
+                        let pitch = crate::theme::FILE_ROW_HEIGHT + ui.spacing().item_spacing.y;
+                        let offset = row_offset_from_built(index, visible.clone(), pitch);
+                        // The row's band and the viewport, both read off THIS Ui, so the
+                        // two are in one coordinate space and cannot need a mapping
+                        // between them: the row sits at the built window's top plus the
+                        // offset, and the viewport is the clip rect.
+                        let row_centre =
+                            ui.max_rect().top() + offset + crate::theme::FILE_ROW_HEIGHT / 2.0;
+                        let viewport = ui.clip_rect();
+                        let view_top = viewport.top() - ui.max_rect().top();
+                        if !row_is_in_view(
+                            offset,
+                            crate::theme::FILE_ROW_HEIGHT,
+                            view_top,
+                            viewport.height(),
+                        ) {
+                            let viewport_centre = viewport.top() + viewport.height() / 2.0;
+                            ui.scroll_with_delta(Vec2::new(
+                                0.0,
+                                centre_scroll_delta(row_centre, viewport_centre),
+                            ));
+                        }
+                    }
                 }
             }
             // Only the rows inside the viewport are built: the scroll area
@@ -1160,12 +1322,30 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
         },
     );
 
-    // "No commits match" is the one variable-height thing in the list, so it is
-    // drawn outside the paged rows: an empty result must not have to claim a row
-    // slot it does not have, and the message stays put where the pane has always
-    // shown it instead of scrolling away with a list that has nothing in it.
-    if display.is_empty() {
-        widgets::empty_state(ui, "No commits match.");
+    // The list's message slot is the one place the machine speaks for the
+    // listing, and it is drawn OUTSIDE the paged rows: an empty result must not
+    // have to claim a row slot it does not have, and the message stays where the
+    // pane has always shown it instead of scrolling away with a list that has
+    // nothing in it.
+    //
+    // Which of the ten states it wears is [`log_states::commit_list`]'s answer —
+    // loading, one of the five failures with its own recovery, one of the three
+    // empties, or nothing at all when the rows are the answer. The band below
+    // takes the slot when it is standing, because a jump the filters blocked is
+    // a more specific fact than an empty list.
+    if let Some(cid) = missed_jump.as_deref()
+        && let Some(root) = hidden_jump_target(state, cid)
+    {
+        state.ui.log_hidden_jump = Some((root, cid.to_owned()));
+    }
+    let hidden = state.ui.log_hidden_jump.clone();
+    if let Some((root, cid)) = hidden {
+        hidden_jump_band(ui, state, root, cid);
+    } else {
+        let list_state = log_states::commit_list(state, display.is_empty());
+        if let Some(recovery) = log_state_slot(ui, &list_state) {
+            apply_log_recovery(state, recovery, AppState::refresh_log_listing);
+        }
     }
 
     // Auto-load-more (P6): the trigger is a settled bottom on an overflowing
@@ -1884,6 +2064,9 @@ enum FileAction {
     ScopeHistory(PathBuf),
     /// Row right-clicked: open the shared menu on this row.
     OpenMenu(PathBuf),
+    /// The state's own `Refresh`, taken while the pane still holds the cached
+    /// file list: the re-ask lands after the frame (plan §1.3).
+    Refresh,
 }
 
 fn files_pane(ui: &mut Ui, state: &mut AppState) {
@@ -1917,6 +2100,12 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
 
     let parent = find_commit(state, root_id, cid).and_then(|c| c.parents.first().cloned());
 
+    // The changed-file list is a read of its own — `git diff-tree` for the one
+    // commit — and its failure is `Error loading changes`, not "this commit
+    // changed nothing" and not the details pane's error. Owned before the
+    // cached list below is borrowed for the whole pane.
+    let changes_state = log_states::changed_files(state);
+
     // Filter row (redesign issue 04): the pane's own narrowing of a long
     // change list, matched case-insensitively against the path.
     widgets::search_input(ui, "Filter changed files", &mut state.ui.log_file_filter);
@@ -1940,7 +2129,13 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
                 action = row_action;
             }
         }
-        if files.is_empty() {
+        if !changes_state.is_default() {
+            if let Some(recovery) = log_state_slot(ui, &changes_state)
+                && recovery == LogRecovery::Refresh
+            {
+                action = FileAction::Refresh;
+            }
+        } else if files.is_empty() {
             widgets::empty_state(ui, "No changed files.");
         } else if shown == 0 {
             // A filter that hides every row is its own state — never the
@@ -1971,6 +2166,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
 
     match action {
         FileAction::None => {}
+        FileAction::Refresh => state.refresh_commit_changes(),
         FileAction::OpenMenu(path) => {
             state.ui.log_file_menu = Some((root_id.clone(), cid.to_owned(), path));
         }
@@ -2224,6 +2420,10 @@ enum DetailAction {
     None,
     /// Jump to a parent commit via its hash link (issue 17).
     SelectParent(CommitId),
+    /// The pane's `Refresh` control, taken during the frame that could not
+    /// apply it: the pane borrows the cached commit for its whole body, so the
+    /// re-ask is deferred like every other mutation here (plan §1.3).
+    Refresh,
 }
 
 /// One line of the details pane's key/value list: a key, a value, and — for the
@@ -2367,6 +2567,20 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     // Compact vertical rhythm so the full message fits the pane.
     ui.style_mut().spacing.item_spacing.y = 3.0;
 
+    // The details read is the pane's only off-thread content — the churn
+    // numbers git measures per file — so it is the one thing here that can be
+    // loading or failed, and it wears its own state for it:
+    // `Error loading commit details` with a `Refresh`, never the commit list's
+    // error and never a silent row of zeroes. Computed before the cached commit
+    // is borrowed below, because the answer is owned and the pane holds the
+    // borrow for its whole body.
+    let details_state = log_states::commit_details(state);
+    if let Some(recovery) = log_state_slot(ui, &details_state)
+        && recovery == LogRecovery::Refresh
+    {
+        action = DetailAction::Refresh;
+    }
+
     // Split-borrow the selection (plan §1.3): the commit is looked up over
     // the cache slice and the file summary iterates the cached list in place.
     //
@@ -2478,13 +2692,17 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
 
     // Deferred action application (plan §1.3): the borrow of the cached
     // commit ended above, so `state.ui` is free to mutate here.
-    if let DetailAction::SelectParent(parent) = action {
-        state.ui.selected_commit = Some(parent.clone());
-        state.ui.log_selected_file = None;
-        // Following history has to show where it landed (issue 08): the parent
-        // is the next row DOWN, which the list may not have built, and the
-        // scroll area is the only thing that can bring it into view.
-        state.ui.log_scroll_to = Some(parent);
+    match action {
+        DetailAction::SelectParent(parent) => {
+            state.ui.selected_commit = Some(parent.clone());
+            state.ui.log_selected_file = None;
+            // Following history has to show where it landed (issue 08): the parent
+            // is the next row DOWN, which the list may not have built, and the
+            // scroll area is the only thing that can bring it into view.
+            state.ui.log_scroll_to = Some(parent);
+        }
+        DetailAction::Refresh => state.refresh_commit_details(),
+        DetailAction::None => {}
     }
 }
 

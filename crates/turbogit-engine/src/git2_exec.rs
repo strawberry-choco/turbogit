@@ -281,6 +281,25 @@ impl GitExecutor for Git2Executor {
         if let Some(branch) = &opts.branch {
             let oid = repo.revparse_single(branch).map_err(err)?.id();
             walk.push(oid).map_err(err)?;
+        } else if let Err(e) = repo.head() {
+            // CLI parity: `git log` in a repository nobody has committed in
+            // refuses the read ("fatal: your current branch 'main' does not have
+            // any commits yet"), and the CLI backend answers that as the EMPTY
+            // listing it means — a repository with no history has an empty
+            // history, which is an answer, and the Log surface's `No changes
+            // committed.` state with its `Commit local changes` action is only
+            // reachable if it is heard that way. libgit2 has no HEAD commit for
+            // the walk to start from, which is the same fact in its vocabulary.
+            // The test is made on `head` rather than on `push_head`'s error
+            // because libgit2 reports the unborn branch as a generic Reference
+            // failure there, indistinguishable from a walk that genuinely
+            // cannot run. Every other failure propagates, above all a missing
+            // REVISION, which is not an empty history but a listing that cannot
+            // be read.
+            if e.code() == ErrorCode::UnbornBranch {
+                return Ok(Vec::new());
+            }
+            return Err(err(e));
         } else {
             walk.push_head().map_err(err)?;
         }

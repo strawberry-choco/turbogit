@@ -343,7 +343,27 @@ impl GitExecutor for CliExecutor {
             a.push(p.to_string_lossy().to_string());
         }
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
-        let (out, _, _) = self.run(root, &args)?;
+        let out = match self.run(root, &args) {
+            Ok((out, _, _)) => out,
+            Err(TgError::Cli { code, stderr }) => {
+                // An unborn HEAD: `git log` in a repository nobody has committed
+                // in exits non-zero ("fatal: your current branch 'main' does not
+                // have any commits yet"). A repository with no history has an
+                // EMPTY history, which is an answer — and the Log surface's
+                // `No changes committed.` state, with its `Commit local changes`
+                // action, is only reachable if that is heard as one. Reported as
+                // a failure it reads `Error loading commits` to someone who has
+                // just created a repository. Every other failure must propagate,
+                // above all "not a git repository", or discovery mistakes an
+                // arbitrary directory for one.
+                if stderr.contains("does not have any commits yet") {
+                    String::new()
+                } else {
+                    return Err(TgError::Cli { code, stderr });
+                }
+            }
+            Err(e) => return Err(e),
+        };
 
         let root_id = RootId(root.into());
         let mut commits = Vec::new();

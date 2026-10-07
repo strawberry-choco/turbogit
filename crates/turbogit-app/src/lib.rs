@@ -20,6 +20,7 @@ pub mod events;
 pub mod granular;
 pub mod keyed_read;
 pub mod log_display;
+pub mod log_states;
 pub mod operation;
 pub mod persistence;
 pub mod pinned_views;
