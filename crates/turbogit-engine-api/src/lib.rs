@@ -59,6 +59,17 @@ pub trait GitExecutor: Send + Sync {
     /// `git branch -vv` (+ remotes) for a root.
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>>;
 
+    /// Branches HEAD's reflog says were checked out in `root`, newest first —
+    /// the mechanism behind the branches surface's Recent group (parity
+    /// ticket 03, captured at `research/evidence/rebased/runtime/R3-SESSION-1.md`):
+    /// `git reflog --max-count 50 --grep-reflog "checkout:"`, each matching
+    /// entry parsed to the branch its checkout moved to. Deriving recents
+    /// here, rather than bookkeeping them in the app, is what makes them
+    /// survive restarts and reflect checkouts made outside the app. A repo
+    /// with no reflog yet answers empty — absence is a normal answer, not an
+    /// error.
+    fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>>;
+
     /// Current branch name (or `None` in detached HEAD).
     fn current_branch(&self, root: &Path) -> TgResult<Option<String>>;
 
