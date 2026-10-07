@@ -187,6 +187,33 @@ pub fn abort_to_backup(vcs: &dyn GitExecutor, root: &Path) -> TgResult<()> {
     Ok(())
 }
 
+/// Post-hoc undo of the last targeted rewrite (ticket 09): restore the branch
+/// from the engine's rewrite backup and discard the spent backup — the same
+/// two verbs [`abort_to_backup`] runs once an abort is out of the way, without
+/// the reconstruction a `git reflog` walk would need.
+///
+/// `expected_tip` is the HEAD the rewrite finished on, captured when the undo
+/// was armed. The guard runs HERE, at undo time, never at rewrite time: if
+/// HEAD has moved since — a second operation in the same root — the undo is
+/// refused and NOTHING is restored, because `restore_rewrite_backup` resets
+/// hard and would destroy whatever landed on top. The backup ref survives the
+/// refusal; refusing is not discarding.
+pub fn undo_last_rewrite(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    expected_tip: &str,
+) -> TgResult<()> {
+    let current = vcs.resolve_revision(root, "HEAD")?;
+    if current != expected_tip {
+        return Err(TgError::Other(format!(
+            "the repository has already been changed since the rewrite (HEAD is {current}, \
+             the undo expects {expected_tip})"
+        )));
+    }
+    vcs.restore_rewrite_backup(root)?;
+    vcs.discard_rewrite_backup(root)
+}
+
 /// Render a plan as the raw REBASE-TODO text (screen 17's editable todo):
 /// one `<verb> <sha> <subject>` line per entry, git's own todo format so the
 /// buffer can be round-tripped back through [`parse_todo`].
