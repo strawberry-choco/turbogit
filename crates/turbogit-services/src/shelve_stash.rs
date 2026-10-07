@@ -53,7 +53,7 @@ pub fn shelf_name_of(message: &str) -> Option<&str> {
         .unwrap_or(message);
     match rest.split_once(": ") {
         // `On <branch>` with no message after it: not a shelve's entry.
-        Some((_, name)) if name.is_empty() => None,
+        Some((_, "")) => None,
         Some((_, name)) => Some(name),
         None => (!rest.is_empty()).then_some(rest),
     }
@@ -74,12 +74,7 @@ pub fn find_shelf_stash<'a>(entries: &'a [Stash], name: &str) -> Option<&'a Stas
 /// it is), `true` is `Unshelve and Remove` (the git copy goes with it, which is
 /// what makes the shelf row's own removal safe). Returns the stash entry it
 /// applied, so the caller can name it in what it reports.
-pub fn unshelve(
-    vcs: &dyn GitExecutor,
-    root: &Path,
-    name: &str,
-    remove: bool,
-) -> TgResult<Stash> {
+pub fn unshelve(vcs: &dyn GitExecutor, root: &Path, name: &str, remove: bool) -> TgResult<Stash> {
     let entries = list(vcs, root)?;
     let found = find_shelf_stash(&entries, name).cloned().ok_or_else(|| {
         turbogit_domain::error::TgError::Other(format!(

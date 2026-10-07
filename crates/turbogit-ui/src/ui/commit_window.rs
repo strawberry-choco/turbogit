@@ -333,8 +333,6 @@ fn two_zone(
     ));
 }
 
-/// Labeled placeholder for a sub-tab whose feature has not landed yet
-/// (ADR-0008): explicit on-screen copy instead of a hidden or disabled tab.
 // ------------------------------------------------------ shelf & stash panes --
 //
 // Two panes, one column-table grammar each (ADR-0008's placeholders superseded
@@ -395,10 +393,12 @@ fn stash_pane(ui: &mut Ui, state: &mut AppState) {
     // the executor: it asks, the app admits at most one listing per root in
     // flight, and the frame before the answer arrives paints the loading word
     // rather than an absence git has not confirmed (reverse gap #10).
-    if let Some(id) = state.selected_root.clone() {
-        if state.caches.stashes(&id).is_none() {
-            state.fetch_stashes(id);
-        }
+    let cold = state
+        .selected_root
+        .clone()
+        .filter(|id| state.caches.stashes(id).is_none());
+    if let Some(id) = cold {
+        state.fetch_stashes(id);
     }
     column_table::column_table_pane(
         ui,
@@ -450,9 +450,7 @@ fn shelf_row(ui: &mut Ui, state: &mut AppState, shelf: &turbogit_domain::model::
         // Right-to-left, so the painted left-to-right order is keep, destroy,
         // delete: the reference's own menu order, and the safe verb first.
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if components::kit_button(ui, components::KitButton::Quiet, "Delete Shelf")
-                .clicked()
-            {
+            if components::kit_button(ui, components::KitButton::Quiet, "Delete Shelf").clicked() {
                 state.ui.confirm = Some(PendingConfirm::DeleteShelf {
                     root: root.clone(),
                     name: name.clone(),

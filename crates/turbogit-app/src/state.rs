@@ -2761,7 +2761,10 @@ impl AppState {
             }
             PendingConfirm::DeleteStash { root, index } => {
                 self.dispatch(Operation::custom(
-                    format!("Delete stash {}", turbogit_services::shelve_stash::stash_ref(index)),
+                    format!(
+                        "Delete stash {}",
+                        turbogit_services::shelve_stash::stash_ref(index)
+                    ),
                     Affected::Root(root.clone()),
                     move |v| v.stash_drop(root.as_path(), index),
                 ));
@@ -2783,7 +2786,7 @@ impl AppState {
             .filter(|s| &s.root == root)
             .cloned()
             .collect();
-        rows.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        rows.sort_by_key(|s| std::cmp::Reverse(s.created_at));
         rows
     }
 
@@ -2809,7 +2812,9 @@ impl AppState {
     /// the pane and the file never disagree about a shelf that has gone.
     pub fn remove_shelf(&mut self, root: &RootId, name: &str) {
         let before = self.ui.shelves.len();
-        self.ui.shelves.retain(|s| &s.root != root || s.name != name);
+        self.ui
+            .shelves
+            .retain(|s| &s.root != root || s.name != name);
         if self.ui.shelves.len() != before {
             let _ =
                 turbogit_services::shelve_stash::save_shelves(&self.project_dir, &self.ui.shelves);
