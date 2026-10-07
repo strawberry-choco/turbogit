@@ -1,7 +1,7 @@
 //! Root caches (CONTEXT.md "Root caches"): the in-memory cache layer keyed
 //! by repository root — commit logs, ref decorations, changed-file lists,
-//! path-scoped logs, ahead/behind counts, worktree lists, and submodule
-//! lists (issue 14).
+//! path-scoped logs, ahead/behind counts, worktree lists, submodule
+//! lists (issue 14), and stash listings (surface 07).
 //!
 //! One deep module with a small interface: the maps are private,
 //! lazy-fill logic lives *inside* (`ensure_*`), and callers get typed
@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use turbogit_domain::model::{
-    Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, RootId, Submodule, Worktree,
+    Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, RootId, Stash, Submodule, Worktree,
     forward_slash_path,
 };
 use turbogit_engine_api::GitExecutor;
@@ -159,6 +159,11 @@ pub struct RootCaches {
     worktree_cache: HashMap<RootId, Vec<Worktree>>,
     /// Registered submodules per root (issue 14).
     submodule_cache: HashMap<RootId, Vec<Submodule>>,
+    /// Stash entries per root (surface 07's Stash pane): what `git stash list`
+    /// answered, in git's own newest-first order. A shelf's content is one of
+    /// these, which is why the Shelf pane and the stash verbs all read through
+    /// here rather than asking git again.
+    stash_cache: HashMap<RootId, Vec<Stash>>,
     /// Per-root hunk-span statistics over the three working-tree diffs
     /// (issue 20): HEAD↔worktree, HEAD↔index, and index↔worktree, each
     /// parsed into per-file hunk spans.
@@ -550,6 +555,13 @@ impl RootCaches {
     /// The cached submodule list of `root`, if loaded (issue 14).
     pub fn submodules(&self, root: &RootId) -> Option<&[Submodule]> {
         self.submodule_cache.get(root).map(|v| v.as_slice())
+    }
+
+    /// The cached stash listing of `root`, if loaded (surface 07). Git's own
+    /// order, newest first — the pane numbers rows by `Stash::index`, not by
+    /// position, because `stash@{n}` is what the verbs hand the engine.
+    pub fn stashes(&self, root: &RootId) -> Option<&[Stash]> {
+        self.stash_cache.get(root).map(|v| v.as_slice())
     }
 
     /// The cached hunk-span statistics of `root`, if loaded (issue 20).
@@ -947,6 +959,13 @@ impl RootCaches {
         self.submodule_cache.insert(root, submodules);
     }
 
+    /// Store a freshly loaded stash listing for `root` (surface 07). An empty
+    /// list is an answer, not an absence: storing it is what stops the pane
+    /// asking git again every frame.
+    pub fn store_stashes(&mut self, root: RootId, stashes: Vec<Stash>) {
+        self.stash_cache.insert(root, stashes);
+    }
+
     // --- Invalidation -------------------------------------------------------
 
     /// Drop the caches for the affected scope. One sanctioned per-cache
@@ -971,6 +990,7 @@ impl RootCaches {
                 self.search_cache.retain(|(r, _), _| r != root);
                 self.ahead_behind.remove(root);
                 self.submodule_cache.remove(root);
+                self.stash_cache.remove(root);
                 self.hunk_stats.remove(root);
                 // A root's failures go with its windows: an operation that
                 // changed the repository must not leave a pane still reporting
@@ -1006,6 +1026,7 @@ impl RootCaches {
         self.ahead_behind.clear();
         self.worktree_cache.clear();
         self.submodule_cache.clear();
+        self.stash_cache.clear();
         self.hunk_stats.clear();
         self.log_failed.clear();
     }
@@ -1023,6 +1044,7 @@ impl RootCaches {
             && self.ahead_behind.is_empty()
             && self.worktree_cache.is_empty()
             && self.submodule_cache.is_empty()
+            && self.stash_cache.is_empty()
             && self.hunk_stats.is_empty()
             && self.log_failed.is_empty()
     }
