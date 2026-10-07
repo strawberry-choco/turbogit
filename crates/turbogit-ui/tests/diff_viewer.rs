@@ -13,7 +13,7 @@
 //! - segmented control toggles side-by-side/unified rendering
 //! - hunk nav ‹ n/N › counts and steps correctly
 //! - hunk nav aims the hunk it names, from any scroll position, in both modes
-//! - Ignore whitespace toggle affects the diff
+//! - The whitespace policy stops painting the line pair it calls equal
 //! - add/del rows paint token-exact backgrounds; gutters show muted numbers
 //! - the diff's ghost icon buttons (nav pair, gutter pair) are two scale
 //!   settings of one shared primitive and keep their labels and enabled flags
@@ -119,7 +119,9 @@ fn repo_staged_only() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// Repo whose only change is a whitespace-only unstaged edit
-/// (`gamma` → `g amma`): toggling Ignore whitespace empties the diff.
+/// (`gamma` → `g amma`): under `Ignore whitespaces` the pair becomes one
+/// unchanged line, and under `Trim whitespaces` — which reads the same fixture —
+/// it stays the difference it is.
 fn repo_whitespace() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "ws.txt", "alpha\nbeta\ngamma\n");
@@ -248,7 +250,7 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
         None,
         None,
         DiffComparison::Local,
-        false,
+        turbogit_domain::model::DiffPolicies::default(),
         Some(path),
     );
     harness
@@ -256,6 +258,7 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
         .tx
         .send(AppEvent::DiffReady {
             key: target.key(),
+            policies: turbogit_domain::model::DiffPolicies::default(),
             result: Err(TgError::Other("diff read failed".into())),
         })
         .expect("send diff failure");
@@ -436,28 +439,45 @@ fn hunk_navigation_counts_and_steps_across_two_hunks() {
     assert_eq!(h.state().ui.diff_current_hunk, 0);
 }
 
-// --- Cycle 4: ignore whitespace -----------------------------------------------
+// --- Cycle 4: the whitespace policy ------------------------------------------
 
+/// The `Ignore Differences` policy reaches the **comparison**, not only its
+/// colouring: under `Ignore whitespaces` the two sides are the same line, so the
+/// old side's row stops being painted and one unchanged row stands where the pair
+/// was. The boolean checkbox this replaces asked the question of `git` (a `-w`
+/// flag), which answered with an empty comparison; the policy is a view decision
+/// folded into the display model, and the raw patch staging composes from keeps
+/// both lines (`crates/turbogit-app/tests/diff_policies.rs` pins that half).
 #[test]
-fn ignore_whitespace_toggle_affects_the_diff() {
+fn whitespace_policy_stops_painting_the_line_pair_it_calls_equal() {
+    use turbogit_domain::model::DiffWhitespace;
     let (_tmp, repo) = repo_whitespace();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo.join("ws.txt"));
 
-    assert!(!h.state().ui.diff_ignore_whitespace);
+    // The menu the five values live in replaces the checkbox, on the file row.
+    assert_painted(&h, "Diff options");
+    assert_eq!(h.state().ui.diff_policies.whitespace, DiffWhitespace::None);
+    assert_painted(&h, "gamma");
     assert_painted(&h, "g amma");
 
-    h.get_by_label("Ignore whitespace").click();
+    h.state_mut().ui.diff_policies.whitespace = DiffWhitespace::IgnoreWhitespace;
     settle(&mut h);
-    assert!(h.state().ui.diff_ignore_whitespace);
-    assert_not_painted(&h, "g amma");
-    assert_painted(&h, "(no differences)");
+    assert_not_painted(&h, "gamma");
+    assert_painted(&h, "g amma");
 
-    // Toggling back restores the full diff.
-    h.get_by_label("Ignore whitespace").click();
+    // `Trim whitespaces` is a *different* answer to this same diff: internal
+    // whitespace is significant there, so the pair comes back. Two values that
+    // behaved alike would be one value with two names.
+    h.state_mut().ui.diff_policies.whitespace = DiffWhitespace::TrimWhitespace;
     settle(&mut h);
-    assert!(!h.state().ui.diff_ignore_whitespace);
+    assert_painted(&h, "gamma");
+
+    // And back to the default, the full diff is painted again.
+    h.state_mut().ui.diff_policies.whitespace = DiffWhitespace::None;
+    settle(&mut h);
+    assert_painted(&h, "gamma");
     assert_painted(&h, "g amma");
 }
 
@@ -1097,15 +1117,15 @@ fn hovered_file_row(harness: &mut Harness<'_, AppState>) -> (Rect, Pos2) {
 }
 
 /// Contract: the statistics sit with the thing they describe. The counts and the
-/// comparison toggle paint **on the file row**, and the diff pane's toolbar
-/// paints neither of them any more.
+/// diff viewer's settings menu paint **on the file row**, and the diff pane's
+/// toolbar paints neither of them any more.
 ///
 /// Scoped by position, never by string: a `+1` is a perfectly ordinary thing for
 /// another surface on screen to be painting (the commit window's preview card
 /// header is still a legitimate place for it), so the question is not "how many
 /// `+1`s are on screen" but "where are they".
 #[test]
-fn the_file_row_carries_the_counts_and_the_whitespace_toggle() {
+fn the_file_row_carries_the_counts_and_the_diff_options_menu() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
@@ -1145,24 +1165,24 @@ fn the_file_row_carries_the_counts_and_the_whitespace_toggle() {
         );
     }
 
-    // The toggle: one control, on the file row, nowhere in the toolbar.
+    // The menu's trigger: one control, on the file row, nowhere in the toolbar.
     let toggles: Vec<Rect> = h
-        .get_all_by_label("Ignore whitespace")
+        .get_all_by_label("Diff options")
         .map(|n| n.rect())
         .collect();
     assert_eq!(
         toggles.len(),
         1,
-        "the toolbar no longer paints the toggle; exactly one control remains"
+        "the toolbar no longer paints the trigger; exactly one control remains"
     );
     assert!(
         band.contains(toggles[0].center()),
-        "the comparison toggle belongs to the file row: {:?} is outside {band:?}",
+        "the policy menu belongs to the file row: {:?} is outside {band:?}",
         toggles[0]
     );
     assert!(
         !toolbar.intersects(toggles[0]),
-        "the toggle moved off the toolbar onto the file row: {toggles:?}"
+        "the trigger moved off the toolbar onto the file row: {toggles:?}"
     );
 }
 
@@ -1272,7 +1292,7 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     open_preview(&mut h, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
-    let toggle = h.get_by_label("Ignore whitespace").rect();
+    let toggle = h.get_by_label("Diff options").rect();
     let changed: Vec<Rect> = filled_rects(&h)
         .into_iter()
         .filter(|(_, c)| *c == Palette::DIFF_ADD_BG || *c == Palette::DIFF_DEL_BG)
@@ -1286,8 +1306,8 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     for row in &changed {
         assert!(
             !row.intersects(toggle),
-            "the file row's toggle sits on a changed row's band {row:?} and would \
-             swallow its click: {toggle:?}"
+            "the file row's menu trigger sits on a changed row's band {row:?} and \
+             would swallow its click: {toggle:?}"
         );
     }
     for row in &changed {

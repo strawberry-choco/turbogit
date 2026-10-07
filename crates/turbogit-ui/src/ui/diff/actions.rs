@@ -1,13 +1,14 @@
 //! Diff actions and toolbar widgets: hunk/line staging dispatch,
 //! the mode/chips/nav toolbar, and the gutter stage buttons (spec R2).
 
-use super::model::{line_counts, mono_font};
+use super::model::{DisplayRow, RowKind, line_counts, mono_font};
 use crate::theme::Palette;
+use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
-    Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui,
-    UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, RichText, Sense, Stroke,
+    StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::collections::BTreeSet;
 use turbogit_app::granular;
@@ -85,17 +86,93 @@ pub(crate) fn preview_line_counts(state: &AppState, path: &std::path::Path) -> (
         .map_or((0, 0), |diff| line_counts(&diff.model))
 }
 
-/// The commit window's preview target for `path`: the live chip and whitespace
-/// state decides its sides, and a peek of it spends no git work (ADR-0021).
+/// The commit window's preview target for `path`: the live chip and view policies
+/// decide its sides and its model, and a peek of it spends no git work (ADR-0021).
 fn preview_target(state: &AppState, path: std::path::PathBuf) -> DiffTarget {
     DiffTarget::new(
         state.selected_path().unwrap_or_default(),
         None,
         None,
         state.ui.diff_comparison,
-        state.ui.diff_ignore_whitespace,
+        state.ui.diff_policies,
         Some(path),
     )
+}
+
+/// The line the caret sits on, on the pane that holds it — the target of `F4`
+/// (Jump to Source), which has to land in the same place the reader was looking.
+///
+/// The caret is **derived**, not stored: it is the first changed row of the
+/// current hunk on the active side, which is the position the hunk navigator just
+/// aimed at and the row the pane's own caret bar is painted over. A second cursor
+/// of its own would be a second canonical selection, which CONTEXT.md "Current
+/// hunk" exists to forbid. A side with no numbered row there — a pure insertion
+/// read as the `Before` pane — has no line to jump to, and says so.
+pub(crate) fn preview_caret_line(state: &AppState) -> Option<(std::path::PathBuf, usize)> {
+    let path = state.ui.preview_change.clone()?;
+    let diff = state.peek(preview_target(state, path.clone()))?;
+    let want_add = state.ui.diff_pane == turbogit_app::state::DiffPane::New;
+    diff.model
+        .display
+        .iter()
+        .flat_map(|row| match row {
+            DisplayRow::Full(r) => vec![r],
+            DisplayRow::Pair(d, a) => d.iter().chain(a.iter()).collect(),
+        })
+        .filter(|r| r.hunk == state.ui.diff_current_hunk)
+        .find(|r| r.kind == if want_add { RowKind::Add } else { RowKind::Del })
+        .map(|r| r.new_no.max(r.old_no))
+        .filter(|line| *line > 0)
+        .map(|line| (path, line))
+}
+
+/// The diff viewer's settings menu (`⌃⇧D`): the two five-value policies, in the
+/// reference's order — what counts as a difference first, then how finely a
+/// difference is highlighted.
+///
+/// Both groups are in one menu rather than two controls because they are decided
+/// together: a reviewer and the code they are reviewing agree on what changed only
+/// once both questions have an answer.
+///
+/// Answers whether the frame changed anything, which is when the choice is
+/// written down: a policy outlives the session it was picked in, because two
+/// people reading one commit have to be reading it the same way tomorrow.
+pub(super) fn diff_options_menu(ui: &mut Ui, state: &mut AppState) -> bool {
+    use turbogit_domain::model::{DiffHighlighting, DiffWhitespace};
+    let mut changed = false;
+    let caption = crate::theme::chrome_font(crate::theme::TYPE_SECTION);
+    ui.label(
+        RichText::new(components::section_label("Ignore Differences"))
+            .font(caption.clone())
+            .color(Palette::INK_3),
+    );
+    for value in DiffWhitespace::ALL {
+        if ui
+            .radio_value(&mut state.ui.diff_policies.whitespace, value, value.label())
+            .changed()
+        {
+            changed = true;
+        }
+    }
+    ui.add_space(crate::theme::ITEM_SPACING.y);
+    ui.label(
+        RichText::new(components::section_label("Highlighting Differences"))
+            .font(caption)
+            .color(Palette::INK_3),
+    );
+    for value in DiffHighlighting::ALL {
+        if ui
+            .radio_value(
+                &mut state.ui.diff_policies.highlighting,
+                value,
+                value.label(),
+            )
+            .changed()
+        {
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Whether one changed line currently sits in the accumulated sub-hunk

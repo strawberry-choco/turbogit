@@ -24,11 +24,14 @@
 //!   (Git Log) keep their fixed pair and show neither.
 //! - **Hunk navigation** ‹ n/N › steps between parsed hunks.
 //! - **The file row carries its own statistics** (spec story 23): a file
-//!   section's `+N −M` change counts, and the **Ignore whitespace** checkbox
-//!   that feeds `DiffOpts::ignore_whitespace` into the engine call and the cache
-//!   key. The row is painted in every state of the comparison — settled, empty,
-//!   still computing or failed — so the control that produces an empty
-//!   comparison does not disappear with it.
+//!   section's `+N −M` change counts, and the **Diff options** menu (`⌃⇧D`) holding
+//!   the viewer's two five-value policies — which whitespace differences count as a
+//!   change at all, and how finely a change is highlighted. They are folded into
+//!   the display model when the diff settles (ADR-0014) and are part of what the
+//!   keyed read is keyed on; they change no byte of the patch partial staging
+//!   composes from. The row is painted in every state of the comparison — settled,
+//!   empty, still computing or failed — so the control that decides what counts as
+//!   a difference does not disappear with it.
 //! - Add/del lines paint token-exact backgrounds (`DIFF_ADD_BG` /
 //!   `DIFF_DEL_BG`) with muted `INK_3` gutter numbers; hunk headers sit on
 //!   SURFACE (spec §2.3). None of the diff pair, the added/removed accent pair
@@ -51,7 +54,9 @@ mod model;
 mod panes;
 mod view;
 
-pub(crate) use actions::{chip_button, preview_hunk_count, preview_line_counts, preview_status};
+pub(crate) use actions::{
+    chip_button, preview_caret_line, preview_hunk_count, preview_line_counts, preview_status,
+};
 pub use view::render_diff;
 
 // Re-exported here so the historical `ui::diff` paths keep resolving

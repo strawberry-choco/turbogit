@@ -115,8 +115,13 @@ pub enum AppEvent {
     /// Fatal / unexpected error to surface in the UI.
     Error(String),
     /// An asynchronously-computed diff is ready (keyed to avoid races).
+    ///
+    /// The policies travel with the answer: the display model is folded under the
+    /// policy the request was made under, never under whatever the viewer has
+    /// since been switched to.
     DiffReady {
         key: String,
+        policies: turbogit_domain::model::DiffPolicies,
         result: TgResult<Patch>,
     },
     /// Blame lines for the open blame target (issue 18) are ready — keyed

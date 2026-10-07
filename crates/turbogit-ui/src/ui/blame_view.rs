@@ -186,13 +186,32 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     // Row clicks are deferred (plan §1.3): the handle keeps the rows alive
     // across the scroll pass, which is what the owned verdict is for.
     let mut clicked: Option<String> = None;
+    // The line `F4` carried in from the diff viewer's caret (Jump to Source).
+    // Copied out before the scroll pass because the pass owns the `Ui` borrow,
+    // and this is the surface's one chance to aim at a row.
+    let caret = state.ui.blame_caret_line;
+    let mut caret_aimed = false;
     ScrollArea::vertical().show(ui, |ui| {
         for line in lines.iter() {
-            if blame_row(ui, line, &target.rev, multi_root) {
+            let response = blame_row(ui, line, &target.rev, multi_root);
+            if Some(line.line_no) == caret {
+                // Arrive at the line the reader was looking at, not at the top of
+                // the file. Centre, not start: a line pinned to the window's edge
+                // is a line the reader has to find again.
+                response.scroll_to_me(Some(egui::Align::Center));
+                caret_aimed = true;
+            }
+            if response.clicked() {
                 clicked = Some(line.commit.clone());
             }
         }
     });
+    if caret_aimed {
+        // One-shot: the aim is this surface's opening position, not a claim on
+        // every frame — leaving it set would pin the view against the reader's
+        // own scrolling.
+        state.ui.blame_caret_line = None;
+    }
 
     if let Some(commit) = clicked {
         // Navigate to the line's commit in the log (issue 18): select it,
@@ -210,7 +229,12 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// One blamed line: highlight when the blamed-at commit introduced it, paint
-/// hash | author | age | line, and report whether it was clicked.
+/// hash | author | age | line, and answer with the row's own response.
+///
+/// The response travels rather than a `clicked` bool because the row has a second
+/// consumer: a blame opened by `F4` from the diff viewer has to **arrive** at the
+/// line the caret was on, and asking the surface to show a row is something only
+/// that row's response can do.
 ///
 /// **The row is the commit table's row.** Its height is
 /// [`CommitTable::ROW_HEIGHT`] and its band and rail are
@@ -227,7 +251,7 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
 /// file, so a per-root swatch repeated down a screen of lines would name a root
 /// the view is already scoped to, and it would make this a fifth site asking
 /// `root_color` for a value the ROOTS column has already said.
-fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str, multi_root: bool) -> bool {
+fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str, multi_root: bool) -> egui::Response {
     let width = ui.available_width();
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, CommitTable::ROW_HEIGHT), Sense::click());
@@ -285,5 +309,5 @@ fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str, multi_root: bool) -> bool
             format!("{} {}", widgets::short_commit_ref(&line.commit), content),
         )
     });
-    response.clicked()
+    response
 }
