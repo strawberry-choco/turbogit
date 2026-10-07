@@ -53,6 +53,7 @@ pub mod project_tree;
 pub mod push_dialog;
 pub mod remotes_dialog;
 pub mod reword_editor;
+pub mod rewrite_gating;
 pub mod rewrite_preflight;
 pub mod rewrite_undo;
 pub mod settings_modal;
