@@ -244,6 +244,17 @@ fn dispatch(state: &mut AppState, pf: &RewritePreflight) {
         },
     };
     state.arm_reselect_after_rewrite(pf.root.clone(), pf.plan.clone(), pf.commit.clone(), anchor);
+    // Ticket 09: the settlement event cannot name the commit or the verb, so
+    // the undo offer's identity is captured here, before the dispatch — the
+    // same capture-before-dispatch the branch delete's undo uses.
+    state.ui.rewrite_undo_pending = Some(turbogit_app::state::RewriteUndoPending {
+        root: pf.root.clone(),
+        verb: match &pf.verb {
+            HistoryVerb::Drop => turbogit_app::state::RewriteUndoVerb::Drop,
+            HistoryVerb::Reword { .. } => turbogit_app::state::RewriteUndoVerb::Reword,
+        },
+        commit: pf.commit.clone(),
+    });
     let operation = match &pf.verb {
         HistoryVerb::Drop => Operation::drop_commit(&pf.root, &branch, &pf.commit, &settings),
         HistoryVerb::Reword { message } => {

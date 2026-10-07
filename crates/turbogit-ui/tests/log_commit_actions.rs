@@ -19,8 +19,8 @@ use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
 use test_support::git_seed::{commit, git};
 use test_support::harness::{
-    assert_menu_item_gated, assert_not_painted, assert_painted, click_menu_item, painted_galleys,
-    right_click_row, settle_quiet, shell_harness_over,
+    assert_menu_item_gated, assert_not_painted, assert_painted, click_menu_item, filled_rects,
+    painted_galleys, right_click_row, settle_quiet, shell_harness_over,
 };
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, Tab};
@@ -1023,4 +1023,186 @@ fn actions_are_blocked_with_an_explanation_on_protected_branches() {
         harness.state().ui.dialog.is_none(),
         "a blocked cherry-pick must not open the branch picker"
     );
+}
+
+// --- Ticket 09: post-hoc undo with a repository-changed guard -------------------
+
+/// Reword the middle commit through both dialogs and wait until the post-hoc
+/// undo is armed.
+fn reword_and_arm_undo(harness: &mut Harness<'static, AppState>, target: &str) {
+    open_reword_preflight(harness, target, "feature-2", "feature: the second one");
+    harness.get_by_label("Reword this commit").click();
+    wait_for(harness, |s| s.ui.rewrite_undo.is_some());
+}
+
+/// A successful reword's notification carries the undo (ticket 09, assertion 1
+/// reword half + assertion 3): the success title is painted with an `Undo`
+/// control, and the control is a primary kit button — a `Palette::ACCENT`
+/// fill — not a greyed-out stub.
+#[test]
+fn the_reword_success_notification_carries_an_undo_control() {
+    let (_tmp, project, _repo, target, _tip) = history_to_rewrite();
+    let mut harness = log_harness_over(project);
+
+    reword_and_arm_undo(&mut harness, &target);
+
+    assert_painted(&harness, "Commit message changed");
+    assert_painted(&harness, "Undo");
+    let undo_rect = harness.get_by_label("Undo").rect();
+    assert!(
+        filled_rects(&harness)
+            .iter()
+            .any(|(r, fill)| *fill == Palette::ACCENT && r.intersects(undo_rect)),
+        "the Undo control is filled with the accent, not painted inert"
+    );
+}
+
+/// After a SECOND operation has run in the same root, the reword's undo is
+/// withheld, not offered-then-failed (ticket 09, assertion 1 withheld half):
+/// the notification paints the repository-changed reason instead of an enabled
+/// `Undo`, the success title leaves the frame with it (assertion 2), and no
+/// accent fill rides the banner row at all (assertion 3, withheld = withheld).
+#[test]
+fn a_second_operation_withholds_the_reword_undo_with_the_reason() {
+    let (_tmp, project, repo, target, _tip) = history_to_rewrite();
+    let mut harness = log_harness_over(project);
+
+    reword_and_arm_undo(&mut harness, &target);
+
+    // The second operation: a commit lands in the root (raw git, the way an
+    // external tool would), then ANY app operation on that root settles and
+    // re-runs the guard, which reads HEAD and finds it moved. The fetch is
+    // that trigger — deliberately no-op-adjacent, so the withholding is
+    // attributable to the repository state, not to what the operation did.
+    commit(&repo, "e.txt", "4\n", "a second operation");
+    let root = harness.state().selected_root.clone().unwrap();
+    harness
+        .state_mut()
+        .dispatch(turbogit_app::operation::Operation::Fetch { roots: vec![root] });
+    wait_for(&mut harness, |s| {
+        s.ui.rewrite_undo.as_ref().is_some_and(|o| o.withheld)
+    });
+
+    assert_painted(&harness, "Cannot undo commit message edit");
+    assert_not_painted(&harness, "Commit message changed");
+    assert_not_painted(&harness, "Undo");
+    // Withheld entirely, not painted inert: no ACCENT fill intersects the
+    // banner row the reason was painted on.
+    let reason_rect = painted_galleys(&harness)
+        .iter()
+        .find(|g| g.text == "Cannot undo commit message edit — the repository has changed since")
+        .map(|g| g.rect)
+        .expect("the withheld reason is painted");
+    let row = egui::Rect::from_min_max(
+        egui::Pos2::new(0.0, reason_rect.top()),
+        egui::Pos2::new(reason_rect.right() + 600.0, reason_rect.bottom()),
+    );
+    assert!(
+        !filled_rects(&harness)
+            .iter()
+            .any(|(r, fill)| *fill == Palette::ACCENT && r.intersects(row)),
+        "a withheld undo paints no control at all, not an inert one"
+    );
+}
+
+/// The undo is real: clicking it restores the dropped commit from the backup
+/// ref — the repository, not the notification, is the evidence. This is also
+/// assertion 1's drop half: the success notification carries the affordance.
+#[test]
+fn clicking_undo_after_a_drop_restores_the_dropped_commit() {
+    let (_tmp, project, repo, target, _tip) = history_to_rewrite();
+    let mut harness = log_harness_over(project);
+
+    open_rewrite_preflight(&mut harness, &target, "feature-2");
+    harness.get_by_label("Drop this commit").click();
+    wait_for(&mut harness, |s| s.ui.rewrite_undo.is_some());
+
+    assert_painted(&harness, "Dropped commit");
+    assert_painted(&harness, "Undo");
+    harness.get_by_label("Undo").click();
+    wait_for(&mut harness, |s| {
+        s.ui.toast
+            .as_ref()
+            .is_some_and(|t| t.message == "Undo drop")
+    });
+
+    let subjects = git(&repo, &["log", "--format=%s", "feature"]);
+    assert!(
+        subjects.contains("feature-2"),
+        "the dropped commit is back: {subjects}"
+    );
+    assert!(
+        git_absent(
+            &repo,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "refs/turbogit/preflight-backup"
+            ]
+        )
+        .is_none(),
+        "and the spent backup is discarded"
+    );
+}
+
+/// The undo-failed outcome is reachable, and its wording is its own (ticket 09,
+/// assertion 2): with the backup ref removed behind the app's back — HEAD has
+/// not moved, so the guard still holds the undo valid — the restore fails and
+/// the frame reports that, not the success title.
+#[test]
+fn an_undo_without_its_backup_reports_a_distinct_failure() {
+    let (_tmp, project, repo, target, _tip) = history_to_rewrite();
+    let mut harness = log_harness_over(project);
+
+    open_rewrite_preflight(&mut harness, &target, "feature-2");
+    harness.get_by_label("Drop this commit").click();
+    wait_for(&mut harness, |s| s.ui.rewrite_undo.is_some());
+
+    git(
+        &repo,
+        &["update-ref", "-d", "refs/turbogit/preflight-backup"],
+    );
+
+    harness.get_by_label("Undo").click();
+    wait_for(&mut harness, |s| {
+        s.ui.toast
+            .as_ref()
+            .is_some_and(|t| t.message.contains("Undo drop:"))
+    });
+
+    assert_painted(&harness, "no rewrite backup to restore");
+    assert_not_painted(&harness, "Dropped commit");
+    let subjects = git(&repo, &["log", "--format=%s", "feature"]);
+    assert!(
+        !subjects.contains("feature-2"),
+        "and nothing was restored: {subjects}"
+    );
+}
+
+/// The three outcome strings are three strings (ticket 09, assertion 2, the
+/// structural half): success title, impossible reason and undo-failed wording
+/// never share text, for either covered verb — and the two verbs never share
+/// either, so a drop never reads as a reword.
+#[test]
+fn the_three_undo_outcomes_never_share_wording() {
+    use turbogit_app::state::RewriteUndoVerb;
+    use turbogit_ui::ui::rewrite_undo::{cannot_undo, success_title, undo_label};
+
+    for verb in [RewriteUndoVerb::Drop, RewriteUndoVerb::Reword] {
+        let success = success_title(verb, "abc1234");
+        let impossible = cannot_undo(verb);
+        let failed = undo_label(verb);
+        assert_ne!(success, impossible, "{verb:?}");
+        assert_ne!(success, failed, "{verb:?}");
+        assert_ne!(impossible, failed, "{verb:?}");
+    }
+    for (a, b) in [
+        (RewriteUndoVerb::Drop, RewriteUndoVerb::Reword),
+        (RewriteUndoVerb::Reword, RewriteUndoVerb::Drop),
+    ] {
+        assert_ne!(success_title(a, "abc1234"), success_title(b, "def5678"));
+        assert_ne!(cannot_undo(a), cannot_undo(b));
+        assert_ne!(undo_label(a), undo_label(b));
+    }
 }
