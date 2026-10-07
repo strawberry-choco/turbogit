@@ -651,6 +651,15 @@ impl GitExecutor for Git2Executor {
         Ok(result)
     }
 
+    fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>> {
+        // libgit2 answers `Repository::reflog` with `(oid, message)` pairs only
+        // — no timestamp — and the cross-repository Recent merge sorts by the
+        // checkout's own time, so the CLI's `--date=unix` selector is the only
+        // adapter that can say when. Delegation, like the other reads that stay
+        // on the CLI until the read-only migration phases land.
+        self.cli.recent_checkouts(root)
+    }
+
     fn ahead_behind(&self, root: &Path, branch: &str, upstream: &str) -> TgResult<(usize, usize)> {
         let repo = self.open(root)?;
         let branch_oid = repo
