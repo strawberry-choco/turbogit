@@ -80,10 +80,16 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
     } else {
         MenuItemState::enabled()
     };
+    // The pull family means "fetch and integrate this branch's upstream", so
+    // unlike the source-branch verbs below it is offered on remote rows only
+    // (ticket 21a): on a local row `Merge`/`Rebase` are how commits move, and
+    // a "Pull" label there names an operation that is not what would run.
     items[BranchMenuAction::CheckoutAndPull.index()] = if is_current {
         MenuItemState::disabled("already checked out")
     } else if !has_upstream {
         MenuItemState::disabled("no upstream to pull from")
+    } else if is_local {
+        MenuItemState::disabled("pull is offered on remote branches")
     } else {
         MenuItemState::enabled()
     };
@@ -113,6 +119,8 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
         MenuItemState::disabled("check out this branch first")
     } else if !has_upstream {
         MenuItemState::disabled("no upstream to pull from")
+    } else if is_local {
+        MenuItemState::disabled("pull is offered on remote branches")
     } else {
         MenuItemState::enabled()
     };
