@@ -39,10 +39,12 @@ fn state(branch: &Branch, current: Option<&str>, item: BranchMenuAction) -> Menu
 // --- cycle 1: the current branch -------------------------------------------------
 
 /// The row for the checked-out branch: Checkout and Checkout-and-pull are
-/// blocked with "already checked out"; Pull is the update action that IS
-/// available; Rename is a local verb and stays enabled.
+/// blocked with "already checked out", and `Pull` — once the one update
+/// action this row offered — is withheld with the pull family's scope
+/// (ticket 21a): the family is a remote-branch verb, and the checked-out
+/// branch is always local. Rename is a local verb and stays enabled.
 #[test]
-fn the_current_branch_offers_pull_but_no_checkout() {
+fn the_current_branch_offers_no_checkout_and_no_pull() {
     let main = local("main", Some("origin/main"), 0, 0);
     let s = |item: BranchMenuAction| state(&main, Some("main"), item);
 
@@ -54,7 +56,10 @@ fn the_current_branch_offers_pull_but_no_checkout() {
         s(BranchMenuAction::CheckoutAndPull),
         MenuItemState::disabled("already checked out")
     );
-    assert_eq!(s(BranchMenuAction::Pull), MenuItemState::enabled());
+    assert_eq!(
+        s(BranchMenuAction::Pull),
+        MenuItemState::disabled("pull is offered on remote branches")
+    );
     assert_eq!(s(BranchMenuAction::Rename), MenuItemState::enabled());
     assert_eq!(s(BranchMenuAction::NewBranchFrom), MenuItemState::enabled());
 }
@@ -224,6 +229,56 @@ fn the_designed_order_is_the_array_slots() {
     for (slot, action) in BranchMenuAction::ORDER.iter().enumerate() {
         assert_eq!(action.index(), slot, "{action:?} is painted in slot {slot}");
     }
+}
+
+// --- cycle 7: the pull family is a remote-branch verb (ticket 21a) ---------------
+
+/// `Pull` and `Checkout and pull` mean "fetch and integrate this branch's
+/// upstream", and the reference scopes that family to remote branches — on a
+/// local row the history verbs above are how commits move, so offering the
+/// family there offers an operation the label does not name. The gate is
+/// `has_upstream && !is_local`: a tracking local row is withheld *because* it
+/// is local, on top of whatever the upstream checks already said.
+#[test]
+fn the_pull_family_is_offered_on_remote_branches_only() {
+    // A tracking local row — the case that used to be offered. The current
+    // branch reaches the new scope reason; any other local row hears it from
+    // `Checkout and pull`, while `Pull` names its checkout blocker first.
+    let tracked = local("side", Some("origin/side"), 0, 0);
+    let current = |item: BranchMenuAction| state(&tracked, Some("side"), item);
+    assert_eq!(
+        current(BranchMenuAction::Pull),
+        MenuItemState::disabled("pull is offered on remote branches")
+    );
+
+    let other = |item: BranchMenuAction| state(&tracked, Some("main"), item);
+    assert_eq!(
+        other(BranchMenuAction::CheckoutAndPull),
+        MenuItemState::disabled("pull is offered on remote branches")
+    );
+    assert_eq!(
+        other(BranchMenuAction::Pull),
+        MenuItemState::disabled("check out this branch first"),
+        "the checkout blocker is stated first where it applies"
+    );
+
+    // A remote row with an upstream: the family is offered. `Checkout and
+    // pull` can act; the collapsed `Pull` still needs the branch checked out
+    // first, and a remote-tracking row never is.
+    let up = Branch {
+        kind: BranchKind::Remote,
+        remote: Some("origin".to_string()),
+        ..local("up", Some("origin/up"), 0, 0)
+    };
+    let remote = |item: BranchMenuAction| state(&up, Some("main"), item);
+    assert_eq!(
+        remote(BranchMenuAction::CheckoutAndPull),
+        MenuItemState::enabled()
+    );
+    assert_eq!(
+        remote(BranchMenuAction::Pull),
+        MenuItemState::disabled("check out this branch first")
+    );
 }
 
 // --- the component: props in, action out -------------------------------------------
@@ -772,37 +827,96 @@ pub(crate) mod surface {
         assert_eq!(context_menu_target(&harness), None);
     }
 
-    /// Pull honours the settings' update method and lands in the activity
-    /// log — the same named operation the palette's `Pull` action dispatches.
+    // --- ticket 21a: the pull family is a remote-branch verb -------------
+
+    /// A tracking local branch is not offered the pull family — the row this
+    /// menu used to offer it on. `Pull` on the checked-out branch states the
+    /// scope; on any other local row `Checkout and pull` states it too, while
+    /// `Pull` names its checkout blocker first. Scoped to the open menu's own
+    /// column, because "Pull" also labels the toolbar, the VCS popup and the
+    /// command palette: the sentinel's rect is what keeps every assertion
+    /// here on the menu's rows.
     #[test]
-    fn pull_dispatches_the_pull_operation() {
-        let project = one_repo_project("dispatch-pull");
+    fn a_tracking_local_branch_is_not_offered_the_pull_family() {
+        let project = one_repo_project("gate-pull-local");
         let mut harness = branches_harness(project);
         open_branches(&mut harness);
 
+        // The checked-out branch: `Pull` was the one update action this row
+        // offered, and the upstream check alone would still pass it.
         right_click_row(&mut harness, "main");
-        click_menu_item(&mut harness, MENU_SENTINEL, "Pull");
-        wait_for(&mut harness, |st| activity_has(st, "Pull"));
+        assert_menu_item_disabled(&mut harness, "Pull", "pull is offered on remote branches");
+
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        right_click_row(&mut harness, "feature-a");
+        assert_menu_item_disabled(
+            &mut harness,
+            "Checkout and pull",
+            "pull is offered on remote branches",
+        );
+        assert_menu_item_disabled(&mut harness, "Pull", "check out this branch first");
     }
 
-    /// Checkout and pull is ONE operation: it checks out and pulls without
-    /// firing the standalone checkout confirmation.
+    /// An untracked local branch is not offered the family either: on a local
+    /// row the withholding is unconditional on the upstream, each item naming
+    /// its nearest blocker. A gate written as `has_upstream && !(is_local &&
+    /// something)` would re-offer the family here and fail this.
     #[test]
-    fn checkout_and_pull_is_one_operation() {
-        let project = one_repo_project("dispatch-cap");
+    fn an_untracked_local_branch_is_not_offered_the_pull_family_either() {
+        let project = one_repo_project("gate-pull-untracked");
         let mut harness = branches_harness(project);
         open_branches(&mut harness);
-        // Even with the worktree clean, the composite must not confirm.
+
+        right_click_row(&mut harness, "plain-b");
+        assert_menu_item_disabled(&mut harness, "Pull", "check out this branch first");
+        assert_menu_item_disabled(
+            &mut harness,
+            "Checkout and pull",
+            "no upstream to pull from",
+        );
+    }
+
+    /// The remote-only scope runs one way only: on a remote row the history
+    /// verbs stay withheld and the pull family is painted, while on a local
+    /// row the history verbs are the ones offered. Pinning both sides is what
+    /// stops a well-meaning "make the gates consistent" change from flipping
+    /// `Merge`/`Rebase` the way `Pull` just moved.
+    #[test]
+    fn a_remote_row_withholds_the_history_verbs_and_keeps_the_pull_family_painted() {
+        let project = one_repo_project("gate-pull-remote");
+        let mut harness = branches_harness(project);
+        open_branches(&mut harness);
+        row_node(&harness, "Remote").click();
+        settle_quiet(&mut harness);
+
+        right_click_row(&mut harness, "remote-only");
+        assert_menu_item_disabled(
+            &mut harness,
+            "Merge into main",
+            "remote branches cannot be merged",
+        );
+        assert_menu_item_disabled(
+            &mut harness,
+            "Rebase onto main",
+            "remote branches cannot be rebased",
+        );
+        // Painted, not offered: a remote-tracking row is never the checked-out
+        // branch, so the collapsed `Pull` names its checkout blocker.
+        assert_menu_item_disabled(&mut harness, "Pull", "check out this branch first");
+
+        // And the polarity is the other way on a local row.
+        harness.key_press(egui::Key::Escape);
+        harness.step();
         right_click_row(&mut harness, "feature-a");
-        click_menu_item(&mut harness, MENU_SENTINEL, "Checkout and pull");
-        wait_for(&mut harness, |st| {
-            st.multi
-                .roots
-                .first()
-                .is_some_and(|r| r.current_branch.as_deref() == Some("feature-a"))
-                && activity_has(st, "Checkout and pull")
-        });
-        assert!(harness.state().ui.confirm.is_none());
+        let column = menu_column(&harness);
+        for label in ["Merge into main", "Rebase onto main"] {
+            let item = menu_item_in_column(&harness, column, label);
+            assert!(
+                !item.accesskit_node().is_disabled(),
+                "{label} must be offered on a local row"
+            );
+        }
     }
 
     /// Push opens the push dialog prefilled at that branch — a non-current
@@ -895,23 +1009,43 @@ pub(crate) mod surface {
         );
     }
 
-    /// Hover a menu item of the open menu until its disabled tooltip paints.
+    /// The left edge of the open menu, taken from the one menu item every
+    /// branch-row context menu carries (`MENU_SENTINEL`): "Pull" and "Push…"
+    /// also label the command palette's rows, and only the menu's rows all
+    /// share one left edge.
     #[track_caller]
-    fn assert_menu_item_disabled(harness: &mut Harness<'_, AppState>, label: &str, reason: &str) {
-        harness.remove_cursor();
-        harness.step();
-        let column = harness
+    fn menu_column(harness: &Harness<'_, AppState>) -> egui::Rect {
+        harness
             .get_all_by_role(egui::accesskit::Role::Button)
-            .find(|n| n.accesskit_node().label() == Some("New branch from".to_string()))
+            .find(|n| n.accesskit_node().label() == Some(MENU_SENTINEL.to_string()))
             .expect("menu open")
-            .rect();
-        let item = harness
+            .rect()
+    }
+
+    /// The menu item whose accessible label is EXACTLY `label` and whose left
+    /// edge sits in the open menu's column — not the toolbar's, the VCS
+    /// popup's or the command palette's row of the same name.
+    #[track_caller]
+    fn menu_item_in_column<'t>(
+        harness: &'t Harness<'_, AppState>,
+        column: egui::Rect,
+        label: &str,
+    ) -> egui_kittest::Node<'t> {
+        harness
             .get_all_by_role(egui::accesskit::Role::Button)
             .find(|n| {
                 n.accesskit_node().label() == Some(label.to_string())
                     && (n.rect().min.x - column.min.x).abs() < 2.0
             })
-            .unwrap_or_else(|| panic!("menu item {label}"));
+            .unwrap_or_else(|| panic!("menu item {label}"))
+    }
+
+    /// Hover a menu item of the open menu until its disabled tooltip paints.
+    #[track_caller]
+    fn assert_menu_item_disabled(harness: &mut Harness<'_, AppState>, label: &str, reason: &str) {
+        harness.remove_cursor();
+        harness.step();
+        let item = menu_item_in_column(harness, menu_column(harness), label);
         assert!(
             item.accesskit_node().is_disabled(),
             "{label} must be gated, not hidden"
