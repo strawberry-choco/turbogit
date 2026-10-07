@@ -14,7 +14,6 @@ use std::path::Path;
 use std::process::Command;
 
 use test_support::git_seed::git;
-use turbogit_domain::error::TgError;
 use turbogit_domain::model::{
     Commit, RebaseAction, RebasePlanEntry, RootId, Signature, SignatureState, VcsSettings,
 };
@@ -171,10 +170,44 @@ pick 9b2e440a docs: runbook
 }
 
 #[test]
-fn parsing_rejects_an_unknown_verb() {
-    let err = history_editor::parse_todo("rebase 9b2e440a docs: runbook")
-        .expect_err("an unknown verb cannot become a plan");
-    assert!(matches!(err, TgError::Other(_)), "{err}");
+fn an_unrecognised_verb_falls_back_to_unknown_and_survives_the_round_trip() {
+    // The parser's fallback (the `rebase.entry.action.name.unknown` name): a
+    // row the editor did not create must SURVIVE as `Unknown` — coercing it
+    // to `pick` would produce a valid-looking wrong plan.
+    let plan = history_editor::parse_todo("rebase 9b2e440a docs: runbook")
+        .expect("the row survives with an Unknown action");
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan[0].action, RebaseAction::Unknown);
+    assert_eq!(plan[0].commit, "9b2e440a");
+
+    // And the fallback is a first-class verb in the editor's own todo text:
+    // rendering the plan back and re-parsing it keeps the row Unknown.
+    let round_tripped = history_editor::parse_todo(&history_editor::render_todo(&plan))
+        .expect("the rendered fallback re-parses");
+    assert_eq!(round_tripped, plan);
+}
+
+#[test]
+fn update_ref_parses_and_renders_like_any_verb() {
+    // Git's todo verb is `update-ref` (its own abbreviation `u`); the plan
+    // carries it as a row action so the editor can offer it like any other.
+    let plan =
+        history_editor::parse_todo("update-ref 9b2e440a docs: runbook").expect("update-ref parses");
+    assert_eq!(plan[0].action, RebaseAction::UpdateRef);
+    assert_eq!(
+        history_editor::render_todo(&plan).trim(),
+        "update-ref 9b2e440a docs: runbook",
+        "the rendered todo round-trips"
+    );
+    assert_eq!(
+        history_editor::parse_todo("u 9b2e440a docs: runbook").unwrap()[0].action,
+        RebaseAction::UpdateRef,
+        "git's own single-letter abbreviation parses too"
+    );
+    // A row marked Update Ref survives the preview like any replayed commit.
+    let preview = history_editor::plan_preview(&plan);
+    assert_eq!(preview.after, 1);
+    assert_eq!(preview.kept, plan);
 }
 
 // ---------------------------------------------------------------- preview --
@@ -441,6 +474,30 @@ fn the_estimate_counts_the_replayed_commits_at_three_seconds_each() {
 
 // ------------------------------------------------------- reword messages --
 
+/// Pick on a modified row RESETS the row ("this commit is applied as is" —
+/// apply-changes:138): the one-click per-row way back. A reset therefore drops
+/// the row's replacement message too — a pick that kept a reword's message
+/// would not be the commit as it was. Any other verb is a retarget, not a
+/// reset, and leaves what the row carries alone.
+#[test]
+fn setting_pick_resets_a_modified_row_and_other_verbs_do_not() {
+    let mut reset = vec![reword("aaaa1111", "new subject\n\nand a body")];
+    history_editor::set_action(&mut reset, 0, RebaseAction::Pick);
+    assert_eq!(reset[0].action, RebaseAction::Pick);
+    assert_eq!(
+        reset[0].message, None,
+        "the reset drops the replacement message: the commit is applied as is"
+    );
+
+    let mut retargeted = vec![reword("aaaa1111", "new subject\n\nand a body")];
+    history_editor::set_action(&mut retargeted, 0, RebaseAction::Squash);
+    assert_eq!(
+        retargeted[0].message.as_deref(),
+        Some("new subject\n\nand a body"),
+        "a retarget is not a reset: the row keeps what it carried"
+    );
+}
+
 /// One revision's subject, as git records it.
 fn subject_of(dir: &Path, rev: &str) -> String {
     git(dir, &["log", "-1", "--format=%s", rev])
@@ -524,6 +581,85 @@ fn a_reword_in_the_plan_rewrites_the_message_and_nothing_else() {
         subject_of(&repo, "HEAD"),
         "feature-3",
         "and the descendant is replayed on top of it"
+    );
+}
+
+// ------------------------------------- update-ref rows and unknown fallback --
+//
+// Git's todo has no per-commit slot for "the refs touching this replay follow
+// the rewrite" and no honest line for a verb the editor did not write, so both
+// are settled where the plan meets git: an `UpdateRef` row replays as the pick
+// it is and turns the replay into `--update-refs`, and an `Unknown` row is
+// refused outright. Both assertions are read back from a real repository — the
+// same discipline as the reword test above.
+
+#[test]
+fn an_update_ref_row_replays_with_update_refs_so_affected_branches_follow() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = plan_repo(tmp.path(), "update-refs");
+    // `topic` points at the commit the plan rewords — exactly the ref
+    // `--update-refs` exists to carry along. (The oldest commit replays
+    // identically and keeps its hash, so a ref on it never moves.)
+    git(&repo, &["branch", "topic", "feature~1"]);
+
+    let mut plan = history_editor::build_plan(&engine(), &repo, "main").expect("plan");
+    plan[0].action = RebaseAction::UpdateRef;
+    plan[1] = reword(&plan[1].commit, "feature-2: retitled\n\nAnd a body.");
+
+    history_editor::execute(&engine(), &repo, &plan).expect("the replay runs");
+
+    assert_eq!(subject_of(&repo, "HEAD~1"), "feature-2: retitled");
+    assert_eq!(
+        rev_parse(&repo, "topic"),
+        rev_parse(&repo, "HEAD~1"),
+        "the replay ran with --update-refs, so topic followed the reworded commit"
+    );
+}
+
+#[test]
+fn without_an_update_ref_row_the_replay_leaves_other_refs_alone() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = plan_repo(tmp.path(), "no-update-refs");
+    git(&repo, &["branch", "topic", "feature~1"]);
+    // The pre-rebase SHA of the commit `topic` points at.
+    let old_first = rev_parse(&repo, "feature~1");
+
+    let mut plan = history_editor::build_plan(&engine(), &repo, "main").expect("plan");
+    plan[1] = reword(&plan[1].commit, "feature-2: retitled\n\nAnd a body.");
+
+    history_editor::execute(&engine(), &repo, &plan).expect("the replay runs");
+
+    assert_eq!(subject_of(&repo, "HEAD~1"), "feature-2: retitled");
+    assert_eq!(
+        rev_parse(&repo, "topic"),
+        old_first,
+        "no UpdateRef row, no --update-refs: the sibling branch keeps its own commit"
+    );
+    assert_ne!(
+        rev_parse(&repo, "topic"),
+        rev_parse(&repo, "HEAD~1"),
+        "the reword really did move the commit, so the stale ref is genuinely left behind"
+    );
+}
+
+#[test]
+fn a_plan_carrying_an_unknown_row_is_refused_not_coerced() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = plan_repo(tmp.path(), "unknown-refused");
+    let built = history_editor::build_plan(&engine(), &repo, "main").expect("plan");
+    let plan = vec![entry(
+        RebaseAction::Unknown,
+        &built[1].commit,
+        "docs: runbook",
+    )];
+
+    let err = history_editor::execute(&engine(), &repo, &plan)
+        .expect_err("an unknown row must never reach git as another verb");
+    assert!(err.to_string().contains("unknown"), "{err}");
+    assert_eq!(
+        subject_of(&repo, "HEAD"),
+        "feature-3",
+        "the refusal happens before git is touched"
     );
 }
 
