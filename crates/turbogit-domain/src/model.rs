@@ -534,11 +534,21 @@ pub struct ConflictVersions {
 }
 
 /// IDE patch store entry (shelve).
+///
+/// **A shelf belongs to one root**, and the root is part of the record rather
+/// than a fact about where the file was written: two roots of one project can
+/// hold shelves with the same name, and an unshelve of one of them moves work in
+/// exactly one repository. A shelf without a root is a name that the Shelf pane
+/// could only ever list globally, which is the multi-root collapse the parity
+/// programme forbids.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Shelf {
     pub name: String,
     pub changes: Vec<Change>,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    /// The root whose changes this shelf holds and whose git stash carries its
+    /// content.
+    pub root: RootId,
 }
 
 /// A git-native stash entry.
