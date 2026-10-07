@@ -702,6 +702,44 @@ pub struct BranchDeleteUndo {
     pub created_at: std::time::Instant,
 }
 
+/// Which targeted history verb a rewrite undo restores (ticket 09). Coverage is
+/// deliberately asymmetric — drop and reword are undoable, squash is not —
+/// matching the reference's own undo lifecycle, which names no squash undo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RewriteUndoVerb {
+    Drop,
+    Reword,
+}
+
+/// A dispatched rewrite whose settlement should arm the undo offer (ticket 09).
+/// The settlement event carries only the [`OpKind`], which cannot name the
+/// commit or the verb, so the dispatch captures them here — the same
+/// capture-before-dispatch shape as [`BranchDeletePending`].
+#[derive(Clone, Debug)]
+pub struct RewriteUndoPending {
+    pub root: RootId,
+    pub verb: RewriteUndoVerb,
+    pub commit: String,
+}
+
+/// A completed rewrite that can still be undone from its backup ref (ticket 09).
+///
+/// `tip_sha` is HEAD as the rewrite finished — the fact the repository-changed
+/// guard compares against on every later check. The guard runs at undo time,
+/// never at rewrite time: any completed operation touching the root re-runs
+/// it, and a moved HEAD flips `withheld`, which the banner answers by painting
+/// the impossible reason and NO control at all (withheld, not greyed — the
+/// same withheld-vs-inert choice `PendingConfirm` makes).
+#[derive(Clone, Debug)]
+pub struct RewriteUndo {
+    pub root: RootId,
+    pub verb: RewriteUndoVerb,
+    pub commit: String,
+    pub tip_sha: String,
+    pub created_at: std::time::Instant,
+    pub withheld: bool,
+}
+
 /// What the diff viewer should display.
 #[derive(Clone)]
 pub struct DiffTarget {
@@ -920,6 +958,12 @@ pub struct UiState {
     pub branches_delete_consequence: Option<String>,
     pub branches_delete_pending: Option<BranchDeletePending>,
     pub branches_undo: Option<BranchDeleteUndo>,
+    /// Rewrite dispatch awaiting settlement to arm the post-hoc undo (ticket 09).
+    pub rewrite_undo_pending: Option<RewriteUndoPending>,
+    /// The armed post-hoc undo offer for the last targeted rewrite (ticket 09).
+    /// Session-transient like [`Self::branches_undo`]: the banner expires, the
+    /// guard withholds, a newer rewrite replaces, and an undo click consumes.
+    pub rewrite_undo: Option<RewriteUndo>,
     /// Fetch reporting (issue 13/14): a callback per in-flight fetch holding
     /// that root's remote-branch snapshot before the fetch, so every repo's
     /// fetch reports what *it* changed ("N new remote branches" vs "nothing
@@ -3069,10 +3113,25 @@ impl AppState {
                     result,
                 } => {
                     self.ui.busy = false;
+                    // Ticket 09: the repository-changed guard re-validates the
+                    // armed rewrite undo against the repository as it stands
+                    // NOW. Every completed op that touches the offer's root
+                    // re-runs it, so a second operation in the same root
+                    // withholds the offer before the control is ever painted.
+                    self.guard_rewrite_undo(&affected);
                     match result {
                         Ok(()) => {
                             self.show_toast(Toast::success(label.clone()));
                             self.refresh(affected.clone());
+                            // Ticket 09: arm the post-hoc undo while the
+                            // rewrite's own tip is still the fact to compare
+                            // against. A pending that does not match this
+                            // completion's kind is dropped with it.
+                            if let Some(pending) = self.ui.rewrite_undo_pending.take()
+                                && matches!(kind, OpKind::DropCommit | OpKind::RewordCommit)
+                            {
+                                self.arm_rewrite_undo(pending);
+                            }
                             granular::settle(self);
                             // Activity log (issue #04): the durable record the
                             // toast only summarizes. An op that leaves conflicts
@@ -3125,6 +3184,9 @@ impl AppState {
                         Err(e) => {
                             let msg = e.to_string();
                             self.ui.branches_delete_pending = None;
+                            // A rewrite that failed arms no undo (ticket 09):
+                            // the offer exists for a landed rewrite only.
+                            self.ui.rewrite_undo_pending = None;
                             // A rewrite that failed moved nothing: the commit the
                             // developer was looking at is still in the history and
                             // still selected, so nothing follows it.
@@ -4158,6 +4220,55 @@ impl AppState {
     /// (`turbogit <path>`) enters the shell directly.
     pub fn show_welcome(&self) -> bool {
         self.multi.roots.is_empty() || self.ui.welcome_visible
+    }
+
+    /// Arm the post-hoc undo for a completed targeted rewrite (ticket 09):
+    /// capture the tip the rewrite finished on, which is what the guard later
+    /// compares against. The read is a single synchronous `rev-parse`, on the
+    /// same footing as [`Self::bulk_rollback`]'s engine calls — settlement is
+    /// the one moment the rewrite's own tip is guaranteed to be HEAD.
+    fn arm_rewrite_undo(&mut self, pending: RewriteUndoPending) {
+        let tip = self
+            .executor
+            .resolve_revision(pending.root.as_path(), "HEAD");
+        self.ui.rewrite_undo = tip.ok().map(|tip_sha| RewriteUndo {
+            root: pending.root,
+            verb: pending.verb,
+            commit: pending.commit,
+            tip_sha,
+            created_at: std::time::Instant::now(),
+            withheld: false,
+        });
+    }
+
+    /// The repository-changed guard (ticket 09), the substance of the undo: an
+    /// offer is valid only while HEAD still stands where the rewrite left it.
+    /// Re-run on every completed operation whose scope covers the offer's
+    /// root — the check is against the repository NOW, never against what it
+    /// was at rewrite time. A moved (or unresolvable) HEAD withholds; the
+    /// banner paints the reason and no control, so an undo is never
+    /// offered-then-failed.
+    fn guard_rewrite_undo(&mut self, affected: &Affected) {
+        let Some(offer) = self.ui.rewrite_undo.as_ref() else {
+            return;
+        };
+        let covered = match affected {
+            Affected::All => true,
+            Affected::Root(id) => id == &offer.root,
+        };
+        if !covered {
+            return;
+        }
+        let root = offer.root.clone();
+        let tip = offer.tip_sha.clone();
+        let moved = self
+            .executor
+            .resolve_revision(root.as_path(), "HEAD")
+            .map(|head| head != tip)
+            .unwrap_or(true);
+        if let Some(offer) = self.ui.rewrite_undo.as_mut() {
+            offer.withheld = moved;
+        }
     }
 }
 

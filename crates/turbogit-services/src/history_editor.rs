@@ -198,11 +198,7 @@ pub fn abort_to_backup(vcs: &dyn GitExecutor, root: &Path) -> TgResult<()> {
 /// refused and NOTHING is restored, because `restore_rewrite_backup` resets
 /// hard and would destroy whatever landed on top. The backup ref survives the
 /// refusal; refusing is not discarding.
-pub fn undo_last_rewrite(
-    vcs: &dyn GitExecutor,
-    root: &Path,
-    expected_tip: &str,
-) -> TgResult<()> {
+pub fn undo_last_rewrite(vcs: &dyn GitExecutor, root: &Path, expected_tip: &str) -> TgResult<()> {
     let current = vcs.resolve_revision(root, "HEAD")?;
     if current != expected_tip {
         return Err(TgError::Other(format!(
