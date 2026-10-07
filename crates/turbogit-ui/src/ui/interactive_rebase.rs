@@ -1,9 +1,9 @@
 //! Interactive rebase editor (issue 30, screen 17): the plan editor for F5
 //! history editing. Plan / Preview / Log tabs over one plan; plan rows with
-//! action chips and move buttons plus ⇧↑/⇧↓ and p/s/f/d shortcuts; a RESULT
-//! PREVIEW of the post-plan commit sequence; the raw REBASE-TODO editable
-//! as text; a right rail with CAUTIONS, AFFECTED REPOS and RECOVERY naming
-//! the backup ref; a footer with the time estimate and Start rebase.
+//! action chips and move buttons plus ⇧↑/⇧↓ and p/r/e/s/f/u/d shortcuts; a
+//! RESULT PREVIEW of the post-plan commit sequence; the raw REBASE-TODO
+//! editable as text; a right rail with CAUTIONS, AFFECTED REPOS and RECOVERY
+//! naming the backup ref; a footer with the time estimate and Start rebase.
 //!
 //! The plan is built once on open from the selected log commit
 //! ([`history_editor::base_of`] → [`history_editor::build_plan`]) and
@@ -22,15 +22,20 @@ use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::widgets;
 
-/// The action chips a plan row offers (screen 17). `edit` stays parseable in
-/// the REBASE-TODO but has no chip — it has no shortcut and the editor's
-/// scope is the five chip actions.
-const CHIPS: [(&str, RebaseAction); 5] = [
+/// The action chips a plan row offers, in the reference's own order (screen
+/// 17 / GitBundle:212-219: Pick, Edit, Reword, Squash, Fixup, Drop, Update
+/// Ref). `Update Ref` marks that the refs touching this replay follow the
+/// rewrite; it rides the `--update-refs` the engine maps the row to. A row
+/// the editor did not create (an unrecognised todo verb) is no chip at all —
+/// it renders as `Unknown` and the engine refuses it.
+const CHIPS: [(&str, RebaseAction); 7] = [
     ("pick", RebaseAction::Pick),
+    ("edit", RebaseAction::Edit),
     ("reword", RebaseAction::Reword),
     ("squash", RebaseAction::Squash),
     ("fixup", RebaseAction::Fixup),
     ("drop", RebaseAction::Drop),
+    ("update-ref", RebaseAction::UpdateRef),
 ];
 
 /// Render the editor while `ui.dialog` is `Dialog::InteractiveRebase`.
@@ -39,7 +44,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     let mut open = true;
     egui::Window::new("Interactive Rebase")
         .open(&mut open)
-        .default_width(1080.0)
+        // Seven verb chips, a hash, a subject and the move buttons share one
+        // row: narrower than this and the subject runs under the buttons.
+        .default_width(1240.0)
         .show(&ctx, |ui| body(ui, state));
     if !open {
         close(state);
@@ -236,9 +243,12 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
     widgets::group_title(ui, "SHORTCUTS");
     for line in [
         "⇧↑↓   Move commit within the plan",
-        "P     Pick · keep the commit as is",
+        "P     Pick · reset the row as is",
+        "R     Reword · change the message",
+        "E     Edit · stop to amend the commit",
         "S     Squash into the commit above",
         "F     Fixup · discard the message",
+        "U     Update Ref · follow the rewrite",
         "D     Drop the commit from the plan",
     ] {
         ui.label(egui::RichText::new(line).monospace());
@@ -264,7 +274,8 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// The Plan tab's keyboard shortcuts (screen 17): ⇧↑/⇧↓ move the selected
-/// row (the selection follows), and p/s/f/d retarget its action. Skipped
+/// row (the selection follows), and p/r/e/s/f/u/d retarget its action —
+/// `p` is the per-row reset (see [`history_editor::set_action`]). Skipped
 /// while a text field owns the keyboard — the Log tab's REBASE-TODO must
 /// take the letters literally.
 fn shortcuts(
@@ -287,10 +298,16 @@ fn shortcuts(
     } else if !shift {
         let action = if pressed(egui::Key::P) {
             Some(RebaseAction::Pick)
+        } else if pressed(egui::Key::R) {
+            Some(RebaseAction::Reword)
+        } else if pressed(egui::Key::E) {
+            Some(RebaseAction::Edit)
         } else if pressed(egui::Key::S) {
             Some(RebaseAction::Squash)
         } else if pressed(egui::Key::F) {
             Some(RebaseAction::Fixup)
+        } else if pressed(egui::Key::U) {
+            Some(RebaseAction::UpdateRef)
         } else if pressed(egui::Key::D) {
             Some(RebaseAction::Drop)
         } else {
@@ -311,10 +328,11 @@ fn plan_rows(
     sel: &mut usize,
 ) {
     let ctx = ui.ctx().clone();
-    let (any_pressed, any_released, press_pos, pointer_pos) = ctx.input(|inp| {
+    let (any_pressed, any_released, any_click, press_pos, pointer_pos) = ctx.input(|inp| {
         (
             inp.pointer.any_pressed(),
             inp.pointer.any_released(),
+            inp.pointer.any_click(),
             inp.pointer.press_origin(),
             inp.pointer.interact_pos(),
         )
@@ -337,10 +355,25 @@ fn plan_rows(
                 .max_rect(rect)
                 .layout(Layout::left_to_right(Align::Center)),
         );
+        // Name the row for accessibility and tests: per-row controls repeat
+        // labels across rows, so a row is addressed through its own node.
+        row.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                format!("plan row {}", plan[i].subject),
+            )
+        });
         for (lbl, act) in CHIPS {
             if child.selectable_label(plan[i].action == act, lbl).clicked() {
                 history_editor::set_action(plan, i, act.clone());
             }
+        }
+        // A row the editor did not create (an unrecognised todo verb) offers
+        // no chip of its own: it is not silently coerced to pick, it renders
+        // as what it is, and the engine refuses the plan while it stands.
+        if plan[i].action == RebaseAction::Unknown {
+            child.label(egui::RichText::new("unknown").color(Palette::STATE_WARNING));
         }
         child.monospace(widgets::short_commit_ref(&plan[i].commit));
         child.label(&plan[i].subject);
@@ -354,7 +387,19 @@ fn plan_rows(
                 *sel = i - 1;
             }
         });
-        if row.clicked() {
+        // Selection rides the same raw-pointer signals as the drag below.
+        // The manual paths are load-bearing: the row is a click_and_drag
+        // widget inside an egui Window whose surface claims the press for
+        // drag attribution, so egui's own click gesture does not land on the
+        // row (`row.clicked()` stays false even when the pointer genuinely
+        // pressed and released inside it). A click completed with the pointer
+        // in this row's rect selects it; a drag gesture that released while
+        // this row owned it keeps the selection on the dragged row. (A press
+        // and its release can land in ONE frame, where `any_pressed` is
+        // already false again — only `any_click` still knows.)
+        let clicked_here = any_click && pointer_pos.is_some_and(|p| rect.contains(p));
+        let released_from_here = any_released && state.ui.dlg.rebase_drag_from == Some(i);
+        if row.clicked() || clicked_here || released_from_here {
             *sel = i;
         }
 
@@ -447,6 +492,8 @@ fn verb(action: &RebaseAction) -> &'static str {
         RebaseAction::Squash => "squash",
         RebaseAction::Fixup => "fixup",
         RebaseAction::Drop => "drop",
+        RebaseAction::UpdateRef => "update-ref",
+        RebaseAction::Unknown => "unknown",
     }
 }
 
