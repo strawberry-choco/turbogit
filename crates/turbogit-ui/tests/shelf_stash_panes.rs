@@ -27,10 +27,7 @@
 //! these tests exercise the two verbs the pane carries directly, which are the
 //! defaults the dialog will pass down.
 
-use egui_kittest::{
-    Harness,
-    kittest::Queryable,
-};
+use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::{
@@ -367,7 +364,11 @@ fn shelf_and_stash_deletes_ask_before_they_destroy() {
         ),
         "the stash delete raises a confirmation too"
     );
-    assert_eq!(stash_lines(&repo).len(), 1, "the entry survives the question");
+    assert_eq!(
+        stash_lines(&repo).len(),
+        1,
+        "the entry survives the question"
+    );
     accept_confirm(&mut h);
     assert!(
         stash_lines(&repo).is_empty(),

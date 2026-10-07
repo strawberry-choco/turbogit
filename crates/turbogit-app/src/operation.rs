@@ -520,7 +520,9 @@ impl Operation {
             Self::Shelve { .. } => "Shelve".to_string(),
             // The two verbs' names carry their own consequence, so the toast and
             // the activity feed say which of the pair ran and which copy is left.
-            Self::Unshelve { name, remove: true, .. } => {
+            Self::Unshelve {
+                name, remove: true, ..
+            } => {
                 format!("Unshelve and Remove '{name}'")
             }
             Self::Unshelve { name, .. } => format!("Unshelve '{name}'"),
@@ -674,11 +676,7 @@ impl Operation {
                 let _ = turbogit_services::changes::discard_changes(vcs, path, &changes);
                 Ok(())
             }
-            Self::Unshelve {
-                root,
-                name,
-                remove,
-            } => turbogit_services::shelve_stash::unshelve(
+            Self::Unshelve { root, name, remove } => turbogit_services::shelve_stash::unshelve(
                 vcs,
                 root.as_path(),
                 &name,
