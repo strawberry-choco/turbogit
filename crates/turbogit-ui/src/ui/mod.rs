@@ -63,6 +63,7 @@ pub mod shell;
 pub mod sidebar;
 pub mod smart_groups;
 pub mod smart_rule_modal;
+pub mod status_inflight;
 pub mod submodules;
 pub mod tree_selection;
 pub mod welcome;

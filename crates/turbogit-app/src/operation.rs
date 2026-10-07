@@ -15,6 +15,7 @@ use turbogit_domain::model::{
     UpdateMethod, VcsSettings,
 };
 use turbogit_engine_api::GitExecutor;
+use turbogit_services::integrate_service::OwnedOperation;
 
 use crate::root_caches::Affected;
 
@@ -53,8 +54,72 @@ pub enum OpKind {
     /// the two phases, and because only a push-phase rejection may trigger
     /// the silent auto-update (a failed recovery must not re-trigger itself).
     PushRecovery,
+    /// [`Operation::Resolve`] — one of the three in-flight resolutions (Abort,
+    /// Continue, Skip) run from the status bar or the palette. Its own identity
+    /// because settlement treats a continuation that stops on the NEXT conflict
+    /// as the same handoff a first-pass merge or rebase gets, and because the
+    /// durable record has to name the verb rather than the operation it
+    /// resolved.
+    Resolve,
     /// The [`Operation::Custom`] tail: dispatched, but nothing settles on it.
     Other,
+}
+
+/// How an operation a repository is holding gets resolved — the three verbs the
+/// status bar announces.
+///
+/// The table lives here, beside the dispatch unit, rather than at either
+/// presentation site: the bar and the palette must offer the same verb set for
+/// the same state, and a second copy of that pair would be free to disagree.
+/// [`LifecycleVerb::offered_for`] is exhaustive over [`OwnedOperation`], so a
+/// fifth held state in git makes the verb question a compile error instead of a
+/// silent two-button announcement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LifecycleVerb {
+    /// `git <op> --abort` — give the whole operation up.
+    Abort,
+    /// `git <op> --continue` — retry the commit that stopped it, now resolved.
+    Continue,
+    /// `git rebase --skip` — abandon the commit that stopped it and carry on.
+    /// The third resolution a paused rebase has, and the one you want when the
+    /// NEXT commit is the one that conflicts; Abort would throw away the whole
+    /// rebase and Continue would retry the same failing commit forever.
+    Skip,
+}
+
+impl LifecycleVerb {
+    /// The verb as one word: the status bar's control label, where the
+    /// announcement beside it has already named the operation.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Abort => "Abort",
+            Self::Continue => "Continue",
+            Self::Skip => "Skip",
+        }
+    }
+
+    /// The sentence the toast and the activity feed leave behind. `Skip` names
+    /// the object rather than the operation because that is what the reference's
+    /// own bundle label says (`Skip Commit`), and a rebase is the only state
+    /// [`Self::offered_for`] hands it out in.
+    pub fn label_for(self, owner: OwnedOperation) -> String {
+        match self {
+            Self::Abort => format!("Abort {}", owner.label()),
+            Self::Continue => format!("Continue {}", owner.label()),
+            Self::Skip => "Skip commit".to_owned(),
+        }
+    }
+
+    /// The resolutions one held state actually has, in the order the bar paints
+    /// them: the destructive verb first and apart, then the two that carry on.
+    pub fn offered_for(owner: OwnedOperation) -> &'static [LifecycleVerb] {
+        match owner {
+            OwnedOperation::Rebase => &[Self::Abort, Self::Continue, Self::Skip],
+            OwnedOperation::Merge | OwnedOperation::CherryPick | OwnedOperation::Revert => {
+                &[Self::Abort, Self::Continue]
+            }
+        }
+    }
 }
 
 /// How a [`Operation::Rebase`] is being run.
@@ -282,6 +347,21 @@ pub enum Operation {
         /// before the re-push. Its presence is what makes the operation a
         /// [`OpKind::PushRecovery`] rather than a [`OpKind::Push`].
         recover: Option<RecoveryPlan>,
+    },
+    /// Resolve an operation a root is HOLDING: the status bar's per-root
+    /// in-flight item, or the palette's menu route, runs one of the three
+    /// [`LifecycleVerb`]s against the [`OwnedOperation`] it announced.
+    ///
+    /// A named variant rather than a [`Operation::Custom`] closure because the
+    /// verb has to settle: a Continue that stops on the next conflict is the same
+    /// handoff the original merge or rebase got, and a resolution that fell into
+    /// `Other` would report a git failure for what is really a paused operation.
+    /// `owner` rides along so the work and the label are computed from the state
+    /// the announcement showed, never from a re-read that could have moved.
+    Resolve {
+        root: RootId,
+        owner: OwnedOperation,
+        verb: LifecycleVerb,
     },
     /// Work whose label nothing inspects. Greppable, so the long tail stays
     /// visible instead of silently growing into free-text dispatch again.
@@ -538,6 +618,7 @@ impl Operation {
                 format!("Reword commit {}", crate::state::short_sha(commit))
             }
             Self::Push { .. } => "Push".to_string(),
+            Self::Resolve { owner, verb, .. } => verb.label_for(*owner),
             Self::Custom { label, .. } => label.clone(),
         }
     }
@@ -569,7 +650,12 @@ impl Operation {
             | Self::WorktreeAdd { root, .. }
             | Self::WorktreeRemove { root, .. }
             | Self::DropCommit { root, .. }
-            | Self::RewordCommit { root, .. } => Affected::Root(root.clone()),
+            | Self::RewordCommit { root, .. }
+            // The in-flight resolution invalidates exactly the root it announced:
+            // the item is per root, so the refresh has to be per root too, or one
+            // root's abort would redraw every root's caches while leaving the
+            // announced marker's own sibling stale.
+            | Self::Resolve { root, .. } => Affected::Root(root.clone()),
         }
     }
 
@@ -599,6 +685,7 @@ impl Operation {
                 recover: Some(_), ..
             } => OpKind::PushRecovery,
             Self::Push { .. } => OpKind::Push,
+            Self::Resolve { .. } => OpKind::Resolve,
             Self::Custom { .. } => OpKind::Other,
         }
     }
@@ -801,6 +888,18 @@ impl Operation {
                             )))
                         }
                     }
+                }
+            }
+            Self::Resolve { root, owner, verb } => {
+                let path = root.as_path();
+                match verb {
+                    LifecycleVerb::Abort => vcs.abort(path, owner.git_subcommand()),
+                    LifecycleVerb::Continue => vcs.continue_op(path, owner.git_subcommand()),
+                    // No `owner` read: the verb table only hands `Skip` out with a
+                    // rebase, and re-deriving the state here from `owner` would let
+                    // a stale announcement run `git merge --skip`, which git has no
+                    // such flag for.
+                    LifecycleVerb::Skip => vcs.rebase_skip(path),
                 }
             }
             Self::Custom { work, .. } => work(vcs),

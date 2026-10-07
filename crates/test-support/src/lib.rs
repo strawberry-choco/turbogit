@@ -571,6 +571,10 @@ impl GitExecutor for RecordingExecutor {
         self.inner.continue_op(root, op)
     }
 
+    fn rebase_skip(&self, root: &Path) -> TgResult<()> {
+        self.inner.rebase_skip(root)
+    }
+
     fn rewrite_backup_ref(&self) -> &str {
         self.inner.rewrite_backup_ref()
     }
