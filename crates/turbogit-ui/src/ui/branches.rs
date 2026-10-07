@@ -460,34 +460,38 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
 /// down and close the list.
 fn settings_toggles(ui: &mut Ui, options: &mut BranchesViewOptions) -> bool {
     ui.spacing_mut().item_spacing = crate::theme::ITEM_SPACING;
-    let mut rows = [
-        (
-            &mut options.group_by_directory,
-            "Group by Directory",
-            "Nest branches under a header per `folder/` prefix",
-        ),
-        (
-            &mut options.group_by_repository,
-            "Group by Repository",
-            "One set of groups per repository in scope",
-        ),
-        (
-            &mut options.show_recent,
-            "Show Recent Branches",
-            "The branches HEAD moved onto most recently",
-        ),
-        (
-            &mut options.show_tags,
-            "Show Tags",
-            "Tags beside the branches, in their own group",
-        ),
-    ];
     let mut changed = false;
-    for (flag, label, help) in rows.iter_mut() {
-        let response = ui.checkbox(*flag, *label).on_hover_text(*help);
-        changed |= response.changed();
-    }
+    changed |= toggle_row(
+        ui,
+        &mut options.group_by_directory,
+        "Group by Directory",
+        "Nest branches under a header per `folder/` prefix",
+    );
+    changed |= toggle_row(
+        ui,
+        &mut options.group_by_repository,
+        "Group by Repository",
+        "One set of groups per repository in scope",
+    );
+    changed |= toggle_row(
+        ui,
+        &mut options.show_recent,
+        "Show Recent Branches",
+        "The branches HEAD moved onto most recently",
+    );
+    changed |= toggle_row(
+        ui,
+        &mut options.show_tags,
+        "Show Tags",
+        "Tags beside the branches, in their own group",
+    );
     changed
+}
+
+/// One named toggle of the gear's list, and whether this frame's click changed
+/// it. The value lives in `flag` so the checkbox answers for itself.
+fn toggle_row(ui: &mut Ui, flag: &mut bool, label: &str, help: &str) -> bool {
+    ui.checkbox(flag, label).on_hover_text(help).changed()
 }
 
 /// The pane's **scope chip**: "all N repos" when nothing is narrowed, or
