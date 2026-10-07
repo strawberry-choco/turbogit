@@ -161,6 +161,7 @@ impl GitExecutor for CliExecutor {
         let (out, _, _) = self.run(root, &["status", "--porcelain=v2", "-b"])?;
         let mut changes: Vec<Change> = Vec::new();
         let mut conflicted: Vec<PathBuf> = Vec::new();
+        let mut conflict_kinds: Vec<(PathBuf, ConflictKind)> = Vec::new();
 
         for line in out.lines() {
             if line.starts_with('#') {
@@ -258,6 +259,10 @@ impl GitExecutor for CliExecutor {
                     continue;
                 }
                 let p = PathBuf::from(path);
+                // The pair right after `u` is the short-format unmerged code
+                // naming WHICH clash this is (ticket 02); the path is the last
+                // token, so the first token is read here and `last()` there.
+                let xy = rest.split_whitespace().next().unwrap_or("");
                 changes.push(Change {
                     path: p.clone(),
                     status: ChangeStatus::Conflicted,
@@ -266,7 +271,10 @@ impl GitExecutor for CliExecutor {
                     unstaged: false,
                     orig_path: None,
                 });
-                conflicted.push(p);
+                conflicted.push(p.clone());
+                if let Some(kind) = conflict_kind_of(xy) {
+                    conflict_kinds.push((p, kind));
+                }
             }
             // Other porcelain lines (extension headers, etc.) are ignored.
         }
@@ -274,6 +282,7 @@ impl GitExecutor for CliExecutor {
         Ok(RootStatus {
             changes,
             conflicted,
+            conflict_kinds,
         })
     }
 
@@ -1932,6 +1941,27 @@ fn tail_from_field(s: &str, n: usize) -> Option<&str> {
         }
     }
     None
+}
+
+/// Map a porcelain short-format unmerged pair (`DD` / `AA` / `UU` / `DU` /
+/// `UD` / `AU` / `UA`) to the file-level clash kind it names. The mapping was
+/// verified against real `git status --porcelain=v2` output for the
+/// modify/delete and add/add merge shapes: `UD` is ours-modified/theirs-deleted
+/// ("deleted by them"), `DU` is ours-deleted/theirs-modified ("deleted by us"),
+/// `AU`/`UA` are the no-base adds ("added by us"/"added by them").
+/// `None` for any other pair, so an unknown git encoding degrades to "kind
+/// unknown" rather than to a wrong word.
+fn conflict_kind_of(xy: &str) -> Option<ConflictKind> {
+    match xy {
+        "DD" => Some(ConflictKind::BothDeleted),
+        "AA" => Some(ConflictKind::BothAdded),
+        "UU" => Some(ConflictKind::BothModified),
+        "DU" => Some(ConflictKind::DeletedByUs),
+        "UD" => Some(ConflictKind::DeletedByThem),
+        "AU" => Some(ConflictKind::AddedByUs),
+        "UA" => Some(ConflictKind::AddedByThem),
+        _ => None,
+    }
 }
 
 /// Map a porcelain v2 XY status pair to a [`ChangeStatus`].
