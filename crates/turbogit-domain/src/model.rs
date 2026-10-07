@@ -1295,6 +1295,17 @@ pub enum RebaseAction {
     Squash,
     Fixup,
     Drop,
+    /// The row marks that the refs touching this replay follow the rewritten
+    /// commits. Git's todo has no per-commit slot for that — the engine maps
+    /// the row to the command-level `--update-refs` — but the plan can carry
+    /// it per row, and the editor offers it like any other verb.
+    UpdateRef,
+    /// The parser's fallback for a REBASE-TODO verb it does not recognise: a
+    /// row can exist that the plan editor did not create, so it survives with
+    /// this action and renders as `Unknown`. It must never reach git as
+    /// another verb — coercing it to `pick` would produce a valid-looking
+    /// wrong plan — so the engine refuses a plan that carries one.
+    Unknown,
 }
 
 /// A row of the interactive rebase plan.
