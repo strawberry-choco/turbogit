@@ -412,7 +412,8 @@ fn a_take_arms_the_confirmation_writes_the_file_and_is_recorded_durably() {
                 ref root,
                 ref source,
                 ref path,
-            }) if *root == root_id(&dir) && source == "feature" && *path == PathBuf::from("both.txt")
+            }) if *root == root_id(&dir) && source == "feature"
+                && path.as_path() == Path::new("both.txt")
         ),
         "the confirmation carries the root, the branch and the path the row showed — \
          not whichever root is focused when OK is clicked"
@@ -525,19 +526,15 @@ fn the_branch_row_offers_the_comparison_except_on_itself() {
         ..branch_defaults()
     };
     let items = branch_menu_items(&side, Some("main"));
-    assert_eq!(
-        items[BranchMenuAction::DiffWithWorkingTree.index()].enabled,
-        true
-    );
+    assert!(items[BranchMenuAction::DiffWithWorkingTree.index()].enabled);
 
     let here = Branch {
         name: "main".to_string(),
         ..branch_defaults()
     };
     let items = branch_menu_items(&here, Some("main"));
-    assert_eq!(
-        items[BranchMenuAction::DiffWithWorkingTree.index()].enabled,
-        false,
+    assert!(
+        !items[BranchMenuAction::DiffWithWorkingTree.index()].enabled,
         "the current branch is the working tree it would be compared with"
     );
 
@@ -547,10 +544,7 @@ fn the_branch_row_offers_the_comparison_except_on_itself() {
         ..branch_defaults()
     };
     let items = branch_menu_items(&up, Some("main"));
-    assert_eq!(
-        items[BranchMenuAction::DiffWithWorkingTree.index()].enabled,
-        true
-    );
+    assert!(items[BranchMenuAction::DiffWithWorkingTree.index()].enabled);
 }
 
 /// The window's `Detached HEAD` posture: no current side, so no comparison and no
@@ -560,8 +554,8 @@ fn a_root_with_no_current_branch_opens_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = repo(tmp.path());
     git(&dir, &["checkout", "-q", "--detach"]);
-    let mut state =
-        AppState::for_roots(tmp.path(), &[dir.clone()]).with_settings(VcsSettings::default());
+    let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&dir))
+        .with_settings(VcsSettings::default());
     state.open_get_from_branch(&root_id(&dir), "feature");
     assert_eq!(state.ui.dialog, None, "nothing to compare against");
 }
