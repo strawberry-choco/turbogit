@@ -62,7 +62,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             columns: &WORKTREE_COLUMNS,
             loading: "Loading worktrees…",
             empty: "No linked worktrees. Use “Add worktree” to check a branch out into its own directory.",
-            cached: |state, id| state.caches.worktrees(id),
+            cached: |state, id| state.caches.worktrees(id).map(<[_]>::to_vec),
             actions: &mut |ui, state| {
                 // The pane's one primary action, and the **only** blue in this pane —
                 // which is what makes the ref chip below it worth having.

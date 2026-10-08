@@ -7,7 +7,8 @@
 //!
 //! Issue #18 extends this suite to the Commit window's sub-tab strip:
 //! Local Changes / Unversioned Files carry active data, Shelf / Stash are
-//! clickable placeholder panes (ADR-0008), and the "Advanced options..."
+//! real Shelf and Stash panes (ticket 12 superseded ADR-0008's placeholders), and
+//! the "Advanced options..."
 //! control is visible but inert (ADR-0010).
 //!
 //! Painted-text assertions come from `tests/common`; harness helpers beyond
@@ -1169,9 +1170,12 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
 }
 
 #[test]
-fn shelf_and_stash_show_labeled_placeholder_panes() {
+fn shelf_and_stash_replace_the_placeholder_with_their_own_panes() {
+    // ADR-0008 made these two sub-tabs labelled placeholders because nothing
+    // was behind them. Ticket 12 gave them panes, so the placeholder copy is
+    // gone from the whole window and each tab shows its own listing chrome.
     let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "placeholder-repo");
+    let repo = temp_repo(parent.path(), "real-panes-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
@@ -1182,15 +1186,17 @@ fn shelf_and_stash_show_labeled_placeholder_panes() {
     h.get_by_label("Shelf").click();
     h.run();
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Shelf);
-    assert_painted(&h, "Shelf arrives in a later phase.");
-    // The placeholder replaces the changelist data instead of stacking on it.
+    assert_painted(&h, "SHELVES");
+    assert_not_painted(&h, "arrives in a later phase");
+    // The pane replaces the changelist data instead of stacking on it.
     assert_not_painted(&h, "UNSTAGED");
     assert_not_painted(&h, "base.txt");
 
     h.get_by_label("Stash").click();
     h.run();
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Stash);
-    assert_painted(&h, "Stash arrives in a later phase.");
+    assert_painted(&h, "STASHES");
+    assert_not_painted(&h, "arrives in a later phase");
     assert_not_painted(&h, "base.txt");
 }
 
