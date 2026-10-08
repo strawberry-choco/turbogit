@@ -119,9 +119,19 @@ pub fn shelf_path(project_dir: &Path) -> PathBuf {
 /// `Option` only in its `Some(..)` spelling, while this build writes `Shelf`'s
 /// root as a plain value — so an `Option` here fails to read back the very file
 /// this build wrote. The marker never escapes the wire: [`StoredShelf::into_shelf`]
-/// replaces it, and a [`Shelf`] always carries a real root.
+/// replaces it on the way in, and [`save_shelves`] re-creates it on the way out
+/// purely to drop the key, so a [`Shelf`] always carries a real root.
 fn absent_root() -> RootId {
     RootId(Arc::from(Path::new("")))
+}
+
+/// Whether a root is [`absent_root`], the wire's **absent** spelling.
+///
+/// One predicate serves both directions on purpose: `skip_serializing_if` drops the
+/// `root` key exactly where `#[serde(default)]` would supply it, so "no root on the
+/// wire" and "the marker in memory" cannot drift into two different meanings.
+fn is_absent_root(root: &RootId) -> bool {
+    root.as_path().as_os_str().is_empty()
 }
 
 /// The store's **on-disk row shape**: a [`Shelf`] whose `root` may be absent.
@@ -146,6 +156,22 @@ struct StoredShelf {
     root: RootId,
 }
 
+/// The same row on its way **out**, borrowed so a save copies nothing it does not
+/// have to.
+///
+/// Serialising [`Shelf`] itself would write a `root` for every row, including the
+/// one a legacy load invented — see [`save_shelves`], which fills this mirror's
+/// `root` with [`absent_root`] for such a row so the key is dropped and the store
+/// keeps the shape it was given.
+#[derive(serde::Serialize)]
+struct StoredShelfOut<'a> {
+    name: &'a str,
+    changes: &'a [Change],
+    created_at: &'a chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "is_absent_root")]
+    root: RootId,
+}
+
 impl StoredShelf {
     /// Bind a row to its root: the one it recorded, or — for a row written before
     /// `root` existed — `project_dir`, the directory that holds this very store.
@@ -159,10 +185,11 @@ impl StoredShelf {
     /// The cost is honest and bounded: in a **multi-root** project whose
     /// `project_dir` is not itself a repository, a legacy row lands on a root no
     /// pane lists, so it reads as missing rather than as applied to the wrong
-    /// tree — and it is never destroyed, because [`save_shelves`] will not
-    /// truncate a store over rows it has not read.
+    /// tree — and it is never destroyed, both because [`save_shelves`] will not
+    /// truncate a store over rows it has not read and because the binding it
+    /// writes back is the absence it read, never this path.
     fn into_shelf(self, project_dir: &Path) -> Shelf {
-        let root = if self.root.as_path().as_os_str().is_empty() {
+        let root = if is_absent_root(&self.root) {
             RootId(Arc::from(project_dir))
         } else {
             self.root
@@ -224,6 +251,17 @@ pub fn load_shelves(project_dir: &Path) -> TgResult<Vec<Shelf>> {
 /// So: when a store exists and this build cannot read it — unparsable, or
 /// unreadable at all — this refuses with an error and the file is left
 /// byte-for-byte alone. The caller reports it; nothing is lost.
+///
+/// A row whose root **is** `project_dir` goes back the way an old row arrived: with
+/// no `root` key. The two spellings are one fact to this store — [`StoredShelf`]
+/// reads an absent root as `project_dir`, so writing the path adds nothing — and
+/// recording it would freeze into the index a location that need not be a
+/// repository, which the next load would hand back as a `RootId` matching nothing.
+/// The read-time binding of a legacy row therefore stays read-time.
+///
+/// One deliberate limit: the guard is **check-then-write** — parsed at t0, truncated
+/// at t1, with no lock and no atomic rename — so it defends this session's own rows,
+/// not a second process writing the same file.
 pub fn save_shelves(project_dir: &Path, shelves: &[Shelf]) -> TgResult<()> {
     let path = shelf_path(project_dir);
     let unreadable = path.exists()
@@ -239,8 +277,21 @@ pub fn save_shelves(project_dir: &Path, shelves: &[Shelf]) -> TgResult<()> {
             path.display()
         )));
     }
+    let rows: Vec<StoredShelfOut<'_>> = shelves
+        .iter()
+        .map(|shelf| StoredShelfOut {
+            name: &shelf.name,
+            changes: &shelf.changes,
+            created_at: &shelf.created_at,
+            root: if shelf.root.as_path() == project_dir {
+                absent_root()
+            } else {
+                shelf.root.clone()
+            },
+        })
+        .collect();
     fs::create_dir_all(project_dir.join(".turbogit"))?;
-    let text = ron::ser::to_string_pretty(shelves, ron::ser::PrettyConfig::new())
+    let text = ron::ser::to_string_pretty(&rows, ron::ser::PrettyConfig::new())
         .map_err(|e| turbogit_domain::error::TgError::Serde(e.to_string()))?;
     fs::write(path, text)?;
     Ok(())
