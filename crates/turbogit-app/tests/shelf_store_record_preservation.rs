@@ -36,6 +36,17 @@ fn project_that_is_a_repo() -> TempDir {
     project
 }
 
+/// A repository in its **own** directory — one root of a multi-root workspace whose
+/// project directory is a plain folder, the shape the fix's stated cost describes.
+fn repo_at(dir: &Path) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    git(dir, &["init", "-q", "-b", "main", dir.to_str().unwrap()]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "Test"]);
+    commit(dir, "README.md", "x\n", "init");
+    dir.to_path_buf()
+}
+
 /// What an **older build** wrote, reproduced by serialising the old field list
 /// rather than typing RON by hand, so the artefact is the real legacy shape.
 #[derive(serde::Serialize)]
@@ -156,4 +167,104 @@ fn a_current_shelf_round_trips_with_its_root() {
         loaded[0].root, root,
         "a non-default root survives the write"
     );
+}
+
+/// Parsed is not **usable**. The legacy row's whole point is that an unshelve can
+/// reach the parked content again, and `unshelve` needs both halves of the record:
+/// the *name* (which selects the stash entry in git's list) and the *root* (the
+/// repository it runs in). This drives the real verb through the app on a real
+/// repository, so the binding to `project_dir` is checked against git itself
+/// rather than against the pane's filter.
+#[test]
+fn a_legacy_row_unshelves_its_parked_content_through_the_real_verb() {
+    let project = project_that_is_a_repo();
+    // Park work exactly as `shelve` does: a stash entry whose message is the shelf's
+    // name, then the pre-ticket-12 record that names it.
+    std::fs::write(project.path().join("README.md"), "shelved work\n").unwrap();
+    git(
+        project.path(),
+        &["stash", "push", "-q", "-m", "wip: parser"],
+    );
+    write_legacy_store(project.path(), "wip: parser");
+
+    let mut state = AppState::for_roots(
+        project.path(),
+        std::slice::from_ref(&project.path().to_path_buf()),
+    );
+    let root = state.multi.roots[0].id.clone();
+    let rows = state.shelves_for(&root);
+    assert_eq!(rows.len(), 1, "the legacy row reaches the pane");
+    let row = rows[0].clone();
+
+    state.unshelve(row.root.clone(), row.name.clone(), false);
+    state.drain_events();
+    assert!(
+        state.last_error.is_none(),
+        "unshelving a legacy row must not fail on the root it was bound to: {:?}",
+        state.last_error
+    );
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("README.md")).unwrap(),
+        "shelved work\n",
+        "the row's name and bound root are what reach the parked content"
+    );
+    assert_eq!(
+        git(project.path(), &["stash", "list"]).lines().count(),
+        1,
+        "`Unshelve` keeps, so the row and git's copy both stand"
+    );
+}
+
+/// The cost the fix accepts, pinned rather than asserted in prose: in a
+/// **multi-root** project whose `project_dir` is not itself a repository, a legacy
+/// row binds to a root no pane lists. It must therefore read as absent (never as
+/// applied to the wrong tree), and it must still **survive** the writes the panes
+/// can make — the row rides in the in-memory slice, so the rewritten file carries
+/// it under the invented root. Invisible is the deal; destroyed would not be.
+#[test]
+fn a_legacy_row_in_a_multi_root_project_is_invisible_but_never_destroyed() {
+    let parent = tempfile::tempdir().unwrap();
+    // A plain directory holding two repositories: the workspace shape where no root
+    // is the project directory.
+    let roots = vec![
+        repo_at(&parent.path().join("alpha")),
+        repo_at(&parent.path().join("beta")),
+    ];
+    let project_dir = parent.path().to_path_buf();
+    write_legacy_store(&project_dir, "wip: parser");
+
+    let mut state = AppState::for_roots(&project_dir, &roots);
+    assert!(
+        state.last_error.is_none(),
+        "a legacy store must not fail the launch even where its row lists under nothing: {:?}",
+        state.last_error
+    );
+    assert_eq!(
+        state.ui.shelves.len(),
+        1,
+        "the row is loaded — it is nowhere to *list*, not lost"
+    );
+    for root in state.multi.roots.iter().map(|r| r.id.clone()) {
+        assert!(
+            state.shelves_for(&root).is_empty(),
+            "a row bound to a non-repo project dir must not appear under a real root"
+        );
+    }
+
+    // A shelve for a listed root rewrites the whole store; the invisible row is in
+    // the slice, so it survives the truncation.
+    let first_root = state.multi.roots[0].id.clone();
+    state
+        .ui
+        .shelves
+        .push(shelve_stash::make_shelf("wip: cli", &[], first_root));
+    shelve_stash::save_shelves(&project_dir, &state.ui.shelves)
+        .expect("a store this build reads is a store it may write");
+
+    let names: Vec<String> = shelve_stash::load_shelves(&project_dir)
+        .unwrap()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, vec!["wip: parser", "wip: cli"]);
 }
