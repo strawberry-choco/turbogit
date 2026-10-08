@@ -513,6 +513,41 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                     }
                 });
             }
+            // Surface 07's two destructive verbs. **Whether the reference
+            // confirms either of them was never observed at runtime**, so these
+            // carry TurboGit's own confirming stance — the documented fallback,
+            // recorded as a divergence rather than a silent invention.
+            PendingConfirm::DeleteShelf { name, .. } => {
+                ui.label(format!(
+                    "Delete shelf '{name}'? Its row leaves the shelf, and the changes it parked \
+                     are dropped from this repository's stash list."
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        state.run_confirmed(confirm);
+                        state.ui.confirm = None;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        state.ui.confirm = None;
+                    }
+                });
+            }
+            PendingConfirm::DeleteStash { index, .. } => {
+                ui.label(format!(
+                    "Delete stash {}? The entry is removed, and with it the only copy of what it \
+                     holds.",
+                    turbogit_services::shelve_stash::stash_ref(*index)
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("OK").clicked() {
+                        state.run_confirmed(confirm);
+                        state.ui.confirm = None;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        state.ui.confirm = None;
+                    }
+                });
+            }
         });
     if !open {
         state.ui.confirm = None;

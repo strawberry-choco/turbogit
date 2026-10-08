@@ -1293,14 +1293,20 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
                     }
                 }
             }
-            let shelf = shelve_stash::make_shelf(&name, &changes);
+            // A shelf belongs to the root whose changes it holds — the Shelf
+            // pane lists per root, and an unshelve parks or restores work in
+            // exactly one repository. With no focused root there is no such
+            // repository, so there is nothing to record and nothing to stash.
+            let Some(root) = state.selected_root.clone() else {
+                close(state);
+                return;
+            };
+            let shelf = shelve_stash::make_shelf(&name, &changes, root.clone());
             state.ui.shelves.push(shelf);
             let _ = shelve_stash::save_shelves(&state.project_dir, &state.ui.shelves);
-            if let Some(root) = state.selected_root.clone() {
-                // The shelf record above is the IDE's own list; the git side is
-                // to park the working changes, with nothing chosen to discard.
-                state.dispatch(Operation::shelve(root, Vec::new(), name));
-            }
+            // The shelf record above is the IDE's own list; the git side is
+            // to park the working changes, with nothing chosen to discard.
+            state.dispatch(Operation::shelve(root, Vec::new(), name));
             close(state);
         }
     });

@@ -55,7 +55,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             columns: &SUBMODULE_COLUMNS,
             loading: "Loading submodules…",
             empty: "No registered submodules in this repository.",
-            cached: |state, id| state.caches.submodules(id),
+            cached: |state, id| state.caches.submodules(id).map(<[_]>::to_vec),
             // No header action: a submodule's verbs live on its own row, next to
             // the state they apply to.
             actions: &mut |_ui, _state| {},

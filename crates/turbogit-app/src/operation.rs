@@ -32,6 +32,11 @@ pub enum OpKind {
     Rebase,
     DeleteBranch,
     Shelve,
+    /// [`Operation::Unshelve`] — one shelf's content put back in the working
+    /// tree. Its own identity because the shelf's IDE record is app state, not
+    /// git state, and only a named kind lets settlement drop that record once
+    /// the git side has actually landed (never on a failure).
+    Unshelve,
     WorktreeAdd,
     WorktreeRemove,
     /// [`Operation::DropCommit`] — one commit removed from the current branch's
@@ -299,6 +304,20 @@ pub enum Operation {
         changes: Vec<Change>,
         message: String,
     },
+    /// Put one shelf's content back: `git stash apply` of the entry the shelve
+    /// wrote, or `git stash pop` of it when `remove`.
+    ///
+    /// The two verbs the reference gives this pair have **opposite keep/remove
+    /// defaults** and the names carry the consequence — `Unshelve` keeps,
+    /// `Unshelve and Remove` destroys the shelved copy. `remove` is that
+    /// difference, and it is also what the settlement reads to decide whether
+    /// the shelf's own record goes with the git copy: only a landed
+    /// `Unshelve and Remove` may delete the row.
+    Unshelve {
+        root: RootId,
+        name: String,
+        remove: bool,
+    },
     /// `git worktree add` — mutates the root's linked-worktree set.
     WorktreeAdd {
         root: RootId,
@@ -419,6 +438,17 @@ impl Operation {
             root,
             changes,
             message: message.into(),
+        }
+    }
+
+    /// Put the shelf named `name` back in `root`'s working tree, keeping its
+    /// shelved copy unless `remove` — the `Unshelve` / `Unshelve and Remove`
+    /// pair in one dispatch unit.
+    pub fn unshelve(root: RootId, name: impl Into<String>, remove: bool) -> Self {
+        Self::Unshelve {
+            root,
+            name: name.into(),
+            remove,
         }
     }
 
@@ -593,6 +623,14 @@ impl Operation {
             },
             Self::DeleteBranch { name, .. } => format!("Delete branch {name}"),
             Self::Shelve { .. } => "Shelve".to_string(),
+            // The two verbs' names carry their own consequence, so the toast and
+            // the activity feed say which of the pair ran and which copy is left.
+            Self::Unshelve {
+                name, remove: true, ..
+            } => {
+                format!("Unshelve and Remove '{name}'")
+            }
+            Self::Unshelve { name, .. } => format!("Unshelve '{name}'"),
             Self::WorktreeAdd { branch, .. } => format!("Add worktree {branch}"),
             Self::WorktreeRemove { .. } => "Remove worktree".to_string(),
             // The short reference, because that is what the developer read in
@@ -643,6 +681,7 @@ impl Operation {
             | Self::Rebase { root, .. }
             | Self::DeleteBranch { root, .. }
             | Self::Shelve { root, .. }
+            | Self::Unshelve { root, .. }
             | Self::WorktreeAdd { root, .. }
             | Self::WorktreeRemove { root, .. }
             | Self::DropCommit { root, .. }
@@ -676,6 +715,7 @@ impl Operation {
             Self::Rebase { .. } => OpKind::Rebase,
             Self::DeleteBranch { .. } => OpKind::DeleteBranch,
             Self::Shelve { .. } => OpKind::Shelve,
+            Self::Unshelve { .. } => OpKind::Unshelve,
             Self::WorktreeAdd { .. } => OpKind::WorktreeAdd,
             Self::WorktreeRemove { .. } => OpKind::WorktreeRemove,
             Self::DropCommit { .. } => OpKind::DropCommit,
@@ -765,6 +805,17 @@ impl Operation {
                 let _ = turbogit_services::changes::discard_changes(vcs, path, &changes);
                 Ok(())
             }
+            Self::Unshelve { root, name, remove } => turbogit_services::shelve_stash::unshelve(
+                vcs,
+                root.as_path(),
+                &name,
+                // A shelf's own record goes with the git copy only for the
+                // destructive sibling of the pair; the shelf list is dropped on
+                // the success side of settlement, which cannot run for an entry
+                // that never existed.
+                remove,
+            )
+            .map(|_| ()),
             Self::WorktreeAdd { root, path, branch } => {
                 vcs.worktree_add(root.as_path(), &path, &branch, true)
             }

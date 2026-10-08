@@ -20,14 +20,19 @@ use turbogit_domain::model::RootId;
 
 use super::widgets::{self, PaneColumn};
 
-/// The cache accessor a column-table pane hands this module: the focused root's
-/// own row list, or `None` while that answer has not arrived.
+/// The row source a column-table pane hands this module: the focused root's own
+/// rows, or `None` while that answer has not arrived.
 ///
-/// A named shape rather than a generic because the two accessors return
-/// differently-typed rows and the caller fixes the row type; a function pointer
-/// keeps `T` out of the signature instead of making it an inference variable the
-/// two call sites have to be identical to satisfy.
-pub(crate) type CachedRows<T> = for<'a> fn(&'a AppState, &'a RootId) -> Option<&'a [T]>;
+/// A named shape rather than a generic because the caller fixes the row type; a
+/// function pointer keeps `T` out of the signature instead of making it an
+/// inference variable the call sites have to be identical to satisfy.
+///
+/// **Owned, not borrowed**, because a pane's rows are not always a cache's
+/// slice: the Shelf pane shows one root's shelves out of a project-wide store,
+/// which is a selection rather than a view. `None` stays reserved for "no answer
+/// yet", so an owned empty `Vec` is how a pane says it has looked and found
+/// nothing.
+pub(crate) type CachedRows<T> = for<'a> fn(&'a AppState, &'a RootId) -> Option<Vec<T>>;
 
 /// The four things a column-table pane decides for itself, and the other four
 /// this module does not ask about.
@@ -81,10 +86,7 @@ pub(crate) fn column_table_pane<T: Clone>(
     spec: PaneTable<'_, T>,
 ) {
     let root = state.selected_root.clone();
-    let loaded: Option<Vec<T>> = root
-        .as_ref()
-        .and_then(|id| (spec.cached)(state, id))
-        .map(<[T]>::to_vec);
+    let loaded: Option<Vec<T>> = root.as_ref().and_then(|id| (spec.cached)(state, id));
     let count = loaded.as_ref().map(|rows| rows.len().to_string());
 
     widgets::pane_header(ui, spec.title, count.as_deref(), |ui| {
