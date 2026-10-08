@@ -152,3 +152,112 @@ fn an_empty_store_is_an_empty_shelf_not_an_unreadable_one() {
         vec!["wip: parser"]
     );
 }
+
+/// The bug's actual shape from the user's side: a store this build cannot read,
+/// then a **create** — the shelve dialog's `save_shelves` passes the slice it just
+/// pushed onto, so it is non-empty and holds a record the file has never seen.
+/// Refusing an empty slice (above) is the easy half; refusing a *populated* one is
+/// what keeps the corrupt file's rows, and the pane must then say so.
+#[test]
+fn a_create_after_an_unreadable_store_refuses_and_leaves_the_bytes_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+    std::fs::create_dir_all(project_dir.join(".turbogit")).unwrap();
+    // Non-empty, unparseable: a row truncated mid-object, the shape a partial write
+    // or a hand-edit leaves behind.
+    let unreadable = r#"[{ name: "wip: parser", changes: [], created_at: "#;
+    std::fs::write(shelf_path(&project_dir), unreadable).unwrap();
+
+    let root = RootId(std::sync::Arc::from(project_dir.as_path()));
+    let created = shelve_stash::make_shelf("wip: cli", &[], root);
+    let refused = shelve_stash::save_shelves(&project_dir, std::slice::from_ref(&created))
+        .expect_err("a create cannot carry the rows on disk, so it must not write them away");
+    assert!(
+        refused
+            .to_string()
+            .contains("Refused to rewrite the shelf store"),
+        "the refusal names itself: {refused}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shelf_path(&project_dir)).unwrap(),
+        unreadable,
+        "a genuinely corrupt file is preserved, not overwritten"
+    );
+}
+
+/// A **valid RON value of the wrong shape** is unreadable in the same way — RON
+/// parses it, `Shelf` does not — so the guard cannot stop at "is this syntax"; the
+/// probe deserialises the store's own row type.
+#[test]
+fn a_parseable_but_wrongly_shaped_store_is_refused_too() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+    std::fs::create_dir_all(project_dir.join(".turbogit")).unwrap();
+    std::fs::write(shelf_path(&project_dir), "\"not a shelf list\"").unwrap();
+
+    assert!(shelve_stash::load_shelves(&project_dir).is_err());
+    shelve_stash::save_shelves(
+        &project_dir,
+        &[shelve_stash::make_shelf(
+            "wip: cli",
+            &[],
+            RootId(std::sync::Arc::from(project_dir.as_path())),
+        )],
+    )
+    .expect_err("a file whose shape this build cannot read stays out of reach of a write");
+    assert_eq!(
+        std::fs::read_to_string(shelf_path(&project_dir)).unwrap(),
+        "\"not a shelf list\""
+    );
+}
+
+/// The lockout the refusal could have become, on the two axes the store's own
+/// discipline has to hold:
+///
+/// * **a second write** — the file a shelve just wrote must read back, or every
+///   later shelve is refused over a store this very build produced;
+/// * **an `Option` on the wire** — [`Change::orig_path`] (a rename) is the shelf's
+///   only optional field, and RON 0.12 deserialises an `Option` solely from its
+///   `Some(..)` spelling. The store writes what it reads only if the serializer
+///   emits that spelling, so a rename-bearing shelf is the case that proves it:
+///   were the serializer writing a plain value, this round trip would fail and the
+///   follow-up write would be refused forever.
+#[test]
+fn a_store_this_build_wrote_reads_back_and_stays_writable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+    let root = RootId(std::sync::Arc::from(project_dir.as_path()));
+
+    let mut renamed = change("src/new.rs");
+    renamed.orig_path = Some(PathBuf::from("src/old.rs"));
+    renamed.staged = true;
+    renamed.unstaged = true;
+    let first =
+        shelve_stash::make_shelf("wip: rename", std::slice::from_ref(&renamed), root.clone());
+
+    shelve_stash::save_shelves(&project_dir, std::slice::from_ref(&first)).unwrap();
+    let loaded = shelve_stash::load_shelves(&project_dir)
+        .expect("the store this build wrote must read back into this build");
+    assert_eq!(
+        loaded[0].changes[0].orig_path.as_deref(),
+        Some(Path::new("src/old.rs"))
+    );
+    assert_eq!(loaded[0].changes[0].path, PathBuf::from("src/new.rs"));
+    assert!(loaded[0].changes[0].staged && loaded[0].changes[0].unstaged);
+    assert_eq!(
+        loaded[0].root, root,
+        "the root this build wrote is the root it reads"
+    );
+
+    // And the very next shelve still works: readable means writable.
+    let second = shelve_stash::make_shelf("wip: cli", &[], root);
+    shelve_stash::save_shelves(&project_dir, &[first, second]).unwrap();
+    assert_eq!(
+        shelve_stash::load_shelves(&project_dir)
+            .expect("a store this build wrote never locks shelving out")
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: rename", "wip: cli"]
+    );
+}
