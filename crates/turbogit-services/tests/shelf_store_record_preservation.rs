@@ -261,3 +261,42 @@ fn a_store_this_build_wrote_reads_back_and_stays_writable() {
         vec!["wip: rename", "wip: cli"]
     );
 }
+
+/// The read-time binding must never reach the **wire**. Binding a rootless row to
+/// `project_dir` is what makes it listable and unshelve-able in this session, but
+/// writing that invented path back gives the store a root no row ever recorded —
+/// a path that may not be a repository, frozen in as if it were a `RootId` someone
+/// chose. A later load matches nothing against it, so the binding silently changes
+/// meaning. The row must therefore round-trip rootless and still mean the same
+/// thing, because `load_shelves` binds an absent root to that very directory.
+#[test]
+fn rewriting_a_legacy_row_does_not_give_the_store_a_root_it_never_had() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+    write_legacy_store(&project_dir, &["wip: parser", "wip: cli"]);
+
+    let loaded = shelve_stash::load_shelves(&project_dir).unwrap();
+    for shelf in &loaded {
+        assert_eq!(
+            shelf.root.as_path(),
+            project_dir.as_path(),
+            "the row is bound in-session, which is what makes it usable"
+        );
+    }
+
+    shelve_stash::save_shelves(&project_dir, &loaded).unwrap();
+    let text = std::fs::read_to_string(shelf_path(&project_dir)).unwrap();
+    assert!(
+        !text.contains("root:"),
+        "the bound path must not be persisted as a recorded root:\n{text}"
+    );
+
+    // And the rewrite neither lost the row nor changed what it means.
+    let again = shelve_stash::load_shelves(&project_dir).unwrap();
+    assert_eq!(
+        again.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        vec!["wip: parser", "wip: cli"]
+    );
+    assert_eq!(again[0].root.as_path(), project_dir.as_path());
+    assert_eq!(again[0].changes.len(), 1);
+}
