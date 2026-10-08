@@ -544,7 +544,7 @@ pub fn branch_file_changes(
     let mut rows: Vec<BranchFileRow> = patch
         .files
         .iter()
-        .filter_map(|file| {
+        .map(|file| {
             // git spells the two one-sided cases as headers on the section, so
             // the rung is read off them and never re-derived from hunk counts —
             // a mode-only change has hunks and is `Modified`, a rename has none
@@ -573,10 +573,10 @@ pub fn branch_file_changes(
             } else {
                 &file.new_path
             };
-            Some(BranchFileRow {
+            BranchFileRow {
                 path: PathBuf::from(name),
                 status,
-            })
+            }
         })
         .collect();
     rows.sort();
