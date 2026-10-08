@@ -2807,18 +2807,54 @@ impl AppState {
         self.dispatch(Operation::unshelve(root, name, remove));
     }
 
+    /// Record a new shelf — the app-side half of the shelve dialog's verb, and the
+    /// mirror image of [`Self::remove_shelf`]: the candidate list is written first
+    /// and kept only when the store accepts it.
+    ///
+    /// The refusal is both **stored and returned**, because the caller has a second
+    /// half to gate: a row the store refused paints for the rest of this session and
+    /// vanishes at the next launch, while the dispatch that follows parks the work in
+    /// git's stash list — where an unshelve can find it again only by the name this
+    /// record carries.
+    pub fn add_shelf(&mut self, shelf: Shelf) -> TgResult<()> {
+        let mut kept = self.ui.shelves.clone();
+        kept.push(shelf);
+        if let Err(e) = turbogit_services::shelve_stash::save_shelves(&self.project_dir, &kept) {
+            self.last_error = Some(e.to_string());
+            return Err(e);
+        }
+        self.ui.shelves = kept;
+        Ok(())
+    }
+
     /// Drop one shelf's record — the app-side half of `Unshelve and Remove` and
     /// of a confirmed shelf delete. The store is rewritten with what is left, so
     /// the pane and the file never disagree about a shelf that has gone.
+    ///
+    /// **The list moves only once the rewrite lands** (write the candidate, commit
+    /// on `Ok`): a refusal that had already dropped the row leaves the pane painting
+    /// nothing while the record sits on disk, and the shelf the user deleted returns
+    /// at the next launch to disagree with the error they already have on screen.
     pub fn remove_shelf(&mut self, root: &RootId, name: &str) {
-        let before = self.ui.shelves.len();
-        self.ui
+        let kept: Vec<Shelf> = self
+            .ui
             .shelves
-            .retain(|s| &s.root != root || s.name != name);
-        if self.ui.shelves.len() != before {
-            let _ =
-                turbogit_services::shelve_stash::save_shelves(&self.project_dir, &self.ui.shelves);
+            .iter()
+            .filter(|s| &s.root != root || s.name != name)
+            .cloned()
+            .collect();
+        if kept.len() == self.ui.shelves.len() {
+            return;
         }
+        // Report a refused rewrite instead of discarding it: the store will
+        // not truncate itself over rows it has not read, and a silent `let _`
+        // there would leave the pane and the file disagreeing with nobody
+        // the wiser.
+        if let Err(e) = turbogit_services::shelve_stash::save_shelves(&self.project_dir, &kept) {
+            self.last_error = Some(e.to_string());
+            return;
+        }
+        self.ui.shelves = kept;
     }
 
     /// Cherry-pick `commit` onto the branch `target` for the focused root
