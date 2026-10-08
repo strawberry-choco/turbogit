@@ -42,6 +42,9 @@ pub mod conflict_resolver;
 pub mod conflicts;
 pub mod dialogs;
 pub mod diff;
+/// The `Get from Branch` window (ticket 17, §4.8 verb 5) and its three-rung
+/// comparison list; internal to the dialog host like [`cherry_across`].
+pub mod get_from_branch;
 pub mod hunk_nav;
 pub mod icons;
 pub mod interactive_rebase;
@@ -117,6 +120,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         } else if d == Dialog::ManageRemotes {
             // Issue 33: the remotes manager lives in its own module.
             remotes_dialog::show(ui, state);
+        } else if d == Dialog::GetFromBranch {
+            // Ticket 17: the fifth integration verb's window lives in its own
+            // module — it owns a rung list of its own, and `dialogs.rs` is the host
+            // for the field-form dialogs, not for a second file tree.
+            get_from_branch::show(ui, state);
         } else {
             dialogs::show(ui, state, d);
         }
@@ -214,6 +222,13 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
         .open(&mut open)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .resizable(false)
+        // A pending confirmation is answered, not hunted for, so it outranks every
+        // ordinary window: the surface that armed it — `Get from Branch`'s rung list
+        // is the case that puts the two over the same pixels — is free to raise
+        // itself on a later click and bury the question's buttons underneath.
+        // `Order::Foreground` is egui's documented order for a window that stays on
+        // top, and a confirmation is the one floating surface that always is.
+        .order(egui::Order::Foreground)
         .show(&ctx, |ui| match &confirm {
             PendingConfirm::Discard { changes } => {
                 // Issue #02: rich confirmation — every affected file is
@@ -469,6 +484,27 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 ));
                 ui.horizontal(|ui| {
                     if ui.button("OK").clicked() {
+                        state.run_confirmed(confirm);
+                        state.ui.confirm = None;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        state.ui.confirm = None;
+                    }
+                });
+            }
+            PendingConfirm::GetFileFromBranch { root, source, path } => {
+                // The whole blast radius, stated because the reference documents no
+                // confirm step at all for this verb (ticket 17 records that absence as
+                // a deliberate departure): one file, in one named root, losing its
+                // entire current contents — and nothing committed, since the take is a
+                // working-tree write the developer then commits by hand.
+                ui.label(format!(
+                    "Replace {} in {} with the entire contents it has on '{source}'? The file's current contents are lost, and nothing is committed.",
+                    path.display(),
+                    root.name()
+                ));
+                ui.horizontal(|ui| {
+                    if ui.button("Replace file").clicked() {
                         state.run_confirmed(confirm);
                         state.ui.confirm = None;
                     }

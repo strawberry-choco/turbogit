@@ -2269,6 +2269,7 @@ const TOKEN_INVENTORY: &[&str] = &[
     "STATUS_MODIFIED",
     "STATUS_ADDED",
     "STATUS_UNVERSIONED",
+    "STATUS_DELETED",
     // --- Palette: diff
     "DIFF_ADD_BG",
     "DIFF_ADD_TEXT",

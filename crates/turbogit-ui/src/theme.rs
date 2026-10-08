@@ -362,6 +362,28 @@ impl Palette {
     pub const STATUS_ADDED: Color32 = Color32::from_rgb(0x6f, 0xae, 0x75);
     /// Unversioned file letter (`U`) — olive.
     pub const STATUS_UNVERSIONED: Color32 = Color32::from_rgb(0xb5, 0xb3, 0x7e);
+    /// Absent-on-the-base-side letter (`D`) — **grey**, the third rung of the
+    /// change-kind grammar: green = Added, blue = Modified, grey = Deleted
+    /// (`differences-viewer.md:12-22`). The grammar is a design-system rule and not
+    /// a per-call-site choice, so all three rungs are named here; the other two are
+    /// the existing [`Self::STATUS_ADDED`] and [`Self::STATUS_MODIFIED`], which is
+    /// why this is one new *name* over a value the palette already holds rather than
+    /// three new colours.
+    ///
+    /// It needed its own name because the app's only other rendering of a deleted
+    /// file is the commit tree's [`Self::STATE_ERROR`], and that red is a **staging
+    /// severity** — work the developer has to answer for — not this grammar's
+    /// "the base side has this path and this side does not". Reading a compare
+    /// window's absent file in error red would say the file is a problem; in grey it
+    /// says the file is not on this side, which is the whole fact. Aliasing
+    /// [`Self::T_MUTED`] adds no value to the palette and inherits the ink ramp's
+    /// legality: 4.7:1 on the content surface, and a caller that puts it on a raised
+    /// or selected fill steps up to `INK_2` like every other muted rung.
+    ///
+    /// Consumer: `ui::get_from_branch`'s rung list (ticket 17). The commit tree's
+    /// red `D` stays as it is — changing it is a visual decision with its own
+    /// callers, not this grammar's business.
+    pub const STATUS_DELETED: Color32 = Self::T_MUTED;
 
     // Diff colors.
     /// Added-line background (`--tg-diff-add`).
