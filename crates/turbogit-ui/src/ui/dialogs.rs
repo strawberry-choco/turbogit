@@ -1302,8 +1302,14 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
                 return;
             };
             let shelf = shelve_stash::make_shelf(&name, &changes, root.clone());
-            state.ui.shelves.push(shelf);
-            let _ = shelve_stash::save_shelves(&state.project_dir, &state.ui.shelves);
+            // A refused record is a refused verb: `add_shelf` writes before it
+            // paints and reports the refusal itself, so the dispatch below parks
+            // work only under a name the shelf index has actually got — which is
+            // the one way an unshelve can find it again.
+            if state.add_shelf(shelf).is_err() {
+                close(state);
+                return;
+            }
             // The shelf record above is the IDE's own list; the git side is
             // to park the working changes, with nothing chosen to discard.
             state.dispatch(Operation::shelve(root, Vec::new(), name));
