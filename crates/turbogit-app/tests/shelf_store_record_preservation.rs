@@ -219,8 +219,9 @@ fn a_legacy_row_unshelves_its_parked_content_through_the_real_verb() {
 /// **multi-root** project whose `project_dir` is not itself a repository, a legacy
 /// row binds to a root no pane lists. It must therefore read as absent (never as
 /// applied to the wrong tree), and it must still **survive** the writes the panes
-/// can make — the row rides in the in-memory slice, so the rewritten file carries
-/// it under the invented root. Invisible is the deal; destroyed would not be.
+/// can make — the row rides in the in-memory slice, and because the binding is
+/// read-time its record goes back rootless, so the store gains no phantom root.
+/// Invisible is the deal; destroyed, or re-labelled as a recorded root, would not be.
 #[test]
 fn a_legacy_row_in_a_multi_root_project_is_invisible_but_never_destroyed() {
     let parent = tempfile::tempdir().unwrap();
@@ -267,4 +268,139 @@ fn a_legacy_row_in_a_multi_root_project_is_invisible_but_never_destroyed() {
         .map(|s| s.name)
         .collect();
     assert_eq!(names, vec!["wip: parser", "wip: cli"]);
+}
+
+/// A refused rewrite is a refused **verb**. The removal above reported the refusal
+/// and kept the file, but it had already dropped the row from the in-memory list:
+/// the pane stopped painting a shelf whose record still sits on disk, so the user
+/// is told to shelve again *and* sees the row come back at the next launch. The
+/// two halves of one verb have to move together — either both or neither.
+#[test]
+fn a_refused_removal_keeps_the_row_the_file_still_holds() {
+    let project = project_that_is_a_repo();
+    let root = RootId(std::sync::Arc::from(project.path()));
+    let shelf = shelve_stash::make_shelf("wip: parser", &[], root.clone());
+    shelve_stash::save_shelves(project.path(), std::slice::from_ref(&shelf)).unwrap();
+
+    let mut state = AppState::for_roots(
+        project.path(),
+        std::slice::from_ref(&project.path().to_path_buf()),
+    );
+    assert_eq!(state.ui.shelves.len(), 1, "a current store loads");
+
+    let unreadable = "[not RON";
+    std::fs::write(shelf_path(project.path()), unreadable).unwrap();
+
+    state.remove_shelf(&root, "wip: parser");
+
+    assert_eq!(
+        state
+            .shelves_for(&root)
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: parser"],
+        "the refusal leaves the pane painting exactly what the store still holds"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shelf_path(project.path())).unwrap(),
+        unreadable,
+        "and the file is untouched"
+    );
+    assert!(
+        state
+            .last_error
+            .as_deref()
+            .is_some_and(|m| m.contains("Refused to rewrite the shelf store")),
+        "the refused write is reported, not discarded: {:?}",
+        state.last_error
+    );
+}
+
+/// The create half of the same hazard, at the seam the shelve dialog goes through.
+/// A row the store refused is a row the next launch drops — and by then the work it
+/// named has already been parked in git's stash list, where the Shelf pane cannot
+/// reach it because only this file carries the name that selects it. So a refused
+/// record is a refused shelf: nothing is added to the list.
+#[test]
+fn a_refused_creation_adds_no_row_that_the_next_launch_would_drop() {
+    let project = project_that_is_a_repo();
+    let root = RootId(std::sync::Arc::from(project.path()));
+    let shelf = shelve_stash::make_shelf("wip: parser", &[], root.clone());
+    shelve_stash::save_shelves(project.path(), std::slice::from_ref(&shelf)).unwrap();
+
+    let mut state = AppState::for_roots(
+        project.path(),
+        std::slice::from_ref(&project.path().to_path_buf()),
+    );
+    assert_eq!(state.ui.shelves.len(), 1, "a current store loads");
+
+    let unreadable = "[not RON";
+    std::fs::write(shelf_path(project.path()), unreadable).unwrap();
+
+    let refused = state.add_shelf(shelve_stash::make_shelf("wip: cli", &[], root.clone()));
+
+    assert!(
+        refused.is_err(),
+        "the caller learns the record did not land, so it parks the work in git no more"
+    );
+    assert_eq!(
+        state
+            .ui
+            .shelves
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: parser"],
+        "the pane paints no phantom row"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shelf_path(project.path())).unwrap(),
+        unreadable,
+        "and the untouched file still holds the rows this session never read"
+    );
+    assert!(
+        state
+            .last_error
+            .as_deref()
+            .is_some_and(|m| m.contains("Refused to rewrite the shelf store")),
+        "the user is told: {:?}",
+        state.last_error
+    );
+}
+
+/// The other direction, so the guard above is not mistaken for a shelf verb that
+/// never happens: an accepted record is both painted and durable, and the row the
+/// store got is the row the pane lists.
+#[test]
+fn an_accepted_creation_lands_in_the_pane_and_on_disk_together() {
+    let project = project_that_is_a_repo();
+    let root = RootId(std::sync::Arc::from(project.path()));
+    let mut state = AppState::for_roots(
+        project.path(),
+        std::slice::from_ref(&project.path().to_path_buf()),
+    );
+
+    state
+        .add_shelf(shelve_stash::make_shelf("wip: cli", &[], root.clone()))
+        .expect("a store this build can read is a store it may write");
+
+    assert_eq!(
+        state
+            .shelves_for(&root)
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: cli"]
+    );
+    assert_eq!(
+        shelve_stash::load_shelves(project.path())
+            .unwrap()
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: cli"],
+        "a restart finds the row the pane is painting"
+    );
+    assert!(state.last_error.is_none(), "{:?}", state.last_error);
 }

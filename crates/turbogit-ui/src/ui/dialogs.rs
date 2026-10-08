@@ -1302,13 +1302,13 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
                 return;
             };
             let shelf = shelve_stash::make_shelf(&name, &changes, root.clone());
-            state.ui.shelves.push(shelf);
-            // The store refuses to rewrite itself while it holds rows this build
-            // cannot read, so the user has to be told the shelf index did not
-            // land — the git side below still parks the content. Silently
-            // swallowing this was how an unreadable store got truncated.
-            if let Err(e) = shelve_stash::save_shelves(&state.project_dir, &state.ui.shelves) {
-                state.last_error = Some(e.to_string());
+            // A refused record is a refused verb: `add_shelf` writes before it
+            // paints and reports the refusal itself, so the dispatch below parks
+            // work only under a name the shelf index has actually got — which is
+            // the one way an unshelve can find it again.
+            if state.add_shelf(shelf).is_err() {
+                close(state);
+                return;
             }
             // The shelf record above is the IDE's own list; the git side is
             // to park the working changes, with nothing chosen to discard.
