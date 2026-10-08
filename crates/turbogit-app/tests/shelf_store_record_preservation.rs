@@ -404,3 +404,105 @@ fn an_accepted_creation_lands_in_the_pane_and_on_disk_together() {
     );
     assert!(state.last_error.is_none(), "{:?}", state.last_error);
 }
+
+/// A per-row reading of the **wire**: which rows recorded a `root`.
+///
+/// The same instrument as the services suite's `WireRow` (integration tests cannot
+/// share a helper across crates), and deliberately not the store's own row type,
+/// which invents a root for a keyless row: `#[serde(default)]` on a plain `String`
+/// leaves the absent spelling empty, so "recorded" and "omitted" stay separately
+/// observable while the pane is being checked.
+#[derive(serde::Deserialize)]
+struct WireRow {
+    name: String,
+    #[serde(default)]
+    root: String,
+}
+
+fn recorded_roots(project_dir: &Path) -> Vec<(String, Option<PathBuf>)> {
+    let text = std::fs::read_to_string(shelf_path(project_dir)).unwrap();
+    ron::from_str::<Vec<WireRow>>(&text)
+        .unwrap_or_else(|e| panic!("the store this build wrote must parse: {e}\n{text}"))
+        .into_iter()
+        .map(|row| {
+            let root = (!row.root.is_empty()).then(|| PathBuf::from(row.root));
+            (row.name, root)
+        })
+        .collect()
+}
+
+/// The **multi-root coincidence**, checked through the real create seam: a project
+/// whose roots are its own directory *and* a nested repository. `save_shelves`
+/// omits the `root` key for the row rooted at `project_dir` — the shape a legacy
+/// row arrives in — so the question this answers is whether that omission is a
+/// loss of information for a row that genuinely recorded the root.
+///
+/// It is not, and the reason is structural: the store lives at
+/// `<project_dir>/.turbogit/shelf.ron`, so the root it erases is always the very
+/// directory the store sits in, which is what [`shelve_stash::load_shelves`] binds
+/// an absent root to. The two spellings therefore carry one value, and the row
+/// still lists under the root `for_roots` registered — while the second, genuinely
+/// different root is recorded and lists under its own pane.
+#[test]
+fn a_project_dir_that_is_also_one_of_several_roots_round_trips_as_the_same_root() {
+    let project = project_that_is_a_repo();
+    let nested = repo_at(&project.path().join("nested"));
+    let roots = vec![project.path().to_path_buf(), nested.clone()];
+    let outer_root = RootId(std::sync::Arc::from(project.path()));
+    let nested_root = RootId(std::sync::Arc::from(nested.as_path()));
+
+    let mut state = AppState::for_roots(project.path(), &roots);
+    state
+        .add_shelf(shelve_stash::make_shelf(
+            "wip: outer",
+            &[],
+            outer_root.clone(),
+        ))
+        .expect("a store this build can read is a store it may write");
+    state
+        .add_shelf(shelve_stash::make_shelf(
+            "wip: nested",
+            &[],
+            nested_root.clone(),
+        ))
+        .expect("and a second write of the same store is refused no more");
+
+    assert_eq!(
+        recorded_roots(project.path()),
+        vec![
+            ("wip: outer".to_string(), None),
+            ("wip: nested".to_string(), Some(nested.clone())),
+        ],
+        "only the row whose root IS the store's own directory goes back rootless"
+    );
+
+    // A relaunch reads the store and registers the roots again: each row comes
+    // back under the root it was shelved in, as the same `RootId` value.
+    let relaunched = AppState::for_roots(project.path(), &roots);
+    assert!(
+        relaunched.last_error.is_none(),
+        "the omitted key must not fail the launch: {:?}",
+        relaunched.last_error
+    );
+    assert_eq!(
+        relaunched
+            .ui
+            .shelves
+            .iter()
+            .map(|s| s.root.clone())
+            .collect::<Vec<RootId>>(),
+        vec![outer_root.clone(), nested_root.clone()],
+        "identity: the rebound root is the value that was written, not another one"
+    );
+    for (root, name) in [(&outer_root, "wip: outer"), (&nested_root, "wip: nested")] {
+        assert_eq!(
+            relaunched
+                .shelves_for(root)
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![name],
+            "and the row lists under exactly one root"
+        );
+    }
+}

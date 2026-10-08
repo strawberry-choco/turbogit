@@ -300,3 +300,178 @@ fn rewriting_a_legacy_row_does_not_give_the_store_a_root_it_never_had() {
     assert_eq!(again[0].root.as_path(), project_dir.as_path());
     assert_eq!(again[0].changes.len(), 1);
 }
+
+/// An **independent** reading of the wire: per row, whether a `root` key is
+/// actually present.
+///
+/// The instrument cannot be the store's own row type, because that type *invent*s
+/// a root for a keyless row — `#[serde(default)] root: String` leaves the absent
+/// spelling as an empty value instead, so "recorded" and "omitted" stay two
+/// observable facts. Extra fields on the row (`changes`, `created_at`) are ignored
+/// by serde, which is what makes this a probe of the shape rather than a second
+/// copy of it.
+#[derive(serde::Deserialize)]
+struct WireRow {
+    name: String,
+    #[serde(default)]
+    root: String,
+}
+
+/// Each stored row's name with whether the **file** recorded a root for it.
+fn wire_rows(project_dir: &Path) -> Vec<(String, Option<PathBuf>)> {
+    let text = std::fs::read_to_string(shelf_path(project_dir)).unwrap();
+    ron::from_str::<Vec<WireRow>>(&text)
+        .unwrap_or_else(|e| panic!("the store this build wrote must parse: {e}\n{text}"))
+        .into_iter()
+        .map(|row| {
+            let root = (!row.root.is_empty()).then(|| PathBuf::from(row.root));
+            (row.name, root)
+        })
+        .collect()
+}
+
+/// The legacy shape survives a **mutation** of the list, not merely a copy of it.
+/// [`rewriting_a_legacy_row_does_not_give_the_store_a_root_it_never_had`] saves the
+/// loaded slice back unchanged; every real verb changes it first. An add is the
+/// shape the shelve dialog writes (a root-bearing row appended to rootless ones)
+/// and a remove is the shape `Unshelve and Remove` writes, and each rewrites the
+/// **whole** file — so the question is whether the untouched neighbour rows keep
+/// the shape they arrived in. They must: `skip_serializing_if` is per row, and a
+/// legacy row gaining a recorded root would freeze the load's invented path into
+/// the index.
+#[test]
+fn a_legacy_row_stays_rootless_while_the_list_is_mutated_around_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+    write_legacy_store(&project_dir, &["wip: parser", "wip: cli"]);
+
+    let mut shelves = shelve_stash::load_shelves(&project_dir).unwrap();
+
+    // An ADD of a row rooted somewhere else — a genuine recorded root, and the
+    // one row on this store that has ever had one.
+    let other = project_dir.join("sibling");
+    let other_root = RootId(std::sync::Arc::from(other.as_path()));
+    shelves.push(shelve_stash::make_shelf(
+        "wip: notes",
+        &[],
+        other_root.clone(),
+    ));
+    shelve_stash::save_shelves(&project_dir, &shelves).unwrap();
+
+    let rows = wire_rows(&project_dir);
+    assert_eq!(
+        rows.iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: parser", "wip: cli", "wip: notes"],
+        "the add wrote all three rows"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|(_, root)| root.is_none())
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: parser", "wip: cli"],
+        "the neighbour rows the mutation never touched are still rootless"
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|(name, _)| name == "wip: notes")
+            .and_then(|(_, root)| root.as_deref()),
+        Some(other.as_path()),
+        "a real root is written, not dropped with the legacy key"
+    );
+
+    // A REMOVE of an unrelated row rewrites the file from the remaining list.
+    shelves.retain(|s| s.name != "wip: cli");
+    shelve_stash::save_shelves(&project_dir, &shelves).unwrap();
+    let rows = wire_rows(&project_dir);
+    assert_eq!(
+        rows.iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: parser", "wip: notes"],
+        "the remove took exactly the one row it named"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|(_, root)| root.is_none())
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["wip: parser"],
+        "and the surviving legacy row is still rootless"
+    );
+
+    // Re-loading after both mutations: the bindings are what they always were.
+    let again = shelve_stash::load_shelves(&project_dir).unwrap();
+    let bound: Vec<(&str, PathBuf)> = again
+        .iter()
+        .map(|s| (s.name.as_str(), s.root.as_path().to_path_buf()))
+        .collect();
+    assert_eq!(
+        bound,
+        vec![
+            ("wip: parser", project_dir.clone()),
+            ("wip: notes", other.clone()),
+        ],
+        "the legacy row re-binds to the project dir and the recorded row keeps its own root"
+    );
+    assert_eq!(
+        again.iter().find(|s| s.name == "wip: notes").unwrap().root,
+        other_root,
+        "the recorded root round-trips as the same `RootId` value"
+    );
+}
+
+/// The single-root coincidence, tested as **identity**: for the project whose one
+/// real root *is* `project_dir`, a shelve's genuine `RootId` is erased to the
+/// absent spelling and the load re-binds it — so the question is whether what
+/// comes back is the same value, not a value that merely happens to work.
+///
+/// The store lives at `<project_dir>/.turbogit/shelf.ron`, so the erased root is
+/// always the directory the store itself sits in, and the load re-binds to that
+/// same directory: the two spellings cannot diverge for this row.
+///
+/// Checked for the multi-root shape in the same test, because that is where an
+/// erasure *could* change meaning: a project directory that is itself a repository
+/// alongside a nested one. A root that is not `project_dir` must be recorded.
+#[test]
+fn a_root_equal_to_the_project_dir_omits_and_rebinds_as_the_same_value() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+    let project_root = RootId(std::sync::Arc::from(project_dir.as_path()));
+    let nested_dir = project_dir.join("nested");
+    let nested_root = RootId(std::sync::Arc::from(nested_dir.as_path()));
+
+    let at_project = shelve_stash::make_shelf("wip: project root", &[], project_root.clone());
+    let at_nested = shelve_stash::make_shelf("wip: nested root", &[], nested_root.clone());
+    shelve_stash::save_shelves(&project_dir, &[at_project, at_nested.clone()]).unwrap();
+
+    let rows = wire_rows(&project_dir);
+    assert_eq!(
+        rows.iter()
+            .map(|(name, root)| (name.as_str(), root.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("wip: project root", None),
+            ("wip: nested root", Some(nested_dir.as_path())),
+        ],
+        "only the row rooted at the store's own directory is written rootless; a \
+         second, genuine root of a multi-root project is recorded"
+    );
+
+    let loaded = shelve_stash::load_shelves(&project_dir).unwrap();
+    assert_eq!(
+        loaded
+            .iter()
+            .map(|s| s.root.clone())
+            .collect::<Vec<RootId>>(),
+        vec![project_root, nested_root],
+        "every row comes back with the ROOT it was written with — identity, not a re-binding"
+    );
+    assert_eq!(
+        loaded.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+        vec!["wip: project root", "wip: nested root"],
+        "and no row was lost to the omission"
+    );
+}
