@@ -261,6 +261,29 @@ pub struct DialogState {
     pub compare_left: String,
     pub compare_right: String,
     pub compare_commits: Vec<CommitId>,
+    // Get from Branch (ticket 17, §4.8 verb 5): the file-level comparison the
+    // branch row's `Show Diff with Working Tree` opens. Snapshot data only — the
+    // rows are the service's answer, captured when the window opens and re-captured
+    // when it swaps or a take lands, so the pane never touches git.
+    /// The root the window is reading. One root per window: the verb is per root
+    /// by construction (reverse gaps #1 and #16), so the identity that writes the
+    /// file is the same identity that was compared.
+    pub get_from_branch_root: Option<RootId>,
+    /// The branch the developer clicked — the side a take reads FROM.
+    pub get_from_branch_source: String,
+    /// The branch checked out in that root when the window opened, named so the
+    /// header can say which two sides it is comparing.
+    pub get_from_branch_current: String,
+    /// `Swap Branches`: which side is the comparison's base. `false` is the flow's
+    /// opening posture, where grey means "the branch has it and you do not"; the
+    /// swap exchanges which paths sit on the grey and green rungs, and the list's
+    /// rung order turns that into the two rows exchanging **positions**.
+    pub get_from_branch_swapped: bool,
+    /// The rung list itself, in the list's own order.
+    pub get_from_branch_rows: Vec<turbogit_services::integrate_service::BranchFileRow>,
+    /// Why the list could not be read, in git's words. The window paints it rather
+    /// than showing nothing: an empty list and a failed read are different answers.
+    pub get_from_branch_error: Option<String>,
     /// The rewrite preflight's payload, present exactly while its dialog is.
     /// One payload for both targeted verbs (ticket 10 drop, ticket 11 reword).
     pub rewrite_preflight: Option<RewritePreflight>,
@@ -565,6 +588,16 @@ pub enum Dialog {
     RenameBranch,
     /// Compare two branches' commit lists (issue 32, spec E9).
     CompareBranches,
+    /// The reference's fifth integration verb's window (ticket 17): the file-level
+    /// comparison `Show Diff with Working Tree` opens, listing every path that
+    /// differs between one branch and the working tree on the three-rung change
+    /// grammar, with `Get from Branch` on the rungs it can be run on. Its payload
+    /// is the [`DialogState`] group prefixed `get_from_branch_`.
+    ///
+    /// A dialog rather than a mode of the Commit window: `UNVERIFIED` in the
+    /// reference's own doc, and this surface already hosts its own tree — a second
+    /// rung list inside it would be read as staging state.
+    GetFromBranch,
     /// The commits a branch delete discarded, reached from that delete's
     /// disclosure link — before the ref moves and after. Its payload is
     /// [`DialogState::unmerged_view`].
@@ -798,6 +831,21 @@ pub enum PendingConfirm {
     CheckoutInWorktree {
         branch: String,
         worktree: std::path::PathBuf,
+    },
+    /// `Get from Branch` (ticket 17): one working-tree file about to be replaced by
+    /// the whole contents it has on another branch.
+    ///
+    /// **This confirmation is a deliberate departure, not a match.** The reference
+    /// documents the menu item and its result and no confirm step
+    /// (`apply-changes:285-287`), which the ticket reads as an omission rather than
+    /// a design: the verb destroys the local file's contents, and `PendingConfirm`
+    /// is where this app puts a whole-file destructive act. Carries its own `root`
+    /// rather than reading `selected_root`, because the window is per root and the
+    /// focused root is free to have moved between the click and the OK.
+    GetFileFromBranch {
+        root: RootId,
+        source: String,
+        path: PathBuf,
     },
 }
 
@@ -2738,6 +2786,13 @@ impl AppState {
                     },
                 ));
             }
+            // `Get from Branch` (ticket 17): the root, the branch and the path all
+            // rode in the confirmation, so what runs is exactly what was
+            // disclosed — never a re-read of whichever root is focused now, which
+            // is how a per-root verb turns into a write in the wrong repository.
+            PendingConfirm::GetFileFromBranch { root, source, path } => {
+                self.dispatch(Operation::GetFileFromBranch { root, source, path });
+            }
             // Surface 07: a shelf's record is app state, so it goes the frame the
             // verb is confirmed; its *content* is a stash entry, so that half is
             // git work and is dispatched. A git-side failure leaves the content
@@ -3740,6 +3795,16 @@ impl AppState {
                                 self.arm_rewrite_undo(pending);
                             }
                             granular::settle(self);
+                            // Ticket 17: a take rewrote one working-tree file, so
+                            // the changes window that offered it re-reads its rung
+                            // list — a path whose contents now match is no longer a
+                            // row, and a window still listing it would offer the
+                            // same overwrite again. The re-read is the app's,
+                            // through the service, never the pane's, and it follows
+                            // the refresh above so both see the taken file.
+                            if kind == OpKind::GetFileFromBranch {
+                                self.reload_get_from_branch_rows();
+                            }
                             // Activity log (issue #04): the durable record the
                             // toast only summarizes. An op that leaves conflicts
                             // behind is a warning, not a success — the counts are
@@ -4464,6 +4529,78 @@ impl AppState {
         self.ui.branches_popup = false;
     }
 
+    /// `Show Diff with Working Tree` (ticket 17, §4.8 verb 5's entry point): open
+    /// the file-level comparison of `source` against the working tree of `id`.
+    ///
+    /// The same shape as [`AppState::open_compare`] for the same reason: one
+    /// synchronous read through the port, captured as plain data, so the window
+    /// paints a snapshot rather than asking git every frame. Detached HEAD has no
+    /// current side to compare against and opens nothing — the row's own gate says
+    /// so before this is reachable.
+    pub fn open_get_from_branch(&mut self, id: &RootId, source: &str) {
+        let Some(current) = self.multi.by_id(id).and_then(|r| r.current_branch.clone()) else {
+            return;
+        };
+        self.ui.dlg.get_from_branch_root = Some(id.clone());
+        self.ui.dlg.get_from_branch_source = source.to_string();
+        self.ui.dlg.get_from_branch_current = current;
+        // Every open starts in the flow's documented posture: the branch the row
+        // named is the base, so grey means "that branch has a file you don't".
+        self.ui.dlg.get_from_branch_swapped = false;
+        self.reload_get_from_branch_rows();
+        self.ui.dialog = Some(Dialog::GetFromBranch);
+        self.ui.branches_popup = false;
+    }
+
+    /// `Swap Branches`: exchange which side of the comparison is the base.
+    ///
+    /// Not a rename of the two fields. The differing path set is a symmetric fact,
+    /// so the swap is a re-reading of the same list — which side a one-sided path
+    /// is missing *from* — and the list's rung order is what makes that visible as
+    /// the grey and green rows trading **positions** rather than the same rows
+    /// changing tint (the inversion the ticket names as the wrong answer).
+    pub fn swap_get_from_branch(&mut self) {
+        self.ui.dlg.get_from_branch_swapped = !self.ui.dlg.get_from_branch_swapped;
+        self.reload_get_from_branch_rows();
+    }
+
+    /// Re-read the window's rung list. Called on open, on a swap, and when a take
+    /// lands — the three moments on which the answer to "what differs between those
+    /// two sides" genuinely changes.
+    ///
+    /// A no-op once the window's payload is gone, so a late completion of a take
+    /// the developer already closed cannot reopen a dialog by itself. The failure
+    /// path stores git's words rather than an empty list: "nothing differs" and "the
+    /// read died" are different answers, and a window that shows only the first one
+    /// makes the second invisible.
+    pub fn reload_get_from_branch_rows(&mut self) {
+        let (Some(root), Some(source)) = (
+            self.ui.dlg.get_from_branch_root.clone(),
+            Some(self.ui.dlg.get_from_branch_source.clone()),
+        ) else {
+            return;
+        };
+        if source.is_empty() {
+            return;
+        }
+        let base_is_branch = !self.ui.dlg.get_from_branch_swapped;
+        match turbogit_services::integrate_service::branch_file_changes(
+            self.executor.as_ref(),
+            root.as_path(),
+            &source,
+            base_is_branch,
+        ) {
+            Ok(rows) => {
+                self.ui.dlg.get_from_branch_rows = rows;
+                self.ui.dlg.get_from_branch_error = None;
+            }
+            Err(e) => {
+                self.ui.dlg.get_from_branch_rows = Vec::new();
+                self.ui.dlg.get_from_branch_error = Some(e.to_string());
+            }
+        }
+    }
+
     /// Open the unmerged-commits viewer for a delete's captured disclosure
     /// — the reference's "Branch Was Not Fully Merged" dialog. The
     /// record is the payload: the branch it names may already be gone, so the
@@ -5171,6 +5308,12 @@ fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &s
         | OpKind::WorktreeRemove
         | OpKind::DropCommit
         | OpKind::RewordCommit
+        // A take reports the verb it ran, and the verb's own label carries the
+        // two facts that make it more than a word: the path and the branch it came
+        // from (ticket 17). There is no ahead/behind story to append — nothing was
+        // integrated, one file was overwritten — and the durable record, not the
+        // toast, is where that has to be readable later.
+        | OpKind::GetFileFromBranch
         // A push reports the verb it ran. Its SUBSTANCE is the failure path —
         // the classified rejection (ticket 13) — and a push that succeeded has
         // nothing to explain, so the label is the whole message.
