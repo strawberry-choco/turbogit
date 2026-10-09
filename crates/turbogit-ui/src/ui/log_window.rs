@@ -87,8 +87,8 @@ use turbogit_app::state::{
     AppState, BlameTarget, Dialog, DiffTarget, NewBranchBase, PendingConfirm, Tab, Toast,
 };
 use turbogit_domain::model::{
-    BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
-    SignatureState, forward_slash_path,
+    BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, PatchOrigin, RefState,
+    Root, RootId, SignatureState, forward_slash_path,
 };
 use turbogit_services::integrate_service;
 use turbogit_services::sync_service;
@@ -1603,8 +1603,10 @@ fn apply_commit_action(
             state.open_rewrite_preflight(root, cid, turbogit_app::state::HistoryVerb::Drop);
         }
         CommitMenuAction::CreatePatch => {
-            // A file write, not git work: no Operation, no activity entry.
-            state.create_patch(root, cid);
+            // The Log route: one commit against its first parent, reached from the row
+            // that was clicked — so the patch names THIS root and not whichever tree is
+            // focused by the time the settings dialog paints.
+            state.open_create_patch_on(root.clone(), PatchOrigin::Commit { id: cid.to_owned() });
         }
         CommitMenuAction::RewordCommit => {
             // Two steps, deliberately: the message is written here, and the cost

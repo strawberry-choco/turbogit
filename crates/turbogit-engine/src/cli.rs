@@ -1963,6 +1963,50 @@ impl GitExecutor for CliExecutor {
         Ok(crate::patch::parse_patch(&out))
     }
 
+    fn patch_bytes(&self, root: &Path, origin: &PatchOrigin, reverse: bool) -> TgResult<Vec<u8>> {
+        // `--no-color` because a patch is an artifact, not a terminal view: the
+        // diff viewer's own read keeps its colour and this one must not carry
+        // escape codes into a file someone else applies.
+        let mut a: Vec<String> = vec!["diff".to_string(), "--no-color".to_string()];
+        if reverse {
+            a.push("-R".to_string());
+        }
+        let paths: &[PathBuf] = match origin {
+            // HEAD, not the index: a patch of **local changes** carries staged
+            // and unstaged content together, which a plain `git diff` splits in
+            // two answers. Unversioned files are not in it — git has no diff for
+            // a path it has never held — and the surface says so rather than
+            // letting a created patch look complete.
+            PatchOrigin::LocalChanges { paths } => {
+                a.push("HEAD".to_string());
+                paths
+            }
+            // `<commit>^!` is the commit against its first parent ONLY: every
+            // ancestor's change would ride along with a plain range, and a patch
+            // of "this revision" that also contains its history is a different
+            // artifact than the one the row promised.
+            PatchOrigin::Commit { id } => {
+                a.push(format!("{}^!", id));
+                &[]
+            }
+            PatchOrigin::FileRevision { commit, path } => {
+                a.push(format!("{}^!", commit));
+                std::slice::from_ref(path)
+            }
+        };
+        if !paths.is_empty() {
+            a.push("--".to_string());
+            for path in paths {
+                a.push(path.to_string_lossy().to_string());
+            }
+        }
+        let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+        // Raw bytes, not `run`: this answer crosses the surface as a file's
+        // content, and a lossy decode would already have replaced the bytes the
+        // encoding field is asked to write.
+        self.run_bytes(root, &args)
+    }
+
     fn blame(&self, root: &Path, path: &Path, rev: Option<&str>) -> TgResult<Vec<BlameLine>> {
         let mut a: Vec<String> = vec!["blame".to_string(), "--line-porcelain".to_string()];
         if let Some(r) = rev {
