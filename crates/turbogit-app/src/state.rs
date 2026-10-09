@@ -3466,6 +3466,42 @@ impl AppState {
         self.open_patch_settings();
     }
 
+    /// `Create Patch from Local Changes` as the Commit window reaches it: the checked
+    /// files when any are checked — the reference's "file or changelist" — and every
+    /// local change of this root when nothing is.
+    ///
+    /// The checked set is read here rather than at the write, so the patch and the
+    /// Commit window's own box state describe the same files.
+    pub fn open_create_patch_from_selection(&mut self) {
+        let origin = self.local_changes_origin();
+        self.open_create_patch(origin);
+    }
+
+    /// [`Self::open_create_patch_from_selection`]'s verb with **no dialog at all**.
+    pub fn copy_patch_from_selection(&mut self) {
+        let origin = self.local_changes_origin();
+        self.copy_patch_to_clipboard(origin);
+    }
+
+    /// The focused root's local changes as an origin: `paths` empty is the whole set,
+    /// and non-empty is exactly the files the developer included.
+    fn local_changes_origin(&self) -> PatchOrigin {
+        let paths = self
+            .selected_root
+            .as_ref()
+            .and_then(|id| self.multi.by_id(id))
+            .map(|root| {
+                root.status
+                    .changes
+                    .iter()
+                    .filter(|c| self.ui.selected.contains(&root.canonical_key(c)))
+                    .map(|c| c.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        PatchOrigin::LocalChanges { paths }
+    }
+
     /// The comment step's answer: the comment names the file, and the settings step
     /// opens on it. An empty comment is not refused — the name simply falls back to
     /// the artifact's own name, which the dialog shows before it is used.
