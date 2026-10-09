@@ -22,9 +22,7 @@ use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::{Patch, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::patch::parse_patch;
-use turbogit_services::patch_apply::{
-    self, ApplyOutcome, Preflight, Rollback, Worktree,
-};
+use turbogit_services::patch_apply::{self, ApplyOutcome, Preflight, Rollback, Worktree};
 
 // ------------------------------------------------------------------ fixtures --
 
@@ -176,7 +174,11 @@ fn a_failed_apply_leaves_the_working_tree_byte_identical_to_what_it_held() {
     // was asked to write anything.
     assert_eq!(bytes(&dir, "first.txt"), Some(before_first.clone()));
     assert_eq!(bytes(&dir, "second.txt"), Some(before_second.clone()));
-    assert_eq!(restored.len(), 2, "both named paths are accounted for: {restored:?}");
+    assert_eq!(
+        restored.len(),
+        2,
+        "both named paths are accounted for: {restored:?}"
+    );
     assert!(outcome.tree_is_restored());
 }
 
@@ -217,7 +219,10 @@ fn a_patch_that_applies_changes_every_section_and_stages_nothing() {
         panic!("expected Applied, got {outcome:?}");
     };
     assert_eq!(paths.len(), 2);
-    assert_eq!(bytes(&dir, "first.txt"), Some(b"one\nTWO\nthree\n".to_vec()));
+    assert_eq!(
+        bytes(&dir, "first.txt"),
+        Some(b"one\nTWO\nthree\n".to_vec())
+    );
     assert_eq!(bytes(&dir, "second.txt"), Some(b"alpha\nBETA\n".to_vec()));
     // The apply is a working-tree write: the index still holds what was committed,
     // which is what makes the changed files show up as local changes to commit.
@@ -250,7 +255,11 @@ fn the_preflight_answers_for_a_conflicting_patch_and_writes_nothing() {
         report.contains("second.txt"),
         "the report should name the file that conflicts: {report}"
     );
-    assert_eq!(paths.len(), 2, "the patch's own paths travel with the verdict");
+    assert_eq!(
+        paths.len(),
+        2,
+        "the patch's own paths travel with the verdict"
+    );
     assert_eq!(bytes(&dir, "first.txt"), Some(before_first));
     assert_eq!(bytes(&dir, "second.txt"), Some(before_second));
 }
@@ -268,7 +277,10 @@ fn a_clean_preflight_says_clean_and_still_writes_nothing() {
         matches!(preflight, Preflight::Clean { files: 2 }),
         "expected a clean answer for two sections, got {preflight:?}"
     );
-    assert_eq!(bytes(&dir, "first.txt"), Some(b"one\ntwo\nthree\n".to_vec()));
+    assert_eq!(
+        bytes(&dir, "first.txt"),
+        Some(b"one\ntwo\nthree\n".to_vec())
+    );
     assert_eq!(bytes(&dir, "second.txt"), Some(b"alpha\nbeta\n".to_vec()));
 }
 
@@ -289,9 +301,7 @@ fn a_rollback_that_cannot_write_is_named_separately_from_one_that_did() {
         patch_apply::apply_patch_with(&engine(), &dir, &first_ok_second_conflicts(), &mut refusing);
 
     let ApplyOutcome::RollbackFailed {
-        unrestored,
-        reason,
-        ..
+        unrestored, reason, ..
     } = &outcome
     else {
         panic!("expected RollbackFailed, got {outcome:?}");
@@ -316,7 +326,10 @@ fn a_rollback_that_cannot_write_is_named_separately_from_one_that_did() {
     );
     // The apply's own failure is reported alongside the rollback's, because the
     // developer needs to know which of the two went wrong.
-    assert!(reason.contains("second.txt"), "git's reason travels: {reason}");
+    assert!(
+        reason.contains("second.txt"),
+        "git's reason travels: {reason}"
+    );
     // The content the rollback was trying to write is still in the record — that is
     // what the window's recovery action has to have in hand.
     let first = unrestored
@@ -347,13 +360,22 @@ fn retrying_a_refused_restore_moves_the_state_to_aborted_once_it_gets_through() 
     };
     // The apply really did write `first.txt` before the rollback was refused, so the
     // tree is genuinely wrong and the retry genuinely has something to fix.
-    assert_eq!(bytes(&dir, "first.txt"), Some(b"one\nTWO\nthree\n".to_vec()));
+    assert_eq!(
+        bytes(&dir, "first.txt"),
+        Some(b"one\nTWO\nthree\n".to_vec())
+    );
 
     let mut real = Worktree;
     let still = patch_apply::retry_restore(&dir, unrestored, &mut real);
 
-    assert!(still.is_empty(), "the retry should have written every path: {still:?}");
-    assert_eq!(bytes(&dir, "first.txt"), Some(b"one\ntwo\nthree\n".to_vec()));
+    assert!(
+        still.is_empty(),
+        "the retry should have written every path: {still:?}"
+    );
+    assert_eq!(
+        bytes(&dir, "first.txt"),
+        Some(b"one\ntwo\nthree\n".to_vec())
+    );
     assert_eq!(bytes(&dir, "second.txt"), Some(b"alpha\nbeta\n".to_vec()));
 }
 
@@ -372,12 +394,18 @@ fn a_patch_naming_a_path_outside_the_root_is_refused_before_anything_is_written(
     let ApplyOutcome::Aborted { reason, restored } = &outcome else {
         panic!("expected a refusal, got {outcome:?}");
     };
-    assert!(restored.is_empty(), "nothing was ever written: {restored:?}");
+    assert!(
+        restored.is_empty(),
+        "nothing was ever written: {restored:?}"
+    );
     assert!(
         reason.contains("outside the repository"),
         "the refusal says why: {reason}"
     );
-    assert_eq!(bytes(&dir, "first.txt"), Some(b"one\ntwo\nthree\n".to_vec()));
+    assert_eq!(
+        bytes(&dir, "first.txt"),
+        Some(b"one\ntwo\nthree\n".to_vec())
+    );
 }
 
 /// A patch with no file sections is not a success that did nothing. git accepts an
