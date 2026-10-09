@@ -115,17 +115,10 @@ fn route(ui: &mut Ui, state: &mut AppState) {
                 label,
             );
             if btn.clicked() {
-                state.ui.dlg.apply_patch_source = variant;
-                // A patch read from a file is not the text the clipboard holds;
-                // carrying one into the other route would apply the wrong payload
-                // under a label that says otherwise.
-                state.ui.dlg.apply_patch_text.clear();
-                state.ui.dlg.apply_patch_loaded.clear();
-                state.ui.dlg.apply_patch_loaded_path.clear();
-                state.ui.dlg.apply_patch_patch = None;
-                state.ui.dlg.apply_patch_preflight = None;
-                state.ui.dlg.apply_patch_outcome = None;
-                state.ui.dlg.apply_patch_error = None;
+                // Which payload the switch drops is the app's rule, not this
+                // frame's: the other route's patch text goes, the working tree's
+                // unfinished rollback stays.
+                state.set_apply_patch_source(variant);
             }
         }
     });
