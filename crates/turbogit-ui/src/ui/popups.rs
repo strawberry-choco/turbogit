@@ -280,11 +280,12 @@ pub fn run_action(state: &mut AppState, action: Action) {
 /// Run one lifecycle verb on the root that is holding an operation which offers
 /// it.
 ///
-/// The root comes from [`super::status_inflight::target_for`], which reads git's
-/// own markers: the focused root when it offers the verb, otherwise the root that
-/// does. Nothing in flight says so out loud — a palette entry that silently did
-/// nothing is a dead verb, and these three are the documented way back after the
-/// notification carrying the same verbs has been dismissed.
+/// The root comes from [`super::status_inflight::target_for`], which asks the
+/// engine which operation holds each root: the focused root when it offers the
+/// verb, otherwise the root that does. Nothing in flight says so out loud — a
+/// palette entry that silently did nothing is a dead verb, and these three are
+/// the documented way back after the notification carrying the same verbs has
+/// been dismissed.
 fn run_lifecycle_verb(state: &mut AppState, verb: LifecycleVerb) {
     match super::status_inflight::target_for(state, verb) {
         Some((root, owner)) => state.dispatch(Operation::Resolve { root, owner, verb }),
