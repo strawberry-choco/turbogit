@@ -64,7 +64,7 @@
 //! second table with its own height and its own offsets is what made switching to
 //! blame a visual reset, and the ticket is the one that ends it.
 
-use crate::theme::Palette;
+use crate::theme::{Palette, TYPE_CONTROL};
 use crate::ui::branch_tree_view::{self, TreeEvent, TreeGroup, TreeProps};
 use crate::ui::branches::fetch_scope;
 use crate::ui::branches_tree::build_branch_view;
@@ -1129,7 +1129,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 }
                 ui.label(
                     RichText::new(format!("Path filter: {}", path.display()))
-                        .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
+                        .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
                         .color(Palette::BRAND),
                 );
             });
@@ -1149,7 +1149,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 }
                 ui.label(
                     RichText::new(format!("Ref filter: {ref_name}"))
-                        .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
+                        .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
                         .color(Palette::BRAND),
                 );
             });
@@ -1223,7 +1223,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 );
                 ui.label(
                     RichText::new(root.id.name())
-                        .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
+                        .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
                         .color(Palette::INK_3),
                 );
             }
@@ -1378,7 +1378,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
             }
             ui.label(
                 RichText::new(format!("{} shown", display.len()))
-                    .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
+                    .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
                     .color(Palette::INK_3),
             );
         });
@@ -1973,7 +1973,7 @@ fn commit_row(
                 for r in labels {
                     ui.label(
                         RichText::new(&r.name)
-                            .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
+                            .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
                             .color(ref_kind(r.kind).accent()),
                     );
                 }
@@ -2373,7 +2373,7 @@ fn file_row(
     let colors = kind.colors();
     let badge_galley = painter.layout_no_wrap(
         change.status.short().to_owned(),
-        FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional),
+        FontId::new(TYPE_CONTROL, FontFamily::Proportional),
         colors.fg,
     );
     let badge_rect = Rect::from_min_size(
@@ -2415,7 +2415,7 @@ fn file_row(
     // secondary text on the row's own band, so it takes the secondary step
     // rather than the muted one (see `row_meta_ink`).
     if let Some(dir) = change.path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        let dir_font = FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional);
+        let dir_font = FontId::new(TYPE_CONTROL, FontFamily::Proportional);
         let dir_text = forward_slash_path(dir);
         let dir_ink = row_meta_ink();
         let dir_galley = elide(&painter, &dir_text, dir_font, dir_ink, text_right - mx);
@@ -2654,7 +2654,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     else {
         ui.label(
             RichText::new("Select a commit…")
-                .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
+                .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
                 .color(Palette::INK_3),
         );
         return;
@@ -2790,7 +2790,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
 /// the dim one.
 fn micro_text(text: impl Into<String>) -> RichText {
     RichText::new(text)
-        .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
+        .font(FontId::new(TYPE_CONTROL, FontFamily::Proportional))
         .color(Palette::INK_3)
 }
 
