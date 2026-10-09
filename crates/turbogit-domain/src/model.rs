@@ -549,6 +549,58 @@ pub struct Shelf {
     /// The root whose changes this shelf holds and whose git stash carries its
     /// content.
     pub root: RootId,
+    /// Where this shelf's **content** actually lives — see [`ShelfSource`].
+    ///
+    /// A row written before an imported patch could be parked has no key for this and
+    /// reads back as [`ShelfSource::Stash`], which is exactly what every such row is;
+    /// the store's own mirror (`StoredShelf`) carries that default so this field stays
+    /// required in memory.
+    #[serde(default)]
+    pub source: ShelfSource,
+}
+
+/// Where one shelf's parked content lives, and therefore what `Unshelve` has to do.
+///
+/// Two mechanisms, because the surface has two sources of work. **A shelved change is
+/// content git already holds**: `shelve` parks the working tree with
+/// `git stash push -m <shelf name>`, so the record only has to name it and the stash
+/// list is the payload. **An imported patch is content no repository holds** — the
+/// reference's whole point is that the patch moves to the shelf **before being
+/// applied** — so there is nothing to stash: stashing it would mean applying it first,
+/// which is the act the developer deferred. Its payload is therefore the patch text,
+/// written by the shelf store beside the index.
+///
+/// The split is not cosmetic: it decides which side of the boundary the verb touches.
+/// `Stash` goes to git (`stash apply`/`pop`, found **by name**), `Patch` goes to the
+/// apply engine, and both keep the row's [`Shelf::root`] as the only tree they may
+/// touch, because a parked patch put into the wrong repository moves work in the wrong
+/// tree.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ShelfSource {
+    /// The content is this repository's stash entry whose message names the shelf.
+    #[default]
+    Stash,
+    /// The content is the imported patch's own bytes, in the shelf payload file
+    /// [`ShelfSource::file_name`] names.
+    Patch { file: String },
+}
+
+impl ShelfSource {
+    /// The payload file an imported shelf reads and writes, or `None` for a row whose
+    /// content is git's stash entry. One accessor for both verb halves so neither can
+    /// guess the other's spelling.
+    pub fn file_name(&self) -> Option<&str> {
+        match self {
+            Self::Stash => None,
+            Self::Patch { file } => Some(file),
+        }
+    }
+
+    /// Whether this row's content is a stash entry — the spelling legacy rows arrive
+    /// as, and the case the store keeps writing **without** a key for.
+    pub fn is_stash(&self) -> bool {
+        matches!(self, Self::Stash)
+    }
 }
 
 /// A git-native stash entry.
@@ -755,6 +807,14 @@ pub struct VcsSettings {
     /// accident. Off by default: a rejection asks.
     #[serde(default)]
     pub auto_update_on_push_rejected: bool,
+    /// `When patch is created:` — what a create route does with the file it wrote.
+    /// `serde(default)` is load-bearing here, not tidiness: this store is read at
+    /// launch and rewritten on every settings apply, so a required new key would make
+    /// every `state.ron` written before it existed fail to parse and hand the writer
+    /// an empty settings block to save back over the user's own. The default is the
+    /// captured **Ask**, so the arm a legacy file lands on is the arm that asks.
+    #[serde(default)]
+    pub when_patch_is_created: PatchCreatedPolicy,
 }
 
 fn default_true() -> bool {
@@ -783,6 +843,7 @@ impl Default for VcsSettings {
             backend: GitBackend::default(),
             in_process_diffs: true,
             auto_update_on_push_rejected: false,
+            when_patch_is_created: PatchCreatedPolicy::default(),
         }
     }
 }
@@ -1281,6 +1342,49 @@ impl PatchOrigin {
 
 /// `Patch File Settings`' last field: how the patch file's bytes are written.
 ///
+/// What the application does with a patch **after** a create route has written it.
+///
+/// The reference's `When patch is created:` field — `Ask / Show in {0} / Do nothing`
+/// — and the fourth instance of that policy shape in this product. The captured
+/// default is **Ask**, which is the whole reason the field exists: today a created
+/// patch always reports the one way the build happened to implement, so the setting
+/// would be a decoration if `Ask` were not the arm that leaves the decision with the
+/// developer.
+///
+/// `Show in {0}` names the operating system's file manager, and this build has no
+/// reveal seam for it (`rfd` is wired for folders and for patch paths, never for
+/// `show`). The arm is therefore not dropped: it takes the file to the surface that
+/// reads patch files, which is where a patch's own content is visible here. That is
+/// a recorded divergence, not a renamed `Do nothing` — the two arms stay distinct.
+///
+/// The clipboard route is outside this policy: it creates **no file**, so there is no
+/// artifact to ask about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PatchCreatedPolicy {
+    /// Name the created file and wait for the developer to say what to do with it.
+    /// The captured default.
+    #[default]
+    Ask,
+    /// Take the created patch to the surface that shows patch content.
+    ShowInFiles,
+    /// Report nothing in the moment. The durable activity feed still gets the fact.
+    DoNothing,
+}
+
+impl PatchCreatedPolicy {
+    /// Every arm, in the reference's order, each with the label the settings page
+    /// paints and the palette route uses.
+    pub const ALL: [Self; 3] = [Self::Ask, Self::ShowInFiles, Self::DoNothing];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ask => "Ask",
+            Self::ShowInFiles => "Show in files",
+            Self::DoNothing => "Do nothing",
+        }
+    }
+}
+
 /// Three members and no more, because each is a rule the surface can actually
 /// apply to bytes: `Utf8` writes git's own output **verbatim** — it is not a
 /// re-encode, and that is the point. A patch's body carries its file's bytes,
