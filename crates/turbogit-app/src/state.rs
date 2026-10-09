@@ -975,6 +975,80 @@ pub struct RewriteUndo {
     pub withheld: bool,
 }
 
+/// One repository's side of a diverged multi-root branch run.
+///
+/// The unit of this data is a ROOT, never the run: an offer that said only
+/// "the operation partially failed" could not be acted on, because rolling
+/// back means naming which repository is about to move.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DivergentRoot {
+    pub root: RootId,
+    /// The repository's display name — the identifier the offer paints.
+    pub name: String,
+    /// The branch this root stands on now: the run's target for a root it
+    /// changed, the branch the run found it on for a root it failed in.
+    pub branch: String,
+    /// Why the run did not land, for a failed root; `None` for a changed one,
+    /// whose whole story is the branch it moved to.
+    pub reason: Option<String>,
+}
+
+/// A branch run that changed some roots and failed in others, held for the
+/// offer to roll the changed ones back.
+///
+/// The reference's policy is stated once and is worth quoting, because it is
+/// the reason this exists at all: an operation that fails in at least one
+/// repository risks branches diverging, so the app suggests rolling the
+/// operation back in the repositories where it succeeded. Divergence is not a
+/// cosmetic difference between two surfaces — the roots genuinely disagree about
+/// which branch they are on, and nothing but a rollback (or hand repair) puts
+/// that back.
+///
+/// This is deliberately the OPPOSITE of the multi-root sync policy, where an
+/// unupdatable root is skipped and the run carries on. A skip is safe because
+/// the skipped root is unchanged by a disclosed decision; a rollback is
+/// necessary because the succeeded roots are changed by an accident. The two
+/// must not be unified, so this arms only on a `Failed` row and never on a
+/// `Skipped` one.
+///
+/// Session-transient like [`UiState::branches_undo`]: the offer is answered,
+/// dismissed, or replaced by the next run's outcome. What outlives it is the
+/// activity-feed entry armed beside it, and the [`crate::bulk_history`] record
+/// the rollback reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchDivergence {
+    /// The history record the rollback reads — one undo mechanism, shared with
+    /// the bulk-history row's `Rollback` control.
+    pub record_id: u64,
+    /// What the run was (`"Create & checkout branch"`), so the offer names the
+    /// operation that diverged instead of hard-coding one verb's wording.
+    pub operation: String,
+    /// The branch the run tried to put every root on.
+    pub branch: String,
+    /// The roots the run CHANGED — and the only roots a rollback may act on.
+    pub changed: Vec<DivergentRoot>,
+    /// The roots the run FAILED in, each with git's reason.
+    pub failed: Vec<DivergentRoot>,
+}
+
+/// What a rollback attempt did: the divergence offer's accept path, and the
+/// bulk-history row's, which share one mechanism.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RollbackOutcome {
+    /// `roots` repositories were put back and the record now says so.
+    Applied { branch: String, roots: usize },
+    /// Some roots could not be put back. The record stays un-rolled-back, so the
+    /// attempt is retryable rather than half-confirmed.
+    Incomplete {
+        branch: String,
+        restored: usize,
+        unrecovered: usize,
+    },
+    /// Nothing was attempted: no such record, an operation with no undo, or a
+    /// record already rolled back.
+    Refused,
+}
+
 /// What the diff viewer should display.
 #[derive(Clone)]
 pub struct DiffTarget {
@@ -1249,6 +1323,11 @@ pub struct UiState {
     /// Session-transient like [`Self::branches_undo`]: the banner expires, the
     /// guard withholds, a newer rewrite replaces, and an undo click consumes.
     pub rewrite_undo: Option<RewriteUndo>,
+    /// The rollback offer for the last branch run that landed in some roots and
+    /// failed in others. Replaced or cleared by the next run's
+    /// outcome, and answered by [`AppState::rollback_divergent_roots`] or
+    /// [`AppState::keep_divergent_branches`].
+    pub branch_divergence: Option<BranchDivergence>,
     /// Fetch reporting (issue 13/14): a callback per in-flight fetch holding
     /// that root's remote-branch snapshot before the fetch, so every repo's
     /// fetch reports what *it* changed ("N new remote branches" vs "nothing
@@ -4104,9 +4183,36 @@ impl AppState {
                     // completed run lands in the history list — merged into
                     // the same record on a retry pass. The monitor's rows
                     // are the run's final truth (done/failed/skipped).
-                    if let Some(view) = self.ui.bulk_run.as_ref() {
-                        let at = chrono::Utc::now().timestamp_millis();
-                        let record = crate::bulk_history::from_run_view(view, at);
+                    //
+                    // The record is built out here, and only then handed to the
+                    // list, because the divergence offer is read from those
+                    // same per-root rows: the run's monitor is the one place
+                    // that knows which repositories moved and which did not, so
+                    // a second account of the outcome could disagree with the
+                    // surface the developer just watched.
+                    let record = self.ui.bulk_run.as_ref().map(|view| {
+                        crate::bulk_history::from_run_view(
+                            view,
+                            chrono::Utc::now().timestamp_millis(),
+                        )
+                    });
+                    if let Some(record) = record {
+                        let offer = branch_divergence_for(&record);
+                        if let Some(offer) = &offer {
+                            // The divergence is a durable feed entry, not just
+                            // the offer: the offer is dismissed and the feed is
+                            // what makes a multi-root operation auditable later.
+                            self.ui.activity.push(crate::activity::ActivityEntry {
+                                at: chrono::Local::now(),
+                                repo: Some("project".to_string()),
+                                message: divergence_report(offer, "diverged"),
+                                kind: crate::activity::ActivityKind::Warning,
+                            });
+                        }
+                        // One offer at a time, and always the newest run's: a
+                        // later run that lands everywhere replaces a stale
+                        // divergence rather than stacking a second modal on it.
+                        self.ui.branch_divergence = offer;
                         crate::bulk_history::record_into(&mut self.ui.bulk_history, record);
                         self.persist_ui();
                     }
@@ -5100,7 +5206,15 @@ impl AppState {
     /// Irreversible operations (fetch/pull/push/stash), unknown ids, and
     /// already-rolled-back records are no-ops. Repos the run failed or
     /// skipped are never touched.
-    pub fn bulk_rollback(&mut self, record_id: u64) {
+    ///
+    /// **This is the tree's one branch-undo mechanism**, and the divergence
+    /// offer deliberately routes through it instead of opening a
+    /// second one: the record it reads was scoped by the bulk preflight and
+    /// written by the run monitor, so the offer cannot reach a root the run
+    /// never covered and cannot bypass either gate. The two callers differ only
+    /// in what prompted them — the history row's `Rollback` button, or a run
+    /// that left the roots disagreeing.
+    pub fn bulk_rollback(&mut self, record_id: u64) -> RollbackOutcome {
         let Some(rec) = self
             .ui
             .bulk_history
@@ -5108,12 +5222,13 @@ impl AppState {
             .find(|r| r.id == record_id)
             .cloned()
         else {
-            return;
+            return RollbackOutcome::Refused;
         };
         if !rec.reversible() || rec.rolled_back {
-            return;
+            return RollbackOutcome::Refused;
         }
         let mut failures = 0usize;
+        let mut restored = 0usize;
         for row in &rec.repos {
             if row.outcome != crate::bulk_history::RepoOutcome::Done {
                 continue;
@@ -5138,26 +5253,99 @@ impl AppState {
                     None => true,
                 }
             };
-            if !done {
+            if done {
+                restored += 1;
+            } else {
                 failures += 1;
             }
         }
         if failures > 0 {
+            let message = format!("Rollback incomplete · {} repo(s) not restored", failures);
             self.ui.toast = Some(Toast {
                 kind: ToastKind::Error,
-                message: format!("Rollback incomplete · {} repo(s) not restored", failures),
+                message: message.clone(),
             });
-            return;
+            // A half-restored fleet is exactly the state this path exists to
+            // prevent, so it is recorded rather than only toasted — and the
+            // record stays un-rolled-back, which is what keeps the retry live.
+            self.ui.activity.push(crate::activity::ActivityEntry {
+                at: chrono::Local::now(),
+                repo: Some("project".to_string()),
+                message,
+                kind: crate::activity::ActivityKind::Error,
+            });
+            return RollbackOutcome::Incomplete {
+                branch: rec.branch.clone(),
+                restored,
+                unrecovered: failures,
+            };
         }
         if let Some(rec) = self.ui.bulk_history.iter_mut().find(|r| r.id == record_id) {
             rec.rolled_back = true;
         }
+        let message = format!("Rolled back · {}", rec.branch);
         self.ui.toast = Some(Toast {
             kind: ToastKind::Success,
-            message: format!("Rolled back · {}", rec.branch),
+            message: message.clone(),
+        });
+        self.ui.activity.push(crate::activity::ActivityEntry {
+            at: chrono::Local::now(),
+            repo: Some("project".to_string()),
+            message: format!("{message} · {restored} repo(s) restored"),
+            kind: crate::activity::ActivityKind::Success,
         });
         self.refresh(Affected::All);
         self.persist_ui();
+        RollbackOutcome::Applied {
+            branch: rec.branch.clone(),
+            roots: restored,
+        }
+    }
+
+    /// Accept the divergence offer: put the roots the run CHANGED
+    /// back the way they were, leaving the roots it failed in untouched — they
+    /// never moved, so there is nothing there to undo.
+    ///
+    /// Delegates the whole undo to [`Self::bulk_rollback`] for the one reason
+    /// that matters: the record it reads is the run monitor's own per-root
+    /// truth, preflight-scoped, and a second rollback path would have to
+    /// re-derive which roots moved and would be free to get it wrong.
+    pub fn rollback_divergent_roots(&mut self) -> RollbackOutcome {
+        let Some(offer) = self.ui.branch_divergence.take() else {
+            return RollbackOutcome::Refused;
+        };
+        let outcome = self.bulk_rollback(offer.record_id);
+        if outcome == RollbackOutcome::Refused {
+            // The offer outlived its record (evicted from the history list, or
+            // rolled back from the row beside it). Say so durably, rather than
+            // leaving the developer to wonder whether the roots were restored.
+            self.ui.activity.push(crate::activity::ActivityEntry {
+                at: chrono::Local::now(),
+                repo: Some("project".to_string()),
+                message: format!(
+                    "Rollback refused · {} · the run's undo record is no longer available",
+                    offer.branch
+                ),
+                kind: crate::activity::ActivityKind::Warning,
+            });
+        }
+        outcome
+    }
+
+    /// Decline the divergence offer: the roots stay as the run left
+    /// them. Declining is an answer, not a dismissal, so it is recorded — the
+    /// feed has to show that the divergence was seen and consciously kept, or a
+    /// later reader cannot tell it from a divergence nobody noticed.
+    pub fn keep_divergent_branches(&mut self) {
+        let Some(offer) = self.ui.branch_divergence.take() else {
+            return;
+        };
+        self.ui.activity.push(crate::activity::ActivityEntry {
+            at: chrono::Local::now(),
+            repo: Some("project".to_string()),
+            message: divergence_report(&offer, "kept divergent"),
+            kind: crate::activity::ActivityKind::Warning,
+        });
     }
 
     /// Welcome-vs-shell routing (issue #9, spec §9.2): the central body shows
@@ -5225,6 +5413,103 @@ fn activity_repo_label(affected: &Affected) -> Option<String> {
         Affected::All => None,
         Affected::Root(id) => Some(crate::activity::root_label(&id.0)),
     }
+}
+
+/// The roots a completed branch run left in disagreement, or `None` when there
+/// is nothing to offer.
+///
+/// Three facts must hold together, and each one is the reason a near-miss must
+/// not fire:
+/// 1. the run CHANGED at least one root — a run that failed everywhere moved
+///    nothing, so there is nothing to roll back;
+/// 2. it FAILED in at least one other root — a run that landed everywhere left
+///    the roots agreeing, which is the outcome everybody wanted;
+/// 3. a rollback can be *honoured* ([`crate::bulk_history::BulkRunRecord::reversible`]).
+///    Offering to undo an operation the app cannot undo is a promise the control
+///    would break on the spot.
+///
+/// A `Skipped` row is in none of the lists deliberately. The preflight matrix
+/// refused it before anything ran and the monitor says why, which is the
+/// multi-root *skip* policy the sync family runs on; this offer is the other,
+/// opposite theory of failure and the two are not to be unified.
+fn branch_divergence_for(record: &crate::bulk_history::BulkRunRecord) -> Option<BranchDivergence> {
+    use crate::bulk_history::RepoOutcome;
+
+    if !record.reversible() {
+        return None;
+    }
+    let mut changed: Vec<DivergentRoot> = Vec::new();
+    let mut failed: Vec<DivergentRoot> = Vec::new();
+    for row in &record.repos {
+        let root = RootId(row.root.clone().into());
+        match &row.outcome {
+            RepoOutcome::Done => {
+                // A root the run found already on the target branch was not
+                // changed by it, so it is not one side of the divergence — and
+                // a rollback that acted on it would move a repository the run
+                // never moved.
+                if row.prior_branch.as_deref() == Some(record.branch.as_str()) {
+                    continue;
+                }
+                changed.push(DivergentRoot {
+                    root,
+                    name: row.name.clone(),
+                    branch: record.branch.clone(),
+                    reason: None,
+                });
+            }
+            RepoOutcome::Failed { error } => {
+                failed.push(DivergentRoot {
+                    root,
+                    name: row.name.clone(),
+                    // The run never landed here, so this is still the branch the
+                    // root was on when the run started — the other half of the
+                    // disagreement the sentence has to state.
+                    branch: row
+                        .prior_branch
+                        .clone()
+                        .unwrap_or_else(|| "detached HEAD".to_string()),
+                    reason: Some(error.clone()),
+                });
+            }
+            RepoOutcome::Skipped { .. } => {}
+        }
+    }
+    if changed.is_empty() || failed.is_empty() {
+        return None;
+    }
+    Some(BranchDivergence {
+        record_id: record.id,
+        operation: record.op.label().to_string(),
+        branch: record.branch.clone(),
+        changed,
+        failed,
+    })
+}
+
+/// The feed's line for one side of a divergence: `alpha (feature/x)`.
+fn divergence_sides(roots: &[DivergentRoot]) -> String {
+    roots
+        .iter()
+        .map(|r| format!("{} ({})", r.name, r.branch))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The durable sentence for a divergence and for the answer to the offer.
+///
+/// One builder for both records because both must name the same two halves —
+/// the roots the run changed and the roots it failed in, each with the branch it
+/// is on — and a feed entry that said only "partially failed" would leave a
+/// later reader unable to tell which repository disagrees.
+fn divergence_report(offer: &BranchDivergence, verb: &str) -> String {
+    format!(
+        "{} {verb} · {} · changed: {} · failed: {}",
+        offer.operation,
+        offer.branch,
+        divergence_sides(&offer.changed),
+        divergence_sides(&offer.failed)
+    )
 }
 
 /// Unresolved conflict files across `affected`'s registered roots, read

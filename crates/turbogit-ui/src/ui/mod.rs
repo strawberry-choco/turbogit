@@ -24,6 +24,7 @@
 pub mod activity_panel;
 pub mod banner;
 pub mod blame_view;
+pub mod branch_divergence;
 pub mod branch_menu;
 pub mod branch_tree_view;
 pub mod branch_widget;
@@ -139,6 +140,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     bulk_preflight::show(ui, state);
     bulk_monitor::show(ui, state);
     bulk_monitor::show_cherry(ui, state);
+    // The rollback offer for a branch run that landed in some roots
+    // and failed in others. Rendered after the monitor it refers to, so the
+    // offer floats above the run whose per-root rows named the failure.
+    branch_divergence::render(ui, state);
     // Redesigned conflict resolver (issue #22, screen 07): dedicated tool
     // window reachable from the Commit tool window's "Resolve…" entry and
     // from the bulk monitor's Resolve deep link.
