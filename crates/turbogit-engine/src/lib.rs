@@ -9,7 +9,6 @@
 
 pub mod cli;
 pub mod git2_exec;
-pub mod patch;
 
 #[cfg(feature = "test-util")]
 pub mod fake;

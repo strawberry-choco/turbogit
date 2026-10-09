@@ -90,7 +90,6 @@ use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, PatchOrigin, RefState,
     Root, RootId, SignatureState, forward_slash_path,
 };
-use turbogit_services::integrate_service;
 use turbogit_services::sync_service;
 
 // --- Pane metrics (spec §8.3) -------------------------------------------------
@@ -1467,7 +1466,7 @@ fn commit_facts<'a>(state: &'a AppState, root: &'a RootId, cid: &str) -> CommitF
         // The operation holding THIS root, asked of the root the menu was opened
         // on and of no other — which is what makes the in-flight gate per root
         // rather than a workspace-wide flag.
-        owner: integrate_service::owning_operation(root.as_path()),
+        owner: state.holding_operation(root.as_path()),
         // The workspace's checked-repository set, as seen from this commit's
         // repository. The same set the status bar's `N repos in scope` counter
         // reports and every fleet verb reads.

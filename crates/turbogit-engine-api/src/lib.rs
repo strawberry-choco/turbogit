@@ -4,10 +4,22 @@
 //! [`GitExecutor`] is the single trait that talks to git; adapters live in
 //! `turbogit-engine`, consumers (services, app, UI) depend only on this
 //! crate. Leaf crate — depends only on `turbogit-domain`.
+//!
+//! Two things besides the trait live here because both adapters and every layer
+//! above need the identical reading of git's dialects: [`patch`], the one
+//! reader of unified-diff syntax (`ADR-0022`), and [`repo_state`], the marker
+//! read behind [`GitExecutor::holding_operation`]. Either one duplicated above
+//! the port is how a caller ends up interpreting git's bytes or its on-disk
+//! state for itself.
 
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::*;
+
+pub mod patch;
+pub mod repo_state;
+
+pub use repo_state::OwnedOperation;
 
 /// Direction for [`GitExecutor::apply_patch_to_index`]: stage a patch into
 /// the index (forward) or unstage it by reverse-applying against the index.
@@ -124,6 +136,24 @@ pub trait GitExecutor: Send + Sync {
     /// never a whole-working-tree porcelain scan. A prunable (missing) work
     /// tree answers clean.
     fn worktree_dirty(&self, path: &Path) -> TgResult<bool>;
+
+    /// Which operation, if any, holds the repository at `root` — the rewrite
+    /// gate's and the status bar's one source for that answer
+    /// ([`OwnedOperation`], `ADR-0022`'s value-shaped read: a caller names the
+    /// operation it refused, never a marker path it went looking for).
+    ///
+    /// One owner, ranked: a sequence stopped on a pick answers `Rebase`, and a
+    /// pick resolved by the merge machinery answers `CherryPick`, so a refusal
+    /// and an announcement cannot blame different operations for one repository.
+    ///
+    /// Cheap by construction — a `stat` over a bounded set of paths inside the
+    /// repository's real git directory, never a git process — because the status
+    /// bar asks it per root per frame. An adapter that shelled out to
+    /// `git status` to answer this would be a regression, not an implementation.
+    /// Not a `TgResult`: a directory that cannot be read answers `None`, the same
+    /// answer an unheld repository gives, because a reader that could not tell
+    /// must not claim a holder.
+    fn holding_operation(&self, root: &Path) -> Option<OwnedOperation>;
 
     /// Registered submodules with pinned vs recorded commits and lifecycle
     /// state (parsed from `git submodule status` + the index gitlinks;

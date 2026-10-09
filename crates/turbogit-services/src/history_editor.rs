@@ -179,7 +179,7 @@ pub fn reword_commit(
 /// discarded. Errors when no backup exists — the net is only present while an
 /// [`execute_with_backup`] replay is the last rewrite.
 pub fn abort_to_backup(vcs: &dyn GitExecutor, root: &Path) -> TgResult<()> {
-    if crate::integrate_service::in_progress(root) {
+    if crate::integrate_service::operation_in_progress(vcs.holding_operation(root)) {
         vcs.abort(root, "rebase")?;
     }
     vcs.restore_rewrite_backup(root)?;

@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use test_support::git_seed::{commit as git_commit, git};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
-use turbogit_engine::patch::parse_patch;
 use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::patch::parse_patch;
 
 fn engine() -> CliExecutor {
     CliExecutor {

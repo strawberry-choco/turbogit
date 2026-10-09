@@ -7,6 +7,12 @@
 //! syntax is the value's own business, in `turbogit-domain`, because the index
 //! is fed bytes and the viewer paints labels.
 //!
+//! The reader sits at the port rather than in an adapter because both adapters
+//! answer with its value *and* the layers above answer for bytes that never came
+//! from an adapter — a patch file the developer pointed at, a header rewriter, a
+//! display model re-reading a cached text. An adapter-local reader would leave
+//! those callers one edge short of it, which is how a second parser gets written.
+//!
 //! Lines before the first `diff --git` section (a `git log -p` commit header,
 //! say) are skipped; an empty diff is an empty value, which is an answer.
 

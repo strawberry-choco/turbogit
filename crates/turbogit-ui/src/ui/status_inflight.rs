@@ -24,25 +24,27 @@
 //!
 //! ## The state is git's, not ours
 //!
-//! Each item comes from [`integrate_service::owning_operation`], which reads the
-//! marker git itself leaves (`rebase-merge`, `CHERRY_PICK_HEAD`, `MERGE_HEAD`,
-//! `REVERT_HEAD`). That is deliberate over an app-side flag: an operation paused
-//! on a conflict survives a restart and can be started outside this app, and a
-//! flag set at dispatch would announce nothing in both cases. It is also
+//! Each item comes from [`GitExecutor::holding_operation`], which names the
+//! operation git itself has this repository in (`Rebase`, `CherryPick`, `Merge`,
+//! `Revert`). That is deliberate over an app-side flag: an operation paused on a
+//! conflict survives a restart and can be started outside this app, and a flag set
+//! at dispatch would announce nothing in both cases. It is also
 //! **per root by construction**, which is the property a multi-root client is
 //! most likely to get wrong — one global "busy with a rebase" boolean would paint
 //! the right words in the wrong root's announcement.
 //!
-//! Reading it is a filesystem `exists()` on `<gitdir>`, the same source
-//! `log_window.rs` and `dialogs.rs` already consult for the rewrite gate; no git
-//! process runs here, so the "UI never calls git" rule is intact.
+//! The bar asks the engine, and the engine asks the filesystem: a bounded `stat`
+//! read of the repository's own git directory, never a git process, which is what
+//! makes asking it per root per frame honest. The same answer is what the rewrite
+//! gate refuses on, so the bar and the menu cannot name different operations for
+//! one repository.
 
 use egui::{Color32, CornerRadius, Response, RichText};
 
 use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{Root, RootId};
-use turbogit_services::integrate_service::{OwnedOperation, owning_operation};
+use turbogit_engine_api::OwnedOperation;
 
 use crate::theme::{self, Palette, chrome_font};
 
@@ -55,9 +57,16 @@ pub struct InFlight {
     pub owner: OwnedOperation,
 }
 
-/// The roots currently holding an operation, in registration order.
+/// The roots-only form of [`items_via`]: it reads git's markers through the
+/// boundary's own probe, for a caller that has root paths and no engine to ask.
+///
+/// The bar itself does not use it — [`render`] and [`target_for`] ask the engine,
+/// so the announcement is the same answer the rewrite gate refuses on and a suite
+/// can drive both from a seeded executor without a working tree.
 pub fn items(roots: &[Root]) -> Vec<InFlight> {
-    items_via(roots, &|root| owning_operation(root.id.as_path()))
+    items_via(roots, &|root| {
+        turbogit_engine_api::repo_state::holding_operation_at(root.id.as_path())
+    })
 }
 
 /// [`items`] over an injected owner read — the same seam
@@ -98,6 +107,18 @@ impl InFlight {
     }
 }
 
+/// The roots the engine says are held, in registration order.
+///
+/// Asked of the engine rather than of git's marker files so that the bar's
+/// announcement, the rewrite gate's refusal and a suite's seeded executor are all
+/// one answer. The read is a `stat` per root, never a git process, which is what
+/// lets the bar ask it every frame.
+fn held_by(state: &AppState) -> Vec<InFlight> {
+    items_via(&state.multi.roots, &|root| {
+        state.holding_operation(root.id.as_path())
+    })
+}
+
 /// The root a menu-route verb acts on.
 ///
 /// Two roots can hold operations at once, so the menu route has to name one. The
@@ -107,7 +128,7 @@ impl InFlight {
 /// rebase is in the other repository. Nothing offers it: `None`, and the caller
 /// says so rather than acting on an arbitrary root.
 pub fn target_for(state: &AppState, verb: LifecycleVerb) -> Option<(RootId, OwnedOperation)> {
-    let found = items(&state.multi.roots);
+    let found = held_by(state);
     let offers = |item: &InFlight| LifecycleVerb::offered_for(item.owner).contains(&verb);
     found
         .iter()
@@ -126,7 +147,7 @@ pub fn target_for(state: &AppState, verb: LifecycleVerb) -> Option<(RootId, Owne
 /// divergence in the ticket.
 pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     let mut first = true;
-    for item in items(&state.multi.roots) {
+    for item in held_by(state) {
         if !first {
             // The bar's one quiet separator ink (`INK_2`, the step up the raised
             // `SURFACE` band forces for every line in it).

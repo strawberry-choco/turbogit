@@ -200,7 +200,7 @@ fn the_reverse_origin_is_a_patch_git_applies_backwards() {
     // The claim the checkbox makes: applying this patch reverts the change, so the
     // file is what HEAD holds afterwards. Run it through the engine's own worktree
     // apply, which is the verb `Apply patch` uses.
-    let patch = turbogit_engine::patch::parse_patch(
+    let patch = turbogit_engine_api::patch::parse_patch(
         std::str::from_utf8(&reverse).expect("this fixture is text"),
     );
     engine()
