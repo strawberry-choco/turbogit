@@ -117,16 +117,20 @@ flowchart TB
 
 ### One sanctioned impurity
 
-`AppState` constructs its own engine: `launch_in` and `rebuild_executor`
-(`turbogit-app/src/state.rs:1376,1478`), which reach
-`turbogit_engine::build_executor` at `state.rs:1335` and `state.rs:1479`, so
-`turbogit-app → turbogit-engine` is a real edge rather than the clean
-`app → port` flow the rest of the graph follows.
+`AppState` constructs its own engine: `launch_in` and `for_roots` both go
+through `with_flat_state` (`turbogit-app/src/state.rs`), which reaches
+`turbogit_engine::build_executor` at `state.rs:2071`, as does `rebuild_executor`
+at `state.rs:2230`. `turbogit_engine::resolve_git_version` is read at
+`state.rs:2073` and `state.rs:5150` and re-exported from `lib.rs:9`. So
+`turbogit-app → turbogit-engine` is two real edges rather than the clean
+`app → port` flow the rest of the graph follows; the app's patch parsing is not
+one of them, because that reader lives in `turbogit-engine-api` (ADR-0022).
 
 The textbook fix is injecting `Arc<dyn GitExecutor>` from the composition root.
 It would instead change constructor signatures used by ~20 test call sites, and
-nothing needs it today: no test runs the app against the fake. The edge is
-accepted and treated as the single composition touchpoint — the only place an
+nothing needs it today: a test that wants another executor swaps one in after
+construction through `AppState::with_executor`, not through a signature. These
+two edges are accepted and treated as the whole impurity — the only places an
 app-side call may reach the adapters.
 
 **Deferred options (do not schedule):** executor injection into `AppState`;

@@ -42,12 +42,19 @@ deny-warnings via `[lints] workspace = true`.
 
 ### One sanctioned impurity
 
-`AppState` calls `turbogit_engine::build_executor` (in `launch_in` and
-`rebuild_executor`), so `turbogit-app` depends on `turbogit-engine`, not only
-on the port. The textbook fix is injecting `Arc<dyn GitExecutor>` from the
+The impurity is `turbogit-app` reaching `turbogit-engine` instead of only the
+port, and it has two edges. `AppState` constructs its own executor —
+`turbogit_engine::build_executor` in `state.rs`, from `with_flat_state` (behind
+`launch_in` and `for_roots`) and from `rebuild_executor`. And
+`turbogit_engine::resolve_git_version` is reached at three sites: re-exported
+from the app's `lib.rs`, read by that same `with_flat_state`, read by
+`git_env_check`. Patch parsing is **not** one of them any more — the unified-diff
+reader lives in `turbogit-engine-api` (ADR-0022), so those calls are the legal
+`app → port` edge. The textbook fix is injecting `Arc<dyn GitExecutor>` from the
 composition root, but that would change constructor signatures used by ~20 test
-call sites for no current benefit. Treat this edge as the single composition
-touchpoint; revisit it only if the app must run against the fake executor.
+call sites for no current benefit; a test that wants another executor swaps one
+in after construction through `AppState::with_executor`. Treat these two edges as
+the whole impurity — the only places an app-side call may reach the adapters.
 
 ### Deferred options (do not schedule)
 
