@@ -120,6 +120,23 @@ impl NewBranchBase {
     }
 }
 
+/// Which of the two `Apply patch` routes a patch arrives by.
+///
+/// Two variants rather than one field that may be empty, because the reference's
+/// second verb is defined by what it does NOT ask for: `Apply patch from
+/// Clipboard` "skips the file path entirely", and a route that merely hid the
+/// field while still reading it would leave a stale path one keystroke from being
+/// applied.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PatchSource {
+    /// Read a patch file chosen through [`AppState::patch_reader`] or typed in
+    /// full. The reference's `Git | Patch | Apply patch…`.
+    #[default]
+    File,
+    /// The patch text is pasted into the window and never touches the filesystem.
+    Clipboard,
+}
+
 /// Persistent input fields for the modal dialogs (kept across redraws).
 #[derive(Default)]
 pub struct DialogState {
@@ -284,6 +301,61 @@ pub struct DialogState {
     /// Why the list could not be read, in git's words. The window paints it rather
     /// than showing nothing: an empty list and a failed read are different answers.
     pub get_from_branch_error: Option<String>,
+    // --- Apply patch (surface `10-patches`) ---
+    /// The root the apply writes into, carried by the window rather than read from
+    /// whichever root is focused at click time. An apply is **per root**: the same
+    /// discipline `Get from Branch` states, and for the same reason — a verb that
+    /// takes the focused root at the last moment writes the patch into a tree the
+    /// developer never named.
+    pub apply_patch_root: Option<RootId>,
+    /// Which of the two routes the patch arrives by. `Clipboard` is not a flag on
+    /// the file route: it skips the path entirely, which is the whole of what the
+    /// reference's second verb is for.
+    pub apply_patch_source: PatchSource,
+    /// The file route's path, as the developer left it — typed or chosen through
+    /// the picker seam, and never read unless this route is the live one.
+    pub apply_patch_path: String,
+    /// The patch's own text: the file's contents on the file route, the pasted
+    /// text on the clipboard route. One field because one thing is parsed.
+    pub apply_patch_text: String,
+    /// The text [`Self::apply_patch_text`] was last parsed from. The parse is
+    /// memoized on it so the dialog's per-frame refresh costs a string compare,
+    /// not a diff read.
+    pub apply_patch_loaded: String,
+    /// The path [`Self::apply_patch_text`] was last read FROM, on the file route.
+    /// Held beside the loaded text because a stale read is the failure this route
+    /// has: a window that applied what it had already parsed after the developer
+    /// retyped the path would write a different patch than the one named.
+    pub apply_patch_loaded_path: String,
+    /// The parsed patch — the value the preflight asks git about and the apply
+    /// writes. `None` is "the text names no file section", which the window says
+    /// rather than painting an empty list.
+    pub apply_patch_patch: Option<turbogit_domain::model::Patch>,
+    /// Why the patch could not be read or parsed. Stated separately from an empty
+    /// patch because "the file is not there" and "the file holds no diff" are
+    /// different things to fix.
+    pub apply_patch_error: Option<String>,
+    /// The provenance a git-format patch carries, as the engine reads it. Held
+    /// beside the two fields it seeds so the seeding can tell an untouched field
+    /// from one the developer has since typed over.
+    pub apply_patch_provenance: Option<turbogit_engine::patch::PatchProvenance>,
+    /// The destination's author field, pre-filled from the patch when the patch
+    /// has an author. Editable, because an applied patch is a local change and the
+    /// local change is the developer's to attribute.
+    pub apply_patch_author: String,
+    /// The destination's message field, pre-filled from the patch's subject.
+    pub apply_patch_message: String,
+    /// `Show Diff`'s answer: git's verdict on whether the patch applies, with
+    /// nothing written. `None` is "not asked yet", which is not the same as clean.
+    pub apply_patch_preflight: Option<turbogit_services::patch_apply::Preflight>,
+    /// The last apply's outcome, which is what the window paints its titled state
+    /// from. Kept until the next apply or a close: the developer needs to be able
+    /// to read the path list after the toast has gone.
+    pub apply_patch_outcome: Option<turbogit_services::patch_apply::ApplyOutcome>,
+    /// The slot the in-flight apply writes its outcome into, armed at dispatch.
+    /// See [`crate::operation::ApplyReport`] for why the outcome cannot ride the
+    /// completion event.
+    pub apply_patch_report: Option<crate::operation::ApplyReport>,
     /// The rewrite preflight's payload, present exactly while its dialog is.
     /// One payload for both targeted verbs (ticket 10 drop, ticket 11 reword).
     pub rewrite_preflight: Option<RewritePreflight>,
@@ -598,6 +670,16 @@ pub enum Dialog {
     /// reference's own doc, and this surface already hosts its own tree — a second
     /// rung list inside it would be read as staging state.
     GetFromBranch,
+    /// `Apply patch` (surface `10-patches`): the window that writes a patch into
+    /// ONE root's working tree, with `Show Diff` as a preflight rather than a
+    /// confirmation and a three-way outcome that says which state the tree is in
+    /// afterwards. Its payload is the [`DialogState`] group prefixed
+    /// `apply_patch_`.
+    ///
+    /// The reference reaches this from `Git | Patch | Apply patch…`; TurboGit has
+    /// no main menu bar, so the command palette is its menu route — the same
+    /// substitution ticket 16 records for the three lifecycle verbs.
+    ApplyPatch,
     /// The commits a branch delete discarded, reached from that delete's
     /// disclosure link — before the ref moves and after. Its payload is
     /// [`DialogState::unmerged_view`].
@@ -1661,6 +1743,15 @@ pub struct AppState {
     /// the highest point at which the developer's choice can be substituted.
     /// `None` means "declined": nothing is written and nothing is confirmed.
     pub patch_writer: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
+    /// The read twin of [`AppState::patch_writer`]: choose the patch file to
+    /// apply. Installed by the composition root for the same reason — a native
+    /// open dialog has no headless equivalent — and left `None` in tests, where
+    /// the path field takes the path directly.
+    ///
+    /// Kept separate from `dir_picker` rather than reused: that seam picks a
+    /// FOLDER and returns a directory a repository lives in, and a patch path
+    /// picked through it would be a directory the apply then refuses to read.
+    pub patch_reader: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
     /// Resolved git version (e.g. `2.47.1`) for the status bar's version
     /// line, computed once at launch (issue #34) so the bar never spawns
     /// `git` per frame. `"unknown"` when the binary cannot be resolved.
@@ -1717,6 +1808,17 @@ pub struct AppState {
     /// keeps the scheduler from stacking fetches on the same repo; entries
     /// only clear with the poll's settlement.
     pub(crate) incoming_poll_inflight: HashSet<RootId>,
+    /// A rollback the working tree is still waiting on, per root: the recorded
+    /// content of the paths a failed apply could not put back.
+    ///
+    /// Held here rather than only in the apply window because the thing it is a
+    /// record OF is the tree, not the dialog. The window's own transitions (a
+    /// keystroke in the patch field, a route or root switch, a close and reopen)
+    /// drop what they are painting — correctly, for a patch that is gone — and
+    /// none of them changes a byte on disk, so none of them may be the event
+    /// that decides whether the developer can still get their content back.
+    /// An entry leaves only when a retry restores every path it holds.
+    rollback_recovery: HashMap<RootId, turbogit_services::patch_apply::ApplyOutcome>,
 }
 
 impl AppState {
@@ -1775,6 +1877,7 @@ impl AppState {
             recents_config_dir,
             dir_picker: None,
             patch_writer: None,
+            patch_reader: None,
             pump,
             worktree: crate::worktree_lifecycle::WorktreeLifecycle::default(),
             reads: Default::default(),
@@ -1790,6 +1893,7 @@ impl AppState {
             fetching_stashes: HashSet::new(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
+            rollback_recovery: HashMap::new(),
         }
     }
 
@@ -3269,6 +3373,429 @@ impl AppState {
         });
     }
 
+    // ------------------------------------------------------- apply a patch ---
+
+    /// Open the `Apply patch` window on the focused root, by the route `source`
+    /// names. The two routes are the reference's two verbs: `Apply patch…` reaches
+    /// for a file, `Apply patch from Clipboard` skips the path entirely.
+    ///
+    /// The apply group of the dialog payload is reset here rather than the whole
+    /// [`DialogState`]: every other dialog's fields live in the same struct and
+    /// survive this window opening, and the window's own state is the only thing
+    /// that must not survive from one visit to the next.
+    pub fn open_apply_patch(&mut self, source: PatchSource) {
+        let Some(root) = self.selected_root.clone() else {
+            self.show_toast(Toast::info(
+                "Apply patch needs a repository: open a workspace first.",
+            ));
+            return;
+        };
+        let d = &mut self.ui.dlg;
+        d.apply_patch_root = Some(root);
+        d.apply_patch_source = source;
+        d.apply_patch_path.clear();
+        d.apply_patch_text.clear();
+        d.apply_patch_loaded.clear();
+        d.apply_patch_loaded_path.clear();
+        d.apply_patch_patch = None;
+        d.apply_patch_error = None;
+        d.apply_patch_provenance = None;
+        d.apply_patch_author.clear();
+        d.apply_patch_message.clear();
+        d.apply_patch_preflight = None;
+        d.apply_patch_outcome = None;
+        d.apply_patch_report = None;
+        self.ui.dialog = Some(Dialog::ApplyPatch);
+        // A rollback this root has not finished is not the window's to forget.
+        // Closing and reopening is the developer coming back for the recovery.
+        self.reseed_apply_patch_recovery();
+    }
+
+    /// Point the window's apply at `root`. Exposed because the window is per root
+    /// and a multi-root workspace has more than one it could mean; leaving the
+    /// choice at whatever was focused when the palette item ran would be the
+    /// per-root admission rule (reverse gaps #1 and #16) reduced to a guess.
+    pub fn set_apply_patch_root(&mut self, root: &RootId) {
+        if self.ui.dlg.apply_patch_root.as_ref() == Some(root) {
+            return;
+        }
+        self.hold_apply_patch_recovery();
+        self.ui.dlg.apply_patch_root = Some(root.clone());
+        // The verdict the old root was measured against says nothing about this
+        // one, and leaving it painted would be a preflight for a tree that is not
+        // the tree about to be written.
+        self.ui.dlg.apply_patch_preflight = None;
+        self.ui.dlg.apply_patch_outcome = None;
+        // The rollback is the exception to that rule: the old root keeps its
+        // record here rather than in the window, and this root's own unfinished
+        // rollback is exactly what pointing at this root should now show.
+        self.reseed_apply_patch_recovery();
+    }
+
+    /// Switch the window's patch route (file ↔ clipboard).
+    ///
+    /// The payload the other route read is dropped with it — a patch read from a
+    /// file is not the text the clipboard holds, and carrying one into the other
+    /// route would apply the wrong payload under a label that says otherwise. A
+    /// rollback the tree is still waiting on is not payload, so it is held here
+    /// and painted again by the same rule every other transition uses.
+    pub fn set_apply_patch_source(&mut self, source: PatchSource) {
+        self.hold_apply_patch_recovery();
+        let d = &mut self.ui.dlg;
+        d.apply_patch_source = source;
+        d.apply_patch_text.clear();
+        d.apply_patch_loaded.clear();
+        d.apply_patch_loaded_path.clear();
+        d.apply_patch_patch = None;
+        d.apply_patch_preflight = None;
+        d.apply_patch_error = None;
+        d.apply_patch_outcome = None;
+        self.reseed_apply_patch_recovery();
+    }
+
+    /// Take the window's unresolved rollback into the per-root holder. Runs
+    /// before any transition that drops what the window paints, so the recorded
+    /// content a retry writes cannot be lost along with the frame that showed it.
+    fn hold_apply_patch_recovery(&mut self) {
+        let Some(outcome) = self.ui.dlg.apply_patch_outcome.clone().filter(|outcome| {
+            matches!(
+                outcome,
+                turbogit_services::patch_apply::ApplyOutcome::RollbackFailed { .. }
+            )
+        }) else {
+            return;
+        };
+        let Some(root) = self.ui.dlg.apply_patch_root.clone() else {
+            return;
+        };
+        self.rollback_recovery.insert(root, outcome);
+    }
+
+    /// The recovery the window's current root is owed, if any.
+    fn held_apply_patch_recovery(&self) -> Option<turbogit_services::patch_apply::ApplyOutcome> {
+        let root = self.ui.dlg.apply_patch_root.as_ref()?;
+        self.rollback_recovery.get(root).cloned()
+    }
+
+    /// Put the held recovery back on the window after a transition cleared it.
+    /// Only a rollback that never finished is re-painted: `Applied` and `Aborted`
+    /// are answers about the patch, and the patch is what the transition dropped.
+    fn reseed_apply_patch_recovery(&mut self) {
+        if let Some(held) = self.held_apply_patch_recovery() {
+            self.ui.dlg.apply_patch_outcome = Some(held);
+        }
+    }
+
+    /// Run the file route's picker: the seam [`crate::AppState::patch_reader`]
+    /// installs, whose absence is "this surface has no native dialog here" rather
+    /// than an error — the path field is the same choice made by typing.
+    pub fn choose_apply_patch_file(&mut self) {
+        let Some(reader) = self.patch_reader.take() else {
+            self.show_toast(Toast::info("Type the patch file's path instead."));
+            return;
+        };
+        let chosen = reader();
+        self.patch_reader = Some(reader);
+        let Some(path) = chosen else {
+            return;
+        };
+        self.ui.dlg.apply_patch_path = path.to_string_lossy().into_owned();
+    }
+
+    /// Bring the window's parsed state in line with what the developer has since
+    /// typed, chosen or pasted. Runs once per frame.
+    ///
+    /// Two memos make that cheap and correct: the file is re-read only when the
+    /// path field has changed, and the patch is re-parsed only when the text has.
+    /// A third thing happens on any reparse — the preflight verdict and the last
+    /// outcome are dropped, because both were answers about a patch that is gone.
+    /// A rollback the tree never finished is the one exception, and
+    /// `reseed_apply_patch_recovery` is what puts it back on the window.
+    pub fn sync_apply_patch(&mut self) {
+        // Held before anything below can drop it: a keystroke in the patch field
+        // changes no byte of the working tree, so it cannot be what leaves the
+        // developer holding a half-applied file with no recorded content to put
+        // back into it.
+        self.hold_apply_patch_recovery();
+        if self.ui.dlg.apply_patch_source == PatchSource::File {
+            let path = self.ui.dlg.apply_patch_path.trim().to_string();
+            if !path.is_empty() && path != self.ui.dlg.apply_patch_loaded_path {
+                self.ui.dlg.apply_patch_loaded_path = path.clone();
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        self.ui.dlg.apply_patch_text = text;
+                        self.ui.dlg.apply_patch_error = None;
+                    }
+                    Err(e) => {
+                        // An unreadable file is stated, not silently treated as no
+                        // patch: the developer has to be able to tell a typo in a
+                        // path from a patch that holds nothing.
+                        self.ui.dlg.apply_patch_text.clear();
+                        self.ui.dlg.apply_patch_loaded.clear();
+                        self.ui.dlg.apply_patch_patch = None;
+                        self.ui.dlg.apply_patch_provenance = None;
+                        self.ui.dlg.apply_patch_preflight = None;
+                        self.ui.dlg.apply_patch_error =
+                            Some(format!("`{path}` could not be read — {e}"));
+                        return;
+                    }
+                }
+            }
+        }
+        if self.ui.dlg.apply_patch_text == self.ui.dlg.apply_patch_loaded {
+            return;
+        }
+        self.ui.dlg.apply_patch_loaded = self.ui.dlg.apply_patch_text.clone();
+        self.ui.dlg.apply_patch_preflight = None;
+        self.ui.dlg.apply_patch_outcome = None;
+        let text = self.ui.dlg.apply_patch_text.clone();
+        let patch = turbogit_engine::patch::parse_patch(&text);
+        let provenance = turbogit_engine::patch::read_provenance(&text);
+        self.ui.dlg.apply_patch_error = if patch.is_empty() && !text.trim().is_empty() {
+            // Empty text is a window nobody has filled yet; text that holds no
+            // `diff --git` section is a file that is not a patch.
+            Some("this text holds no diff section — nothing to apply".to_string())
+        } else {
+            None
+        };
+        self.ui.dlg.apply_patch_patch = (!patch.is_empty()).then_some(patch);
+        self.seed_apply_patch_fields(&provenance);
+        self.ui.dlg.apply_patch_provenance = provenance;
+        self.reseed_apply_patch_recovery();
+    }
+
+    /// Fill the destination's author and message fields from the patch's own
+    /// header — the reference's behaviour for a git-format patch, and the reason
+    /// the provenance is read at all rather than dropped with the `From:` lines.
+    ///
+    /// Only an **untouched** field is re-seeded: a field still holding what the
+    /// previous patch put there is the patch's, and one holding anything else is
+    /// the developer's typing over it. The distinction is made by comparing to the
+    /// provenance actually seeded last, not by a "dirty" flag, so re-opening the
+    /// same patch cannot clobber an edit and a new patch cannot be ignored.
+    fn seed_apply_patch_fields(&mut self, next: &Option<turbogit_engine::patch::PatchProvenance>) {
+        let field =
+            |p: Option<&turbogit_engine::patch::PatchProvenance>,
+             pick: fn(&turbogit_engine::patch::PatchProvenance) -> Option<String>| {
+                p.and_then(pick).unwrap_or_default()
+            };
+        let last = self.ui.dlg.apply_patch_provenance.as_ref();
+        let author = field(next.as_ref(), |p| p.author.clone());
+        let subject = field(next.as_ref(), |p| p.subject.clone());
+        if self.ui.dlg.apply_patch_author == field(last, |p| p.author.clone()) {
+            self.ui.dlg.apply_patch_author = author;
+        }
+        if self.ui.dlg.apply_patch_message == field(last, |p| p.subject.clone()) {
+            self.ui.dlg.apply_patch_message = subject;
+        }
+    }
+
+    /// `Show Diff` as a preflight, not a confirmation: ask git whether the patch
+    /// applies and paint the answer. Nothing is written, nothing is staged, and no
+    /// `Operation` is dispatched — the whole of the verb's value is that a
+    /// developer can use it as many times as they like and still be looking at the
+    /// tree they started with.
+    pub fn preflight_apply_patch(&mut self) {
+        self.sync_apply_patch();
+        let (Some(root), Some(patch)) = (
+            self.ui.dlg.apply_patch_root.clone(),
+            self.ui.dlg.apply_patch_patch.clone(),
+        ) else {
+            return;
+        };
+        self.ui.dlg.apply_patch_preflight = Some(turbogit_services::patch_apply::preflight(
+            self.executor.as_ref(),
+            root.as_path(),
+            &patch,
+        ));
+    }
+
+    /// Dispatch the apply. The outcome slot is armed first, exactly as a push
+    /// records its request first: under an inline pump the completion event is
+    /// queued inside this call, and settlement must find a handle to read.
+    pub fn dispatch_apply_patch(&mut self) {
+        self.sync_apply_patch();
+        let (Some(root), Some(patch)) = (
+            self.ui.dlg.apply_patch_root.clone(),
+            self.ui.dlg.apply_patch_patch.clone(),
+        ) else {
+            return;
+        };
+        let report = crate::operation::ApplyReport::armed();
+        self.ui.dlg.apply_patch_report = Some(report.clone());
+        self.ui.dlg.apply_patch_outcome = None;
+        self.dispatch(Operation::ApplyPatch {
+            root,
+            patch,
+            report,
+        });
+    }
+
+    /// Move a completed apply's outcome out of its slot and onto the window, so
+    /// the titled state paints from the record rather than from the toast's prose.
+    pub(crate) fn settle_apply_patch(&mut self) {
+        let outcome = self
+            .ui
+            .dlg
+            .apply_patch_report
+            .as_ref()
+            .and_then(|report| report.take());
+        self.ui.dlg.apply_patch_report = None;
+        self.ui.dlg.apply_patch_outcome = outcome.or(self.ui.dlg.apply_patch_outcome.take());
+        // The window's painted outcome is the only place a failed rollback's
+        // recorded bytes exist, so settling is where they move somewhere that
+        // outlives the window's own transitions.
+        self.hold_apply_patch_recovery();
+    }
+
+    /// The durable record of an apply's two titled outcomes: `Apply patch
+    /// aborted` with its guarantee, and `Rollback failed` with every path that
+    /// could not be restored, the reason for that one write and the action the
+    /// window offers beside it.
+    ///
+    /// Recorded as its own entry rather than left to the generic failure line
+    /// because the generic one carries git's apply error, and git's error does
+    /// not know what the rollback then did — neither that every file came back,
+    /// nor which files are still wrong. The feed is where the developer looks
+    /// after the notification has gone, and [`ApplyOutcome::title`] names these
+    /// strings once so the window and this entry cannot drift.
+    pub(crate) fn record_apply_outcome(&mut self) {
+        let entry: Option<(crate::activity::ActivityKind, String)> = match self
+            .ui
+            .dlg
+            .apply_patch_outcome
+            .as_ref()
+        {
+            Some(
+                outcome @ (turbogit_services::patch_apply::ApplyOutcome::Aborted { .. }
+                | turbogit_services::patch_apply::ApplyOutcome::RollbackFailed { .. }),
+            ) => {
+                let kind = if outcome.tree_is_restored() {
+                    crate::activity::ActivityKind::Warning
+                } else {
+                    crate::activity::ActivityKind::Error
+                };
+                let message = match outcome {
+                    turbogit_services::patch_apply::ApplyOutcome::Aborted { reason, .. } => {
+                        format!(
+                            "{} — {} · Why: {reason}",
+                            outcome.title(),
+                            outcome.message()
+                        )
+                    }
+                    turbogit_services::patch_apply::ApplyOutcome::RollbackFailed {
+                        unrestored,
+                        ..
+                    } => {
+                        let stated: Vec<String> = unrestored.iter().map(|u| u.stated()).collect();
+                        format!(
+                            "{} · {} file(s) still hold what the apply wrote: {}. The \
+                             content they held before is recorded and the window's Restore \
+                             retry writes it.",
+                            outcome.title(),
+                            unrestored.len(),
+                            stated.join("; ")
+                        )
+                    }
+                    _ => return,
+                };
+                Some((kind, message))
+            }
+            _ => None,
+        };
+        let Some((kind, message)) = entry else {
+            return;
+        };
+        let repo = self
+            .ui
+            .dlg
+            .apply_patch_root
+            .as_ref()
+            .map(|r| crate::activity::root_label(r.as_path()));
+        self.ui.activity.push(crate::activity::ActivityEntry {
+            at: chrono::Local::now(),
+            repo,
+            message,
+            kind,
+        });
+    }
+
+    /// The `Rollback failed` state's one recovery action: write the recorded
+    /// content again, for exactly the paths that failed, and re-state the outcome
+    /// from what the second attempt answers.
+    ///
+    /// Not a git call and not a fresh apply — no `Operation`, no dispatch, on the
+    /// same reasoning as [`AppState::create_patch`], which is a file write and so
+    /// has never gone through the engine. The bytes are already in the outcome
+    /// this action reads, and the tree is already the one the apply left.
+    ///
+    /// A retry that succeeds moves the window to `Apply patch aborted`, which is
+    /// then true: the patch did not land and every file changed by it is back. The
+    /// state does not vanish on a retry — it is replaced by the state the tree is
+    /// actually in.
+    pub fn retry_apply_patch_restore(&mut self) {
+        let (Some(root), Some(outcome)) = (
+            self.ui.dlg.apply_patch_root.clone(),
+            self.ui.dlg.apply_patch_outcome.clone(),
+        ) else {
+            return;
+        };
+        let turbogit_services::patch_apply::ApplyOutcome::RollbackFailed {
+            reason,
+            unrestored,
+            restored,
+        } = outcome
+        else {
+            return;
+        };
+        let still = turbogit_services::patch_apply::retry_restore(
+            root.as_path(),
+            &unrestored,
+            &mut turbogit_services::patch_apply::Worktree,
+        );
+        let restored_now: Vec<PathBuf> = unrestored
+            .iter()
+            .filter(|u| !still.iter().any(|s| s.path == u.path))
+            .map(|u| u.path.clone())
+            .chain(restored.clone())
+            .collect();
+        let restored_everything = still.is_empty();
+        self.ui.dlg.apply_patch_outcome = Some(if still.is_empty() {
+            turbogit_services::patch_apply::ApplyOutcome::Aborted {
+                reason,
+                restored: restored_now,
+            }
+        } else {
+            turbogit_services::patch_apply::ApplyOutcome::RollbackFailed {
+                reason,
+                unrestored: still,
+                restored,
+            }
+        });
+        // The holder follows the tree, not the window: a retry that restored
+        // every path releases the root's record, and one refused again keeps the
+        // second refusal's reasons in place of the first one's.
+        if restored_everything {
+            self.rollback_recovery.remove(&root);
+        } else {
+            self.hold_apply_patch_recovery();
+        }
+        self.refresh(Affected::Root(root));
+        if self
+            .ui
+            .dlg
+            .apply_patch_outcome
+            .as_ref()
+            .is_some_and(|o| o.tree_is_restored())
+        {
+            self.show_toast(Toast::success(
+                "Rollback complete · every file the apply changed is back to the content it held.",
+            ));
+        } else {
+            self.record_apply_outcome();
+        }
+    }
+
     /// Focus a commit in the dialog's patch preview rail (issue 16) and load
     /// its patch synchronously — one engine read, like the preflight's live git
     /// reads. The answer is a patch value; the preview classifies its own lines
@@ -3777,6 +4304,14 @@ impl AppState {
                     // re-runs it, so a second operation in the same root
                     // withholds the offer before the control is ever painted.
                     self.guard_rewrite_undo(&affected);
+                    // The apply's outcome is three-way and the event it travels on
+                    // is two-way, so the record comes off the slot its dispatch
+                    // armed — read before either arm below, because `report_for`
+                    // asks the window what actually happened and the failure arm
+                    // has to name the paths the rollback failed on.
+                    if kind == OpKind::ApplyPatch {
+                        self.settle_apply_patch();
+                    }
                     match result {
                         Ok(()) => {
                             self.show_toast(Toast::success(label.clone()));
@@ -3985,6 +4520,13 @@ impl AppState {
                                 message: format!("{label}: {e}"),
                                 kind: crate::activity::ActivityKind::Error,
                             });
+                            // An apply that ended in one of its two titled states is
+                            // recorded a second time, by that state's own name: the
+                            // line above carries git's apply error, and git never
+                            // learned what the rollback then did.
+                            if kind == OpKind::ApplyPatch {
+                                self.record_apply_outcome();
+                            }
                             granular::on_op_failed(self);
                         }
                     }
@@ -5320,6 +5862,17 @@ fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &s
         | OpKind::Push
         | OpKind::PushRecovery
         | OpKind::Other => label.to_string(),
+        // An apply reports the working tree it just wrote, in the outcome's own
+        // words: the file count and the fact that nothing was staged are the two
+        // things a developer needs from a patch verb, and the window's titled
+        // state reads the same record rather than a second copy of it.
+        OpKind::ApplyPatch => state
+            .ui
+            .dlg
+            .apply_patch_outcome
+            .as_ref()
+            .map(|outcome| format!("{} — {}", outcome.title(), outcome.message()))
+            .unwrap_or_else(|| label.to_string()),
     }
 }
 

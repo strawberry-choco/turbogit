@@ -391,3 +391,136 @@ fn unescape_c(s: &str) -> String {
 }
 
 const Q: char = '"';
+
+/// Where one patch came from, as the patch itself says.
+///
+/// A `git format-patch` file carries the commit's own header ahead of its first
+/// `diff --git` section — author, date, subject — and a patch read out of the
+/// clipboard or a file is the one artifact a developer can hand across machines
+/// with its provenance intact. Discarding it is what makes an applied patch an
+/// anonymous local change; [`read_provenance`] exists so the apply surface can
+/// fill the destination's fields from the source rather than asking again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatchProvenance {
+    /// `Name <email>` from `From:` (a format-patch) or `Author:` (a `git show`
+    /// dump). `None` when the header names no one.
+    pub author: Option<String>,
+    /// The `Date:` line verbatim, which is the patch's own timestamp rather than
+    /// this machine's.
+    pub date: Option<String>,
+    /// The `Subject:` line with git's `[PATCH 2/3]` decoration removed.
+    pub subject: Option<String>,
+    /// The commit the patch was made from, when the file names one — `From <sha>`
+    /// or `commit <sha>`.
+    pub commit: Option<String>,
+}
+
+impl PatchProvenance {
+    /// Carries no provenance at all: a plain `git diff` patch, whose header is
+    /// two paths and nothing else.
+    pub fn is_empty(&self) -> bool {
+        self.author.is_none()
+            && self.date.is_none()
+            && self.subject.is_none()
+            && self.commit.is_none()
+    }
+}
+
+/// Read a git-format patch's provenance header.
+///
+/// Only the lines BEFORE the first `diff --git` section are candidates, which is
+/// what keeps this a reader of the header and not a second pass over the body:
+/// a patch's file content is free to contain a line that reads `Subject: anything`,
+/// and a reader that went past the section boundary would believe it. `None` when
+/// no provenance header is present, which is an answer (a plain diff) rather than
+/// a failure.
+pub fn read_provenance(text: &str) -> Option<PatchProvenance> {
+    let mut out = PatchProvenance {
+        author: None,
+        date: None,
+        subject: None,
+        commit: None,
+    };
+    // A subject's continuation lines are indented four spaces by format-patch and
+    // belong to it, so the header is read as one field rather than per line.
+    let mut subject_continues = false;
+    for line in text.lines() {
+        if section_header(line).is_some() || line.starts_with("--- ") && out.subject.is_some() {
+            break;
+        }
+        if subject_continues {
+            if line.starts_with("    ") {
+                if let Some(subject) = &mut out.subject {
+                    subject.push('\n');
+                    subject.push_str(line.trim_end());
+                }
+                continue;
+            }
+            subject_continues = false;
+        }
+        if let Some(v) = value_after(line, &["From:", "Author:"]) {
+            out.author.get_or_insert_with(|| v.to_string());
+        } else if let Some(v) = value_after(line, &["Date:"]) {
+            out.date.get_or_insert_with(|| v.to_string());
+        } else if let Some(v) = value_after(line, &["Subject:"]) {
+            out.subject = Some(strip_patch_decoration(v));
+            subject_continues = true;
+        } else if let Some(v) = line
+            .strip_prefix("From ")
+            .or_else(|| line.strip_prefix("commit "))
+        {
+            // `format-patch` writes `From <sha> Mon Sep 17 00:00:00 2001`: the
+            // reference is ONE token and the rest of the line is a date in git's
+            // fixed format. Reading the line whole would make every real patch's
+            // commit fail to look like a hash at all.
+            let v = v.split_whitespace().next().unwrap_or("");
+            if is_sha(v) {
+                out.commit = Some(v.to_string());
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The trimmed value after one of `names`, if this line opens with any of them.
+/// `names` rather than one spelling because the two git dump formats disagree:
+/// `format-patch` writes `From:`, `git show` writes `Author:`.
+fn value_after<'a>(line: &'a str, names: &[&'a str]) -> Option<&'a str> {
+    names
+        .iter()
+        .find_map(|n| line.strip_prefix(*n))
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
+
+/// `Subject: [PATCH 1/2] Fix` → `Fix`. Only a leading bracket is dropped, and
+/// only when it looks like git's own decoration, so a subject that genuinely
+/// begins with a bracketed reference survives.
+fn strip_patch_decoration(subject: &str) -> String {
+    // `close` indexes the `]` within `subject`, so the decoration is
+    // `subject[1..close]` and the text starts after it.
+    let Some(close) = subject
+        .strip_prefix('[')
+        .and_then(|rest| rest.find(']'))
+        .map(|i| i + 1)
+    else {
+        return subject.to_string();
+    };
+    if is_patch_decoration(&subject[1..close]) {
+        subject[close + 1..].trim_start().to_string()
+    } else {
+        subject.to_string()
+    }
+}
+
+/// The bracketed prefix git writes: `PATCH`, `PATCH 1/2`, `PATCH v2 3/5`.
+fn is_patch_decoration(inner: &str) -> bool {
+    let Some(rest) = inner.strip_prefix("PATCH") else {
+        return false;
+    };
+    rest.is_empty() || rest.starts_with(' ')
+}
+
+fn is_sha(v: &str) -> bool {
+    (7..=40).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_hexdigit())
+}

@@ -24,6 +24,7 @@ pub mod hunk_stats;
 pub mod integrate_service;
 pub mod multi_root;
 pub mod partial;
+pub mod patch_apply;
 pub mod remote_service;
 pub mod reselection;
 pub mod shelve_stash;

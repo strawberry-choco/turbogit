@@ -326,6 +326,20 @@ pub trait GitExecutor: Send + Sync {
         direction: ApplyDirection,
     ) -> TgResult<()>;
 
+    /// Write a patch into the **working tree** (`git apply`, no `--cached`),
+    /// leaving the index exactly as it stands — the verb behind `Apply patch`,
+    /// where the developer expects to land an ordinary local change and commit
+    /// it by hand.
+    ///
+    /// Forward only, and the asymmetry with [`Self::apply_patch_to_index`] is
+    /// the point: nothing that undoes this call is asked of git. A failed apply
+    /// is rolled back by restoring the bytes recorded before it ran
+    /// (`turbogit_services::patch_apply`), because reverse-applying against a
+    /// tree that has already been half-written depends on `git` agreeing with a
+    /// state it never saw. A patch that is meant to be reversed arrives as the
+    /// reversed patch.
+    fn apply_patch_to_worktree(&self, root: &Path, patch: &Patch) -> TgResult<()>;
+
     /// Mark paths as intent-to-add (`git add -N -- <paths>`), recording them
     /// in the index without their content so partial patches can be applied
     /// to previously untracked files.
