@@ -143,13 +143,10 @@ fn rejection(state: &AppState) -> Option<PushOutcome> {
     state.ui.push_rejection.as_ref().map(|r| r.outcome.clone())
 }
 
-/// The class names the recovery's own failure, whichever of the two update
-/// classes it landed in.
+/// The class a recovery that never ran its update lands in: the guard's own
+/// refusal is the update's failure, and the re-push is never attempted.
 fn is_update_failure(outcome: &PushOutcome) -> bool {
-    matches!(
-        outcome,
-        PushOutcome::UpdateErrored { .. } | PushOutcome::UpdateConflicted
-    )
+    matches!(outcome, PushOutcome::UpdateErrored { .. })
 }
 
 // -------------------------------------------------------------------- tests --
