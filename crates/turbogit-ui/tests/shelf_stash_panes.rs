@@ -12,7 +12,12 @@
 //!   `Apply Stash` keeps and `Pop Stash` destroys, each pair painted as two
 //!   rects with two fills rather than one control and a checkbox;
 //! - **the consequence** — plain unshelve leaves the shelf row painted; the
-//!   destructive sibling takes the row and git's copy with it;
+//!   destructive sibling takes the row and git's copy with it, and a destructive verb
+//!   whose pop never lands leaves both standing;
+//! - **the clicks** — every verb on the surface is run by clicking it, the stash pair
+//!   included, so the index each row hands git is observed rather than assumed, and the
+//!   two pane headers are shown to open the dialogs they name rather than merely to paint
+//!   their labels;
 //! - **the confirmation stance** — shelf and stash deletes ask before destroying
 //!   (a documented divergence: whether the reference confirms these verbs was
 //!   never observed at runtime).
@@ -420,5 +425,159 @@ fn shelve_one_change(repo: &Path, name: &str) {
         stash_lines(repo).len(),
         1,
         "the shelve parked the change in git's stash stack"
+    );
+}
+
+// ------------------------------------------------------------ the clicks ----
+
+#[test]
+fn apply_stash_puts_the_work_back_and_keeps_the_entry() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "stash-click");
+    std::fs::write(repo.join("base.txt"), "half-done work\n").unwrap();
+    git(&repo, &["stash", "push", "-q", "-m", "half-done"]);
+    let mut h = harness(app_state(std::slice::from_ref(&repo)));
+
+    open_sub_tab(&mut h, "Stash");
+    h.run();
+    h.run();
+    h.get_by_label("Apply Stash (keeps)").click();
+    h.run();
+    h.run();
+
+    assert_eq!(
+        std::fs::read_to_string(repo.join("base.txt")).unwrap(),
+        "half-done work\n",
+        "the click put the entry's content back in the tree"
+    );
+    assert_eq!(
+        stash_lines(&repo).len(),
+        1,
+        "and the keeping half of the pair really keeps: the entry is still git's"
+    );
+    assert!(
+        git(&repo, &["stash", "list"]).contains("half-done"),
+        "under the message it was stashed with"
+    );
+}
+
+#[test]
+fn pop_stash_removes_the_entry_its_own_row_names() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "stash-pop");
+    std::fs::write(repo.join("base.txt"), "older work\n").unwrap();
+    git(&repo, &["stash", "push", "-q", "-m", "older"]);
+    std::fs::write(repo.join("base.txt"), "newer work\n").unwrap();
+    git(&repo, &["stash", "push", "-q", "-m", "newer"]);
+    let mut h = harness(app_state(std::slice::from_ref(&repo)));
+
+    open_sub_tab(&mut h, "Stash");
+    h.run();
+    h.run();
+
+    // Two rows, one label, and the index each row hands git is the entry's identity —
+    // so the click is targeted by position: the `Pop Stash (removes)` rect sitting on
+    // `stash@{1}`'s own line. A wrong index would pop the newest entry and leave this
+    // one, and every painted-text assert would still be satisfied.
+    let older = galley_origin(&h, "stash@{1}").expect("the second entry paints its ref");
+    let pops: Vec<_> = h.get_all_by_label("Pop Stash (removes)").collect();
+    assert_eq!(pops.len(), 2, "one destructive verb per row");
+    let target = pops
+        .iter()
+        .min_by_key(|n| (n.rect().center().y - older.y).abs() as i32)
+        .expect("a pop on the older entry's line");
+    target.click();
+    h.run();
+    h.run();
+
+    let lines = stash_lines(&repo);
+    assert_eq!(lines.len(), 1, "the pop took exactly one entry: {lines:?}");
+    assert!(
+        lines[0].contains("newer"),
+        "and the survivor is the entry that was NOT clicked: {lines:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.join("base.txt")).unwrap(),
+        "older work\n",
+        "the work that came back is the clicked row's own content"
+    );
+}
+
+#[test]
+fn the_shelf_pane_header_reaches_the_shelve_dialog() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "shelve-header");
+    let mut state = app_state(std::slice::from_ref(&repo));
+    state.ui.shelves.push(shelf_record("weather", &repo));
+    let mut h = harness(state);
+
+    open_sub_tab(&mut h, "Shelf");
+    assert_eq!(
+        h.state().ui.dialog,
+        None,
+        "listing the pane opens no window of its own"
+    );
+
+    h.get_by_label("Shelve\u{2026}").click();
+    h.run();
+
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Shelve),
+        "the pane's own header button is a route to the shelve dialog, not a painted \
+         decoration"
+    );
+}
+
+#[test]
+fn the_stash_pane_header_reaches_the_stash_dialog() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "stash-header");
+    std::fs::write(repo.join("base.txt"), "half-done work\n").unwrap();
+    git(&repo, &["stash", "push", "-q", "-m", "half-done"]);
+    let mut h = harness(app_state(std::slice::from_ref(&repo)));
+
+    open_sub_tab(&mut h, "Stash");
+    h.run();
+    h.run();
+    assert_eq!(h.state().ui.dialog, None, "and the same for the stash pane");
+
+    h.get_by_label("Stash\u{2026}").click();
+    h.run();
+
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Stash),
+        "the stash pane's header opens the park-every-changes window"
+    );
+}
+
+#[test]
+fn a_failed_unshelve_and_remove_leaves_the_row_painted() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "pop-failed");
+    let mut state = app_state(std::slice::from_ref(&repo));
+    // A record whose parked content is gone from git's stash list: nothing for the
+    // destructive verb to pop.
+    state.ui.shelves.push(shelf_record("weather", &repo));
+    let mut h = harness(state);
+
+    open_sub_tab(&mut h, "Shelf");
+    h.get_by_label("Unshelve and Remove").click();
+    h.run();
+    h.run();
+
+    assert!(
+        painted_in_pane(&h, "weather", "SHELVES"),
+        "a pop that failed leaves the row painted — the work is still wherever it is"
+    );
+    assert_eq!(
+        h.state().ui.shelves.len(),
+        1,
+        "the record goes with the failure, not with the intent"
+    );
+    assert!(
+        h.state().ui.shelf_removal_pending.is_none(),
+        "and the armed removal is disarmed, so no later success can spend it"
     );
 }
