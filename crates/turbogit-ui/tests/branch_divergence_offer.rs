@@ -259,10 +259,10 @@ fn the_offer_names_both_states_and_the_rollback_verb_with_the_root_identifiers()
 
 #[test]
 fn the_two_controls_are_distinguishable_by_fill() {
-    let (_tmp, _project, _alpha, _broken, mut harness) = offer_harness("offer-fills");
+    let (_tmp, _project, _alpha, _broken, harness) = offer_harness("offer-fills");
 
-    let rollback = button_fill(&mut harness, "Roll back 1 repository");
-    let keep = button_fill(&mut harness, "Keep divergent");
+    let rollback = button_fill(&harness, "Roll back 1 repository");
+    let keep = button_fill(&harness, "Keep divergent");
 
     assert_eq!(
         rollback,
