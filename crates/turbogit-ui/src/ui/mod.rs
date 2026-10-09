@@ -98,6 +98,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // palette so a same-frame open works from either trigger — the sidebar's
     // workspace header row, or the palette's Switch Workspace action.
     popups::workspace_picker(ui, state);
+    // The clipboard is a `Context` act, and the create routes decide its content:
+    // drained on every frame, because the route that copies opens no dialog and so
+    // would never reach a drain living inside one.
+    create_patch::drain_clipboard(ui.ctx(), state);
     if let Some(d) = state.ui.dialog {
         if d == Dialog::Push {
             // Issue #20: the redesigned push dialog lives in its own module.
