@@ -1251,6 +1251,70 @@ impl PatchFile {
     }
 }
 
+/// Which change a **created** patch describes.
+///
+/// The reference reaches one `Patch File Settings` dialog from three sources, so
+/// the source is one value rather than three dialog shapes: uncommitted changes,
+/// a revision in the Log, and one file's revision in a file history. Named
+/// *origin* and not *source* because the patch surface already uses `PatchSource`
+/// for the other half of the pair — how a patch **arrives** to be applied.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PatchOrigin {
+    /// The root's tracked uncommitted changes: all of them when `paths` is empty,
+    /// or the one file / the selection the verb was reached on.
+    LocalChanges { paths: Vec<PathBuf> },
+    /// One commit against its first parent — the commit's own change and none of
+    /// its ancestors'.
+    Commit { id: String },
+    /// One file's change in one revision: what a row of a **file history** is.
+    FileRevision { commit: String, path: PathBuf },
+}
+
+impl PatchOrigin {
+    /// Whether this origin needs the comment step, where the comment becomes the
+    /// file name. A commit and a file revision already name themselves — a commit
+    /// has a subject — and only uncommitted changes have no name to be asked for.
+    pub fn needs_comment(&self) -> bool {
+        matches!(self, Self::LocalChanges { .. })
+    }
+}
+
+/// `Patch File Settings`' last field: how the patch file's bytes are written.
+///
+/// Three members and no more, because each is a rule the surface can actually
+/// apply to bytes: `Utf8` writes git's own output **verbatim** — it is not a
+/// re-encode, and that is the point. A patch's body carries its file's bytes,
+/// which git does not guarantee are text in any encoding, so the default must be
+/// the one that cannot corrupt them. The other two can only be honoured for a
+/// patch that *is* valid UTF-8, and say so when it is not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PatchEncoding {
+    /// The bytes git produced, unchanged. The shipped default.
+    #[default]
+    Utf8,
+    /// `Utf8` with a leading byte-order mark, which is what a Windows editor
+    /// needs to read the patch as UTF-8 at all.
+    Utf8WithBom,
+    /// ISO-8859-1: one byte per code point, the single-byte legacy case.
+    Latin1,
+}
+
+impl PatchEncoding {
+    /// Every encoding the field offers, in drop-down order.
+    pub const ALL: [Self; 3] = [Self::Utf8, Self::Utf8WithBom, Self::Latin1];
+
+    /// The label the drop-down paints. Spelled as the reference's list spells
+    /// them, and held here because the field's list, its default and its
+    /// transcode rule must not be three places that can disagree.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Utf8 => "UTF-8",
+            Self::Utf8WithBom => "UTF-8 with BOM",
+            Self::Latin1 => "ISO-8859-1",
+        }
+    }
+}
+
 /// A whole patch: one section per file. What the **Git engine** answers where
 /// unified-diff text used to be the interface.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
