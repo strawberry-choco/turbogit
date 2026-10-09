@@ -469,7 +469,11 @@ pub fn read_provenance(text: &str) -> Option<PatchProvenance> {
             .strip_prefix("From ")
             .or_else(|| line.strip_prefix("commit "))
         {
-            let v = v.trim();
+            // `format-patch` writes `From <sha> Mon Sep 17 00:00:00 2001`: the
+            // reference is ONE token and the rest of the line is a date in git's
+            // fixed format. Reading the line whole would make every real patch's
+            // commit fail to look like a hash at all.
+            let v = v.split_whitespace().next().unwrap_or("");
             if is_sha(v) {
                 out.commit = Some(v.to_string());
             }
