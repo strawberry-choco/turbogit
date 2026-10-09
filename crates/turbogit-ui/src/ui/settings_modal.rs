@@ -25,7 +25,8 @@ use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::state::{AppState, SettingsCategory, Toast};
 use turbogit_domain::model::{
-    CleanTreeMethod, DateFormat, GitBackend, IncomingCheckInterval, UpdateMethod, VcsSettings,
+    CleanTreeMethod, DateFormat, GitBackend, IncomingCheckInterval, PatchCreatedPolicy,
+    UpdateMethod, VcsSettings,
 };
 
 /// Spec §8.8: large modal, ~768px wide.
@@ -527,6 +528,24 @@ fn advanced_page(ui: &mut Ui, s: &mut VcsSettings) {
         "Path to a file whose content pre-fills new commit messages.",
         |ui| {
             labeled_text_input(ui, "Commit message template", &mut s.commit_template);
+        },
+    );
+
+    ui.add_space(6.0);
+    setting_row(
+        ui,
+        "When patch is created",
+        "What to do with a patch file after a create route has written it. The default \
+         asks, because a patch nobody chose an ending for is a patch nobody found.",
+        |ui| {
+            egui::ComboBox::from_id_salt("settings_when_patch_is_created")
+                .selected_text(s.when_patch_is_created.label())
+                .width(140.0)
+                .show_ui(ui, |ui| {
+                    for arm in PatchCreatedPolicy::ALL {
+                        ui.selectable_value(&mut s.when_patch_is_created, arm, arm.label());
+                    }
+                });
         },
     );
 

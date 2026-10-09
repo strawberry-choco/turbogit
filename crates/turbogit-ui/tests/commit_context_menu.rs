@@ -2638,7 +2638,23 @@ mod surface {
             "git apply accepts the patch: {}",
             String::from_utf8_lossy(&check.stderr)
         );
-        assert_painted(&harness, "Wrote mine.patch");
+        // The created file is still named to the developer — by the `When patch is
+        // created: Ask` follow-up, not by the toast this assertion was written
+        // against. The captured default is `Ask`, so no transient `Wrote` report is
+        // emitted for a patch that has a root: nothing is decided about the artifact
+        // until the developer says so (same re-scope as ticket 18b's create suite).
+        assert_painted(&harness, "mine.patch");
+        assert_painted(&harness, "Import to shelf");
+        assert_eq!(
+            harness
+                .state()
+                .ui
+                .patch_created
+                .as_ref()
+                .map(|a| a.path.file_name().map(|n| n.to_string_lossy().into_owned())),
+            Some(Some("mine.patch".to_string())),
+            "the default arm leaves the created patch waiting for an answer"
+        );
     }
 
     /// The hash stays on screen, but nothing about it invites a press: the chip

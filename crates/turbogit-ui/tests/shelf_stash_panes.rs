@@ -60,6 +60,9 @@ fn shelf_record(name: &str, root: &Path) -> Shelf {
         changes: Vec::new(),
         created_at: chrono::Utc::now(),
         root: RootId(root.into()),
+        // Every row this pane has ever drawn was shelved through git's stash list; an
+        // imported row is the other kind, and it is the pane's own suite that says so.
+        source: turbogit_domain::model::ShelfSource::Stash,
     }
 }
 

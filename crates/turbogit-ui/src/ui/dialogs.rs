@@ -41,6 +41,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
             }
         }
         Dialog::Shelve => "Shelve".to_string(),
+        Dialog::ImportPatches => "Import Patches".to_string(),
         Dialog::Stash => "Stash".to_string(),
         Dialog::NewWorktree => "New worktree".to_string(),
         Dialog::CherryPickTarget => "Cherry-pick to branch".to_string(),
@@ -69,6 +70,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState, dialog: Dialog) {
             Dialog::Rebase => rebase(ui, state),
             Dialog::Tag => tag(ui, state),
             Dialog::Shelve => shelve(ui, state),
+            Dialog::ImportPatches => import_patches(ui, state),
             Dialog::Stash => stash(ui, state),
             Dialog::NewWorktree => super::worktrees::new_worktree_dialog(ui, state),
             Dialog::CherryPickTarget => cherry_pick_target(ui, state),
@@ -1314,6 +1316,58 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
             // to park the working changes, with nothing chosen to discard.
             state.dispatch(Operation::shelve(root, Vec::new(), name));
             close(state);
+        }
+    });
+}
+
+/// `Import Patches…` — the Shelf view accepting patch FILES as a source.
+///
+/// Importing is the reference's deferral, and it defers for real: the bytes are parked
+/// beside the shelf index and **nothing is applied**, which is why a stash entry is not
+/// the payload here (`shelve` can stash because the work is already in the tree; an
+/// imported patch is work no tree holds). `Unshelve` is the later act that puts them in,
+/// through the same apply engine the `Apply patch` window drives.
+///
+/// The root is **the pane's own**: this dialog opens from a shelf list already filtered to
+/// one repository, which is the same reasoning the `Shelve` dialog states for its
+/// `selected_root`. A row imported here therefore names the only tree it may be unshelved
+/// into, and with no root in scope the verb refuses instead of parking work under nobody.
+fn import_patches(ui: &mut Ui, state: &mut AppState) {
+    ui.label("Patch file:");
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut state.ui.dlg.import_patch_path)
+                .hint_text("/path/to/change.patch")
+                .desired_width(320.0),
+        );
+        if ui.button("Choose file…").clicked() {
+            state.choose_import_patch_file();
+        }
+    });
+    ui.label("Shelf name:");
+    ui.text_edit_singleline(&mut state.ui.dlg.import_patch_name);
+    if let Some(message) = state.ui.dlg.import_patch_error.clone() {
+        widgets::inline_error(ui, message);
+    }
+    widgets::dialog_footer(ui, |ui| {
+        if ui.button("Cancel").clicked() {
+            close(state);
+        }
+        if ui.button("Import to shelf").clicked() {
+            let path = std::path::PathBuf::from(state.ui.dlg.import_patch_path.trim());
+            let name = state.ui.dlg.import_patch_name.trim().to_string();
+            match state.import_patch_file_to_shelf(&path, &name) {
+                Ok(_) => {
+                    state.ui.dlg.import_patch_path.clear();
+                    state.ui.dlg.import_patch_name.clear();
+                    state.ui.dlg.import_patch_error = None;
+                    close(state);
+                }
+                // A refusal keeps the dialog OPEN with its reason in it, the way the
+                // create settings dialog keeps a destination that could not be written:
+                // the developer's next act is to correct the path, not to reopen it.
+                Err(e) => state.ui.dlg.import_patch_error = Some(e.to_string()),
+            }
         }
     });
 }

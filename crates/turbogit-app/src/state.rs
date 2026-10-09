@@ -420,6 +420,13 @@ pub struct DialogState {
     /// copied and the frame that owns the clipboard performs it — the same division the
     /// log's Copy hash already holds.
     pub create_patch_clipboard: Option<String>,
+    /// `Import Patches…` (Shelf view): the patch file the developer is parking, and
+    /// the name it goes in under. The path field is what the `patch_reader` seam
+    /// writes into, because a native open dialog has no headless equivalent.
+    pub import_patch_path: String,
+    pub import_patch_name: String,
+    /// Why the last import was refused, kept on the dialog that was refused on.
+    pub import_patch_error: Option<String>,
     /// The rewrite preflight's payload, present exactly while its dialog is.
     /// One payload for both targeted verbs (ticket 10 drop, ticket 11 reword).
     pub rewrite_preflight: Option<RewritePreflight>,
@@ -787,6 +794,10 @@ pub enum Dialog {
     /// create sources, which is why it is reached from the Commit window, from a Log
     /// commit and from a file revision.
     PatchFileSettings,
+    /// `Import Patches…` — the Shelf view taking patch FILES as a source. Its payload is
+    /// the [`DialogState`] group prefixed `import_patch_`, and it imports into the root
+    /// whose pane opened it.
+    ImportPatches,
     /// The commits a branch delete discarded, reached from that delete's
     /// disclosure link — before the ref moves and after. Its payload is
     /// [`DialogState::unmerged_view`].
@@ -1425,6 +1436,19 @@ impl SettingsCategory {
     }
 }
 
+/// A patch file a create route wrote, held for the `When patch is created: Ask`
+/// follow-up.
+///
+/// Both halves travel with it: the **path** is what an apply or an import reads, and
+/// the **root** is the tree the patch was generated from — the only root an imported
+/// shelf row may be parked under, because applying a shelf in the wrong root moves
+/// work in the wrong tree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatchCreated {
+    pub path: std::path::PathBuf,
+    pub root: RootId,
+}
+
 /// UI-only ephemeral state (never persisted).
 #[derive(Default)]
 pub struct UiState {
@@ -1695,6 +1719,17 @@ pub struct UiState {
     /// one verb pair on this surface whose two halves live on different sides of
     /// the boundary.
     pub shelf_removal_pending: Option<(RootId, String)>,
+    /// The `When patch is created: Ask` follow-up: a patch file a create route has
+    /// written, and the root it was generated **from**, waiting for the developer to
+    /// say what to do with it.
+    ///
+    /// This is app state rather than a dialog field because the settings dialog that
+    /// produced it has already closed — the ask outlives the window that answered it,
+    /// and a value living in `dlg` would be reset by the next visit to the create
+    /// group while still painted. Nothing about the patch is decided here until one of
+    /// [`AppState::import_created_patch_to_shelf`], [`AppState::apply_created_patch`]
+    /// or [`AppState::dismiss_created_patch`] runs.
+    pub patch_created: Option<PatchCreated>,
     // commit-tab inline diff preview (Epic C3)
     pub preview_change: Option<PathBuf>,
     // diff viewer (Epic E: async cache + layout)
@@ -3146,6 +3181,7 @@ impl AppState {
         rows
     }
 
+    /// Point one shelf's content back at its own tree.
     /// Open the Unshelve dialog: the one route that asks *which* shelf to apply and
     /// *whether the shelf survives it*, where the pane's two verbs answer the second
     /// question by their own labels.
@@ -3168,21 +3204,56 @@ impl AppState {
         self.ui.dialog = Some(Dialog::Unshelve);
     }
 
-    /// Put one shelf's content back in its root's working tree.
     ///
-    /// `remove` is the destructive sibling of the pair — `Unshelve and Remove` —
-    /// and the shelf's own record goes with it, but only once the git side has
-    /// landed: the record is armed as a pending removal here and settlement
-    /// drops it on the [`OpKind::Unshelve`] success arm. The pending is armed
-    /// **before** the dispatch because under the inline pump the completion is
-    /// queued synchronously inside `dispatch`, so a record armed afterwards
-    /// would already have been settled past.
+    /// Two mechanisms behind one verb, chosen by the record rather than by a guess: a
+    /// shelved change's content is **git's** stash entry, found again by the shelf's
+    /// name, while an imported patch's content is the patch text the shelf store parked,
+    /// and putting it back means applying it. The second is the deferral the reference
+    /// names — the patch went to the shelf **before** being applied — so an unshelve that
+    /// looked for a stash entry it never made would report "nothing shelved as X" over
+    /// bytes it has in hand.
+    ///
+    /// `remove` keeps the meaning both halves share, and it is the captured default's
+    /// opposite: `Unshelve` keeps the row, `Unshelve and Remove` destroys it — for a
+    /// patch row that means the payload file goes with it, which is the only reclaim an
+    /// imported shelf has.
+    ///
+    /// **The pending is armed before the dispatch** because under the inline pump the
+    /// completion is queued synchronously inside `dispatch`, and settlement drops the row
+    /// on its [`crate::operation::OpKind::Unshelve`] success arm only if the record is
+    /// already waiting there.
     pub fn unshelve(&mut self, root: RootId, name: impl Into<String>, remove: bool) {
         let name = name.into();
+        let patch = self.shelf_patch_payload(&root, &name);
         if remove {
             self.ui.shelf_removal_pending = Some((root.clone(), name.clone()));
         }
-        self.dispatch(Operation::unshelve(root, name, remove));
+        match patch {
+            Some(patch) => self.dispatch(Operation::unshelve_patch(root, name, remove, patch)),
+            None => self.dispatch(Operation::unshelve(root, name, remove)),
+        }
+    }
+
+    /// The parsed patch an imported row parked, or `None` when the row is stash-backed.
+    ///
+    /// A payload that cannot be read answers `None`, and the verb then looks for a stash
+    /// entry that cannot exist and fails with git's own words. That is deliberate: the
+    /// delete path is the only verb allowed to drop a record whose content has gone,
+    /// because there destroying the reference is the point — an unshelve that quietly
+    /// succeeded by applying nothing would be worse.
+    fn shelf_patch_payload(&self, root: &RootId, name: &str) -> Option<Patch> {
+        let row = self
+            .ui
+            .shelves
+            .iter()
+            .find(|s| &s.root == root && s.name == name)?;
+        let ShelfSource::Patch { file } = &row.source else {
+            return None;
+        };
+        let text =
+            turbogit_services::shelve_stash::read_patch_payload(&self.project_dir, file).ok()?;
+        let patch = turbogit_engine::patch::parse_patch(&text);
+        (!patch.is_empty()).then_some(patch)
     }
 
     /// Record a new shelf — the app-side half of the shelve dialog's verb, and the
@@ -3203,6 +3274,216 @@ impl AppState {
         }
         self.ui.shelves = kept;
         Ok(())
+    }
+
+    /// `Import to shelf` — park a patch as a shelf row **without applying it**.
+    ///
+    /// The reference's deferral ("if you want to move the patch to a temporary storage
+    /// (shelf) before applying it") reached from three places: the apply window's footer,
+    /// the Shelf view's `Import Patches…`, and the `When patch is created: Ask` follow-up.
+    /// All three run this one method, so the deferral cannot mean three different things.
+    ///
+    /// **The patch bytes are the payload, not a git stash entry.** A shelve can stash
+    /// because the work is already in the working tree; an imported patch is work no
+    /// repository holds, and stashing it would mean applying it first — the exact act the
+    /// developer deferred. So the bytes go to the shelf store's payload file and the row
+    /// records which one, and [`Self::unshelve`] reads them back through the apply engine.
+    ///
+    /// The order is **payload, then index, then memory**, and the index write is the
+    /// commit point: `add_shelf` refuses to rewrite a store it cannot read, and a refusal
+    /// here deletes the payload it just made rather than leaving bytes no row lists. A
+    /// row never reaches the pane except by way of a store that accepted it, which is the
+    /// discipline both shelf verbs already hold and the one thing a third way to create a
+    /// record must not reinvent.
+    ///
+    /// `root` is the tree the patch was made against and the only one an unshelve may
+    /// later write — the row is per root, and the pane lists it under that root alone.
+    pub fn import_patch_to_shelf(
+        &mut self,
+        root: &RootId,
+        name: &str,
+        text: &str,
+    ) -> TgResult<Shelf> {
+        let patch = turbogit_engine::patch::parse_patch(text);
+        if patch.is_empty() {
+            return Err(TgError::Other(
+                "this file carries no `diff --git` section, so there is nothing to park"
+                    .to_string(),
+            ));
+        }
+        let changes: Vec<Change> = patch
+            .files
+            .iter()
+            .map(|f| Change {
+                path: std::path::PathBuf::from(if f.new_path.is_empty() {
+                    &f.old_path
+                } else {
+                    &f.new_path
+                }),
+                status: turbogit_domain::model::ChangeStatus::Modified,
+                chunks: Vec::new(),
+                staged: false,
+                unstaged: false,
+                orig_path: None,
+            })
+            .collect();
+        let created_at = chrono::Utc::now();
+        let name = if name.trim().is_empty() {
+            "Imported patch".to_string()
+        } else {
+            name.trim().to_string()
+        };
+        let file = turbogit_services::shelve_stash::write_patch_payload(
+            &self.project_dir,
+            &name,
+            created_at,
+            text,
+        )?;
+        let shelf = turbogit_services::shelve_stash::make_patch_shelf(
+            &name,
+            &changes,
+            root.clone(),
+            created_at,
+            &file,
+        );
+        if let Err(e) = self.add_shelf(shelf.clone()) {
+            // The record refused, so the bytes it would have named go back the way they
+            // came. Best-effort, and stated either way: a payload that survives this is a
+            // file no row lists, and the only reclaim for it is Settings until someone
+            // deletes it by hand.
+            if let Err(cleanup) =
+                turbogit_services::shelve_stash::delete_patch_payload(&self.project_dir, &file)
+            {
+                self.last_error = Some(format!(
+                    "{e} — and its leftover payload {} could not be removed: {cleanup}",
+                    turbogit_services::shelve_stash::patch_payload_path(&self.project_dir, &file)
+                        .display()
+                ));
+            }
+            return Err(e);
+        }
+        self.ui.activity.push(crate::activity::ActivityEntry {
+            at: chrono::Local::now(),
+            repo: activity_repo_label(&Affected::Root(root.clone())),
+            message: format!(
+                "Patch imported to the shelf · {name} · {} file(s), nothing applied",
+                changes.len()
+            ),
+            kind: crate::activity::ActivityKind::Success,
+        });
+        Ok(shelf)
+    }
+
+    /// `Import to shelf` from the apply window: the patch **as the window holds it**,
+    /// including whatever base-path and leading-directory repairs the developer has since
+    /// typed. Parking what is on screen is the only defensible reading — parking the file
+    /// as git wrote it would defer something other than what they were about to apply.
+    pub fn import_patch_from_apply_window(&mut self) {
+        let (Some(root), Some(text)) = (
+            self.ui.dlg.apply_patch_root.clone(),
+            (!self.ui.dlg.apply_patch_text.is_empty())
+                .then(|| self.ui.dlg.apply_patch_text.clone()),
+        ) else {
+            self.show_toast(Toast::info(
+                "Import to shelf needs a patch: choose or paste one first.",
+            ));
+            return;
+        };
+        let name = self.apply_window_shelf_name();
+        match self.import_patch_to_shelf(&root, &name, &text) {
+            Ok(shelf) => {
+                self.show_toast(Toast::success(format!(
+                    "'{}' is on the shelf — nothing was applied",
+                    shelf.name
+                )));
+                self.ui.dialog = None;
+            }
+            Err(e) => self.ui.dlg.apply_patch_error = Some(e.to_string()),
+        }
+    }
+
+    /// The name a deferral gets when the developer did not give it one: the patch's own
+    /// commit subject when git carried one, its file name when it came from disk, and a
+    /// plain label otherwise. A shelf row nobody can name is a row nobody can find again.
+    fn apply_window_shelf_name(&self) -> String {
+        let message = self.ui.dlg.apply_patch_message.trim();
+        if !message.is_empty() {
+            return message.to_string();
+        }
+        let path = self.ui.dlg.apply_patch_path.trim();
+        if !path.is_empty()
+            && let Some(stem) = std::path::Path::new(path).file_stem()
+        {
+            return stem.to_string_lossy().into_owned();
+        }
+        "Imported patch".to_string()
+    }
+
+    /// `Import Patches…` from the Shelf view: read the chosen file and park it in the
+    /// pane's own root. The read is a plain file read of a path the developer typed or
+    /// chose — the same seam rule the apply window states for its own path field.
+    pub fn import_patch_file_to_shelf(
+        &mut self,
+        path: &std::path::Path,
+        name: &str,
+    ) -> TgResult<Shelf> {
+        let root = self.selected_root.clone().ok_or_else(|| {
+            TgError::Other("a shelf row needs a repository to belong to".to_string())
+        })?;
+        let text = std::fs::read_to_string(path)?;
+        let fallback = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let name = if name.trim().is_empty() {
+            fallback.as_str()
+        } else {
+            name.trim()
+        };
+        self.import_patch_to_shelf(&root, name, &text)
+    }
+
+    /// The `When patch is created: Ask` follow-up's deferral verb: park the file the
+    /// create route just wrote, under the root it was generated from.
+    pub fn import_created_patch_to_shelf(&mut self) {
+        let Some(PatchCreated { path, root }) = self.ui.patch_created.clone() else {
+            return;
+        };
+        let name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Imported patch".to_string());
+        match std::fs::read_to_string(&path)
+            .map_err(TgError::Io)
+            .and_then(|text| self.import_patch_to_shelf(&root, &name, &text))
+        {
+            Ok(shelf) => {
+                self.ui.patch_created = None;
+                self.show_toast(Toast::success(format!(
+                    "'{}' is on the shelf — nothing was applied",
+                    shelf.name
+                )));
+            }
+            Err(e) => {
+                self.ui.patch_created = None;
+                self.last_error = Some(e.to_string());
+                self.show_toast(Toast::error(e.to_string()));
+            }
+        }
+    }
+
+    /// Choose the patch file to import, through the same read seam the apply window
+    /// uses: a native open dialog has no headless equivalent, and the path field is
+    /// where the developer's choice has to land for the verb to read it.
+    pub fn choose_import_patch_file(&mut self) {
+        let Some(reader) = self.patch_reader.take() else {
+            self.show_toast(Toast::info("Type the patch file's path instead."));
+            return;
+        };
+        let chosen = reader();
+        self.patch_reader = Some(reader);
+        let Some(path) = chosen else { return };
+        self.ui.dlg.import_patch_path = path.to_string_lossy().into_owned();
     }
 
     /// Drop one shelf's record — the app-side half of `Unshelve and Remove` and
@@ -3232,7 +3513,30 @@ impl AppState {
             self.last_error = Some(e.to_string());
             return;
         }
+        // The payload goes **after** the index accepted the shorter list, never before:
+        // deleting the bytes first would leave the row still painted and pointing at a
+        // file that is gone, which is the stranded-work shape reversed rather than solved.
+        let orphaned: Vec<String> = self
+            .ui
+            .shelves
+            .iter()
+            .filter(|s| &s.root == root && s.name == name)
+            .filter_map(|s| s.source.file_name().map(|f| f.to_string()))
+            .collect();
         self.ui.shelves = kept;
+        for file in orphaned {
+            // A payload that will not delete is a file no row lists — reclaimable by hand
+            // and never by an unshelve, so it is reported rather than swallowed.
+            if let Err(e) =
+                turbogit_services::shelve_stash::delete_patch_payload(&self.project_dir, &file)
+            {
+                self.last_error = Some(format!(
+                    "The shelf row is gone but its patch file {} is not: {e}",
+                    turbogit_services::shelve_stash::patch_payload_path(&self.project_dir, &file)
+                        .display()
+                ));
+            }
+        }
     }
 
     /// Cherry-pick `commit` onto the branch `target` for the focused root
@@ -3847,13 +4151,7 @@ impl AppState {
             match std::fs::write(&written, &payload) {
                 Ok(()) => {
                     self.ui.dialog = None;
-                    self.show_toast(Toast::success(format!(
-                        "Wrote {}",
-                        written
-                            .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| written.to_string_lossy().into_owned())
-                    )));
+                    self.report_created_patch(&written);
                 }
                 Err(e) => {
                     self.ui.dlg.create_patch_error = Some(format!(
@@ -3865,6 +4163,80 @@ impl AppState {
             }
         }
         self.ui.dlg.create_patch_origin = None;
+    }
+
+    /// What happens **after** a create route wrote a patch file: the durable feed
+    /// first, then the `When patch is created:` arm the developer chose.
+    ///
+    /// The feed entry is written before the policy is read and is not gated by it,
+    /// because reverse gap #6 is the differentiator the programme refuses to trade:
+    /// `Do nothing` withholds the *transient* report — the toast, the ask, the window —
+    /// and cannot be allowed to also erase the record. The two asking and showing arms
+    /// are told apart by what they leave armed, never by whether the file was mentioned.
+    fn report_created_patch(&mut self, written: &std::path::Path) {
+        let root = self.ui.dlg.create_patch_root.clone();
+        let name = written
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| written.to_string_lossy().into_owned());
+        let affected = root.clone().map(Affected::Root).unwrap_or(Affected::All);
+        self.ui.activity.push(crate::activity::ActivityEntry {
+            at: chrono::Local::now(),
+            repo: activity_repo_label(&affected),
+            message: format!("Patch created · {name}"),
+            kind: crate::activity::ActivityKind::Success,
+        });
+        match self.settings.when_patch_is_created {
+            PatchCreatedPolicy::Ask => {
+                // A patch generated outside every repository still has a file; what it
+                // cannot have is a root to park it under, and an ask that could not
+                // honour its own first verb would be a decoy. So the ask names the root
+                // it came from, and there is no ask without one.
+                if let Some(root) = root {
+                    self.ui.patch_created = Some(PatchCreated {
+                        path: written.to_path_buf(),
+                        root,
+                    });
+                } else {
+                    self.show_toast(Toast::success(format!("Wrote {name}")));
+                }
+            }
+            PatchCreatedPolicy::ShowInFiles => {
+                if let Some(root) = root {
+                    self.show_created_patch(written, root);
+                } else {
+                    self.show_toast(Toast::success(format!("Wrote {name}")));
+                }
+            }
+            PatchCreatedPolicy::DoNothing => {}
+        }
+    }
+
+    /// The `Show in {0}` arm. The reference reveals the file in the operating
+    /// system's file manager; this build has no reveal seam, so the created patch
+    /// goes to the one surface that reads a patch file and lists what it names —
+    /// recorded as a divergence rather than dropped into silence.
+    fn show_created_patch(&mut self, written: &std::path::Path, root: RootId) {
+        self.open_apply_patch(PatchSource::File);
+        if self.ui.dialog != Some(Dialog::ApplyPatch) {
+            return;
+        }
+        self.set_apply_patch_root(&root);
+        self.ui.dlg.apply_patch_path = written.to_string_lossy().into_owned();
+    }
+
+    /// The ask's second verb: take the created file to the window that reads it.
+    pub fn apply_created_patch(&mut self) {
+        let Some(PatchCreated { path, root }) = self.ui.patch_created.take() else {
+            return;
+        };
+        self.show_created_patch(&path, root);
+    }
+
+    /// The ask's refusal: nothing is done with the patch, and the ask goes away. The
+    /// feed entry the write already made stays, which is what makes silence auditable.
+    pub fn dismiss_created_patch(&mut self) {
+        self.ui.patch_created = None;
     }
 
     /// `Copy as Patch to Clipboard`: the same generation with **no dialog at all** —
