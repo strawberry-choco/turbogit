@@ -4,7 +4,7 @@
 //! per-conflict actions (Take ours / Take theirs / Take both · theirs first),
 //! per-conflict Undo, Prev/Next navigation, Auto-advance to next conflict,
 //! "Apply to all N remaining" (which names both its outcomes — the negative
-//! one included; parity ticket 02), a left list whose rows carry each file's
+//! one included), a left list whose rows carry each file's
 //! file-level clash kind (`both modified`, `deleted by them`, … — the seven
 //! vocabulary kinds, a different axis from the per-hunk marker grammar), and
 //! header actions Abort merge / Continue merge.
@@ -209,8 +209,8 @@ fn conflict_block(
 /// Whether the selected file already carries merged changes: any conflict
 /// resolved, or the Result pane free-edited. Per FILE, not per conflict —
 /// matching the reference's "This file already contains merged changes"
-/// (parity ticket 01; the per-file vs per-conflict trigger is UNVERIFIED
-/// against the running product and assumed per file).
+/// (the per-file vs per-conflict trigger is UNVERIFIED against the running
+/// product and assumed per file).
 fn file_has_merged_changes(state: &AppState) -> bool {
     state.ui.conflict_resolver_edited || state.ui.conflict_res.iter().any(|r| r.is_some())
 }
@@ -306,7 +306,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         Some(id) => id.clone(),
         None => return,
     };
-    // Each conflicted path paired with its file-level clash kind (ticket 02):
+    // Each conflicted path paired with its file-level clash kind:
     // `None` when the engine does not classify, and the row then carries no
     // word rather than a guessed one.
     let conflicted: Vec<(PathBuf, Option<ConflictKind>)> = state
@@ -362,7 +362,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     render_overwrite_confirm(ui, state);
 }
 
-/// The `Overwrite Changes` confirm (parity ticket 01). The affirmative is the
+/// The `Overwrite Changes` confirm. The affirmative is the
 /// dangerous sentence (`Discard and Accept`) and wears the primary kit fill;
 /// the safe option (`Keep Merged Changes`) does nothing. Naming carries the
 /// safety — the button order is UNVERIFIED against the reference and kept in
@@ -408,8 +408,8 @@ fn render_overwrite_confirm(ui: &mut Ui, state: &mut AppState) {
 fn overwrite_safe_button(ui: &mut Ui, label: &str) -> egui::Response {
     ui.add(egui::Button::new(RichText::new(label)).fill(Palette::RAISED_ON_CARD))
 }
-/// The status word a file-list row carries for its file-level clash kind
-/// (rebased-parity ticket 02). TurboGit's own strings for the seven vocabulary
+/// The status word a file-list row carries for its file-level clash kind.
+/// TurboGit's own strings for the seven vocabulary
 /// kinds the reference names — deliberately NOT the editor's per-hunk marker
 /// grammar (`Modified line` / `Conflicting lines`), which is a different axis.
 fn kind_word(kind: ConflictKind) -> &'static str {
@@ -439,7 +439,7 @@ fn render_file_list(
         let label = path.display().to_string();
         let is_selected = state.ui.conflict_resolver_selected.as_ref() == Some(path);
         // The kind word rides the row so a merge can be triaged by reading the
-        // list (ticket 02). A row with no classified kind (an engine that does
+        // list. A row with no classified kind (an engine that does
         // not report kinds) shows the path alone rather than a guessed word.
         let row = match kind {
             Some(kind) => format!("{label} — {}", kind_word(*kind)),
@@ -469,13 +469,13 @@ fn render_file_list(
 
 /// The bulk control: `Apply to all N remaining` with its scope option — the
 /// deliberate fold of the reference's `Apply Non-Conflicting Changes` /
-/// `Resolve All Simple Conflicts` pair into one control (parity ticket 01),
-/// the side scope being an option on it rather than two more buttons. It
+/// `Resolve All Simple Conflicts` pair into one control, the side scope being
+/// an option on it rather than two more buttons. It
 /// sits in the file column under the lists because the footer row is the
 /// window's tightest fit: an added footer row lays out past the window's
 /// clip rect, where it still exists but can be neither seen nor clicked.
 ///
-/// The button stays visible at zero remaining (parity ticket 02): a click
+/// The button stays visible at zero remaining: a click
 /// with nothing left to resolve REPORTS the negative result under the
 /// control instead of staying silent, which a control that vanished could
 /// never do. The scope option — meaningless with nothing remaining — is
@@ -508,7 +508,7 @@ fn render_bulk_control(ui: &mut Ui, state: &mut AppState) {
     {
         apply_to_all_remaining(state);
     }
-    // The bulk apply's outcome, named (ticket 02): the negative result is
+    // The bulk apply's outcome, named: the negative result is
     // reported, not left silent — the outcome that regresses silently.
     match state.ui.conflict_bulk_report {
         Some(ConflictBulkReport::AllResolved) => {
@@ -605,10 +605,9 @@ fn render_resolver_body(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // The finish control is WITHHELD while anything is unresolved —
             // no fill paints for its slot at all, not a tinted one. A
-            // disabled control in this design is withheld, not greyed
-            // (rebased-parity ticket 02): Quiet's disabled fill is
-            // TRANSPARENT, so one kit kind at two states carries both looks
-            // without minting a fifth button flavour.
+            // disabled control in this design is withheld, not greyed: Quiet's
+            // disabled fill is TRANSPARENT, so one kit kind at two states
+            // carries both looks without minting a fifth button flavour.
             ui.scope(|ui| {
                 if unresolved > 0 {
                     ui.disable();
@@ -700,7 +699,7 @@ fn apply_to_all_remaining(state: &mut AppState) {
     if !state.ui.conflict_resolver_edited {
         state.ui.conflict_text = compose(&state.ui.conflict_segs, &state.ui.conflict_res);
     }
-    // Both outcomes are named (ticket 02) — including "nothing to do", which
+    // Both outcomes are named — including "nothing to do", which
     // the reference reports rather than leaves silent. One file's bulk fill
     // resolves all-or-nothing, so no partial outcome exists here to report.
     state.ui.conflict_bulk_report = Some(if filled == 0 {
@@ -746,7 +745,7 @@ fn held_operation(state: &turbogit_app::state::AppState) -> OwnedOperation {
 fn abort_merge(state: &mut AppState) {
     let owner = held_operation(state);
     if let Some(r) = state.selected_root.clone() {
-        // The named in-flight resolution (ticket 16), shared with the status
+        // The named in-flight resolution, shared with the status
         // bar's item and the palette entry: one verb, one operation, so the
         // three routes cannot drift into three different dispatch shapes.
         state.dispatch(Operation::Resolve {

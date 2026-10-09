@@ -22,7 +22,7 @@ pub enum BranchMenuAction {
     Merge,
     Rebase,
     Compare,
-    /// The reference's entry into verb 5 (`apply-changes:269-287`): compare this
+    /// The reference's entry into its fifth integration verb: compare this
     /// branch's files with the working tree, which is where `Get from Branch`
     /// lives. Read-only, so — like [`Self::Compare`] — a remote-tracking row can be
     /// one side of it.
@@ -92,8 +92,8 @@ pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemSta
         MenuItemState::enabled()
     };
     // The pull family means "fetch and integrate this branch's upstream", so
-    // unlike the source-branch verbs below it is offered on remote rows only
-    // (ticket 21a): on a local row `Merge`/`Rebase` are how commits move, and
+    // unlike the source-branch verbs below it is offered on remote rows only:
+    // on a local row `Merge`/`Rebase` are how commits move, and
     // a "Pull" label there names an operation that is not what would run.
     items[BranchMenuAction::CheckoutAndPull.index()] = if is_current {
         MenuItemState::disabled("already checked out")

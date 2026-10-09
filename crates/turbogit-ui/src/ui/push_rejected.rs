@@ -1,4 +1,4 @@
-//! The classified reply to a rejected push (ticket 13).
+//! The classified reply to a rejected push.
 //!
 //! "Your push was rejected" is one string for six situations that need six
 //! different replies, so this surface paints ONE message per outcome class and

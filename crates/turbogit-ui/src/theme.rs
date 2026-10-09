@@ -364,7 +364,7 @@ impl Palette {
     pub const STATUS_UNVERSIONED: Color32 = Color32::from_rgb(0xb5, 0xb3, 0x7e);
     /// Absent-on-the-base-side letter (`D`) — **grey**, the third rung of the
     /// change-kind grammar: green = Added, blue = Modified, grey = Deleted
-    /// (`differences-viewer.md:12-22`). The grammar is a design-system rule and not
+    /// The grammar is a design-system rule and not
     /// a per-call-site choice, so all three rungs are named here; the other two are
     /// the existing [`Self::STATUS_ADDED`] and [`Self::STATUS_MODIFIED`], which is
     /// why this is one new *name* over a value the palette already holds rather than
@@ -380,7 +380,7 @@ impl Palette {
     /// legality: 4.7:1 on the content surface, and a caller that puts it on a raised
     /// or selected fill steps up to `INK_2` like every other muted rung.
     ///
-    /// Consumer: `ui::get_from_branch`'s rung list (ticket 17). The commit tree's
+    /// Consumer: `ui::get_from_branch`'s rung list. The commit tree's
     /// red `D` stays as it is — changing it is a visual decision with its own
     /// callers, not this grammar's business.
     pub const STATUS_DELETED: Color32 = Self::T_MUTED;

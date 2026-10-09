@@ -247,7 +247,7 @@ pub fn subset_push_state(outgoing: &[String], selected: &[String]) -> SubsetPush
     SubsetPushState::Suffix { oldest: oldest_sha }
 }
 
-/// Ticket 13: which phase a push-path operation was in when it failed. The
+/// Which phase a push-path operation was in when it failed. The
 /// push itself, or the recovery work (update / fetch) a rejection affordance
 /// ran before its re-push. The phase decides whether an unmarked failure is
 /// read as a rejection or as the update's own error.
@@ -259,7 +259,7 @@ pub enum PushPhase {
     Recovery,
 }
 
-/// Ticket 13: the classified push outcome — six classes, four of which carry
+/// The classified push outcome — six classes, four of which carry
 /// a next step (update-and-retry, fetch-and-retry, resolve) and two of which
 /// carry none. The classification is read from the git stderr the port
 /// already surfaces on `TgError::Cli`; the wording the UI paints per class is
@@ -301,8 +301,8 @@ const REMOTE_REJECTED_MARKER: &str = "[remote rejected]";
 /// and a stale lease print it, so it is the LAST rejection marker checked.
 const REJECTED_MARKER: &str = "[rejected]";
 
-/// Classify a failed push-path operation into one of the six outcome classes
-/// (ticket 13). `err` is the error the executor surfaced; its text carries
+/// Classify a failed push-path operation into one of the six outcome classes.
+/// `err` is the error the executor surfaced; its text carries
 /// the verbatim git stderr on `TgError::Cli`. `conflicts_present` says
 /// whether the affected root's freshly refreshed status still lists
 /// conflicted paths — the worktree, not the stderr, is the reliable signal
@@ -360,10 +360,11 @@ pub fn classify_push_failure(
 /// the push is about to write, so "this creates a branch" and "this moves a
 /// branch that exists" are never the same word.
 ///
-/// Five states, one name each. The panel used to answer "where does this push
-/// go" with a Remote/Branch field pair plus a `--set-upstream` checkbox: the
-/// capability was there, the *disclosure* was not, and a user could not tell
-/// whether they were about to create a branch or overwrite one.
+/// Five states, one name each. The question this answers is "where does this push
+/// go": a Remote/Branch field pair plus a `--set-upstream` checkbox carries the
+/// capability without the disclosure, which is why the state is named here rather
+/// than left for the user to infer — creating a branch and overwriting one must
+/// never share a word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PushTargetState {
     /// Nothing on this branch yet — the repository has no commits.
@@ -508,7 +509,7 @@ pub fn direct_push_target(
     })
 }
 
-/// How wide a rejected push's recovery update reaches (ticket 13).
+/// How wide a rejected push's recovery update reaches.
 ///
 /// The reference documents the EFFECT of the choice — "if this option is
 /// cleared, only the affected repositories will be updated" — and never its
@@ -744,7 +745,7 @@ mod tests {
         assert!(is_protected(&wild, "anything/at/all"));
     }
 
-    // --- ticket 13: the six push-rejection outcome classes -----------------
+    // --- the six push-rejection outcome classes ----------------------------
 
     /// git's own rejection line for an ordinary (local) refusal.
     fn rejected_stderr() -> String {
