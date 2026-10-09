@@ -1808,6 +1808,17 @@ pub struct AppState {
     /// keeps the scheduler from stacking fetches on the same repo; entries
     /// only clear with the poll's settlement.
     pub(crate) incoming_poll_inflight: HashSet<RootId>,
+    /// A rollback the working tree is still waiting on, per root: the recorded
+    /// content of the paths a failed apply could not put back.
+    ///
+    /// Held here rather than only in the apply window because the thing it is a
+    /// record OF is the tree, not the dialog. The window's own transitions (a
+    /// keystroke in the patch field, a route or root switch, a close and reopen)
+    /// drop what they are painting — correctly, for a patch that is gone — and
+    /// none of them changes a byte on disk, so none of them may be the event
+    /// that decides whether the developer can still get their content back.
+    /// An entry leaves only when a retry restores every path it holds.
+    rollback_recovery: HashMap<RootId, turbogit_services::patch_apply::ApplyOutcome>,
 }
 
 impl AppState {
@@ -1882,6 +1893,7 @@ impl AppState {
             fetching_stashes: HashSet::new(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
+            rollback_recovery: HashMap::new(),
         }
     }
 
@@ -3394,6 +3406,9 @@ impl AppState {
         d.apply_patch_outcome = None;
         d.apply_patch_report = None;
         self.ui.dialog = Some(Dialog::ApplyPatch);
+        // A rollback this root has not finished is not the window's to forget.
+        // Closing and reopening is the developer coming back for the recovery.
+        self.reseed_apply_patch_recovery();
     }
 
     /// Point the window's apply at `root`. Exposed because the window is per root
@@ -3404,12 +3419,71 @@ impl AppState {
         if self.ui.dlg.apply_patch_root.as_ref() == Some(root) {
             return;
         }
+        self.hold_apply_patch_recovery();
         self.ui.dlg.apply_patch_root = Some(root.clone());
         // The verdict the old root was measured against says nothing about this
         // one, and leaving it painted would be a preflight for a tree that is not
         // the tree about to be written.
         self.ui.dlg.apply_patch_preflight = None;
         self.ui.dlg.apply_patch_outcome = None;
+        // The rollback is the exception to that rule: the old root keeps its
+        // record here rather than in the window, and this root's own unfinished
+        // rollback is exactly what pointing at this root should now show.
+        self.reseed_apply_patch_recovery();
+    }
+
+    /// Switch the window's patch route (file ↔ clipboard).
+    ///
+    /// The payload the other route read is dropped with it — a patch read from a
+    /// file is not the text the clipboard holds, and carrying one into the other
+    /// route would apply the wrong payload under a label that says otherwise. A
+    /// rollback the tree is still waiting on is not payload, so it is held here
+    /// and painted again by the same rule every other transition uses.
+    pub fn set_apply_patch_source(&mut self, source: PatchSource) {
+        self.hold_apply_patch_recovery();
+        let d = &mut self.ui.dlg;
+        d.apply_patch_source = source;
+        d.apply_patch_text.clear();
+        d.apply_patch_loaded.clear();
+        d.apply_patch_loaded_path.clear();
+        d.apply_patch_patch = None;
+        d.apply_patch_preflight = None;
+        d.apply_patch_error = None;
+        d.apply_patch_outcome = None;
+        self.reseed_apply_patch_recovery();
+    }
+
+    /// Take the window's unresolved rollback into the per-root holder. Runs
+    /// before any transition that drops what the window paints, so the recorded
+    /// content a retry writes cannot be lost along with the frame that showed it.
+    fn hold_apply_patch_recovery(&mut self) {
+        let Some(outcome) = self.ui.dlg.apply_patch_outcome.clone().filter(|outcome| {
+            matches!(
+                outcome,
+                turbogit_services::patch_apply::ApplyOutcome::RollbackFailed { .. }
+            )
+        }) else {
+            return;
+        };
+        let Some(root) = self.ui.dlg.apply_patch_root.clone() else {
+            return;
+        };
+        self.rollback_recovery.insert(root, outcome);
+    }
+
+    /// The recovery the window's current root is owed, if any.
+    fn held_apply_patch_recovery(&self) -> Option<turbogit_services::patch_apply::ApplyOutcome> {
+        let root = self.ui.dlg.apply_patch_root.as_ref()?;
+        self.rollback_recovery.get(root).cloned()
+    }
+
+    /// Put the held recovery back on the window after a transition cleared it.
+    /// Only a rollback that never finished is re-painted: `Applied` and `Aborted`
+    /// are answers about the patch, and the patch is what the transition dropped.
+    fn reseed_apply_patch_recovery(&mut self) {
+        if let Some(held) = self.held_apply_patch_recovery() {
+            self.ui.dlg.apply_patch_outcome = Some(held);
+        }
     }
 
     /// Run the file route's picker: the seam [`crate::AppState::patch_reader`]
@@ -3435,7 +3509,14 @@ impl AppState {
     /// path field has changed, and the patch is re-parsed only when the text has.
     /// A third thing happens on any reparse — the preflight verdict and the last
     /// outcome are dropped, because both were answers about a patch that is gone.
+    /// A rollback the tree never finished is the one exception, and
+    /// `reseed_apply_patch_recovery` is what puts it back on the window.
     pub fn sync_apply_patch(&mut self) {
+        // Held before anything below can drop it: a keystroke in the patch field
+        // changes no byte of the working tree, so it cannot be what leaves the
+        // developer holding a half-applied file with no recorded content to put
+        // back into it.
+        self.hold_apply_patch_recovery();
         if self.ui.dlg.apply_patch_source == PatchSource::File {
             let path = self.ui.dlg.apply_patch_path.trim().to_string();
             if !path.is_empty() && path != self.ui.dlg.apply_patch_loaded_path {
@@ -3480,6 +3561,7 @@ impl AppState {
         self.ui.dlg.apply_patch_patch = (!patch.is_empty()).then_some(patch);
         self.seed_apply_patch_fields(&provenance);
         self.ui.dlg.apply_patch_provenance = provenance;
+        self.reseed_apply_patch_recovery();
     }
 
     /// Fill the destination's author and message fields from the patch's own
@@ -3560,6 +3642,10 @@ impl AppState {
             .and_then(|report| report.take());
         self.ui.dlg.apply_patch_report = None;
         self.ui.dlg.apply_patch_outcome = outcome.or(self.ui.dlg.apply_patch_outcome.take());
+        // The window's painted outcome is the only place a failed rollback's
+        // recorded bytes exist, so settling is where they move somewhere that
+        // outlives the window's own transitions.
+        self.hold_apply_patch_recovery();
     }
 
     /// The durable record of an apply's two titled outcomes: `Apply patch
@@ -3673,6 +3759,7 @@ impl AppState {
             .map(|u| u.path.clone())
             .chain(restored.clone())
             .collect();
+        let restored_everything = still.is_empty();
         self.ui.dlg.apply_patch_outcome = Some(if still.is_empty() {
             turbogit_services::patch_apply::ApplyOutcome::Aborted {
                 reason,
@@ -3685,6 +3772,14 @@ impl AppState {
                 restored,
             }
         });
+        // The holder follows the tree, not the window: a retry that restored
+        // every path releases the root's record, and one refused again keeps the
+        // second refusal's reasons in place of the first one's.
+        if restored_everything {
+            self.rollback_recovery.remove(&root);
+        } else {
+            self.hold_apply_patch_recovery();
+        }
         self.refresh(Affected::Root(root));
         if self
             .ui

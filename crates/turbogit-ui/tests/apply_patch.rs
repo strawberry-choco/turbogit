@@ -489,3 +489,106 @@ fn a_second_refused_retry_keeps_the_state_named_and_records_it_again() {
         "the durable entry names the path it could not restore"
     );
 }
+
+// ------------------------------------------------ the recovery's lifetime --
+//
+// The promise `Apply patch` makes is about the WORKING TREE, and the record that
+// pays it is the failed rollback's held bytes. A transition inside the window —
+// typing in the patch field, changing route, closing and reopening — changes
+// nothing on disk, so it cannot be allowed to be the thing that decides whether
+// the developer can still get their file back. Each test below strands a real
+// half-applied tree, runs one transition, and then asks the window to finish the
+// restore it promised: the file's bytes are the assertion, not a field.
+
+/// The pre-apply content, and the content the failed apply left behind.
+const RECORDED: &[u8] = b"one\ntwo\nthree\n";
+const LEFT_BY_APPLY: &[u8] = b"one\nTWO\nthree\n";
+
+/// The window in the state a failed rollback leaves: `first.txt` on disk holding
+/// what the apply wrote, and the bytes it held before living only in the
+/// outcome's record.
+fn stranded(dir: &Path, parent: &Path) -> Harness<'static, AppState> {
+    std::fs::write(dir.join("first.txt"), LEFT_BY_APPLY).unwrap();
+    let mut harness = window(dir, parent, PatchSource::Clipboard);
+    harness.state_mut().ui.dlg.apply_patch_outcome = Some(ApplyOutcome::RollbackFailed {
+        reason: "git exited with code 1: error: patch failed: second.txt:1".to_string(),
+        unrestored: vec![Unrestored {
+            path: PathBuf::from("first.txt"),
+            reason: "injected: the write was refused".to_string(),
+            recorded: Some(RECORDED.to_vec()),
+        }],
+        restored: Vec::new(),
+    });
+    settle(&mut harness);
+    assert_painted(
+        &harness,
+        &painted_title(ApplyOutcome::ROLLBACK_FAILED_TITLE),
+    );
+    harness
+}
+
+/// Every transition has to leave the same two things true: the state is still
+/// named on screen with its one action, and that action still has the bytes to
+/// write. Shared because the three tests differ only in the transition.
+#[track_caller]
+fn assert_still_rescuable(harness: &mut Harness<'static, AppState>, dir: &Path) {
+    // The state is still named on screen, with its one action attached: a frame
+    // that painted the patch list instead would be the transition retiring the
+    // failure it owes an answer to.
+    assert_painted(harness, &painted_title(ApplyOutcome::ROLLBACK_FAILED_TITLE));
+    assert_painted(harness, "Restore recorded content");
+    click(harness, "Restore recorded content");
+    settle(harness);
+    assert_eq!(
+        std::fs::read(dir.join("first.txt")).unwrap(),
+        RECORDED,
+        "the recorded content was still held after the transition"
+    );
+}
+
+/// The stranding this feature cannot ship with: one keystroke in the patch field
+/// erasing the only copy of the content the working tree lost.
+#[test]
+fn editing_the_patch_text_leaves_the_failed_rollback_resolvable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = repo(tmp.path());
+    let mut harness = stranded(&dir, tmp.path());
+
+    harness.state_mut().ui.dlg.apply_patch_text =
+        "diff --git a/third.txt b/third.txt\n--- /dev/null\n+++ b/third.txt\n@@ -0,0 +1 @@\n+x\n"
+            .to_string();
+    settle(&mut harness);
+
+    assert_still_rescuable(&mut harness, &dir);
+}
+
+/// A route switch drops the payload the other route read — it has no business
+/// dropping the tree's recovery with it.
+#[test]
+fn switching_the_patch_route_leaves_the_failed_rollback_resolvable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = repo(tmp.path());
+    let mut harness = stranded(&dir, tmp.path());
+
+    click(&mut harness, "From file");
+    settle(&mut harness);
+
+    assert_still_rescuable(&mut harness, &dir);
+}
+
+/// Closing the window is not fixing the tree: reopening it has to find the same
+/// unresolved rollback where it left it.
+#[test]
+fn reopening_the_window_leaves_the_failed_rollback_resolvable() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = repo(tmp.path());
+    let mut harness = stranded(&dir, tmp.path());
+
+    click(&mut harness, "Close");
+    settle(&mut harness);
+    assert_eq!(harness.state().ui.dialog, None, "the window is closed");
+    harness.state_mut().open_apply_patch(PatchSource::Clipboard);
+    settle(&mut harness);
+
+    assert_still_rescuable(&mut harness, &dir);
+}
