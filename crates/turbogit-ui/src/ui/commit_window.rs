@@ -382,6 +382,18 @@ fn shelf_pane(ui: &mut Ui, state: &mut AppState) {
                 {
                     state.ui.dialog = Some(Dialog::Shelve);
                 }
+                // The shelf accepts patch FILES as a source, not only changes this
+                // application shelved. Importing is the deferral: the bytes are parked,
+                // nothing is applied, and `Unshelve` is what later puts them in this
+                // root's tree. It sits in **this pane**, whose rows are already one
+                // root's, because that is what makes the root it parks under a stated
+                // fact rather than a guess at the focus (reverse gap #1).
+                if widgets::ghost_button(ui, None, "Import Patches\u{2026}")
+                    .on_hover_text("Park a patch file on this repository's shelf")
+                    .clicked()
+                {
+                    state.ui.dialog = Some(Dialog::ImportPatches);
+                }
             },
             row: &mut shelf_row,
         },

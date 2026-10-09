@@ -146,6 +146,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             dialogs::show(ui, state, d);
         }
     }
+    // The `When patch is created: Ask` follow-up, painted outside the dialog slot: the
+    // settings step that produced it has already closed, and an ask that could not
+    // coexist with `Cancel` on another window would be a policy that vanishes on contact.
+    create_patch::created_patch_ask(ui, state);
     render_confirm(ui, state);
     // The classified reply to a rejected push (ticket 13): unconditional, like
     // every other floating surface, because the Push dialog has already closed
