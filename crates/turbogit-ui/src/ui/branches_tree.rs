@@ -29,7 +29,7 @@ use turbogit_domain::model::{Branch, BranchKind, RecentCheckout, RefState, Root,
 /// How many recently checked-out branches the Recent group shows.
 ///
 /// The single place the documented cap is written: "Recent branches node shows
-/// up to five recently checked-out branches" (`manage-branches.md:61`). It is
+/// up to five recently checked-out branches". It is
 /// a display cap on a longer history, not a cache size — the engine answers
 /// HEAD's whole checkout window — and both branch-recents surfaces read it, so
 /// the number cannot drift between the tab and the status-bar popup.
@@ -466,8 +466,8 @@ pub fn build_branch_view(
 ///
 /// Only two of the four toggles reach the model, and both are the ones a label
 /// depends on: `Group by Directory` (see [`build_tree`]) and, through it, the
-/// repository qualifier that un-grouped rows need because the band that used to
-/// name the repository is gone. `Show Recent Branches` and `Show Tags` hide a
+/// repository qualifier that un-grouped rows need because no band names the
+/// repository once grouping is off. `Show Recent Branches` and `Show Tags` hide a
 /// whole group, which is a decision the renderer makes from
 /// [`BranchView::options`]; the data stays in the model either way, because a
 /// toggle never changes what the surface knows.
@@ -1286,8 +1286,8 @@ mod tests {
         );
 
         let rows = build_recent_group(&[repo], &recents);
-        // "Recent branches node shows up to five recently checked-out branches"
-        // (manage-branches.md:61). The four older moves are not in the group and
+        // "Recent branches node shows up to five recently checked-out branches".
+        // The four older moves are not in the group and
         // no overflow affordance is reserved for them: the escape is unverified.
         assert_eq!(recent_names(&rows), vec!["r7", "r6", "r5", "r4", "r3"]);
     }

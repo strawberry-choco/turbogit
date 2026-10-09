@@ -367,8 +367,8 @@ pub fn revert_commit(
 
 // ------------------------------------------------- verb 5: Get from Branch ---
 //
-// The reference's fifth integration verb (`apply-changes-from-one-branch-to-
-// another.md:269-287`) is not a history operation at all: it compares ONE FILE
+// The reference's fifth integration verb is not a history operation at all: it
+// compares ONE FILE
 // across two sides and copies the other side's whole contents into the working
 // tree. Neither `cherry-pick` nor `merge` covers "take that one file from over
 // there", and it is the only verb that can bring across a file the target branch
@@ -410,7 +410,8 @@ pub enum BranchFileStatus {
 /// list the window paints is that order, and the two one-sided rows exchanging
 /// **positions** under `Swap Branches` is a fact about the ordering, not about the
 /// tint; reordering these fields would silently re-sort the window by path and turn
-/// the swap into the re-colouring the ticket names as the wrong answer.
+/// the swap into a re-colouring, which is the wrong answer: it discloses nothing
+/// about which side lost the path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BranchFileRow {
     pub status: BranchFileStatus,

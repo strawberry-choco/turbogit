@@ -1,4 +1,4 @@
-//! The classified reply to a rejected push (ticket 13).
+//! The classified reply to a rejected push.
 //!
 //! "Your push was rejected" is one string for six situations that need six
 //! different replies, so this surface paints ONE message per outcome class and
@@ -187,7 +187,7 @@ fn set_update_all(state: &mut AppState, all: bool) {
 ///
 /// The two fetch classes share one reply because their reply IS the same —
 /// refresh what the remote holds, then push again — while their MESSAGES
-/// differ, which is the point of the ticket: the message is what the user reads
+/// differ, which is the point of the split: the message is what the user reads
 /// before choosing. The ordinary rejection differs from both, because it needs
 /// the branch integrated, not merely refreshed.
 fn next_step(outcome: &PushOutcome) -> Option<NextAction> {
@@ -250,8 +250,8 @@ fn is_stale(state: &AppState, rejection: &PushRejection) -> bool {
         .any(|id| state.multi.roots.iter().any(|r| &r.id == id))
 }
 
-/// The outcome's title. Each class names what failed, because "Push rejected"
-/// alone is the collapse this ticket exists to undo.
+/// The outcome's title. Each class names what failed, because one bare "Push
+/// rejected" would collapse six different failures into one reply.
 fn window_title(outcome: &PushOutcome) -> String {
     match outcome {
         PushOutcome::Rejected { .. } => "Push rejected".to_string(),

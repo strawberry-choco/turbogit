@@ -167,7 +167,7 @@ impl Block {
 ///
 /// `None` means the item is live — and enablement is the whole affordance: no
 /// confirmation is added by this gate, and the preflight a live verb opens is
-/// the one ticket 09 shipped.
+/// the shared RewritePreflight dialog.
 ///
 /// The order of the five arms is load-bearing and compiles either way; see the
 /// module doc. `scope` is matched rather than tested as a boolean so the two

@@ -80,7 +80,7 @@ pub fn add_mapping(project_dir: &Path, dir: &Path, vcs: Vcs) -> TgResult<()> {
 /// git is asked or what an action does, only how the same branches are arranged
 /// and how much of the arrangement is shown. They are the popup's only
 /// persisted state on either side of the parity comparison
-/// (`manage-branches.md:70`), which is why they live with the other durable UI
+/// which is why they live with the other durable UI
 /// state rather than in the tree's ephemeral expand/collapse block —
 /// [`crate::state::BranchesGroups`] answers "is this group open right now",
 /// this answers "does this group exist for me at all".

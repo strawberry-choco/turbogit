@@ -279,13 +279,13 @@ pub struct DialogState {
     pub compare_left: String,
     pub compare_right: String,
     pub compare_commits: Vec<CommitId>,
-    // Get from Branch (ticket 17, §4.8 verb 5): the file-level comparison the
-    // branch row's `Show Diff with Working Tree` opens. Snapshot data only — the
+    // Get from Branch: the file-level comparison the branch row's
+    // `Show Diff with Working Tree` opens. Snapshot data only — the
     // rows are the service's answer, captured when the window opens and re-captured
     // when it swaps or a take lands, so the pane never touches git.
     /// The root the window is reading. One root per window: the verb is per root
-    /// by construction (reverse gaps #1 and #16), so the identity that writes the
-    /// file is the same identity that was compared.
+    /// by construction, so the identity that writes the file is the same identity
+    /// that was compared.
     pub get_from_branch_root: Option<RootId>,
     /// The branch the developer clicked — the side a take reads FROM.
     pub get_from_branch_source: String,
@@ -364,8 +364,8 @@ pub struct DialogState {
     // prefixed `create_patch_` for the same reason the apply group is prefixed
     // `apply_patch_` — every other dialog's fields live in this one struct.
     /// The root the patch is generated FROM. A created patch is per root, like the
-    /// apply that consumes one (reverse gaps #1 and #16), and the base path, the
-    /// directory-strip count and the default location all belong to that root rather
+    /// apply that consumes one, and the base path, the directory-strip count and
+    /// the default location all belong to that root rather
     /// than to whichever tree is focused when the button is pressed.
     pub create_patch_root: Option<RootId>,
     /// Which change the patch describes — the source the verb was reached on. `None`
@@ -620,7 +620,7 @@ pub enum CommitSubTab {
 /// (`Apply Non-Conflicting Changes` vs `Resolve All Simple Conflicts`); that
 /// adjacent pair is a mis-click generator, so TurboGit folds both classes
 /// into this one control and the side scope — the active choice vs one side —
-/// is an option on it instead (parity ticket 01).
+/// is an option on it instead.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BulkApplyScope {
     /// The active conflict's recorded choice, ours as fallback — the control's
@@ -633,7 +633,7 @@ pub enum BulkApplyScope {
     Theirs,
 }
 
-/// The outcome a bulk apply has to name (parity ticket 02). The reference
+/// The outcome a bulk apply has to name. The reference
 /// reports the NEGATIVE result (`No conflicts were resolved automatically`)
 /// instead of staying silent, and gives the positive one its own sentence —
 /// two strings for two outcomes. Within one file a bulk fill resolves either
@@ -647,7 +647,7 @@ pub enum ConflictBulkReport {
     NoneResolved,
 }
 
-/// Expand/collapse state of the Branches tab's groups (issue 03): Recent, Local
+/// Expand/collapse state of the Branches tab's groups: Recent, Local
 /// and Remote open by default, Tags collapsed — the design's sensible default.
 ///
 /// `recent` is a fourth flag and not a reuse of the gear's `show_recent`: this
@@ -759,7 +759,7 @@ pub enum Dialog {
     RenameBranch,
     /// Compare two branches' commit lists (issue 32, spec E9).
     CompareBranches,
-    /// The reference's fifth integration verb's window (ticket 17): the file-level
+    /// The reference's fifth integration verb's window: the file-level
     /// comparison `Show Diff with Working Tree` opens, listing every path that
     /// differs between one branch and the working tree on the three-rung change
     /// grammar, with `Get from Branch` on the rungs it can be run on. Its payload
@@ -777,7 +777,7 @@ pub enum Dialog {
     ///
     /// The reference reaches this from `Git | Patch | Apply patch…`; TurboGit has
     /// no main menu bar, so the command palette is its menu route — the same
-    /// substitution ticket 16 records for the three lifecycle verbs.
+    /// substitution the palette already makes for the three lifecycle verbs.
     ApplyPatch,
     /// `Create Patch from Local Changes`' first step (surface `10-patches`): the
     /// comment whose words become the patch file's name. Its payload is the
@@ -817,7 +817,7 @@ pub enum Dialog {
     Reword,
 }
 
-/// A push rejection held for the rejection notification (ticket 13): the
+/// A push rejection held for the rejection notification: the
 /// classified outcome, the request a retry replays verbatim, and the two
 /// recovery choices the surface exposes.
 ///
@@ -1032,13 +1032,13 @@ pub enum PendingConfirm {
         branch: String,
         worktree: std::path::PathBuf,
     },
-    /// `Get from Branch` (ticket 17): one working-tree file about to be replaced by
-    /// the whole contents it has on another branch.
+    /// `Get from Branch`: one working-tree file about to be replaced by the whole
+    /// contents it has on another branch.
     ///
     /// **This confirmation is a deliberate departure, not a match.** The reference
-    /// documents the menu item and its result and no confirm step
-    /// (`apply-changes:285-287`), which the ticket reads as an omission rather than
-    /// a design: the verb destroys the local file's contents, and `PendingConfirm`
+    /// documents the menu item and its result with no confirm step, which reads as
+    /// an omission rather than a design: the verb destroys the local file's
+    /// contents, and `PendingConfirm`
     /// is where this app puts a whole-file destructive act. Carries its own `root`
     /// rather than reading `selected_root`, because the window is per root and the
     /// focused root is free to have moved between the click and the OK.
@@ -1137,7 +1137,7 @@ pub struct BranchDeleteUndo {
     pub unmerged: Option<UnmergedCommits>,
 }
 
-/// Which targeted history verb a rewrite undo restores (ticket 09). Coverage is
+/// Which targeted history verb a rewrite undo restores. Coverage is
 /// deliberately asymmetric — drop and reword are undoable, squash is not —
 /// matching the reference's own undo lifecycle, which names no squash undo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1146,7 +1146,7 @@ pub enum RewriteUndoVerb {
     Reword,
 }
 
-/// A dispatched rewrite whose settlement should arm the undo offer (ticket 09).
+/// A dispatched rewrite whose settlement should arm the undo offer.
 /// The settlement event carries only the [`OpKind`], which cannot name the
 /// commit or the verb, so the dispatch captures them here — the same
 /// capture-before-dispatch shape as [`BranchDeletePending`].
@@ -1157,7 +1157,7 @@ pub struct RewriteUndoPending {
     pub commit: String,
 }
 
-/// A completed rewrite that can still be undone from its backup ref (ticket 09).
+/// A completed rewrite that can still be undone from its backup ref.
 ///
 /// `tip_sha` is HEAD as the rewrite finished — the fact the repository-changed
 /// guard compares against on every later check. The guard runs at undo time,
@@ -1530,9 +1530,9 @@ pub struct UiState {
     pub branches_delete_unmerged: Option<UnmergedCommits>,
     pub branches_delete_pending: Option<BranchDeletePending>,
     pub branches_undo: Option<BranchDeleteUndo>,
-    /// Rewrite dispatch awaiting settlement to arm the post-hoc undo (ticket 09).
+    /// Rewrite dispatch awaiting settlement to arm the post-hoc undo.
     pub rewrite_undo_pending: Option<RewriteUndoPending>,
-    /// The armed post-hoc undo offer for the last targeted rewrite (ticket 09).
+    /// The armed post-hoc undo offer for the last targeted rewrite.
     /// Session-transient like [`Self::branches_undo`]: the banner expires, the
     /// guard withholds, a newer rewrite replaces, and an undo click consumes.
     pub rewrite_undo: Option<RewriteUndo>,
@@ -1616,7 +1616,7 @@ pub struct UiState {
     pub blame_cache: Option<(String, std::sync::Arc<[BlameLine]>)>,
     pub dialog: Option<Dialog>,
     /// The push dispatched and not yet settled. Settlement takes it to replay
-    /// on a retry and to name the target a rejection reports (ticket 13);
+    /// on a retry and to name the target a rejection reports;
     /// taking it is also what says "no push is in flight".
     pub push_in_flight: Option<crate::operation::PushRequest>,
     /// The last push rejection awaiting the user's reply, if any. Session-only
@@ -1696,17 +1696,17 @@ pub struct UiState {
     /// the first conflicted file when the resolver opens).
     pub conflict_resolver_selected: Option<PathBuf>,
     /// What the `Apply to all N remaining` control fills the still-unresolved
-    /// conflicts with (parity ticket 01). Session-scoped and sticky across
+    /// conflicts with. Session-scoped and sticky across
     /// files on purpose — `open_resolver` deliberately does not reset it, so
     /// a user bulk-resolving several files the same way keeps their scope.
     pub conflict_resolver_scope: BulkApplyScope,
-    /// Pending `Overwrite Changes` confirm (parity ticket 01): the
+    /// Pending `Overwrite Changes` confirm: the
     /// `(conflict ordinal, choice)` a take-ours/take-theirs click wants to
     /// apply while the file already carries merged changes. The dangerous
     /// affirmative (`Discard and Accept`) applies it; the safe option clears
     /// this and does nothing.
     pub conflict_overwrite_pending: Option<(usize, u8)>,
-    /// What the last `Apply to all` click resolved (parity ticket 02): the
+    /// What the last `Apply to all` click resolved: the
     /// reference reports a bulk apply's NEGATIVE result instead of leaving it
     /// silent, so the resolver names both outcomes under the control. Cleared
     /// when another file opens, so a stale verdict never follows a new file.
@@ -2851,7 +2851,7 @@ impl AppState {
     }
 
     /// Dispatch a push, remembering the request so a rejection can be
-    /// classified and replayed (ticket 13).
+    /// classified and replayed.
     ///
     /// The request is recorded BEFORE the dispatch on purpose: under
     /// [`Pump::Inline`] the completion event is queued synchronously inside
@@ -3137,7 +3137,7 @@ impl AppState {
                     },
                 ));
             }
-            // `Get from Branch` (ticket 17): the root, the branch and the path all
+            // `Get from Branch`: the root, the branch and the path all
             // rode in the confirmation, so what runs is exactly what was
             // disclosed — never a re-read of whichever root is focused now, which
             // is how a per-root verb turns into a write in the wrong repository.
@@ -3554,9 +3554,9 @@ impl AppState {
         }
     }
 
-    /// Cherry-pick `commit` onto the branch `target` for the focused root
-    /// (issue 15 log commit action). The service guards the protected target
-    /// and a dirty worktree; the original checkout is restored afterwards.
+    /// Cherry-pick `commit` onto the branch `target` for the focused root.
+    /// The service guards the protected target and a dirty worktree; the original
+    /// checkout is restored afterwards.
     pub fn cherry_pick_to(&mut self, commit: String, target: String) {
         let Some(root) = self.selected_root.clone() else {
             return;
@@ -3577,7 +3577,7 @@ impl AppState {
         ));
     }
 
-    // -- Cherry-pick across repositories (issue 16) ---------------------------
+    // -- Cherry-pick across repositories --------------------------------------
 
     /// The source repo's log, cache-first with a synchronous engine read as
     /// fallback (the dialog can open before the log tab has loaded).
@@ -3592,7 +3592,7 @@ impl AppState {
             })
     }
 
-    /// Open the cross-repo cherry-pick dialog (issue 16): the source is the
+    /// Open the cross-repo cherry-pick dialog: the source is the
     /// focused root, the candidate commits its log in application order
     /// (oldest first), and the checked targets default to the current
     /// multi-repo selection — every other root when nothing is selected.
@@ -3624,7 +3624,7 @@ impl AppState {
         self.cherry_reforecast();
     }
 
-    /// Open the new-branch dialog (issue 08) with what the entry point knows.
+    /// Open the new-branch dialog with what the entry point knows.
     ///
     /// ONE place, because six surfaces open this dialog and they mean different
     /// things by it: five of them open it blank and let it default to the
@@ -3834,7 +3834,7 @@ impl AppState {
         self.ui.dialog = Some(Dialog::Tag);
     }
 
-    /// Toggle one candidate commit in the dialog's checkbox list (issue 16);
+    /// Toggle one candidate commit in the dialog's checkbox list;
     /// the selection stays in application order and the forecast recomputes.
     pub fn cherry_toggle_commit(&mut self, id: String) {
         let dlg = &mut self.ui.dlg;
@@ -3853,7 +3853,7 @@ impl AppState {
         self.cherry_reforecast();
     }
 
-    /// Toggle one target repo in the dialog's targets table (issue 16);
+    /// Toggle one target repo in the dialog's targets table;
     /// the rows stay in registration order and the forecast recomputes.
     pub fn cherry_toggle_target(&mut self, id: RootId) {
         let dlg = &mut self.ui.dlg;
@@ -3977,7 +3977,7 @@ impl AppState {
     }
 
     /// Point the create flow at `root`. The patch, its base path and its removal count
-    /// are all facts about ONE working tree (reverse gaps #1 and #16), so switching root
+    /// are all facts about ONE working tree, so switching root
     /// drops the answer measured against the other tree rather than painting it here.
     pub fn set_create_patch_root(&mut self, root: &RootId) {
         if self.ui.dlg.create_patch_root.as_ref() == Some(root) {
@@ -4184,7 +4184,7 @@ impl AppState {
     /// first, then the `When patch is created:` arm the developer chose.
     ///
     /// The feed entry is written before the policy is read and is not gated by it,
-    /// because reverse gap #6 is the differentiator the programme refuses to trade:
+    /// because the durable record is not part of what a policy arm may withhold:
     /// `Do nothing` withholds the *transient* report — the toast, the ask, the window —
     /// and cannot be allowed to also erase the record. The two asking and showing arms
     /// are told apart by what they leave armed, never by whether the file was mentioned.
@@ -4397,7 +4397,7 @@ impl AppState {
     /// Point the window's apply at `root`. Exposed because the window is per root
     /// and a multi-root workspace has more than one it could mean; leaving the
     /// choice at whatever was focused when the palette item ran would be the
-    /// per-root admission rule (reverse gaps #1 and #16) reduced to a guess.
+    /// per-root admission rule reduced to a guess.
     pub fn set_apply_patch_root(&mut self, root: &RootId) {
         if self.ui.dlg.apply_patch_root.as_ref() == Some(root) {
             return;
@@ -5284,7 +5284,7 @@ impl AppState {
                     result,
                 } => {
                     self.ui.busy = false;
-                    // Ticket 09: the repository-changed guard re-validates the
+                    // The repository-changed guard re-validates the
                     // armed rewrite undo against the repository as it stands
                     // NOW. Every completed op that touches the offer's root
                     // re-runs it, so a second operation in the same root
@@ -5306,7 +5306,7 @@ impl AppState {
                             // rejection arm.
                             self.ui.push_in_flight = None;
                             self.refresh(affected.clone());
-                            // Ticket 09: arm the post-hoc undo while the
+                            // Arm the post-hoc undo while the
                             // rewrite's own tip is still the fact to compare
                             // against. A pending that does not match this
                             // completion's kind is dropped with it.
@@ -5316,7 +5316,7 @@ impl AppState {
                                 self.arm_rewrite_undo(pending);
                             }
                             granular::settle(self);
-                            // Ticket 17: a take rewrote one working-tree file, so
+                            // A take rewrote one working-tree file, so
                             // the changes window that offered it re-reads its rung
                             // list — a path whose contents now match is no longer a
                             // row, and a window still listing it would offer the
@@ -5397,7 +5397,7 @@ impl AppState {
                             let msg = e.to_string();
                             self.ui.branches_delete_pending = None;
                             self.ui.branches_delete_unmerged = None;
-                            // A rewrite that failed arms no undo (ticket 09):
+                            // A rewrite that failed arms no undo:
                             // the offer exists for a landed rewrite only.
                             self.ui.rewrite_undo_pending = None;
                             // A rewrite that failed moved nothing: the commit the
@@ -5431,7 +5431,7 @@ impl AppState {
                                 });
                                 continue;
                             }
-                            // Ticket 13: a rejected push is not one failure, it
+                            // A rejected push is not one failure, it
                             // is six, and they need six different replies. The
                             // toast still says what git said — this is the
                             // surface that says what to DO about it.
@@ -6092,7 +6092,7 @@ impl AppState {
         self.ui.branches_popup = false;
     }
 
-    /// `Show Diff with Working Tree` (ticket 17, §4.8 verb 5's entry point): open
+    /// `Show Diff with Working Tree`: open
     /// the file-level comparison of `source` against the working tree of `id`.
     ///
     /// The same shape as [`AppState::open_compare`] for the same reason: one
@@ -6121,7 +6121,7 @@ impl AppState {
     /// so the swap is a re-reading of the same list — which side a one-sided path
     /// is missing *from* — and the list's rung order is what makes that visible as
     /// the grey and green rows trading **positions** rather than the same rows
-    /// changing tint (the inversion the ticket names as the wrong answer).
+    /// changing tint, which is the inversion this shape exists to avoid.
     pub fn swap_get_from_branch(&mut self) {
         self.ui.dlg.get_from_branch_swapped = !self.ui.dlg.get_from_branch_swapped;
         self.reload_get_from_branch_rows();
@@ -6813,7 +6813,7 @@ impl AppState {
         self.multi.roots.is_empty() || self.ui.welcome_visible
     }
 
-    /// Arm the post-hoc undo for a completed targeted rewrite (ticket 09):
+    /// Arm the post-hoc undo for a completed targeted rewrite:
     /// capture the tip the rewrite finished on, which is what the guard later
     /// compares against. The read is a single synchronous `rev-parse`, on the
     /// same footing as [`Self::bulk_rollback`]'s engine calls — settlement is
@@ -6832,7 +6832,7 @@ impl AppState {
         });
     }
 
-    /// The repository-changed guard (ticket 09), the substance of the undo: an
+    /// The repository-changed guard, the substance of the undo: an
     /// offer is valid only while HEAD still stands where the rewrite left it.
     /// Re-run on every completed operation whose scope covers the offer's
     /// root — the check is against the repository NOW, never against what it
@@ -7020,7 +7020,7 @@ fn push_target_names(
 /// Which operations hand the developer over to the conflict experience rather
 /// than reporting a clean finish.
 ///
-/// The original merge/rebase (issue 09) and a ticket 16 in-flight resolution
+/// The original merge/rebase and an in-flight resolution
 /// share one rule: git stops on the NEXT conflict with a non-zero exit and a
 /// worktree full of unmerged paths, and the answer to that is the resolver, not
 /// a failure toast. Stated once because the two settlement arms must not be able
@@ -7054,12 +7054,12 @@ fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &s
         | OpKind::RewordCommit
         // A take reports the verb it ran, and the verb's own label carries the
         // two facts that make it more than a word: the path and the branch it came
-        // from (ticket 17). There is no ahead/behind story to append — nothing was
+        // from. There is no ahead/behind story to append — nothing was
         // integrated, one file was overwritten — and the durable record, not the
         // toast, is where that has to be readable later.
         | OpKind::GetFileFromBranch
         // A push reports the verb it ran. Its SUBSTANCE is the failure path —
-        // the classified rejection (ticket 13) — and a push that succeeded has
+        // the classified rejection — and a push that succeeded has
         // nothing to explain, so the label is the whole message.
         | OpKind::Push
         | OpKind::PushRecovery

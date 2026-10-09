@@ -2079,6 +2079,22 @@ fn named_density_variants_cover_shell_and_status_bar() {
     assert_ne!(theme::WINDOW_RADIUS, theme::CHIP_RADIUS);
 }
 
+/// The compressed-list density roles are named in `theme.rs`, not spelled at the
+/// call site. Each value is pinned because the command palette's action rows and
+/// the workspace picker's recents list wear the same gap, and only the palette
+/// wears the compressed padding and band.
+#[test]
+fn compressed_list_density_is_a_named_role_not_a_call_site_literal() {
+    assert_eq!(theme::DENSITY_COMMAND_BUTTON, egui::vec2(8.0, 1.0));
+    assert_eq!(theme::DENSITY_COMMAND_ROW_HEIGHT, 14.0);
+    assert_eq!(theme::DENSITY_LIST_GAP, 2.0);
+    // Tighter at every step than the defaults they override — static properties,
+    // since all four values are compile-time constants.
+    const { assert!(theme::DENSITY_COMMAND_BUTTON.y < theme::DENSITY_DENSE_BUTTON.y) };
+    const { assert!(theme::DENSITY_COMMAND_BUTTON.x < theme::BUTTON_PADDING.x) };
+    const { assert!(theme::DENSITY_LIST_GAP < theme::ITEM_SPACING.y) };
+}
+
 #[test]
 fn chip_radii_are_shared_variants_not_local_contracts() {
     // S3: compact chips and the welcome pill are explicit shared shape
@@ -2293,6 +2309,9 @@ const TOKEN_INVENTORY: &[&str] = &[
     "CELL_GAP",
     "DENSITY_COMPACT_BUTTON",
     "DENSITY_DENSE_BUTTON",
+    "DENSITY_COMMAND_BUTTON",
+    "DENSITY_COMMAND_ROW_HEIGHT",
+    "DENSITY_LIST_GAP",
     "STATUS_INFLIGHT_ABORT_GAP",
     // --- Module-level: shape
     "CHIP_RADIUS",

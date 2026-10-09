@@ -317,7 +317,7 @@ impl GitExecutor for CliExecutor {
                 }
                 let p = PathBuf::from(path);
                 // The pair right after `u` is the short-format unmerged code
-                // naming WHICH clash this is (ticket 02); the path is the last
+                // naming WHICH clash this is; the path is the last
                 // token, so the first token is read here and `last()` there.
                 let xy = rest.split_whitespace().next().unwrap_or("");
                 changes.push(Change {
@@ -774,7 +774,7 @@ impl GitExecutor for CliExecutor {
     }
 
     fn recent_checkouts(&self, root: &Path) -> TgResult<Vec<RecentCheckout>> {
-        // The reference's own invocation (R3-SESSION-1) reads
+        // The reference's own invocation reads
         // `reflog --max-count 50 --grep-reflog "checkout: --"`; as a regex
         // that quoted pattern matches no reflog message a checkout writes
         // ("checkout: moving from A to B"), so the capture is treated as the

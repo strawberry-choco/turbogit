@@ -73,7 +73,7 @@ impl OwnedOperation {
 /// gating bug: the app would rewrite inside a repository that is mid-operation.
 ///
 /// A bare repository answers `<root>/.git` (no `.git` entry at all) and so reads
-/// as idle here, exactly as it did before this function existed.
+/// as idle here — the marker probe simply finds nothing to report.
 fn markers_dir(root: &Path) -> PathBuf {
     let dot_git = root.join(".git");
     let Ok(text) = std::fs::read_to_string(&dot_git) else {

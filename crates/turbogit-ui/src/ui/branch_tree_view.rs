@@ -491,10 +491,10 @@ fn paint_repo_section(
 /// one Local group, one Tags group, over all of them at once.
 ///
 /// Nothing else about the list changes. Every branch keeps a row — the count on
-/// the merged header is the sum of the same leaves the bands used to carry — and
-/// the builder has already qualified the rows whose name another repository also
-/// answers with, so the row still says where it came from once the band that
-/// used to say it is gone.
+/// the merged header is the sum of the same leaves the per-repository bands carry
+/// — and the builder has already qualified the rows whose name another repository
+/// also answers with, so the row still says where it came from with no band to
+/// say it.
 ///
 /// The Remote area stays per repository: revealing one repository's remotes is
 /// that repository's own decision ([`TreeEvent::RemoteRevealToggled`] carries its
