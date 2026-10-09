@@ -1,4 +1,4 @@
-//! `Create patch` (surface `10-patches`): the two dialogs, the counting repair pair,
+//! `Create patch`: the two dialogs, the counting repair pair,
 //! the four `Patch File Settings` fields and the route that opens neither dialog.
 //!
 //! The ticket's own structural demand is what this suite is built around: **three

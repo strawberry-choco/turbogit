@@ -1,4 +1,4 @@
-//! Ticket 17 (`04-integrate` §4.8 verb 5) — the file-level comparison behind
+//! The file-level comparison behind
 //! `Show Diff with Working Tree`, and `Get from Branch` itself.
 //!
 //! One seam: the services function over a real temporary repository with git on

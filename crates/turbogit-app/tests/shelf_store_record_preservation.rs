@@ -4,7 +4,7 @@
 //!
 //! Both are the user-facing half of the record-preservation invariant that
 //! [`turbogit_services::shelve_stash`] now holds: a legacy store (written before
-//! ticket 12 gave [`Shelf`] a `root`) has to reach the pane, and a verb has to
+//! the [`Shelf`] `root` field became required) has to reach the pane, and a verb has to
 //! leave the rows the launch never read exactly where they were. The second one
 //! is the data loss — `.turbogit/shelf.ron` held every shelf's *name*, and
 //! [`turbogit_services::shelve_stash::unshelve`] finds the parked content in git's

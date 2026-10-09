@@ -153,7 +153,7 @@ fn seed_merge_with_auto_merged(repo: &Path, branch: &str) {
 /// BOTH MODIFIED (UU: both branches rewrote it) and `victim.txt` is DELETED
 /// BY THEM (UD: ours rewrote it, theirs deleted it — a modify/delete clash).
 /// The resolver's file list must name each kind on its row so the merge can
-/// be triaged by reading the list (rebased-parity ticket 02, verification 1).
+/// be triaged by reading the list.
 fn seed_two_conflict_kinds(repo: &Path, branch: &str) {
     std::fs::write(
         repo.join("conf.txt"),
@@ -536,7 +536,7 @@ fn left_list_splits_auto_merged_from_conflicted() {
     assert_painted(&h, "auto.txt");
 }
 
-/// Ticket 02, verification 1: a merge with one `both modified` and one
+/// A merge with one `both modified` and one
 /// `deleted by them` file paints both status words on their own rows.
 /// Scoped by each row's `Node::rect()`: "modified"/"deleted" also appear in
 /// the change-kind colouring elsewhere in the Commit window behind the
@@ -573,7 +573,7 @@ fn file_list_rows_paint_their_file_level_conflict_kind() {
     }
 }
 
-/// Ticket 02, verification 2 (negative): a bulk apply with nothing left to
+/// Negative case: a bulk apply with nothing left to
 /// resolve reports the NEGATIVE result instead of staying silent — the
 /// outcome that regresses silently.
 #[test]
@@ -589,7 +589,7 @@ fn bulk_apply_reports_the_negative_result_when_nothing_resolves() {
     // Resolve both conflicts individually, so the bulk apply has nothing
     // left to do — then click it and expect it to say so. The second take
     // lands on a file that already carries merged changes, so the Overwrite
-    // Changes pre-check holds it (ticket 01) and the dangerous affirmative
+    // Changes pre-check holds it and the dangerous affirmative
     // is what applies it.
     h.get_by_label("Take ours 1").click();
     h.run();
@@ -609,7 +609,7 @@ fn bulk_apply_reports_the_negative_result_when_nothing_resolves() {
     assert_not_painted(&h, "All conflicts were resolved automatically");
 }
 
-/// Ticket 02, verification 2 (positive): a bulk apply that resolves
+/// Positive case: a bulk apply that resolves
 /// everything reports the positive result — a distinct string for a
 /// distinct outcome.
 #[test]
@@ -629,7 +629,7 @@ fn bulk_apply_reports_all_resolved_when_everything_resolves() {
     assert_not_painted(&h, "No conflicts were resolved automatically");
 }
 
-/// Ticket 02, verification 3: the finish control's fill is WITHHELD — no
+/// The finish control's fill is WITHHELD — no
 /// fill rect for its slot, not a tinted one — while anything is unresolved,
 /// and paints `Palette::ACCENT` once everything is resolved. Assert the
 /// rect's absence/presence at the control's own slot, never a colour change:
@@ -666,7 +666,7 @@ fn finish_control_fill_is_withheld_until_every_conflict_is_resolved() {
     );
 
     // All resolved: the finish control paints its ACCENT fill. The second
-    // take is held by the Overwrite Changes pre-check (ticket 01); the
+    // take is held by the Overwrite Changes pre-check; the
     // dangerous affirmative applies it.
     h.get_by_label("Next >").click();
     h.run();
@@ -725,7 +725,7 @@ fn continue_merge_completes_when_no_conflicts_remain() {
     // navigate to conflict 2 and then resolve it. That second side-take
     // happens on a file that now carries merged changes (conflict 1 is
     // resolved), so the Overwrite Changes pre-check holds it and the
-    // dangerous affirmative is what applies it (ticket 01b).
+    // dangerous affirmative is what applies it.
     h.get_by_label("Take ours 1").click();
     h.run();
     h.get_by_label("Next >").click();
@@ -867,9 +867,7 @@ fn resolver_panes_and_controls_remain_reachable_at_small_window() {
     }
 }
 
-// ------------------------------------------------- ticket 01 (parity) tests --
-
-/// Ticket 01b — the Overwrite Changes pre-check. `Take ours` / `Take theirs`
+/// The Overwrite Changes pre-check. `Take ours` / `Take theirs`
 /// are the resolver's Accept Yours / Accept Theirs; on a file that already
 /// carries merged changes (any conflict resolved, or the Result free-edited)
 /// they confirm first. The trigger is per FILE — the reference's
@@ -944,7 +942,7 @@ fn accept_side_on_file_with_merged_changes_confirms_overwrite_first() {
     assert_not_painted(&h, "Overwrite Changes");
 }
 
-/// Ticket 01b — the confirm's two options are *visually* distinguishable, not
+/// The confirm's two options are *visually* distinguishable, not
 /// two identical rects: the dangerous affirmative wears the primary kit idle
 /// fill ([`Palette::ACCENT`], what `KitButton::Primary` already paints), and
 /// the safe option wears the raised-on-card surface (`Palette::SURFACE_2`).
@@ -980,7 +978,7 @@ fn overwrite_confirm_affirmative_and_safe_option_paint_different_fills() {
     );
 }
 
-/// Ticket 01a — the folded bulk control. TurboGit deliberately folds the
+/// The folded bulk control. TurboGit deliberately folds the
 /// reference's `Apply Non-Conflicting Changes` / `Resolve All Simple
 /// Conflicts` pair into one `Apply to all N remaining` control, so with a
 /// conflict present (the class the reference calls "simple") neither

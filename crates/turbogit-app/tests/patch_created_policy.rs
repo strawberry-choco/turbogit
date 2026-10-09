@@ -1,5 +1,5 @@
 //! `When patch is created:` — the persisted three-way policy behind the create
-//! routes (surface `10-patches`).
+//! routes.
 //!
 //! The captured default across the programme is **Ask**, and the product today has
 //! no ask at all: a created patch always reports the same way, whatever the
@@ -130,7 +130,7 @@ fn asking_leaves_the_created_patch_waiting_for_an_answer() {
         "the patch on disk is the payload the dialog held"
     );
     // The ask belongs to the root the patch was generated FROM, so importing it to
-    // a shelf later cannot park it under a different tree (reverse gap #1).
+    // a shelf later cannot park it under a different tree.
     let expected = fx.state.multi.roots[0].id.clone();
     assert!(
         fx.state
