@@ -10,7 +10,7 @@ on worker threads, with results delivered back to the UI thread over a channel.
 | Crate | Responsibility | Depends on |
 |---|---|---|
 | `turbogit-domain` | `model` + `error`; the leaf | `serde`, `chrono`, `thiserror` |
-| `turbogit-engine-api` | the `GitExecutor` port, `ApplyDirection` | domain |
+| `turbogit-engine-api` | the `GitExecutor` port, `ApplyDirection`, and the port's two value modules (`patch`, `repo_state`) | domain |
 | `turbogit-engine` | the adapters, the factory, the fake | domain, engine-api, `git2` |
 | `turbogit-services` | pure domain services over the port | domain, engine-api |
 | `turbogit-app` | `AppState`, worker dispatch, events, caches, persistence, granular | domain, engine-api, engine, services |
@@ -237,7 +237,9 @@ Pure-ish services over the engine seam; no egui, no `AppState`:
 
 ### 6. Engine
 - **`turbogit-engine-api`** — `GitExecutor` is the **only** thing that talks to
-  git, plus `ApplyDirection`. 75 methods, all synchronous; callers run them on
+  git, plus `ApplyDirection` and the port's two value modules: `patch`, the one
+  reader of unified-diff syntax, and `repo_state`, the marker read behind
+  `holding_operation` (ADR-0022). 75 methods, all synchronous; callers run them on
   worker threads so the UI never blocks.
 - **`turbogit-engine`** — the adapters and the factory:
   - `cli::CliExecutor` — shells out to system `git`; handles **all mutating ops**.

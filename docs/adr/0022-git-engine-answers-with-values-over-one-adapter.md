@@ -46,7 +46,7 @@ compare, and `07` raised six more: the app layer's two (`rev-list --count` behin
 a delete confirmation, `rev-parse` for its undo sha) and services' four
 reference-transaction calls behind the rebase backup. What remains is the one this
 record called permanent, and `tests/port_discipline.rs` fails if a second
-appears. The diff text has one reader (`engine/src/patch.rs`) and one writer, the
+appears. The diff text has one reader (`engine-api/src/patch.rs`) and one writer, the
 value's own rendering in the domain.
 
 ## Decision
@@ -92,7 +92,7 @@ each is raised by its own ticket rather than wrapped.
 Reading and writing unified diff are separated on purpose, and the split follows
 the one honest adapter rather than the layer boundary:
 
-- **The reader is the engine's.** `engine/src/patch.rs` is the only code in the
+- **The reader is the engine's.** `engine-api/src/patch.rs` is the only code in the
   workspace that interprets git's diff syntax. The CLI adapter answers
   `diff_patch` with it; the libgit2 adapter builds the same value from patches it
   never renders as text. Nothing above the port tests a line prefix.
