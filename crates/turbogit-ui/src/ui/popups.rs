@@ -74,6 +74,12 @@ pub enum Action {
     // action set is a frozen pin — because the Shelf pane's own header already carries
     // the verb where the shelves are listed.
     Unshelve,
+    // The same menu's other half: `Git | Patch | Create Patch from Local Changes`
+    // and its dialog-free clipboard twin (surface `10-patches`). PALETTE-ONLY for
+    // the reason the two above are, and the clipboard entry is separate because it
+    // is defined by the dialog it does not open.
+    CreatePatch,
+    CopyPatchToClipboard,
 }
 
 impl Action {
@@ -106,6 +112,8 @@ impl Action {
             Action::ApplyPatch => "Apply patch\u{2026}",
             Action::ApplyPatchFromClipboard => "Apply patch from Clipboard",
             Action::Unshelve => "Unshelve\u{2026}",
+            Action::CreatePatch => crate::ui::create_patch::LOCAL_CHANGES_VERB,
+            Action::CopyPatchToClipboard => crate::ui::create_patch::CLIPBOARD_VERB,
         }
     }
 
@@ -164,6 +172,8 @@ impl Action {
             Action::ApplyPatch,
             Action::ApplyPatchFromClipboard,
             Action::Unshelve,
+            Action::CreatePatch,
+            Action::CopyPatchToClipboard,
         ]
     }
 }
@@ -256,6 +266,11 @@ pub fn run_action(state: &mut AppState, action: Action) {
         // whether the developer is asked for a file.
         Action::ApplyPatch => state.open_apply_patch(PatchSource::File),
         Action::ApplyPatchFromClipboard => state.open_apply_patch(PatchSource::Clipboard),
+        // The two create routes, and the difference between them is the number of
+        // dialogs: one ends in `Patch File Settings`, the other hands the bytes to
+        // the clipboard and asks nothing on the way.
+        Action::CreatePatch => state.open_create_patch_from_selection(),
+        Action::CopyPatchToClipboard => state.copy_patch_from_selection(),
         // The unshelve window opens through the app's own opener, shared with the
         // Shelf pane's header action, so the two routes cannot arm different defaults.
         Action::Unshelve => state.open_unshelve_dialog(),

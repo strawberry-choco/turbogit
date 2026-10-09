@@ -87,8 +87,8 @@ use turbogit_app::state::{
     AppState, BlameTarget, Dialog, DiffTarget, NewBranchBase, PendingConfirm, Tab, Toast,
 };
 use turbogit_domain::model::{
-    BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, RefState, Root, RootId,
-    SignatureState, forward_slash_path,
+    BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, PatchOrigin, RefState,
+    Root, RootId, SignatureState, forward_slash_path,
 };
 use turbogit_services::integrate_service;
 use turbogit_services::sync_service;
@@ -1603,8 +1603,10 @@ fn apply_commit_action(
             state.open_rewrite_preflight(root, cid, turbogit_app::state::HistoryVerb::Drop);
         }
         CommitMenuAction::CreatePatch => {
-            // A file write, not git work: no Operation, no activity entry.
-            state.create_patch(root, cid);
+            // The Log route: one commit against its first parent, reached from the row
+            // that was clicked — so the patch names THIS root and not whichever tree is
+            // focused by the time the settings dialog paints.
+            state.open_create_patch_on(root.clone(), PatchOrigin::Commit { id: cid.to_owned() });
         }
         CommitMenuAction::RewordCommit => {
             // Two steps, deliberately: the message is written here, and the cost
@@ -2075,6 +2077,9 @@ enum FileAction {
     OpenBlame(PathBuf),
     /// Menu item: scope the whole workspace to this file's history.
     ScopeHistory(PathBuf),
+    /// Menu item: a patch of THIS file's change in THIS commit — one row of a
+    /// file history is itself a revision, and the menu was opened on it.
+    CreatePatch(PathBuf),
     /// Row right-clicked: open the shared menu on this row.
     OpenMenu(PathBuf),
     /// The state's own `Refresh`, taken while the pane still holds the cached
@@ -2207,6 +2212,18 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
             state.ui.selected_commit = None;
             state.ui.log_selected_file = None;
         }
+        FileAction::CreatePatch(path) => {
+            // A patch of one file's change in one revision, named by the row the
+            // menu opened on rather than by whatever is selected when the dialog
+            // paints (surface `10-patches`, the file-revision route).
+            state.open_create_patch_on(
+                root_id.clone(),
+                PatchOrigin::FileRevision {
+                    commit: cid.to_owned(),
+                    path,
+                },
+            );
+        }
     }
 
     file_row_context_menu(ui, state);
@@ -2266,6 +2283,22 @@ fn file_row_context_menu(ui: &mut Ui, state: &mut AppState) {
             if history.clicked() {
                 picked = Some(FileAction::ScopeHistory(path.clone()));
             }
+            if menu_item(
+                ui,
+                MenuItemProps {
+                    icon: Icon::ARCHIVE,
+                    label: crate::ui::create_patch::VERB,
+                    data: None,
+                    shortcut: None,
+                    enabled: true,
+                    disabled_reason: None,
+                    kind: MenuItemKind::Default,
+                },
+            )
+            .clicked()
+            {
+                picked = Some(FileAction::CreatePatch(path.clone()));
+            }
             picked
         },
         // Close before the verb, or the right-click that picked an item
@@ -2293,6 +2326,15 @@ fn apply_file_action(state: &mut AppState, root: &RootId, cid: &CommitId, action
             state.ui.log_path_scope = Some(path);
             state.ui.selected_commit = None;
             state.ui.log_selected_file = None;
+        }
+        FileAction::CreatePatch(path) => {
+            state.open_create_patch_on(
+                root.clone(),
+                PatchOrigin::FileRevision {
+                    commit: cid.to_owned(),
+                    path,
+                },
+            );
         }
         _ => {}
     }
