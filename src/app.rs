@@ -34,6 +34,12 @@ impl TurbogitApp {
                 .set_file_name("patch.diff")
                 .save_file()
         }));
+        // The read twin of the seam above, for `Apply patch`: choose the patch file
+        // to write into the working tree. Declining is not an error — the window's
+        // path field is the same choice made by typing.
+        state.patch_reader = Some(Box::new(|| {
+            rfd::FileDialog::new().set_title("Apply patch").pick_file()
+        }));
         Self { state }
     }
 }

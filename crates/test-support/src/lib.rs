@@ -69,6 +69,10 @@ pub enum RecordedCall {
     ApplyPatch {
         direction: turbogit_engine_api::ApplyDirection,
     },
+    /// A worktree apply — the `Apply patch` verb, which writes the working tree
+    /// and stages nothing, so it is a different act from `ApplyPatch` above rather
+    /// than a flag on it.
+    ApplyPatchToWorktree,
     AddIntentToAdd(Vec<PathBuf>),
     Add(Vec<PathBuf>),
     CommitAll,
@@ -669,6 +673,14 @@ impl GitExecutor for RecordingExecutor {
             .expect("calls mutex")
             .push(RecordedCall::ApplyPatch { direction });
         self.inner.apply_patch_to_index(_root, _patch, direction)
+    }
+
+    fn apply_patch_to_worktree(&self, root: &Path, patch: &Patch) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::ApplyPatchToWorktree);
+        self.inner.apply_patch_to_worktree(root, patch)
     }
 
     fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {

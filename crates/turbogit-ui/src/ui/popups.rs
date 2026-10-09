@@ -11,7 +11,7 @@ use turbogit_app::granular;
 use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, Tab, Toast};
+use turbogit_app::state::{AppState, Dialog, PatchSource, Tab, Toast};
 
 use crate::ui::widgets;
 
@@ -62,6 +62,13 @@ pub enum Action {
     AbortOperation,
     ContinueOperation,
     SkipCommit,
+    // `Git | Patch | Apply patch…` and its clipboard twin (surface `10-patches`).
+    // PALETTE-ONLY for the same reason as the three verbs above: the reference's
+    // route is a main menu bar this app does not have, and the VCS popup's action
+    // set is a frozen pin. The two are separate entries because the second is
+    // defined by the path it does not ask for.
+    ApplyPatch,
+    ApplyPatchFromClipboard,
 }
 
 impl Action {
@@ -91,6 +98,8 @@ impl Action {
             Action::AbortOperation => "Abort Operation",
             Action::ContinueOperation => "Continue Operation",
             Action::SkipCommit => "Skip Commit",
+            Action::ApplyPatch => "Apply patch\u{2026}",
+            Action::ApplyPatchFromClipboard => "Apply patch from Clipboard",
         }
     }
 
@@ -146,6 +155,8 @@ impl Action {
             Action::AbortOperation,
             Action::ContinueOperation,
             Action::SkipCommit,
+            Action::ApplyPatch,
+            Action::ApplyPatchFromClipboard,
         ]
     }
 }
@@ -234,6 +245,10 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::AbortOperation => run_lifecycle_verb(state, LifecycleVerb::Abort),
         Action::ContinueOperation => run_lifecycle_verb(state, LifecycleVerb::Continue),
         Action::SkipCommit => run_lifecycle_verb(state, LifecycleVerb::Skip),
+        // The two apply routes, both reaching the same window: what differs is only
+        // whether the developer is asked for a file.
+        Action::ApplyPatch => state.open_apply_patch(PatchSource::File),
+        Action::ApplyPatchFromClipboard => state.open_apply_patch(PatchSource::Clipboard),
     }
 }
 
