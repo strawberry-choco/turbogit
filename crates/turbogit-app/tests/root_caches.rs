@@ -15,6 +15,8 @@
 //! - `refresh(All)` clears every cache, refetches only the selected log,
 //!   and drops decorations / path-scoped history (manual-refresh totality)
 //! - an op outside the selected root does not refetch the selected log
+//! - a cached stash listing goes with its own root, and with every root only on a
+//!   project-wide invalidation
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,7 +27,9 @@ use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::operation::OpKind;
 use turbogit_app::root_caches::{Affected, LogScope, RootCaches};
 use turbogit_app::state::AppState;
-use turbogit_domain::model::{Commit, LogOpts, RootId, Signature, SignatureState, VcsSettings};
+use turbogit_domain::model::{
+    Commit, LogOpts, RootId, Signature, SignatureState, Stash, VcsSettings,
+};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 
@@ -234,6 +238,80 @@ fn scoped_op_completion_keeps_unaffected_roots_cached() {
         state.caches.ahead_behind(&beta_id),
         Some((9, 9)),
         "unaffected root's ahead/behind must survive a scoped op"
+    );
+}
+
+/// A cached stash listing for `root`, in the shape `fetch_stashes` stores: git's own
+/// index is the entry's identity.
+fn stash_entry(root: &RootId, message: &str) -> Stash {
+    Stash {
+        message: message.to_string(),
+        root: root.clone(),
+        index: 0,
+    }
+}
+
+/// A root's **stash listing** is one of that root's cached git values: it goes when the
+/// root is invalidated, and nothing else does. The pane's stash verbs hand git the
+/// `stash@{n}` index the listing carries, so a listing left warm after an op that popped
+/// an entry would aim the next click at a different entry — while a listing dropped
+/// project-wide would send every other root's pane back to a cold read for an op that
+/// never touched it.
+#[test]
+fn a_stash_listing_is_invalidated_with_its_own_root_and_no_further() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+    let beta_id = RootId(p.beta.clone().into());
+
+    let mut state = AppState::for_roots(&p.dir, &[p.alpha.clone(), p.beta.clone()]);
+    state
+        .caches
+        .store_stashes(alpha_id.clone(), vec![stash_entry(&alpha_id, "alpha work")]);
+    state
+        .caches
+        .store_stashes(beta_id.clone(), vec![stash_entry(&beta_id, "beta work")]);
+
+    state
+        .tx
+        .send(AppEvent::OpCompleted {
+            kind: OpKind::Other,
+            label: "op".to_string(),
+            affected: Affected::Root(alpha_id.clone()),
+            result: Ok(()),
+        })
+        .expect("send OpCompleted");
+    state.drain_events();
+
+    assert!(
+        state.caches.stashes(&alpha_id).is_none(),
+        "the root the op named loses its listing"
+    );
+    assert_eq!(
+        state.caches.stashes(&beta_id).map(|rows| rows.len()),
+        Some(1),
+        "and the root the op never named keeps its own"
+    );
+
+    // A whole-project invalidation takes every root's listing, the way it takes the rest.
+    state
+        .caches
+        .store_stashes(alpha_id.clone(), vec![stash_entry(&alpha_id, "alpha work")]);
+    state
+        .caches
+        .store_stashes(beta_id.clone(), vec![stash_entry(&beta_id, "beta work")]);
+    state
+        .tx
+        .send(AppEvent::OpCompleted {
+            kind: OpKind::Other,
+            label: "switch".to_string(),
+            affected: Affected::All,
+            result: Ok(()),
+        })
+        .expect("send OpCompleted");
+    state.drain_events();
+    assert!(
+        state.caches.stashes(&alpha_id).is_none() && state.caches.stashes(&beta_id).is_none(),
+        "every root's listing goes with a project-wide invalidation"
     );
 }
 

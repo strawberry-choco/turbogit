@@ -13,7 +13,10 @@
 //! and the real shell, and the consequences are read back from **git** — a stash
 //! list and a working tree, not a mock.
 
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::{
@@ -338,25 +341,87 @@ fn the_changelist_fields_are_absent_rather_than_inert() {
     let mut h = harness(state);
     open_dialog(&mut h);
 
-    // `Set active` and `Track context` are changelist verbs, and `Comment`
-    // describes the changelist the reference creates as the destination. TurboGit
-    // has no changelist model, so it ships no control for them: a ticked box that
-    // changes nothing is worse than an absent one.
-    for absent in ["Set active", "Track context"] {
+    // `Set active`, `Track context` and the `Comment` that describes a destination
+    // changelist are changelist verbs, and the `Name` the reference *types* a destination
+    // into is the same subsystem's; TurboGit has no changelist model, so it ships no
+    // control for them: a ticked box that changes nothing is worse than an absent one.
+    //
+    // Scanned **case-insensitively**, because `group_title` → `micro_header` uppercases
+    // whatever it is handed: a future `COMMENT` or `SET ACTIVE` header would slip past a
+    // compare against the doc's own mixed-case spelling, and the absence check would pass
+    // for the wrong reason — which is worse than not running it.
+    let painted: Vec<String> = painted_galleys(&h)
+        .into_iter()
+        .map(|g| g.text.to_lowercase())
+        .collect();
+    for absent in ["comment", "set active", "track context", "changelist"] {
+        let hits: Vec<&str> = painted
+            .iter()
+            .filter(|text| text.contains(absent))
+            .map(String::as_str)
+            .collect();
         assert!(
-            !painted_exact(&h, absent),
-            "`{absent}` would be an inert control: {:#?}",
-            painted_galleys(&h)
+            hits.is_empty(),
+            "`{absent}` would promise a changelist this application cannot write: {hits:?}"
         );
     }
-    let texts: Vec<String> = painted_galleys(&h)
-        .into_iter()
-        .map(|g| g.text)
-        .filter(|t| t.to_lowercase().contains("changelist"))
+}
+
+/// The reference's `Name` is a **field**: the changelist to restore into, or the name of a
+/// new one to create. This window has no such destination, so `NAME` caps a *picker* — this
+/// root's shelves, one selectable row each — and no text input of any kind sits under it.
+///
+/// Checked as widget roles, not as painted text: an empty `TextEdit` paints no galley, so
+/// the text scan above cannot see the field this denies. The scan walks the **window's own
+/// subtree** — the shell behind the dialog has a text input (the commit message box) and
+/// lies geometrically under it, so a rect test would fail on the chrome rather than the
+/// window.
+#[test]
+fn the_name_field_caps_a_picker_and_invents_no_destination() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "destination");
+    let mut state = app_state(std::slice::from_ref(&repo));
+    state.ui.shelves.push(shelf_record("weather", &repo));
+    state.ui.shelves.push(shelf_record("tides", &repo));
+    let mut h = harness(state);
+    open_dialog(&mut h);
+
+    assert!(
+        painted_in_dialog(&h, "weather") && painted_in_dialog(&h, "tides"),
+        "the heading caps a list of this root's shelves — that is the field's whole content"
+    );
+
+    let window = h
+        .get_all_by_role(egui::accesskit::Role::Window)
+        .find(|n| {
+            n.accesskit_node()
+                .label()
+                .is_some_and(|label| label.starts_with("Unshelve"))
+        })
+        .expect("the open dialog is a window node titled by the verb it runs");
+
+    // The subtree scan is proven to reach the window's controls before it is trusted to
+    // report an absence: the remove option is one checkbox in there, and a scan that found
+    // nothing at all would pass for the wrong reason.
+    let options: Vec<egui::Rect> = window
+        .query_all_by_role(egui::accesskit::Role::CheckBox)
+        .map(|n| n.rect())
+        .collect();
+    assert_eq!(
+        options.len(),
+        1,
+        "the option is the window's one checkbox, so the walk is inside the window: \
+         {options:?}"
+    );
+
+    let inputs: Vec<egui::Rect> = window
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .map(|n| n.rect())
         .collect();
     assert!(
-        texts.is_empty(),
-        "the dialog never promises a changelist it cannot write: {texts:?}"
+        inputs.is_empty(),
+        "a text input inside this window could only name a changelist that does not \
+         exist; found {inputs:?}"
     );
 }
 
