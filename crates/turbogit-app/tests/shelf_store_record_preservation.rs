@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use test_support::git_seed::{commit, git};
 use turbogit_app::state::AppState;
-use turbogit_domain::model::{Change, ChangeStatus, RootId, Shelf};
+use turbogit_domain::model::{Change, ChangeStatus, RootId, Shelf, ShelfSource};
 use turbogit_services::shelve_stash::{self, shelf_path};
 
 /// A repository **at the project directory itself** — the single-root layout
@@ -431,6 +431,167 @@ fn recorded_roots(project_dir: &Path) -> Vec<(String, Option<PathBuf>)> {
         .collect()
 }
 
+/// A per-row reading of the **wire**: which rows recorded a `source`, and the payload file
+/// a recorded one names.
+///
+/// The same reason as [`WireRow`]: `ShelfSource` itself reads a missing key as `Stash`, so
+/// presence and absence would collapse. `ron::Value` sees the key and its fields (RON's
+/// enum tag is dropped in the generic value), so the tag is asserted from the file's text
+/// beside it, and any other spelling of a `source` fails loudly here.
+fn source_keys(project_dir: &Path) -> Vec<(String, Option<String>)> {
+    let text = std::fs::read_to_string(shelf_path(project_dir)).unwrap();
+    let value: ron::Value = ron::from_str(&text)
+        .unwrap_or_else(|e| panic!("the store this build wrote must parse: {e}\n{text}"));
+    let ron::Value::Seq(rows) = value else {
+        panic!("the shelf store is a list of rows, got: {value:?}");
+    };
+    rows.iter()
+        .map(|row| {
+            let ron::Value::Map(fields) = row else {
+                panic!("each row is a map, got: {row:?}");
+            };
+            let name = match fields.get(&ron::Value::String("name".to_string())) {
+                Some(ron::Value::String(name)) => name.clone(),
+                other => panic!("a row's name is a string, got: {other:?}"),
+            };
+            let file = fields
+                .get(&ron::Value::String("source".to_string()))
+                .map(payload_file);
+            (name, file)
+        })
+        .collect()
+}
+
+/// The payload field a recorded `source` holds.
+fn payload_file(value: &ron::Value) -> String {
+    match value {
+        ron::Value::Map(fields) => match fields.get(&ron::Value::String("file".to_string())) {
+            Some(ron::Value::String(file)) => file.clone(),
+            other => panic!("a recorded `source` must name its payload file, got: {other:?}"),
+        },
+        other => panic!("unexpected `source` spelling on the wire: {other:?}"),
+    }
+}
+
+/// A patch that applies cleanly to the `README.md` this suite's `repo_at` commits.
+const PATCH: &str = "diff --git a/README.md b/README.md\n\
+                    --- a/README.md\n\
+                    +++ b/README.md\n\
+                    @@ -1 +1 @@\n\
+                    -x\n\
+                    +y\n";
+
+/// An **imported** row's `source` is the only fact that names the file its parked bytes
+/// live in, and [`AppState::unshelve`] branches on it: read back as `Stash`, the verb goes
+/// looking for a git stash entry that was never made and fails over content the store is
+/// holding. So the relaunched row has to come back as the same variant addressing the same
+/// file — and the stash row written beside it must still go back keyless, because the store
+/// is rewritten whole on every verb.
+#[test]
+fn a_relaunched_imported_row_is_still_a_patch_row_addressing_its_own_payload() {
+    let project = TempDir::new().unwrap();
+    let lib = repo_at(&project.path().join("lib"));
+    let mut state = AppState::for_roots(project.path(), std::slice::from_ref(&lib));
+    let root = state.multi.roots[0].id.clone();
+
+    let imported = state
+        .import_patch_to_shelf(&root, "align the api", PATCH)
+        .expect("the import lands on a store this build can read");
+    let ShelfSource::Patch { file } = imported.source.clone() else {
+        panic!("an imported row is a patch row: {:?}", imported.source)
+    };
+    state
+        .add_shelf(shelve_stash::make_shelf("wip: parser", &[], root.clone()))
+        .expect("and a shelved row sits beside it");
+
+    assert_eq!(
+        source_keys(project.path()),
+        vec![
+            ("align the api".to_string(), Some(file.clone())),
+            ("wip: parser".to_string(), None),
+        ],
+        "one row records where its bytes are; the other is given no key it does not need"
+    );
+
+    let relaunched = AppState::for_roots(project.path(), std::slice::from_ref(&lib));
+    assert!(
+        relaunched.last_error.is_none(),
+        "a store with a `source` key launches clean: {:?}",
+        relaunched.last_error
+    );
+    let rows = relaunched.shelves_for(&root);
+    let again = rows
+        .iter()
+        .find(|s| s.name == "align the api")
+        .unwrap_or_else(|| panic!("the imported row relaunches: {rows:?}"));
+    assert_eq!(
+        again.source,
+        ShelfSource::Patch { file: file.clone() },
+        "the variant and the file it addresses both survive the relaunch"
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|s| s.name == "wip: parser")
+            .map(|s| s.source.clone()),
+        Some(ShelfSource::Stash),
+        "and the neighbouring stash row is not mistaken for one"
+    );
+    assert_eq!(
+        shelve_stash::read_patch_payload(project.path(), &file).ok(),
+        Some(PATCH.to_string()),
+        "the relaunched row still addresses the bytes it parked"
+    );
+}
+
+/// A store this build cannot read must not launch into an **empty pane**: the Shelf pane
+/// would then answer "nothing is shelved" over rows it never read, and the only reclaim
+/// left — the next shelve — is the write the store itself refuses. The launch therefore
+/// reports the failure, and reports it while the file is still byte-for-byte what it was.
+#[test]
+fn a_store_that_will_not_parse_launches_with_a_report_not_an_empty_pane() {
+    let project = project_that_is_a_repo();
+    std::fs::create_dir_all(project.path().join(".turbogit")).unwrap();
+    let unreadable = "[{ name: \"wip: parser\", changes: [], created_at: ";
+    std::fs::write(shelf_path(project.path()), unreadable).unwrap();
+
+    let state = AppState::for_roots(
+        project.path(),
+        std::slice::from_ref(&project.path().to_path_buf()),
+    );
+
+    assert!(
+        state.ui.shelves.is_empty(),
+        "rows that were never read are not invented: {:?}",
+        state.ui.shelves
+    );
+    assert!(
+        state.last_error.is_some(),
+        "a launch that could not read the store says so instead of painting an absence"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shelf_path(project.path())).unwrap(),
+        unreadable,
+        "and reporting it costs nothing on disk"
+    );
+
+    // The report is the session's, and it is not a licence to write: the first verb that
+    // rewrites the store is refused over the same file.
+    let mut state = state;
+    let refused = state.add_shelf(shelve_stash::make_shelf(
+        "wip: cli",
+        &[],
+        RootId(std::sync::Arc::from(project.path())),
+    ));
+    assert!(
+        refused.is_err(),
+        "the launch's report and the writer's guard agree about this file"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shelf_path(project.path())).unwrap(),
+        unreadable,
+        "so the rows the launch never read are still there"
+    );
+}
 /// The **multi-root coincidence**, checked through the real create seam: a project
 /// whose roots are its own directory *and* a nested repository. `save_shelves`
 /// omits the `root` key for the row rooted at `project_dir` — the shape a legacy

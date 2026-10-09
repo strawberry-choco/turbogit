@@ -20,7 +20,7 @@
 
 use std::path::{Path, PathBuf};
 
-use turbogit_domain::model::{Change, ChangeStatus, RootId, Shelf};
+use turbogit_domain::model::{Change, ChangeStatus, RootId, Shelf, ShelfSource};
 use turbogit_services::shelve_stash::{self, shelf_path};
 
 /// What an **older build** wrote: the same row without the `root` field ticket 12
@@ -473,5 +473,218 @@ fn a_root_equal_to_the_project_dir_omits_and_rebinds_as_the_same_value() {
         loaded.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
         vec!["wip: project root", "wip: nested root"],
         "and no row was lost to the omission"
+    );
+}
+
+// ------------------------------------------- the `source` field's own discipline --
+
+/// A row read off the **file**, in the same independent instrument as [`WireRow`]: its
+/// name and its payload file when the row carries a `source` key, `None` when it does
+/// not.
+///
+/// Deliberately not `ShelfSource` — the store's own type reads a missing key as `Stash`
+/// through `#[serde(default)]`, which is precisely the fact under test. `ron::Value`
+/// reports presence without deciding what absence means. It does drop RON's enum tag
+/// (`Patch(file: "…")` parses to the field alone), so the tag is asserted from the file's
+/// own text beside it, and a `source` of any shape this suite has not been shown fails
+/// loudly rather than reading as absent.
+fn source_keys(project_dir: &Path) -> Vec<(String, Option<String>)> {
+    let text = std::fs::read_to_string(shelf_path(project_dir)).unwrap();
+    let value: ron::Value = ron::from_str(&text)
+        .unwrap_or_else(|e| panic!("the store this build wrote must parse: {e}\n{text}"));
+    let rows = match value {
+        ron::Value::Seq(rows) => rows,
+        other => panic!("the shelf store is a list of rows, got: {other:?}"),
+    };
+    rows.iter()
+        .map(|row| {
+            let ron::Value::Map(fields) = row else {
+                panic!("each row is a map, got: {row:?}");
+            };
+            let name = match fields.get(&ron::Value::String("name".to_string())) {
+                Some(ron::Value::String(name)) => name.clone(),
+                other => panic!("a row's name is a string, got: {other:?}"),
+            };
+            let file = fields
+                .get(&ron::Value::String("source".to_string()))
+                .map(payload_file);
+            (name, file)
+        })
+        .collect()
+}
+
+/// The payload field a recorded `source` holds. A `source` written any other way — a bare
+/// variant name, a map with no `file` — is a shape this store does not emit, and saying so
+/// is the point of reading the wire at all.
+fn payload_file(value: &ron::Value) -> String {
+    match value {
+        ron::Value::Map(fields) => match fields.get(&ron::Value::String("file".to_string())) {
+            Some(ron::Value::String(file)) => file.clone(),
+            other => panic!("a recorded `source` must name its payload file, got: {other:?}"),
+        },
+        other => panic!("unexpected `source` spelling on the wire: {other:?}"),
+    }
+}
+
+/// An **imported patch** row is the one row whose content lives outside git: `source`
+/// names the payload file its bytes sit in, and the unshelve branches on that field — a
+/// row that read back as `Stash` would point an imported patch at a stash entry that was
+/// never made, and report failure over bytes the store is holding.
+///
+/// Pinned in both directions. The patch row's variant **and its file** survive a reload
+/// and survive a whole-file rewrite, which is what every shelf verb is; and the stash rows
+/// written beside it gain no `source` key, so the store a rewrite emits is the shape a
+/// rewrite reads.
+#[test]
+fn an_imported_patch_row_survives_the_store_as_a_patch_row_with_its_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+    let root = RootId(std::sync::Arc::from(project_dir.join("repo").as_path()));
+    let created_at = chrono::DateTime::parse_from_rfc3339("2026-04-02T10:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let imported = shelve_stash::make_patch_shelf(
+        "imported: api",
+        std::slice::from_ref(&change("src/api.rs")),
+        root.clone(),
+        created_at,
+        "imported-api-1775.patch",
+    );
+    let shelved = shelve_stash::make_shelf("wip: parser", &[], root.clone());
+    shelve_stash::save_shelves(&project_dir, &[imported, shelved]).unwrap();
+
+    let loaded = shelve_stash::load_shelves(&project_dir).unwrap();
+    assert_eq!(
+        loaded[0].source,
+        ShelfSource::Patch {
+            file: "imported-api-1775.patch".to_string(),
+        },
+        "the variant and the payload file it addresses both come back: {:?}",
+        loaded[0].source
+    );
+    assert_eq!(
+        loaded[1].source,
+        ShelfSource::Stash,
+        "and a row shelved through git is still a stash row"
+    );
+    assert_eq!(
+        loaded[0].changes.len(),
+        1,
+        "the imported row's own file list rode along"
+    );
+
+    assert_eq!(
+        source_keys(&project_dir),
+        vec![
+            (
+                "imported: api".to_string(),
+                Some("imported-api-1775.patch".to_string())
+            ),
+            ("wip: parser".to_string(), None),
+        ],
+        "the patch row records where its bytes are; the stash row is given no key it does \
+         not need"
+    );
+    let text = std::fs::read_to_string(shelf_path(&project_dir)).unwrap();
+    assert_eq!(
+        text.matches("Patch(").count(),
+        1,
+        "the variant is written by name, once, over the row that holds a patch:\n{text}"
+    );
+    assert!(
+        !text.contains("Stash"),
+        "a stash row spells its mechanism by carrying no key, not by naming it:\n{text}"
+    );
+
+    // The whole-file rewrite a verb actually is: an unrelated stash row is added and the
+    // file is written from scratch. The imported row must not degrade on the second pass.
+    let mut shelves = loaded.clone();
+    shelves.push(shelve_stash::make_shelf(
+        "wip: cli",
+        &[],
+        RootId(std::sync::Arc::from(project_dir.join("other").as_path())),
+    ));
+    shelve_stash::save_shelves(&project_dir, &shelves).unwrap();
+
+    let again = shelve_stash::load_shelves(&project_dir).unwrap();
+    assert_eq!(
+        again
+            .iter()
+            .map(|s| s.source.clone())
+            .collect::<Vec<ShelfSource>>(),
+        vec![
+            ShelfSource::Patch {
+                file: "imported-api-1775.patch".to_string()
+            },
+            ShelfSource::Stash,
+            ShelfSource::Stash,
+        ],
+        "a rewrite that adds a row degrades no row it did not touch"
+    );
+    assert_eq!(
+        source_keys(&project_dir)
+            .into_iter()
+            .map(|(name, file)| (name, file.is_some()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("imported: api".to_string(), true),
+            ("wip: parser".to_string(), false),
+            ("wip: cli".to_string(), false),
+        ],
+        "and the key stays exactly where it was written — one row's own fact, never a \
+         default spelled out for the others"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shelf_path(&project_dir))
+            .unwrap()
+            .matches("Patch(")
+            .count(),
+        1,
+        "one tag for one patch row, after the rewrite"
+    );
+}
+
+/// A store this build fills with **stash rows only** — every row a `shelve` has ever
+/// made — goes back with no `source` key anywhere, which is the shape every such row
+/// arrived in. This is the `skip_serializing_if` half of the mirror, checked on its own so
+/// a patch row cannot be the only thing keeping the key alive on the wire.
+#[test]
+fn a_store_of_stash_rows_gains_no_source_key_when_it_is_rewritten() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_dir = tmp.path().to_path_buf();
+    let root = RootId(std::sync::Arc::from(project_dir.join("repo").as_path()));
+    let nested = RootId(std::sync::Arc::from(
+        project_dir.join("repo/nested").as_path(),
+    ));
+    shelve_stash::save_shelves(
+        &project_dir,
+        &[
+            shelve_stash::make_shelf("wip: parser", &[], root),
+            shelve_stash::make_shelf("wip: cli", &[], nested),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        source_keys(&project_dir),
+        vec![
+            ("wip: parser".to_string(), None),
+            ("wip: cli".to_string(), None),
+        ],
+        "a stash row is written back as the keyless row it was read as"
+    );
+
+    // Rewriting the loaded list — what every shelf verb does — changes nothing observable.
+    let loaded = shelve_stash::load_shelves(&project_dir).unwrap();
+    shelve_stash::save_shelves(&project_dir, &loaded).unwrap();
+    let text = std::fs::read_to_string(shelf_path(&project_dir)).unwrap();
+    assert!(
+        !text.contains("source"),
+        "a rewrite of a keyless store invents nothing:\n{text}"
+    );
+    assert_eq!(
+        loaded.into_iter().map(|s| s.name).collect::<Vec<String>>(),
+        vec!["wip: parser", "wip: cli"],
+        "and both rows are still there afterwards"
     );
 }
