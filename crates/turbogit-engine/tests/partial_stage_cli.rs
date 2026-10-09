@@ -17,7 +17,7 @@ use turbogit_engine::{ApplyDirection, GitExecutor};
 /// A patch value, read from git's syntax — which is what the hand-written
 /// fixtures below are written in.
 fn value(text: &str) -> Patch {
-    turbogit_engine::patch::parse_patch(text)
+    turbogit_engine_api::patch::parse_patch(text)
 }
 
 // ---------------------------------------------------------------- helpers --

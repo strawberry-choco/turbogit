@@ -636,7 +636,7 @@ mod tests {
     /// The two readers under test, reached the only way they are reachable now:
     /// through the engine's one patch parser.
     fn patch(text: &str) -> Patch {
-        turbogit_engine::patch::parse_patch(text)
+        turbogit_engine_api::patch::parse_patch(text)
     }
 
     fn parse(text: &str) -> Vec<Row> {

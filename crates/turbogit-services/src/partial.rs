@@ -344,7 +344,7 @@ mod tests {
     /// it. git's syntax has exactly one reader and it lives with the adapters;
     /// nothing in this crate's production code calls it.
     fn patch(text: &str) -> Patch {
-        turbogit_engine::patch::parse_patch(text)
+        turbogit_engine_api::patch::parse_patch(text)
     }
 
     /// …and the composed value's *text* is the staging guarantee (ADR-0013 as

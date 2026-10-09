@@ -4,11 +4,19 @@
 //! [`GitExecutor`] is the single trait that talks to git; adapters live in
 //! `turbogit-engine`, consumers (services, app, UI) depend only on this
 //! crate. Leaf crate — depends only on `turbogit-domain`.
+//!
+//! Two things besides the trait live here because both adapters and every layer
+//! above need the identical reading of git's dialects: [`patch`], the one
+//! reader of unified-diff syntax (`ADR-0022`), and [`repo_state`], the marker
+//! read behind [`GitExecutor::holding_operation`]. Either one duplicated above
+//! the port is how a caller ends up interpreting git's bytes or its on-disk
+//! state for itself.
 
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::*;
 
+pub mod patch;
 pub mod repo_state;
 
 pub use repo_state::OwnedOperation;

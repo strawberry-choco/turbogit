@@ -12,7 +12,7 @@ use turbogit_domain::error::TgResult;
 use turbogit_domain::model::*;
 use turbogit_engine_api::{GitExecutor, OwnedOperation};
 
-use crate::patch::parse_patch;
+use turbogit_engine_api::patch::parse_patch;
 
 /// One recorded engine call (mutating operations only).
 #[derive(Clone, Debug, PartialEq, Eq)]

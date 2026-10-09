@@ -21,7 +21,7 @@ use test_support::git_seed::{commit as git_commit, git};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::{Patch, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
-use turbogit_engine::patch::parse_patch;
+use turbogit_engine_api::patch::parse_patch;
 use turbogit_services::patch_apply::{self, ApplyOutcome, Preflight, Rollback, Worktree};
 
 // ------------------------------------------------------------------ fixtures --

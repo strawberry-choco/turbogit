@@ -1968,7 +1968,7 @@ impl GitExecutor for CliExecutor {
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         let (out, _, _) = self.run(root, &args)?;
         // git's format is interpreted here and stops existing here.
-        Ok(crate::patch::parse_patch(&out))
+        Ok(turbogit_engine_api::patch::parse_patch(&out))
     }
 
     fn patch_bytes(&self, root: &Path, origin: &PatchOrigin, reverse: bool) -> TgResult<Vec<u8>> {
