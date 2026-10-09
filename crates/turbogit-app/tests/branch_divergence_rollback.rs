@@ -504,3 +504,56 @@ fn an_offer_whose_record_is_gone_refuses_and_says_so() {
     let refused = entry(&state, "Rollback refused").expect("the refusal is durable");
     assert!(refused.message.contains("feature/x"), "{}", refused.message);
 }
+
+// -- the record arms even when the offer cannot -------------------------------
+
+/// The offer and the record are two different promises, and `Custom` is where
+/// they part. An arbitrary git cascade never consults the preflight matrix, so
+/// it can leave some roots moved and others failed; but `reversible()` is
+/// `op == CreateBranch` — the app did not arrange the change and cannot undo
+/// it, so offering a rollback would be a false promise. The divergence is
+/// still a fact the durable feed must record, because root divergence is
+/// unrecoverable without hand repair and silence is the worst outcome.
+#[test]
+fn a_custom_run_that_moved_one_root_and_failed_in_another_records_without_offering() {
+    let (_tmp, project, alpha, broken) = diverging_project("custom-diverge");
+    let mut state = app_two(&project, &alpha, &broken);
+
+    // `git branch feature/x` lands in `alpha` and hits `broken`'s ref-directory
+    // collision at run time — a Failed row, not a skip, because Custom never
+    // consults the preflight matrix.
+    state.run_bulk_confirmed(BulkPlan {
+        op: BulkOp::Custom,
+        roots: vec![rid(&alpha), rid(&broken)],
+        rebase: false,
+        branch: String::new(),
+        command: "branch feature/x".to_string(),
+    });
+    wait_for_summary(&mut state, "1 ok · 1 failed");
+
+    assert!(
+        has_branch(&alpha, "feature/x"),
+        "the command really did move a root, which is what diverged"
+    );
+
+    // The offer stays closed: rolling back arbitrary git is a promise the app
+    // cannot honour, which is exactly what `reversible()` exists to prevent.
+    assert!(
+        state.ui.branch_divergence.is_none(),
+        "no rollback is offered for a run the app cannot undo"
+    );
+
+    // Yet the divergence is recorded durably — the feed names both halves.
+    let record = entry(&state, "diverged")
+        .expect("a diverged custom run is recorded even though no rollback is offered");
+    assert_eq!(
+        record.kind,
+        turbogit_app::activity::ActivityKind::Warning,
+        "a divergence needs attention, so it is not filed as a success"
+    );
+    assert!(
+        record.message.contains("alpha") && record.message.contains("broken"),
+        "the durable record names both halves: {}",
+        record.message
+    );
+}
