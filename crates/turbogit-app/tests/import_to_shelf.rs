@@ -76,7 +76,7 @@ fn payload_files(project: &Path) -> Vec<String> {
 fn importing_a_patch_parks_it_without_touching_the_working_tree() {
     let project = TempDir::new().unwrap();
     let (lib, _docs) = two_roots(project.path());
-    let mut state = AppState::for_roots(project.path(), &[lib.clone()]);
+    let mut state = AppState::for_roots(project.path(), std::slice::from_ref(&lib));
     let before = std::fs::read_to_string(lib.join("note.txt")).unwrap();
 
     let shelf = state
