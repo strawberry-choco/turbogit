@@ -71,6 +71,7 @@ pub mod smart_rule_modal;
 pub mod status_inflight;
 pub mod submodules;
 pub mod tree_selection;
+pub mod unshelve_dialog;
 pub mod welcome;
 pub mod widgets;
 pub mod worktrees;
@@ -127,6 +128,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             // module — it owns a rung list of its own, and `dialogs.rs` is the host
             // for the field-form dialogs, not for a second file tree.
             get_from_branch::show(ui, state);
+        } else if d == Dialog::Unshelve {
+            // Surface 07: the unshelve window owns a per-root shelf picker and the
+            // remove-after-apply choice, so it lives in its own module rather than in
+            // the field-form host `dialogs.rs` is.
+            unshelve_dialog::show(ui, state);
         } else if d == Dialog::ApplyPatch {
             // Surface `10-patches`: the apply window owns a patch payload, git's
             // preflight verdict and the three-way ending of the last apply, none of

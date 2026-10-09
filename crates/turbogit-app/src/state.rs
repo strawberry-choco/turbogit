@@ -419,6 +419,22 @@ pub struct DialogState {
     pub shelve_name: String,
     pub stash_msg: String,
     pub stash_keep: bool,
+    // Unshelve. The three fields are the dialog's whole input: which shelf, in
+    // which repository, and whether the shelf survives the apply.
+    /// The shelf the dialog will apply, picked from that root's own list. A name
+    /// typed into this field cannot create anything: the dialog's `Name` field
+    /// selects, because a shelf is made by shelving and this surface has no
+    /// destination to invent.
+    pub unshelve_shelf: Option<String>,
+    /// The root the dialog was **opened** on, held rather than re-read so the
+    /// picker cannot follow a focus change mid-dialog and offer — then apply to —
+    /// a different repository's shelves.
+    pub unshelve_root: Option<RootId>,
+    /// `Remove successfully applied files from the shelf`: **off** on every open,
+    /// which is why plain unshelve is a keeping verb. Ticked, it makes the
+    /// affirmative the destructive sibling, and only the settlement arm decides
+    /// whether the shelf actually goes.
+    pub unshelve_remove: bool,
     // New worktree (issue 14): relative-or-absolute path of the worktree
     // and the branch to create & check out in it.
     pub wt_path: String,
@@ -649,6 +665,18 @@ pub enum Dialog {
     Tag,
     Shelve,
     Stash,
+    /// The shelf-apply window (`DialogState`'s `unshelve_` group). Of the reference's
+    /// five fields, two map onto this app's model and are here: **a destination picked
+    /// from a list** and **whether the shelf survives the apply**. The other three —
+    /// entering a name for a destination to be created, `Set active`, `Track context`,
+    /// and the `Comment` that describes such a destination — are changelist verbs, and
+    /// this application has no changelist model: it stages into buckets. They ship as
+    /// recorded absences, never as controls that tick and do nothing.
+    ///
+    /// It is a dialog rather than a pane mode because the reference's own dialog is
+    /// where the remove-after-apply choice lives, and the pane's two verbs carry that
+    /// choice as their names instead.
+    Unshelve,
     /// New worktree (issue 14 Worktrees tab add action).
     NewWorktree,
     /// Cherry-pick target-branch picker (issue 15 log commit actions).
@@ -3026,6 +3054,28 @@ impl AppState {
             .collect();
         rows.sort_by_key(|s| std::cmp::Reverse(s.created_at));
         rows
+    }
+
+    /// Open the Unshelve dialog: the one route that asks *which* shelf to apply and
+    /// *whether the shelf survives it*, where the pane's two verbs answer the second
+    /// question by their own labels.
+    ///
+    /// **The root is stamped at open**, and the newest shelf of that root is
+    /// preselected, because a shelf names work in exactly one repository and a
+    /// picker that followed the focus could apply a same-named shelf of the wrong
+    /// tree. Both defaults are re-armed on every open: `Remove successfully applied
+    /// files from the shelf` is **off**, so an open dialog is never one tick away
+    /// from a destruction the developer did not ask for.
+    pub fn open_unshelve_dialog(&mut self) {
+        let root = self.selected_root.clone();
+        let shelf = root
+            .as_ref()
+            .and_then(|id| self.shelves_for(id).first().map(|s| s.name.clone()));
+        let dlg = &mut self.ui.dlg;
+        dlg.unshelve_root = root;
+        dlg.unshelve_shelf = shelf;
+        dlg.unshelve_remove = false;
+        self.ui.dialog = Some(Dialog::Unshelve);
     }
 
     /// Put one shelf's content back in its root's working tree.
