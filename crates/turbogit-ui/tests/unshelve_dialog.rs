@@ -45,6 +45,8 @@ fn shelf_record(name: &str, root: &Path) -> Shelf {
         changes: Vec::new(),
         created_at: chrono::Utc::now(),
         root: RootId(root.into()),
+        // Every row this dialog lists was shelved through git's stash list.
+        source: turbogit_domain::model::ShelfSource::Stash,
     }
 }
 

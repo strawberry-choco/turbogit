@@ -359,7 +359,23 @@ fn the_comment_becomes_the_name_of_the_file_that_gets_written() {
         "the file holds the patch the dialog described: {text}"
     );
     assert!(text.contains("+TWO"), "and the change itself: {text}");
-    assert_painted(&harness, "Wrote Fix_the_login_form.patch");
+    // The created file is still named to the developer — but by the `When patch is
+    // created: Ask` follow-up, not by the toast this assertion was written against. The
+    // captured default is `Ask`, so the transient report is exactly what the policy
+    // withholds: nothing is decided about the artifact until the developer says so. The
+    // file name stays painted, and the ask is armed on the state beside it.
+    assert_painted(&harness, "Fix_the_login_form.patch");
+    assert_painted(&harness, "Import to shelf");
+    assert_eq!(
+        harness
+            .state()
+            .ui
+            .patch_created
+            .as_ref()
+            .map(|a| a.path.file_name().map(|n| n.to_string_lossy().into_owned())),
+        Some(Some("Fix_the_login_form.patch".to_string())),
+        "the default arm leaves the created patch waiting for an answer"
+    );
 }
 
 /// The name is editable **apart** from the comment: renaming the artifact must not

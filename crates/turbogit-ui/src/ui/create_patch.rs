@@ -327,3 +327,57 @@ fn close(state: &mut AppState) {
     state.ui.dialog = None;
     state.ui.dlg.create_patch_origin = None;
 }
+
+/// The `When patch is created: Ask` follow-up — the ask the captured default stands for.
+///
+/// It is a **window rather than a toast** because a toast cannot carry a choice: the
+/// reference's `Ask` arm is the one that leaves the decision with the developer, and a
+/// transient label would decide for them while pretending not to. It is also not a
+/// `Dialog` variant, because the two are mutually exclusive on the one `dialog` slot —
+/// the settings step has already closed by the time this opens, and a patch created under
+/// `Ask` needs its follow-up to survive the developer pressing `Cancel` on something else.
+///
+/// The three verbs are the surface's whole patch story in one place: park it (`Import to
+/// shelf`, nothing applied), put it in the tree (`Apply patch…`, the window that states
+/// what an apply did), or leave it be. The deferral is offered **first** and in the same
+/// fill as the other two, because the reference's point about the shelf is that a patch
+/// need not be applied the moment it exists.
+pub fn created_patch_ask(ui: &egui::Ui, state: &mut AppState) {
+    let Some(ask) = state.ui.patch_created.clone() else {
+        return;
+    };
+    let ctx = ui.ctx().clone();
+    let name = ask
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ask.path.to_string_lossy().into_owned());
+    let root = ask.root.name();
+    let mut open = true;
+    egui::Window::new("Patch created")
+        .open(&mut open)
+        .show(&ctx, |ui| {
+            ui.label(format!("Wrote “{name}” from {root}."));
+            ui.label("Nothing has been done with it yet.");
+            ui.horizontal(|ui| {
+                if kit_button(ui, KitButton::Secondary, "Import to shelf")
+                    .on_hover_text("Park this patch on the shelf without applying it")
+                    .clicked()
+                {
+                    state.import_created_patch_to_shelf();
+                }
+                if kit_button(ui, KitButton::Quiet, "Apply patch\u{2026}")
+                    .on_hover_text("Open the patch in the window that applies it")
+                    .clicked()
+                {
+                    state.apply_created_patch();
+                }
+                if ui.button("Do nothing").clicked() {
+                    state.dismiss_created_patch();
+                }
+            });
+        });
+    if !open {
+        state.dismiss_created_patch();
+    }
+}

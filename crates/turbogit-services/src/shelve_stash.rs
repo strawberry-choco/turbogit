@@ -32,6 +32,147 @@ pub fn make_shelf(name: &str, changes: &[Change], root: RootId) -> Shelf {
         changes: changes.to_vec(),
         created_at: chrono::Utc::now(),
         root,
+        source: ShelfSource::Stash,
+    }
+}
+
+/// Build the [`Shelf`] record for an **imported patch**: the same named bucket, whose
+/// content is the patch text in [`patch_payload_path`] rather than a stash entry.
+///
+/// `file` is the payload this record was written beside, so the row and its bytes can
+/// never disagree about which file holds them — and so an import that the index refused
+/// can delete exactly the file it made.
+pub fn make_patch_shelf(
+    name: &str,
+    changes: &[Change],
+    root: RootId,
+    created_at: chrono::DateTime<chrono::Utc>,
+    file: &str,
+) -> Shelf {
+    Shelf {
+        name: name.to_string(),
+        changes: changes.to_vec(),
+        created_at,
+        root,
+        source: ShelfSource::Patch {
+            file: file.to_string(),
+        },
+    }
+}
+
+// ---------- Imported patch payloads ----------
+
+/// The directory holding an imported shelf's patch bytes, beside the index that names
+/// them.
+///
+/// The content lives in a **file per shelf** rather than inside `shelf.ron` because the
+/// index is rewritten whole on every verb: a patch's bytes in that file would make every
+/// shelve a re-serialisation of every imported patch this project ever parked, and a
+/// refused rewrite would put them all at risk for nothing. This is also the shape the
+/// reference's own shelf uses — a directory of `.patch` files addressed by the record.
+pub fn patch_payload_dir(project_dir: &Path) -> PathBuf {
+    project_dir.join(".turbogit").join("shelf")
+}
+
+/// Where one imported shelf's bytes live.
+pub fn patch_payload_path(project_dir: &Path, file: &str) -> PathBuf {
+    patch_payload_dir(project_dir).join(file)
+}
+
+/// The payload file **stem** for a shelf: a slug of its name plus its timestamp.
+///
+/// The timestamp is load-bearing, not tidiness — two shelves may share a name (the
+/// pane lists both), and a payload file keyed on the name alone would have the second
+/// import overwrite the first one's parked bytes while both rows still pointed at it.
+/// It is a stem rather than a file name because [`write_patch_payload`] adds the counter
+/// that makes a same-nanosecond pair distinct, and the suffix has to come after it.
+pub fn patch_payload_stem(name: &str, created_at: chrono::DateTime<chrono::Utc>) -> String {
+    let mut slug: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    let slug = slug.trim_matches('-').chars().take(40).collect::<String>();
+    let slug = if slug.is_empty() { "patch" } else { &slug };
+    format!(
+        "{slug}-{}",
+        created_at.timestamp_nanos_opt().unwrap_or_default()
+    )
+}
+
+/// Write an imported patch's bytes to the payload store and return the file name they
+/// went under.
+///
+/// **Payload first, index second** is the ordering this function exists to make
+/// unavoidable. The alternative — record, then bytes — leaves a row naming a file that
+/// was never made if the write is refused by a full disk or a read-only directory, and
+/// `Unshelve` on that row can only fail with a message about a missing file. Reversed,
+/// the residue is an unreferenced `.patch` nobody lists, which [`delete_patch_payload`]
+/// removes on the refusal path anyway. A stray file is recoverable; a row pointing at
+/// nothing is the stranded-work bug wearing an imported name.
+///
+/// The name is also **disambiguated against the directory**, because a timestamp alone is
+/// not unique: two imports in one second land on the same `created_at` on a fast machine,
+/// and two rows whose payload is the same file is one row's bytes silently replacing the
+/// other's — a deferral that destroys what it deferred. So a taken name gains a counter,
+/// and every row owns exactly one file.
+pub fn write_patch_payload(
+    project_dir: &Path,
+    name: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+    text: &str,
+) -> TgResult<String> {
+    let stem = patch_payload_stem(name, created_at);
+    let dir = patch_payload_dir(project_dir);
+    fs::create_dir_all(&dir)?;
+    let mut taken = 1usize;
+    let file = loop {
+        let candidate = if taken == 1 {
+            format!("{stem}.patch")
+        } else {
+            format!("{stem}-{taken}.patch")
+        };
+        if !dir.join(&candidate).exists() {
+            break candidate;
+        }
+        taken += 1;
+    };
+    fs::write(dir.join(&file), text)?;
+    Ok(file)
+}
+
+/// Read an imported shelf's parked bytes back. A payload that is not there is an error
+/// with a name in it, because the row still lists the files the patch carried and the
+/// developer deserves to know which half went missing.
+pub fn read_patch_payload(project_dir: &Path, file: &str) -> TgResult<String> {
+    let path = patch_payload_path(project_dir, file);
+    fs::read_to_string(&path).map_err(|e| {
+        turbogit_domain::error::TgError::Other(format!(
+            "The patch this shelf was imported from is not at {} — {e}",
+            path.display()
+        ))
+    })
+}
+
+/// Delete an imported shelf's payload: the cleanup that follows a row leaving the shelf,
+/// and the rollback of a refused index write.
+///
+/// A file that is already gone is **not a failure** — the verb is reclaiming space, and
+/// nothing is left to reclaim.
+pub fn delete_patch_payload(project_dir: &Path, file: &str) -> TgResult<()> {
+    let path = patch_payload_path(project_dir, file);
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -154,6 +295,12 @@ struct StoredShelf {
     created_at: chrono::DateTime<chrono::Utc>,
     #[serde(default = "absent_root")]
     root: RootId,
+    /// Absent on every row written before an imported patch could be parked, and an
+    /// absent one **is** a stash row: that was the only mechanism there was. The default
+    /// therefore lands on the truth rather than on a guess, which is what keeps
+    /// [`unshelve`] going to git's stash list for a row it invented nothing about.
+    #[serde(default)]
+    source: ShelfSource,
 }
 
 /// The same row on its way **out**, borrowed so a save copies nothing it does not
@@ -170,6 +317,12 @@ struct StoredShelfOut<'a> {
     created_at: &'a chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "is_absent_root")]
     root: RootId,
+    /// A stash row goes back with **no `source` key**, exactly as it arrived, so a store
+    /// this build rewrites is byte-comparable with one it merely read. Only an imported
+    /// row gains the key — and it must, because the file its bytes live in is a fact
+    /// nothing else records.
+    #[serde(skip_serializing_if = "ShelfSource::is_stash")]
+    source: &'a ShelfSource,
 }
 
 impl StoredShelf {
@@ -199,6 +352,7 @@ impl StoredShelf {
             changes: self.changes,
             created_at: self.created_at,
             root,
+            source: self.source,
         }
     }
 }
@@ -288,6 +442,7 @@ pub fn save_shelves(project_dir: &Path, shelves: &[Shelf]) -> TgResult<()> {
             } else {
                 shelf.root.clone()
             },
+            source: &shelf.source,
         })
         .collect();
     fs::create_dir_all(project_dir.join(".turbogit"))?;

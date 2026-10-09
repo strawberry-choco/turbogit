@@ -357,10 +357,20 @@ pub enum Operation {
     /// difference, and it is also what the settlement reads to decide whether
     /// the shelf's own record goes with the git copy: only a landed
     /// `Unshelve and Remove` may delete the row.
+    ///
+    /// `patch` is the shelf's other mechanism, chosen by the record rather than by a
+    /// new verb: `None` is a row whose content is git's stash entry, `Some` is a row
+    /// imported from a **patch file**, whose bytes were never in any working tree and so
+    /// were never stashed. Putting those back is an apply, and it runs under this kind —
+    /// an unshelve is the act, whichever store held the work. That reuse is what makes
+    /// the atomic guarantee carry over: a failed import-unshelve rolls every file it
+    /// touched back through the same engine as an apply, and lands on the same failure
+    /// arm that keeps the row painted.
     Unshelve {
         root: RootId,
         name: String,
         remove: bool,
+        patch: Option<turbogit_domain::model::Patch>,
     },
     /// `git worktree add` — mutates the root's linked-worktree set.
     WorktreeAdd {
@@ -514,6 +524,27 @@ impl Operation {
             root,
             name: name.into(),
             remove,
+            patch: None,
+        }
+    }
+
+    /// The same verb for a shelf row imported from a **patch file**: put the parked
+    /// bytes back by applying them, keeping or removing the row as the pair says.
+    ///
+    /// Not a new verb and deliberately not a new `OpKind` — the act is an unshelve, so
+    /// it settles on the arm that already decides whether the shelf's record and its
+    /// payload go with it.
+    pub fn unshelve_patch(
+        root: RootId,
+        name: impl Into<String>,
+        remove: bool,
+        patch: turbogit_domain::model::Patch,
+    ) -> Self {
+        Self::Unshelve {
+            root,
+            name: name.into(),
+            remove,
+            patch: Some(patch),
         }
     }
 
@@ -882,17 +913,44 @@ impl Operation {
                 let _ = turbogit_services::changes::discard_changes(vcs, path, &changes);
                 Ok(())
             }
-            Self::Unshelve { root, name, remove } => turbogit_services::shelve_stash::unshelve(
-                vcs,
-                root.as_path(),
-                &name,
-                // A shelf's own record goes with the git copy only for the
-                // destructive sibling of the pair; the shelf list is dropped on
-                // the success side of settlement, which cannot run for an entry
-                // that never existed.
+            Self::Unshelve {
+                root,
+                name,
                 remove,
-            )
-            .map(|_| ()),
+                patch,
+            } => match patch {
+                // An imported row: the parked bytes go into THEIR root through the apply
+                // engine, and an outcome that is not `Applied` is an error — the state
+                // that error names is the engine's titled one, because the guarantee it
+                // carries (every file the apply touched is back where it was) is what
+                // makes keeping the row the safe answer.
+                Some(patch) => {
+                    let outcome =
+                        turbogit_services::patch_apply::apply_patch(vcs, root.as_path(), &patch);
+                    match outcome {
+                        turbogit_services::patch_apply::ApplyOutcome::Applied { paths } => {
+                            let _ = paths;
+                            Ok(())
+                        }
+                        other => Err(turbogit_domain::error::TgError::Other(format!(
+                            "{} — {}",
+                            other.title(),
+                            other.message()
+                        ))),
+                    }
+                }
+                None => turbogit_services::shelve_stash::unshelve(
+                    vcs,
+                    root.as_path(),
+                    &name,
+                    // A shelf's own record goes with the git copy only for the
+                    // destructive sibling of the pair; the shelf list is dropped on
+                    // the success side of settlement, which cannot run for an entry
+                    // that never existed.
+                    remove,
+                )
+                .map(|_| ()),
+            },
             Self::WorktreeAdd { root, path, branch } => {
                 vcs.worktree_add(root.as_path(), &path, &branch, true)
             }

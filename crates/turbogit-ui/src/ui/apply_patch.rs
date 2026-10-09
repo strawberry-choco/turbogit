@@ -347,6 +347,16 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
         if command_d {
             ui.label("⌘D");
         }
+        // `Import to shelf` is the deferral, and a deferral offered only in a corner
+        // case is not a deferral: it is enabled on exactly the condition the apply is,
+        // and it is a **different fill** because two buttons that look identical offer
+        // two things the developer has to tell apart before pressing one. It writes no
+        // file into the working tree — the patch goes to the shelf as bytes, which is
+        // the point of parking it *before* applying.
+        let import = kit_button(ui, KitButton::Secondary, "Import to shelf");
+        if import.clicked() && loaded && !inflight {
+            state.import_patch_from_apply_window();
+        }
         let apply = kit_button(ui, KitButton::Primary, VERB);
         if apply.clicked() && loaded && !inflight {
             state.dispatch_apply_patch();
