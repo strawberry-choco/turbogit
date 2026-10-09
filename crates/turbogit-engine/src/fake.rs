@@ -39,6 +39,12 @@ pub enum Call {
     ApplyPatch {
         direction: turbogit_engine_api::ApplyDirection,
     },
+    /// A worktree apply, recorded with the paths its sections name so a suite
+    /// can see the order the sections went in — the order is what the rollback's
+    /// coverage is argued against.
+    ApplyPatchToWorktree {
+        paths: Vec<PathBuf>,
+    },
     AddIntentToAdd(Vec<PathBuf>),
     /// A tag creation with its full spec (issue 31).
     TagCreate {
@@ -517,6 +523,24 @@ impl GitExecutor for FakeExecutor {
             .lock()
             .unwrap()
             .push(Call::ApplyPatch { direction });
+        Ok(())
+    }
+
+    /// Records the section's paths and answers `Ok`: the fake has no working
+    /// tree to write into, so what a suite asserts through it is that the apply
+    /// was asked for, per section, in order — never that bytes moved.
+    fn apply_patch_to_worktree(&self, _root: &Path, patch: &Patch) -> TgResult<()> {
+        let paths: Vec<PathBuf> = patch
+            .files
+            .iter()
+            .flat_map(|f| [f.old_path.as_str(), f.new_path.as_str()])
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        self.calls
+            .lock()
+            .unwrap()
+            .push(Call::ApplyPatchToWorktree { paths });
         Ok(())
     }
 

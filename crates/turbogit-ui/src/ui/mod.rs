@@ -22,6 +22,7 @@
 //! (one row raises several quick-actions), and the tree emits several per frame.
 
 pub mod activity_panel;
+pub mod apply_patch;
 pub mod banner;
 pub mod blame_view;
 pub mod branch_divergence;
@@ -126,6 +127,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             // module — it owns a rung list of its own, and `dialogs.rs` is the host
             // for the field-form dialogs, not for a second file tree.
             get_from_branch::show(ui, state);
+        } else if d == Dialog::ApplyPatch {
+            // Surface `10-patches`: the apply window owns a patch payload, git's
+            // preflight verdict and the three-way ending of the last apply, none of
+            // which is a field form `dialogs.rs` hosts.
+            apply_patch::show(ui, state);
         } else {
             dialogs::show(ui, state, d);
         }
