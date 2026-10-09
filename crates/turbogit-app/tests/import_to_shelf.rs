@@ -431,3 +431,56 @@ fn two_imports_never_share_one_payload_file() {
     assert_ne!(addrs[0], addrs[1], "each row addresses its own bytes");
     assert!(shelve_stash::read_patch_payload(project.path(), addrs[0]).is_ok());
 }
+
+/// What the row's `source` is **for**, read back after a restart: `AppState::unshelve`
+/// branches on that field, so an imported row that came back as a stash row would hand git
+/// a lookup for a stash entry that was never made — the parked bytes would stay parked while
+/// the verb reported failure over content the store is holding. The repository has no stash
+/// entry at all, which is what makes this a routing assertion rather than just an apply one.
+#[test]
+fn a_relaunched_imported_row_unshelves_its_parked_bytes_and_not_a_stash_entry() {
+    let project = TempDir::new().unwrap();
+    let (lib, _docs) = two_roots(project.path());
+    let mut state = AppState::for_roots(project.path(), std::slice::from_ref(&lib));
+    let id = state.multi.roots[0].id.clone();
+    state
+        .import_patch_to_shelf(&id, "align", PATCH)
+        .expect("the import parks the patch");
+    assert!(
+        git(&lib, &["stash", "list"]).trim().is_empty(),
+        "deferral: nothing was ever parked in git's stash stack"
+    );
+
+    let mut relaunched = AppState::for_roots(project.path(), std::slice::from_ref(&lib));
+    assert!(
+        relaunched
+            .shelves_for(&id)
+            .iter()
+            .any(|s| s.name == "align" && matches!(s.source, ShelfSource::Patch { .. })),
+        "the relaunched row is still the imported kind, not a stash row: {:?}",
+        relaunched.shelves_for(&id)
+    );
+
+    relaunched.unshelve(id.clone(), "align", false);
+    relaunched.drain_events();
+
+    assert!(
+        relaunched.last_error.is_none(),
+        "unshelving a relaunched imported row has nothing to fail on: {:?}",
+        relaunched.last_error
+    );
+    assert_eq!(
+        std::fs::read_to_string(lib.join("note.txt")).unwrap(),
+        "two\n",
+        "the parked bytes landed in the tree the row names"
+    );
+    assert_eq!(
+        names(&relaunched.shelves_for(&id)),
+        vec!["align"],
+        "`Unshelve` keeps, so the row its verb came from is still listed"
+    );
+    assert!(
+        git(&lib, &["stash", "list"]).trim().is_empty(),
+        "and git's stash list never became part of the route"
+    );
+}
