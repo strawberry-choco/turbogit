@@ -547,6 +547,43 @@ pub fn update_project(vcs: &dyn GitExecutor, root: &Path, method: UpdateMethod) 
     fetch(vcs, root, None)?;
     pull(vcs, root, method == UpdateMethod::Rebase)
 }
+
+/// Fetch, then integrate the upstream into `root` as a rejected push's
+/// recovery, paying both guards every other rewrite pays.
+///
+/// `branch` is the root's current branch: the question the guard answers is
+/// "is the branch this update would rewrite protected?", and only a caller that
+/// has just read `HEAD` can answer it. A merging update rewrites nothing, so it
+/// owes neither the refusal nor the backup — which is why the method, not the
+/// branch, decides what is checked.
+pub fn update_for_recovery(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    method: UpdateMethod,
+    settings: &VcsSettings,
+    branch: &str,
+) -> TgResult<()> {
+    let rebase = method == UpdateMethod::Rebase;
+    if rebase {
+        crate::integrate_service::ensure_rebase_allowed(settings, branch)?;
+    }
+    fetch(vcs, root, None)?;
+    if rebase {
+        // Order-bearing, and silent either way.
+        //
+        // The check above must refuse BEFORE this reference is written: one
+        // rewrite backup exists per repository, and it is the Undo verb's only
+        // target, so a refused update that wrote it would overwrite the record
+        // of an earlier rewrite that succeeded. And this must run BEFORE the
+        // pull, or the rebase rewrites history with nothing to undo.
+        //
+        // A rebasing pull therefore cannot be inlined as `fetch` + `pull` at a
+        // call site: the two guards are the difference between an update the
+        // user can reverse and one they cannot.
+        vcs.save_rewrite_backup(root)?;
+    }
+    pull(vcs, root, rebase)
+}
 #[allow(clippy::too_many_arguments)]
 pub fn push(
     vcs: &dyn GitExecutor,
