@@ -302,7 +302,7 @@ pub struct DialogState {
     /// Why the list could not be read, in git's words. The window paints it rather
     /// than showing nothing: an empty list and a failed read are different answers.
     pub get_from_branch_error: Option<String>,
-    // --- Apply patch (surface `10-patches`) ---
+    // --- Apply patch ---
     /// The root the apply writes into, carried by the window rather than read from
     /// whichever root is focused at click time. An apply is **per root**: the same
     /// discipline `Get from Branch` states, and for the same reason — a verb that
@@ -357,7 +357,7 @@ pub struct DialogState {
     /// See [`crate::operation::ApplyReport`] for why the outcome cannot ride the
     /// completion event.
     pub apply_patch_report: Option<crate::operation::ApplyReport>,
-    // --- Create patch (surface `10-patches`) ---
+    // --- Create patch ---
     //
     // One group for the reference's two create dialogs, which share a payload: the
     // comment step that names the file, then `Patch File Settings`. The fields are
@@ -769,7 +769,7 @@ pub enum Dialog {
     /// reference's own doc, and this surface already hosts its own tree — a second
     /// rung list inside it would be read as staging state.
     GetFromBranch,
-    /// `Apply patch` (surface `10-patches`): the window that writes a patch into
+    /// `Apply patch`: the window that writes a patch into
     /// ONE root's working tree, with `Show Diff` as a preflight rather than a
     /// confirmation and a three-way outcome that says which state the tree is in
     /// afterwards. Its payload is the [`DialogState`] group prefixed
@@ -779,7 +779,7 @@ pub enum Dialog {
     /// no main menu bar, so the command palette is its menu route — the same
     /// substitution the palette already makes for the three lifecycle verbs.
     ApplyPatch,
-    /// `Create Patch from Local Changes`' first step (surface `10-patches`): the
+    /// `Create Patch from Local Changes`' first step: the
     /// comment whose words become the patch file's name. Its payload is the
     /// [`DialogState`] group prefixed `create_patch_`, which the settings step that
     /// follows shares.

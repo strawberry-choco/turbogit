@@ -1,4 +1,4 @@
-//! Ticket 20 — the diff viewer's two view policies, at the seam the view reads
+//! The diff viewer's two view policies, at the seam the view reads
 //! through: the keyed read answers with a display model, and the policy is decided
 //! before that model is built.
 //!

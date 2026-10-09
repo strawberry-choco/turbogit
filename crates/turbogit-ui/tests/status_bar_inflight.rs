@@ -1,4 +1,4 @@
-//! Ticket 16 (`04-integrate` §4.8/§5.8): the status bar's **per-root in-flight
+//! The status bar's **per-root in-flight
 //! operation item** and its Abort / Continue / Skip verbs.
 //!
 //! The reference announces an in-flight operation in the status bar, one
@@ -20,8 +20,8 @@
 //!    where a multi-root client either names a root or picks a arbitrary one.
 //! 5. One end-to-end click: a real conflicted merge, `Abort` in the bar, and the
 //!    durable activity record that follows. The transient toast is not the
-//!    record (reverse gap #6), and the record only exists because `OpKind` grew
-//!    a settlement arm (reverse gap #7).
+//!    record, and the record only exists because `OpKind` grew
+//!    a settlement arm.
 //!
 //! Per-root-ness is the requirement, not a nicety: a single global "operation in
 //! flight" flag would make this whole suite pass while shipping the wrong thing,

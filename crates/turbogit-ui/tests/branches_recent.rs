@@ -1,8 +1,8 @@
-//! Ticket 03 — the Branches tab's `Recent` group, capped at five.
+//! The Branches tab's `Recent` group, capped at five.
 //!
 //! Recent is a view-level group above `Local` whose members are the five most
 //! recently checked-out branches, derived from the reflog (the reference's own
-//! mechanism, `R3-SESSION-1`) — not from anything the app bookkept — so
+//! mechanism) — not from anything the app bookkept — so
 //! recents survive restarts and reflect checkouts made outside the app. The
 //! cap is the documented one ("Recent branches node shows up to five recently
 //! checked-out branches", manage-branches.md:61); no overflow affordance is

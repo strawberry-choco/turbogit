@@ -1,4 +1,4 @@
-//! Ticket 17 (`04-integrate` §4.8 verb 5) — the `Get from Branch` window: its
+//! The `Get from Branch` window: its
 //! three-rung status grammar, `Swap Branches`, and the verb's end-to-end channel.
 //!
 //! The reference's fifth integration verb is a per-file take, not a history
@@ -20,7 +20,7 @@
 //!    green one — offering the take where the base side has no copy is the case that
 //!    would delete a file.
 //! 4. The dispatch channel end to end: a real repository, the row's control, the
-//!    confirmation the ticket adds, and the **durable** activity record (ticket 16's
+//!    confirmation the verb adds, and the **durable** activity record (the
 //!    settle seam) — not a transient notification.
 //! 5. `branch_menu_items`' gate for the menu verb that opens the window.
 
@@ -382,7 +382,7 @@ fn the_verb_is_filled_on_the_blue_rung_and_withheld_on_the_green_one() {
 /// The whole channel, over a real repository: the row's control arms the
 /// confirmation the ticket adds, confirming runs the take, the file on disk is the
 /// branch's copy, and the **durable** activity record names the verb and its root
-/// (ticket 16's settle seam — the toast is a summary, not the record).
+/// (the settle seam — the toast is a summary, not the record).
 ///
 /// The list then re-reads itself: the taken path stops being a row, because a window
 /// that still listed it would offer the same overwrite a second time.

@@ -1,4 +1,4 @@
-//! `Apply patch` (surface `10-patches`): the window that writes a patch into ONE
+//! `Apply patch`: the window that writes a patch into ONE
 //! repository's working tree, and the surface that states what happened to it.
 //!
 //! Two routes, because the reference has two verbs: `Git | Patch | Apply patch…`

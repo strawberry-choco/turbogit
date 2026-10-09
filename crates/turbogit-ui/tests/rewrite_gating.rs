@@ -1,4 +1,4 @@
-//! Ticket 11 — rewrite gating is a state machine over the repository's state,
+//! Rewrite gating is a state machine over the repository's state,
 //! and the reason it gives is a status-bar affordance.
 //!
 //! TurboGit gated the two history verbs on the protected-branch rule alone. The
@@ -26,7 +26,7 @@
 //! Two fixture choices are load-bearing and stated where they are made: the
 //! repositories are checked out on `feature`, because TurboGit's default
 //! settings protect `main` and `master` and the protected guard is an up-front
-//! refusal that stays (reverse gap #15) — a fixture on `main` would have every
+//! refusal that stays — a fixture on `main` would have every
 //! verb blocked by a reason this suite is not measuring; and the commit subjects
 //! are root-qualified, because the log's listing is the union across visible
 //! roots, so two repositories with the same subjects would let a right-click
@@ -712,7 +712,7 @@ fn the_reason_paints_below_every_menu_item_in_the_status_bar() {
 /// A rewrite with nothing wrong about it stays live — the gate is enablement, and
 /// no reason paints until a blocked item is hovered. The ticket's posture is
 /// enablement over confirmation: nothing here adds a confirmation step, and the
-/// preflight that a live verb opens is the one ticket 09 shipped.
+/// preflight that a live verb opens is the one already shipped.
 #[test]
 fn an_ordinary_commit_stays_live_and_says_nothing() {
     let p = project();

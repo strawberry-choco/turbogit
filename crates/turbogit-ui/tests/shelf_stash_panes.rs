@@ -1,4 +1,4 @@
-//! Ticket 12, first half — the Shelf and Stash panes of the Commit tool window.
+//! The Shelf and Stash panes of the Commit tool window.
 //!
 //! These two sub-tabs were labelled placeholders (ADR-0008) with every verb on
 //! the surface unreachable. The suite drives the real shell through

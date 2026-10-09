@@ -1,4 +1,4 @@
-//! Ticket 13 — the six classified push-rejection notifications.
+//! The six classified push-rejection notifications.
 //!
 //! Six situations collapsed into one string is the failure this surface exists
 //! to prevent, so the suite asserts the *asymmetry*: each class says one thing

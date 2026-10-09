@@ -1,4 +1,4 @@
-//! Ticket 10 — `--onto` in the Rebase dialog as **two ordered fields**.
+//! `--onto` in the Rebase dialog as **two ordered fields**.
 //!
 //! The reference's rebase dialog bundles name four fields
 //! (`rebase.dialog.target`, `rebase.dialog.new.base`, `rebase.dialog.old.base`,

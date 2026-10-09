@@ -1,4 +1,4 @@
-//! The `Apply patch` window (surface `10-patches`): the two routes, the preflight
+//! The `Apply patch` window: the two routes, the preflight
 //! that mutates nothing, the two titled outcomes, and the recovery the second one
 //! carries.
 //!
@@ -123,7 +123,7 @@ fn click(harness: &mut Harness<'_, AppState>, label: &str) {
 }
 
 /// The painted form of a shipped title. `group_title` runs the design system's
-/// mandatory uppercase transform (`widgets::group_title`, §3.3), so the window
+/// mandatory uppercase transform (`widgets::group_title`), so the window
 /// paints the title's uppercase — an assertion against the mixed-case constant
 /// would pin the transform's spelling rather than the state. The mixed-case
 /// constants themselves are pinned by the services suite and by the feed

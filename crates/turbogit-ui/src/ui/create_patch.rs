@@ -1,4 +1,4 @@
-//! `Create patch` (surface `10-patches`): the two dialogs the create routes end in,
+//! `Create patch`: the two dialogs the create routes end in,
 //! and the clipboard route that ends in neither.
 //!
 //! The reference reaches **one** `Patch File Settings` dialog from three sources —
