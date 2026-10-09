@@ -25,6 +25,7 @@ pub mod integrate_service;
 pub mod multi_root;
 pub mod partial;
 pub mod patch_apply;
+pub mod patch_create;
 pub mod remote_service;
 pub mod reselection;
 pub mod shelve_stash;

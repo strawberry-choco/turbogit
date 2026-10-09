@@ -33,8 +33,9 @@ use std::sync::{Arc, Mutex};
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
     BlameLine, Branch, Change, ChangeQuestion, ChangeStats, Commit, CommitId, CommitRef,
-    ConflictVersions, DiffOpts, LogOpts, MergeOpts, Patch, RebaseOpts, RebasePlanEntry,
-    RecentCheckout, Remote, RootStatus, Stash, Submodule, TagSpec, Upstream, Worktree,
+    ConflictVersions, DiffOpts, LogOpts, MergeOpts, Patch, PatchOrigin, RebaseOpts,
+    RebasePlanEntry, RecentCheckout, Remote, RootStatus, Stash, Submodule, TagSpec, Upstream,
+    Worktree,
 };
 use turbogit_engine_api::GitExecutor;
 // `engine::fake` is unit-test-only (`#[cfg(test)]`), so integration tests
@@ -167,6 +168,10 @@ pub struct RecordingExecutor {
     /// Every `log` request in order, so a test can assert the shape of the
     /// page the app asked for (log paging).
     log_opts: Mutex<Vec<LogOpts>>,
+    /// Every `patch_bytes` read in order: the origin asked for and whether
+    /// `Reverse patch` was on. A created patch is generated once per settings change,
+    /// and a suite that cannot see the count cannot say that.
+    patch_reads: Mutex<Vec<(PatchOrigin, bool)>>,
 }
 
 impl RecordingExecutor {
@@ -178,6 +183,7 @@ impl RecordingExecutor {
             ref_calls: Mutex::new(0),
             stats_calls: Mutex::new(0),
             log_opts: Mutex::new(Vec::new()),
+            patch_reads: Mutex::new(Vec::new()),
         }
     }
 
@@ -190,6 +196,13 @@ impl RecordingExecutor {
     /// actually handed the engine.
     pub fn log_opts(&self) -> Vec<LogOpts> {
         self.log_opts.lock().expect("log opts mutex").clone()
+    }
+
+    /// Every `patch_bytes` read made so far, in order. A created patch is generated
+    /// once per change of settings, never once per frame, and `Reverse patch` is a
+    /// question asked of git rather than an edit made afterwards.
+    pub fn patch_reads(&self) -> Vec<(PatchOrigin, bool)> {
+        self.patch_reads.lock().expect("patch reads mutex").clone()
     }
 
     /// How many `ref_decorations` invocations have been made so far.
@@ -756,6 +769,17 @@ impl GitExecutor for RecordingExecutor {
 
     fn diff_patch(&self, root: &Path, opts: &DiffOpts) -> TgResult<Patch> {
         self.inner.diff_patch(root, opts)
+    }
+
+    fn patch_bytes(&self, root: &Path, origin: &PatchOrigin, reverse: bool) -> TgResult<Vec<u8>> {
+        // Counted rather than recorded verbatim: a created patch is a read, and what
+        // a suite needs to see is that the dialog asked once per change of settings
+        // and not once per frame.
+        self.patch_reads
+            .lock()
+            .expect("patch reads mutex")
+            .push((origin.clone(), reverse));
+        self.inner.patch_bytes(root, origin, reverse)
     }
 
     fn blame(&self, root: &Path, path: &Path, rev: Option<&str>) -> TgResult<Vec<BlameLine>> {
