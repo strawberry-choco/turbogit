@@ -334,7 +334,7 @@ fn a_rollback_that_cannot_write_is_named_separately_from_one_that_did() {
     // what the window's recovery action has to have in hand.
     let first = unrestored
         .iter()
-        .find(|u| u.path == PathBuf::from("first.txt"))
+        .find(|u| u.path == Path::new("first.txt"))
         .expect("first.txt is named");
     assert_eq!(
         first.recorded.as_deref(),
