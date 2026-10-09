@@ -1188,6 +1188,15 @@ impl GitExecutor for Git2Executor {
         self.cli.check_patch(root, patch)
     }
 
+    fn apply_patch_to_worktree(&self, root: &Path, patch: &Patch) -> TgResult<()> {
+        // Delegated to the CLI for the same reason [`Self::check_patch`] is:
+        // libgit2's `ApplyLocation::Worktree` has no `--recount`, and an apply
+        // whose accept/reject verdict comes from one tolerance while its
+        // write comes from another is how a patch that passed its own preflight
+        // fails to land. The two must agree, so they share one implementation.
+        self.cli.apply_patch_to_worktree(root, patch)
+    }
+
     fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
         // Delegated to the CLI: libgit2 1.9 cannot *create* intent-to-add
         // entries. `IndexEntryExtendedFlag::INTENT_TO_ADD` exists only for

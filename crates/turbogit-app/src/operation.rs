@@ -8,6 +8,7 @@
 //! forgot its settlement arm is a compile error.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::{
@@ -69,6 +70,13 @@ pub enum OpKind {
     /// longer a row, and a window that still lists it would offer to take it
     /// again).
     GetFileFromBranch,
+    /// [`Operation::ApplyPatch`] — write a patch into one root's working tree.
+    /// Its own identity because its outcome is three-way and `TgResult<()>` is
+    /// two-way: an apply that landed, an apply that failed and was rolled back,
+    /// and an apply that failed and could NOT be rolled back are three different
+    /// things to tell the developer, and collapsing the third into the second is
+    /// the exact promise this surface must not make.
+    ApplyPatch,
     /// The [`Operation::Custom`] tail: dispatched, but nothing settles on it.
     Other,
 }
@@ -259,6 +267,42 @@ impl PushRequest {
 /// One-shot work against the Git engine.
 type Work = Box<dyn FnOnce(&dyn GitExecutor) -> TgResult<()> + Send>;
 
+/// The slot an [`Operation::ApplyPatch`] writes its outcome into.
+///
+/// Exists because the apply's report is three-way and the completion event it
+/// travels on is two-way. Cloning the handle shares the one record, so the
+/// worker writes it and settlement reads it without either owning the other;
+/// a poisoned lock still hands back the outcome it was given, because a panic in
+/// the middle of a rollback is exactly the case where reading what it recorded
+/// matters.
+#[derive(Clone, Default)]
+pub struct ApplyReport(Arc<Mutex<Option<turbogit_services::patch_apply::ApplyOutcome>>>);
+
+impl ApplyReport {
+    /// An armed, empty slot: created before the dispatch, so settlement always
+    /// finds a handle to read even under an inline pump.
+    pub fn armed() -> Self {
+        Self::default()
+    }
+
+    /// The worker's write.
+    pub(crate) fn record(&self, outcome: turbogit_services::patch_apply::ApplyOutcome) {
+        *self.lock() = Some(outcome);
+    }
+
+    /// Settlement's read: the outcome, leaving it in place so a second look at
+    /// the same completion can still see what happened.
+    pub fn take(&self) -> Option<turbogit_services::patch_apply::ApplyOutcome> {
+        self.lock().clone()
+    }
+
+    fn lock(
+        &self,
+    ) -> std::sync::MutexGuard<'_, Option<turbogit_services::patch_apply::ApplyOutcome>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 /// A unit of git work and everything the shell needs to know about it.
 ///
 /// Deliberately not `Clone`: [`Operation::Custom`] holds a consumed [`FnOnce`],
@@ -387,6 +431,27 @@ pub enum Operation {
         root: RootId,
         source: String,
         path: PathBuf,
+    },
+    /// `Apply patch`: write `patch` into one root's working tree, with the
+    /// total-rollback discipline [`turbogit_services::patch_apply`] holds.
+    ///
+    /// Per root by construction — one `root`, one working tree, one record — the
+    /// same shape `GetFileFromBranch` takes, and for the same reason: an apply
+    /// that silently widened to every registered root would write the patch N
+    /// times and roll back whichever tree failed.
+    ///
+    /// A named variant rather than a [`Operation::Custom`] closure because the
+    /// verb settles, and settles three ways. `report` is why the outcome rides a
+    /// slot instead of the `TgResult<()>` a completion event carries: the
+    /// [`ApplyOutcome`] names which paths could not be restored and still holds
+    /// their recorded bytes, which is the content a `Rollback failed` recovery
+    /// has to have in hand to offer its retry at all. The slot is armed before
+    /// the dispatch and read by settlement after the completion — the same
+    /// "recorded before it runs" discipline as a push's replay request.
+    ApplyPatch {
+        root: RootId,
+        patch: turbogit_domain::model::Patch,
+        report: ApplyReport,
     },
     /// Work whose label nothing inspects. Greppable, so the long tail stays
     /// visible instead of silently growing into free-text dispatch again.
@@ -654,6 +719,12 @@ impl Operation {
                     .unwrap_or_else(|| path.to_string_lossy().into_owned());
                 format!("Get {name} from {source}")
             }
+            // The count is the fact the record needs: an apply over three files
+            // that failed on the second is told apart from a one-file refusal by
+            // nothing else in this line, and the durable feed outlives the dialog.
+            Self::ApplyPatch { patch, .. } => {
+                format!("Apply patch · {} file(s)", patch.files.len())
+            }
             Self::Custom { label, .. } => label.clone(),
         }
     }
@@ -696,7 +767,12 @@ impl Operation {
             // row of one window opened against one branch of one repository, and
             // widening it here would be the multi-root collapse the programme
             // forbids (reverse gaps #1 and #16) wearing an invalidation rule.
-            | Self::GetFileFromBranch { root, .. } => Affected::Root(root.clone()),
+            | Self::GetFileFromBranch { root, .. }
+            // An apply writes one root's working tree, so it invalidates exactly
+            // that root: the record it writes is the tree's own contents, and a
+            // fleet-wide refresh would be an apply that reached past the tree the
+            // dialog named.
+            | Self::ApplyPatch { root, .. } => Affected::Root(root.clone()),
         }
     }
 
@@ -728,6 +804,7 @@ impl Operation {
             Self::Push { .. } => OpKind::Push,
             Self::Resolve { .. } => OpKind::Resolve,
             Self::GetFileFromBranch { .. } => OpKind::GetFileFromBranch,
+            Self::ApplyPatch { .. } => OpKind::ApplyPatch,
             Self::Custom { .. } => OpKind::Other,
         }
     }
@@ -951,6 +1028,26 @@ impl Operation {
                     &source,
                     &path,
                 )
+            }
+            // The apply records its own three-way outcome before it answers, and
+            // the `TgResult` it returns is only the two-way summary the generic
+            // completion path reads: a patch that landed is `Ok`, one that did not
+            // — rolled back or not — is `Err` carrying git's reason. Which of the
+            // two failures it was is the slot's business, and settlement reads it
+            // there rather than out of prose.
+            Self::ApplyPatch {
+                root,
+                patch,
+                report,
+            } => {
+                let outcome =
+                    turbogit_services::patch_apply::apply_patch(vcs, root.as_path(), &patch);
+                let failure = turbogit_services::patch_apply::error_of(&outcome);
+                report.record(outcome);
+                match failure {
+                    None => Ok(()),
+                    Some(e) => Err(e),
+                }
             }
             Self::Custom { work, .. } => work(vcs),
         }
