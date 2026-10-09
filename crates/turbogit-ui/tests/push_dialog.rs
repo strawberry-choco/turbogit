@@ -1443,7 +1443,7 @@ fn push_button_states_the_resolved_scope() {
     assert_painted(&h, "Push 4 commits to 2 repos");
 }
 
-// ------------------------------------------- ticket 13: rejection classes --
+// --- rejection classes -----------------------------------------------------
 
 /// `repo_ahead_of_origin` plus divergence, WITHOUT the follow-up fetch: the
 /// remote moved while the repo's remote-tracking ref still names the old tip.

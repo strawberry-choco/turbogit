@@ -292,7 +292,7 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         apply_hunk_nav(state, super::hunk_nav::Dir::Prev);
     }
 
-    // The diff viewer's three verbs (spec §4.11): `⌃⇧D` opens its settings menu,
+    // The diff viewer's three verbs: `⌃⇧D` opens its settings menu,
     // `⌃⇧⇥` moves the caret to the opposite pane (`Diff.FocusOppositePane`), `F4`
     // jumps to the caret's line on the source surface with that line preserved.
     // All three are meaningless with no diff previewed, so that is their gate —

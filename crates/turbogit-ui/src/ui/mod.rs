@@ -139,7 +139,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             // the field-form host `dialogs.rs` is.
             unshelve_dialog::show(ui, state);
         } else if d == Dialog::ApplyPatch {
-            // Surface `10-patches`: the apply window owns a patch payload, git's
+            // The apply window owns a patch payload, git's
             // preflight verdict and the three-way ending of the last apply, none of
             // which is a field form `dialogs.rs` hosts.
             apply_patch::show(ui, state);

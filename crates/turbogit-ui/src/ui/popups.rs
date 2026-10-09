@@ -62,7 +62,7 @@ pub enum Action {
     AbortOperation,
     ContinueOperation,
     SkipCommit,
-    // `Git | Patch | Apply patch…` and its clipboard twin (surface `10-patches`).
+    // `Git | Patch | Apply patch…` and its clipboard twin.
     // PALETTE-ONLY for the same reason as the three verbs above: the reference's
     // route is a main menu bar this app does not have, and the VCS popup's action
     // set is a frozen pin. The two are separate entries because the second is
@@ -75,7 +75,7 @@ pub enum Action {
     // the verb where the shelves are listed.
     Unshelve,
     // The same menu's other half: `Git | Patch | Create Patch from Local Changes`
-    // and its dialog-free clipboard twin (surface `10-patches`). PALETTE-ONLY for
+    // and its dialog-free clipboard twin. PALETTE-ONLY for
     // the reason the two above are, and the clipboard entry is separate because it
     // is defined by the dialog it does not open.
     CreatePatch,

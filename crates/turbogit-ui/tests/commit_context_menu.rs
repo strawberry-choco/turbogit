@@ -2642,7 +2642,7 @@ mod surface {
         // created: Ask` follow-up, not by the toast this assertion was written
         // against. The captured default is `Ask`, so no transient `Wrote` report is
         // emitted for a patch that has a root: nothing is decided about the artifact
-        // until the developer says so (same re-scope as ticket 18b's create suite).
+        // until the developer says so.
         assert_painted(&harness, "mine.patch");
         assert_painted(&harness, "Import to shelf");
         assert_eq!(

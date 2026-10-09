@@ -1,4 +1,4 @@
-//! Ticket 11 — the repository's owning operation, read from git's own markers.
+//! The repository's owning operation, read from git's own markers.
 //!
 //! Gating a rewrite verb on repository state is only as good as the state read,
 //! so this suite drives **real git** into each in-flight state and asks the

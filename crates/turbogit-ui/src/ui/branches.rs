@@ -189,7 +189,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     );
 
     // Esc clears the gear's toggle list first, then the filter, then the context
-    // menu, then the selection (§9): the press belongs to the thing that was
+    // menu, then the selection: the press belongs to the thing that was
     // opened last. Read at the very top of the frame, before any widget could
     // consume it: one press closes the menu and disturbs nothing else.
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {

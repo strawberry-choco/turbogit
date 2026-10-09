@@ -1025,7 +1025,7 @@ fn actions_are_blocked_with_an_explanation_on_protected_branches() {
     );
 }
 
-// --- Ticket 09: post-hoc undo with a repository-changed guard -------------------
+// --- Post-hoc undo with a repository-changed guard ------------------------------
 
 /// Reword the middle commit through both dialogs and wait until the post-hoc
 /// undo is armed.
@@ -1035,8 +1035,8 @@ fn reword_and_arm_undo(harness: &mut Harness<'static, AppState>, target: &str) {
     wait_for(harness, |s| s.ui.rewrite_undo.is_some());
 }
 
-/// A successful reword's notification carries the undo (ticket 09, assertion 1
-/// reword half + assertion 3): the success title is painted with an `Undo`
+/// A successful reword's notification carries the undo: the success title is
+/// painted with an `Undo`
 /// control, and the control is a primary kit button — a `Palette::ACCENT`
 /// fill — not a greyed-out stub.
 #[test]
@@ -1058,7 +1058,7 @@ fn the_reword_success_notification_carries_an_undo_control() {
 }
 
 /// After a SECOND operation has run in the same root, the reword's undo is
-/// withheld, not offered-then-failed (ticket 09, assertion 1 withheld half):
+/// withheld, not offered-then-failed:
 /// the notification paints the repository-changed reason instead of an enabled
 /// `Undo`, the success title leaves the frame with it (assertion 2), and no
 /// accent fill rides the banner row at all (assertion 3, withheld = withheld).
@@ -1146,8 +1146,8 @@ fn clicking_undo_after_a_drop_restores_the_dropped_commit() {
     );
 }
 
-/// The undo-failed outcome is reachable, and its wording is its own (ticket 09,
-/// assertion 2): with the backup ref removed behind the app's back — HEAD has
+/// The undo-failed outcome is reachable, and its wording is its own:
+/// with the backup ref removed behind the app's back — HEAD has
 /// not moved, so the guard still holds the undo valid — the restore fails and
 /// the frame reports that, not the success title.
 #[test]
@@ -1180,8 +1180,8 @@ fn an_undo_without_its_backup_reports_a_distinct_failure() {
     );
 }
 
-/// The three outcome strings are three strings (ticket 09, assertion 2, the
-/// structural half): success title, impossible reason and undo-failed wording
+/// The three outcome strings are three strings:
+/// success title, impossible reason and undo-failed wording
 /// never share text, for either covered verb — and the two verbs never share
 /// either, so a drop never reads as a reword.
 #[test]

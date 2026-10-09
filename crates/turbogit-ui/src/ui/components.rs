@@ -660,7 +660,7 @@ pub fn middle_truncate(name: &str, max_chars: usize) -> String {
     format!("{head_s}…{tail_s}")
 }
 
-// --- §14.4b count pluralisation ----------------------------------------------
+// --- count pluralisation -----------------------------------------------------
 
 /// One count-pluralised phrase (`2 conflicts`, `1 file`). The rebased-parity
 /// spec mandates a SINGLE shared helper for pluralisation — per-call-site
