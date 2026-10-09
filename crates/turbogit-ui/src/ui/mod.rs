@@ -42,6 +42,7 @@ pub mod commit_window;
 pub mod components;
 pub mod conflict_resolver;
 pub mod conflicts;
+pub mod create_patch;
 pub mod dialogs;
 pub mod diff;
 /// The `Get from Branch` window (ticket 17, §4.8 verb 5) and its three-rung
@@ -98,6 +99,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // palette so a same-frame open works from either trigger — the sidebar's
     // workspace header row, or the palette's Switch Workspace action.
     popups::workspace_picker(ui, state);
+    // The clipboard is a `Context` act, and the create routes decide its content:
+    // drained on every frame, because the route that copies opens no dialog and so
+    // would never reach a drain living inside one.
+    create_patch::drain_clipboard(ui.ctx(), state);
     if let Some(d) = state.ui.dialog {
         if d == Dialog::Push {
             // Issue #20: the redesigned push dialog lives in its own module.
@@ -132,6 +137,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             // preflight verdict and the three-way ending of the last apply, none of
             // which is a field form `dialogs.rs` hosts.
             apply_patch::show(ui, state);
+        } else if d == Dialog::CreatePatchComment || d == Dialog::PatchFileSettings {
+            // The same surface's other half, in one module: the two create dialogs are
+            // one flow whose first step names the file the second step writes, and the
+            // settings dialog's removal count is state this flow holds between them.
+            create_patch::show(ui, state);
         } else {
             dialogs::show(ui, state, d);
         }

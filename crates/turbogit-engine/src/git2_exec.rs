@@ -1369,6 +1369,13 @@ impl GitExecutor for Git2Executor {
         self.cli.diff_patch(root, opts)
     }
 
+    fn patch_bytes(&self, root: &Path, origin: &PatchOrigin, reverse: bool) -> TgResult<Vec<u8>> {
+        // The CLI, for the reason every other diff-shaped verb here has: a
+        // created patch is git's own text, and a libgit2 rendering of it would be
+        // a second implementation of the format the artifact is read by.
+        self.cli.patch_bytes(root, origin, reverse)
+    }
+
     fn blame(&self, root: &Path, path: &Path, rev: Option<&str>) -> TgResult<Vec<BlameLine>> {
         self.cli.blame(root, path, rev)
     }

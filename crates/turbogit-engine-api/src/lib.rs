@@ -402,6 +402,25 @@ pub trait GitExecutor: Send + Sync {
     /// format is interpreted, and no caller upstream parses it.
     fn diff_patch(&self, root: &Path, opts: &DiffOpts) -> TgResult<Patch>;
 
+    /// The **bytes** of the patch for `origin`, as `git diff` renders them — the
+    /// read behind `Create patch`, where the artifact leaves the application and
+    /// `Patch`'s text fields cannot hold it.
+    ///
+    /// Bytes and not a `String`, deliberately and for two reasons that are one
+    /// fact: a patch's body is its file's content, which git does not guarantee
+    /// is valid UTF-8, and `Patch File Settings`' encoding field is a statement
+    /// about the bytes on disk — a value already decoded to `String` could no
+    /// longer be written verbatim, which is the default this surface ships. Path
+    /// rewriting and the reverse-patch rule therefore work on this answer's raw
+    /// text (`turbogit_services::patch_create`), the same raw-diff discipline
+    /// partial staging keeps (`ADR-0013`).
+    ///
+    /// `reverse` asks git for the patch that **undoes** the origin's change
+    /// (`git diff -R`) rather than a value the application re-renders: reverting
+    /// a diff is git's own operation, and doing it in two lines of Rust would be
+    /// a second, weaker implementation of hunk arithmetic.
+    fn patch_bytes(&self, root: &Path, origin: &PatchOrigin, reverse: bool) -> TgResult<Vec<u8>>;
+
     /// `git blame` for a path (optionally at a revision).
     fn blame(&self, root: &Path, path: &Path, rev: Option<&str>) -> TgResult<Vec<BlameLine>>;
 
