@@ -342,8 +342,10 @@ fn a_state_file_written_before_the_policy_existed_still_loads_and_asks() {
 #[test]
 fn a_state_file_in_the_current_shape_round_trips_the_chosen_arm() {
     let project = TempDir::new().unwrap();
-    let mut settings = VcsSettings::default();
-    settings.when_patch_is_created = PatchCreatedPolicy::ShowInFiles;
+    let settings = VcsSettings {
+        when_patch_is_created: PatchCreatedPolicy::ShowInFiles,
+        ..Default::default()
+    };
     turbogit_app::persistence::save_settings(project.path(), &settings).unwrap();
     let text = std::fs::read_to_string(project.path().join(".turbogit").join("state.ron"))
         .expect("the store is where the choice lives");

@@ -3411,10 +3411,10 @@ impl AppState {
             return message.to_string();
         }
         let path = self.ui.dlg.apply_patch_path.trim();
-        if !path.is_empty() {
-            if let Some(stem) = std::path::Path::new(path).file_stem() {
-                return stem.to_string_lossy().into_owned();
-            }
+        if !path.is_empty()
+            && let Some(stem) = std::path::Path::new(path).file_stem()
+        {
+            return stem.to_string_lossy().into_owned();
         }
         "Imported patch".to_string()
     }
