@@ -69,6 +69,11 @@ pub enum Action {
     // defined by the path it does not ask for.
     ApplyPatch,
     ApplyPatchFromClipboard,
+    // `Unshelve…` (surface 07): the reference reaches this dialog from a menu, and the
+    // palette is this app's menu. PALETTE-ONLY like the verbs above — the VCS popup's
+    // action set is a frozen pin — because the Shelf pane's own header already carries
+    // the verb where the shelves are listed.
+    Unshelve,
 }
 
 impl Action {
@@ -100,6 +105,7 @@ impl Action {
             Action::SkipCommit => "Skip Commit",
             Action::ApplyPatch => "Apply patch\u{2026}",
             Action::ApplyPatchFromClipboard => "Apply patch from Clipboard",
+            Action::Unshelve => "Unshelve\u{2026}",
         }
     }
 
@@ -157,6 +163,7 @@ impl Action {
             Action::SkipCommit,
             Action::ApplyPatch,
             Action::ApplyPatchFromClipboard,
+            Action::Unshelve,
         ]
     }
 }
@@ -249,6 +256,9 @@ pub fn run_action(state: &mut AppState, action: Action) {
         // whether the developer is asked for a file.
         Action::ApplyPatch => state.open_apply_patch(PatchSource::File),
         Action::ApplyPatchFromClipboard => state.open_apply_patch(PatchSource::Clipboard),
+        // The unshelve window opens through the app's own opener, shared with the
+        // Shelf pane's header action, so the two routes cannot arm different defaults.
+        Action::Unshelve => state.open_unshelve_dialog(),
     }
 }
 
