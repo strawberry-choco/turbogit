@@ -38,7 +38,7 @@ fn engine() -> CliExecutor {
 fn patch(context: &str, added: &str) -> turbogit_domain::model::Patch {
     // One physical line each: a `\n\` continuation would swallow the
     // context line's significant leading space.
-    turbogit_engine::patch::parse_patch(&format!(
+    turbogit_engine_api::patch::parse_patch(&format!(
         "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1,2 @@\n {context}\n+{added}\n"
     ))
 }

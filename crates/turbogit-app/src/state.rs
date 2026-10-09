@@ -17,7 +17,7 @@ use std::sync::Arc;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 use turbogit_engine::build_executor;
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, OwnedOperation};
 use turbogit_services::branch_service;
 use turbogit_services::bulk_ops::{self, BulkOp, BulkPlan, Preflight};
 use turbogit_services::bulk_run;
@@ -339,7 +339,7 @@ pub struct DialogState {
     /// The provenance a git-format patch carries, as the engine reads it. Held
     /// beside the two fields it seeds so the seeding can tell an untouched field
     /// from one the developer has since typed over.
-    pub apply_patch_provenance: Option<turbogit_engine::patch::PatchProvenance>,
+    pub apply_patch_provenance: Option<turbogit_engine_api::patch::PatchProvenance>,
     /// The destination's author field, pre-filled from the patch when the patch
     /// has an author. Editable, because an applied patch is a local change and the
     /// local change is the developer's to attribute.
@@ -2230,6 +2230,21 @@ impl AppState {
         self.executor = build_executor(&self.settings);
     }
 
+    /// Which operation, if any, holds `root` — the port's answer, reached through
+    /// the engine this app owns.
+    ///
+    /// The rewrite gate, the status bar's in-flight item and the conflict
+    /// resolver all ask it, and none of them may read git's marker files for
+    /// themselves: the day an engine answers differently, three surfaces
+    /// disagreeing about who holds one repository is the bug.
+    ///
+    /// Cheap enough to ask per root per frame for that reason — a `stat` inside
+    /// the repository's git directory, never a git process — which is the
+    /// property the adapters are held to by `tests/holding_operation.rs`.
+    pub fn holding_operation(&self, root: &Path) -> Option<OwnedOperation> {
+        self.executor.holding_operation(root)
+    }
+
     /// The effective config dir for the global recents file (ADR-0005).
     fn recents_config(&self) -> Option<PathBuf> {
         self.recents_config_dir
@@ -3252,7 +3267,7 @@ impl AppState {
         };
         let text =
             turbogit_services::shelve_stash::read_patch_payload(&self.project_dir, file).ok()?;
-        let patch = turbogit_engine::patch::parse_patch(&text);
+        let patch = turbogit_engine_api::patch::parse_patch(&text);
         (!patch.is_empty()).then_some(patch)
     }
 
@@ -3304,7 +3319,7 @@ impl AppState {
         name: &str,
         text: &str,
     ) -> TgResult<Shelf> {
-        let patch = turbogit_engine::patch::parse_patch(text);
+        let patch = turbogit_engine_api::patch::parse_patch(text);
         if patch.is_empty() {
             return Err(TgError::Other(
                 "this file carries no `diff --git` section, so there is nothing to park"
@@ -4115,7 +4130,7 @@ impl AppState {
     /// engine call — the UI paints a value and never parses (`ADR-0022`).
     pub fn create_patch_preview(&self) -> Option<Patch> {
         let payload = self.create_patch_payload().ok()?;
-        let patch = turbogit_engine::patch::parse_patch(&String::from_utf8_lossy(&payload));
+        let patch = turbogit_engine_api::patch::parse_patch(&String::from_utf8_lossy(&payload));
         (!patch.is_empty()).then_some(patch)
     }
 
@@ -4517,8 +4532,8 @@ impl AppState {
         self.ui.dlg.apply_patch_preflight = None;
         self.ui.dlg.apply_patch_outcome = None;
         let text = self.ui.dlg.apply_patch_text.clone();
-        let patch = turbogit_engine::patch::parse_patch(&text);
-        let provenance = turbogit_engine::patch::read_provenance(&text);
+        let patch = turbogit_engine_api::patch::parse_patch(&text);
+        let provenance = turbogit_engine_api::patch::read_provenance(&text);
         self.ui.dlg.apply_patch_error = if patch.is_empty() && !text.trim().is_empty() {
             // Empty text is a window nobody has filled yet; text that holds no
             // `diff --git` section is a file that is not a patch.
@@ -4541,10 +4556,13 @@ impl AppState {
     /// the developer's typing over it. The distinction is made by comparing to the
     /// provenance actually seeded last, not by a "dirty" flag, so re-opening the
     /// same patch cannot clobber an edit and a new patch cannot be ignored.
-    fn seed_apply_patch_fields(&mut self, next: &Option<turbogit_engine::patch::PatchProvenance>) {
+    fn seed_apply_patch_fields(
+        &mut self,
+        next: &Option<turbogit_engine_api::patch::PatchProvenance>,
+    ) {
         let field =
-            |p: Option<&turbogit_engine::patch::PatchProvenance>,
-             pick: fn(&turbogit_engine::patch::PatchProvenance) -> Option<String>| {
+            |p: Option<&turbogit_engine_api::patch::PatchProvenance>,
+             pick: fn(&turbogit_engine_api::patch::PatchProvenance) -> Option<String>| {
                 p.and_then(pick).unwrap_or_default()
             };
         let last = self.ui.dlg.apply_patch_provenance.as_ref();

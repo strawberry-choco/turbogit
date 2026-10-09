@@ -10,7 +10,7 @@ use turbogit_services::partial::{HunkSelection, Selection, compose};
 /// the assertion is on the text `git apply` will be fed, which is what
 /// `ADR-0013` guarantees.
 fn compose_patch(text: &str, selection: &Selection) -> String {
-    compose(&turbogit_engine::patch::parse_patch(text), selection).to_string()
+    compose(&turbogit_engine_api::patch::parse_patch(text), selection).to_string()
 }
 
 // --- fixtures (hand-written unified-diff text) -------------------------------

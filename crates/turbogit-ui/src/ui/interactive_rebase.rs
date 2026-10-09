@@ -10,8 +10,6 @@
 //! mutated in place; execution goes through the guarded, backup-ref dispatch
 //! [`history_editor::execute_with_backup`].
 
-use std::path::Path;
-
 use egui::{Align, Layout, Sense, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::state::{AppState, RebaseEditorTab};
@@ -258,9 +256,14 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
     widgets::recovery_note(ui, &state.rewrite_backup_ref());
     ui.add_space(6.0);
     ui.label("Abort at any time to restore the pre-rewrite state.");
-    if turbogit_services::integrate_service::in_progress(
-        state.selected_path().as_deref().unwrap_or(Path::new(".")),
-    ) && ui.button("Abort & restore").clicked()
+    // The owner the engine names for this root: the button aborts a rebase, so a
+    // held revert must not arm it, and the answer comes from the same read the
+    // status bar and the rewrite gate ask.
+    let held = state
+        .selected_path()
+        .and_then(|root| state.holding_operation(&root));
+    if turbogit_services::integrate_service::operation_in_progress(held)
+        && ui.button("Abort & restore").clicked()
     {
         if let Some(root) = state.selected_root.clone() {
             state.dispatch(Operation::custom(

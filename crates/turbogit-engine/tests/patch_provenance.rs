@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 use test_support::git_seed::{commit as git_commit, git};
-use turbogit_engine::patch::read_provenance;
+use turbogit_engine_api::patch::read_provenance;
 
 fn repo(parent: &Path) -> PathBuf {
     let dir = parent.join("app");
