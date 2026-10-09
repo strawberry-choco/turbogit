@@ -51,20 +51,26 @@ pub const SETTINGS_TITLE: &str = "Patch File Settings";
 /// on the patch, it IS the patch file's name.
 pub const COMMENT_PROMPT: &str = "Enter a commit comment (it will be used as the patch file name)";
 
-/// Render whichever create surface is open. Also the frame that owns the clipboard.
+/// Render whichever create surface is open.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    let dialog = state.ui.dialog;
-    let ctx = ui.ctx().clone();
-    // Drained before anything is painted, so a copy asked for by a verb that has already
-    // closed its dialog cannot be missed by the frame that would have painted it.
-    if let Some(text) = state.take_create_patch_clipboard() {
-        ctx.copy_text(text);
-        state.show_patch_toast(Toast::success("Patch copied to the clipboard"));
-    }
-    match dialog {
+    match state.ui.dialog {
         Some(Dialog::CreatePatchComment) => comment_step(ui, state),
         Some(Dialog::PatchFileSettings) => settings(ui, state),
         _ => {}
+    }
+}
+
+/// Drain the pending clipboard payload — the application's only clipboard write.
+///
+/// **Unconditional**, and called from [`crate::ui::render`] rather than from [`show`]:
+/// `Copy as Patch to Clipboard` is defined by opening no dialog, so a drain that lived
+/// in the dialog's own paint frame could never run for the one verb that needs it. Both
+/// routes fill the same slot, so neither can hand over a different artifact — and a
+/// success reported before `copy_text` has run would describe an act nobody performed.
+pub fn drain_clipboard(ctx: &egui::Context, state: &mut AppState) {
+    if let Some(text) = state.take_create_patch_clipboard() {
+        ctx.copy_text(text);
+        state.show_patch_toast(Toast::success("Patch copied to the clipboard"));
     }
 }
 
