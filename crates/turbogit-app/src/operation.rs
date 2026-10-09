@@ -1009,8 +1009,9 @@ impl Operation {
                                 if vcs.branch_upstream(path, &branch)?.is_none() {
                                     continue;
                                 }
-                                vcs.fetch(path, None)?;
-                                vcs.pull(path, method == UpdateMethod::Rebase)?;
+                                turbogit_services::sync_service::update_for_recovery(
+                                    vcs, path, method, &settings, &branch,
+                                )?;
                             }
                         }
                         RecoveryMode::Fetch => {
