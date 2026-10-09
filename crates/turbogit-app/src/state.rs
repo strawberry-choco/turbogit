@@ -3562,22 +3562,63 @@ impl AppState {
         self.ui.dlg.apply_patch_outcome = outcome.or(self.ui.dlg.apply_patch_outcome.take());
     }
 
-    /// The durable record of a `Rollback failed` outcome: every path that could
-    /// not be restored, named, with the reason for that one write and the action
-    /// the window offers beside it.
+    /// The durable record of an apply's two titled outcomes: `Apply patch
+    /// aborted` with its guarantee, and `Rollback failed` with every path that
+    /// could not be restored, the reason for that one write and the action the
+    /// window offers beside it.
     ///
     /// Recorded as its own entry rather than left to the generic failure line
-    /// because the generic one carries git's apply error, and git's error does not
-    /// know which files the rollback then failed on. The feed is where the
-    /// developer looks after the notification has gone, so this is the entry that
-    /// has to be able to say which paths are still wrong.
-    pub(crate) fn record_rollback_failure(&mut self) {
-        let unrestored: Vec<String> = match self.ui.dlg.apply_patch_outcome.as_ref() {
-            Some(turbogit_services::patch_apply::ApplyOutcome::RollbackFailed {
-                unrestored,
-                ..
-            }) => unrestored.iter().map(|u| u.stated()).collect(),
-            _ => return,
+    /// because the generic one carries git's apply error, and git's error does
+    /// not know what the rollback then did — neither that every file came back,
+    /// nor which files are still wrong. The feed is where the developer looks
+    /// after the notification has gone, and [`ApplyOutcome::title`] names these
+    /// strings once so the window and this entry cannot drift.
+    pub(crate) fn record_apply_outcome(&mut self) {
+        let entry: Option<(crate::activity::ActivityKind, String)> = match self
+            .ui
+            .dlg
+            .apply_patch_outcome
+            .as_ref()
+        {
+            Some(
+                outcome @ (turbogit_services::patch_apply::ApplyOutcome::Aborted { .. }
+                | turbogit_services::patch_apply::ApplyOutcome::RollbackFailed { .. }),
+            ) => {
+                let kind = if outcome.tree_is_restored() {
+                    crate::activity::ActivityKind::Warning
+                } else {
+                    crate::activity::ActivityKind::Error
+                };
+                let message = match outcome {
+                    turbogit_services::patch_apply::ApplyOutcome::Aborted { reason, .. } => {
+                        format!(
+                            "{} — {} · Why: {reason}",
+                            outcome.title(),
+                            outcome.message()
+                        )
+                    }
+                    turbogit_services::patch_apply::ApplyOutcome::RollbackFailed {
+                        unrestored,
+                        ..
+                    } => {
+                        let stated: Vec<String> = unrestored.iter().map(|u| u.stated()).collect();
+                        format!(
+                            "{} · {} file(s) still hold what the apply wrote: {}. The \
+                             content they held before is recorded and the window's Restore \
+                             retry writes it.",
+                            outcome.title(),
+                            unrestored.len(),
+                            stated.join("; ")
+                        )
+                    }
+                    _ => return,
+                };
+                Some((kind, message))
+            }
+            _ => None,
+        };
+        let Some((kind, message)) = entry else {
+            return;
         };
         let repo = self
             .ui
@@ -3588,14 +3629,8 @@ impl AppState {
         self.ui.activity.push(crate::activity::ActivityEntry {
             at: chrono::Local::now(),
             repo,
-            message: format!(
-                "Rollback failed · {} file(s) still hold what the apply wrote: {}. The \
-                 content they held before is recorded and the window's Restore retry writes \
-                 it.",
-                unrestored.len(),
-                unrestored.join("; ")
-            ),
-            kind: crate::activity::ActivityKind::Error,
+            message,
+            kind,
         });
     }
 
@@ -3662,7 +3697,7 @@ impl AppState {
                 "Rollback complete · every file the apply changed is back to the content it held.",
             ));
         } else {
-            self.record_rollback_failure();
+            self.record_apply_outcome();
         }
     }
 
@@ -4390,12 +4425,12 @@ impl AppState {
                                 message: format!("{label}: {e}"),
                                 kind: crate::activity::ActivityKind::Error,
                             });
-                            // A rollback that failed on any path is recorded a
-                            // second time, by path: the line above carries git's
-                            // apply error, and git never learned which files the
-                            // restore then could not write.
+                            // An apply that ended in one of its two titled states is
+                            // recorded a second time, by that state's own name: the
+                            // line above carries git's apply error, and git never
+                            // learned what the rollback then did.
                             if kind == OpKind::ApplyPatch {
-                                self.record_rollback_failure();
+                                self.record_apply_outcome();
                             }
                             granular::on_op_failed(self);
                         }
