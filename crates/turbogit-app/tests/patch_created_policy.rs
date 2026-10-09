@@ -179,7 +179,7 @@ fn doing_nothing_arms_no_ask_and_opens_no_window() {
     );
 }
 
-/// Reverse gap #6: whichever arm ran, the durable feed remembers the created file.
+/// Whichever arm ran, the durable feed remembers the created file.
 /// The transient report is exactly what a policy is allowed to withhold.
 #[test]
 fn every_arm_records_the_created_patch_in_the_durable_feed() {

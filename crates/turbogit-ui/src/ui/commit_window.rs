@@ -220,8 +220,10 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
 // --------------------------------------------------------- sub-tab strip --
 
-/// Sub-tabs in strip order. Shelf / Stash are Phase-J placeholders (ADR-0008);
-/// Unversioned Files was removed in the one-tree redesign (issue 04).
+/// Sub-tabs in strip order. All three render a real pane; ADR-0008's placeholder
+/// treatment is superseded for Shelf and Stash, which list this root's shelves
+/// and git's stash entries. Unversioned Files was removed in the one-tree
+/// redesign (issue 04).
 const SUB_TABS: [(CommitSubTab, &str); 3] = [
     (CommitSubTab::LocalChanges, "Local Changes"),
     (CommitSubTab::Shelf, "Shelf"),
