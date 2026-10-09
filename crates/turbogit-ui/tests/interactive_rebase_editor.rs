@@ -520,9 +520,9 @@ fn the_footer_estimates_and_start_dispatches_the_backup_backed_plan() {
     assert_eq!(h.state().ui.dlg.rebase_plan, None);
 }
 
-// ------------------------------------------- ticket 08: the seven plan verbs --
+// --- the seven plan verbs -----------------------------------------------------
 //
-// The three verification assertions of ticket 08. All row claims are scoped by
+// The three verification assertions. All row claims are scoped by
 // the row's own `Node::rect()` — every plan row is a labeled node ("plan row
 // <subject>") — because verb words repeat across rows AND in the SHORTCUTS
 // legend, so unscoped painted-text claims would collide with both.

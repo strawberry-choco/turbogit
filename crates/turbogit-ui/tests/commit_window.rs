@@ -7,7 +7,7 @@
 //!
 //! Issue #18 extends this suite to the Commit window's sub-tab strip:
 //! Local Changes / Unversioned Files carry active data, Shelf / Stash are
-//! real Shelf and Stash panes (ticket 12 superseded ADR-0008's placeholders), and
+//! real Shelf and Stash panes (they superseded ADR-0008's placeholders), and
 //! the "Advanced options..."
 //! control is visible but inert (ADR-0010).
 //!
@@ -1172,7 +1172,7 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
 #[test]
 fn shelf_and_stash_replace_the_placeholder_with_their_own_panes() {
     // ADR-0008 made these two sub-tabs labelled placeholders because nothing
-    // was behind them. Ticket 12 gave them panes, so the placeholder copy is
+    // was behind them. They have real panes now, so the placeholder copy is
     // gone from the whole window and each tab shows its own listing chrome.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "real-panes-repo");

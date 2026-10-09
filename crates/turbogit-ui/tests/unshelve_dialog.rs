@@ -1,4 +1,4 @@
-//! Ticket 12, second half — the **Unshelve dialog**.
+//! The **Unshelve dialog**.
 //!
 //! The panes carry the reference's two verbs with their two defaults baked into
 //! their labels; the dialog is the surface that carries the reference's *fields*

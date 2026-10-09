@@ -2212,7 +2212,7 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         FileAction::CreatePatch(path) => {
             // A patch of one file's change in one revision, named by the row the
             // menu opened on rather than by whatever is selected when the dialog
-            // paints (surface `10-patches`, the file-revision route).
+            // paints (the file-revision route).
             state.open_create_patch_on(
                 root_id.clone(),
                 PatchOrigin::FileRevision {

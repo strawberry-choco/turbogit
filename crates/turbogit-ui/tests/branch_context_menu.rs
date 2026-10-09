@@ -41,7 +41,7 @@ fn state(branch: &Branch, current: Option<&str>, item: BranchMenuAction) -> Menu
 /// The row for the checked-out branch: Checkout and Checkout-and-pull are
 /// blocked with "already checked out", and `Pull` — once the one update
 /// action this row offered — is withheld with the pull family's scope
-/// (ticket 21a): the family is a remote-branch verb, and the checked-out
+/// — the family is a remote-branch verb, and the checked-out
 /// branch is always local. Rename is a local verb and stays enabled.
 #[test]
 fn the_current_branch_offers_no_checkout_and_no_pull() {
@@ -217,7 +217,7 @@ fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
         MenuItemState::disabled("remote branches cannot be rebased")
     );
     assert_eq!(remote(BranchMenuAction::Compare), MenuItemState::enabled());
-    // Ticket 17: the file-level comparison is read-only too, so a remote-tracking
+    // The file-level comparison is read-only too, so a remote-tracking
     // row can be one of its sides — which is what makes `Get from Branch` reachable
     // for a file that only exists on `origin/*`.
     assert_eq!(
@@ -238,7 +238,7 @@ fn the_designed_order_is_the_array_slots() {
     }
 }
 
-// --- cycle 7: the pull family is a remote-branch verb (ticket 21a) ---------------
+// --- the pull family is a remote-branch verb -------------------------------------
 
 /// `Pull` and `Checkout and pull` mean "fetch and integrate this branch's
 /// upstream", and the reference scopes that family to remote branches — on a
@@ -835,7 +835,7 @@ pub(crate) mod surface {
         assert_eq!(context_menu_target(&harness), None);
     }
 
-    // --- ticket 21a: the pull family is a remote-branch verb -------------
+    // --- the pull family is a remote-branch verb -------------------------
 
     /// A tracking local branch is not offered the pull family — the row this
     /// menu used to offer it on. `Pull` on the checked-out branch states the

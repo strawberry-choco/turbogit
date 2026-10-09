@@ -10,7 +10,7 @@
 //! Two ways that happened, both from `save_shelves` writing the whole in-memory
 //! slice as one `fs::write` truncation:
 //!
-//! 1. ticket 12 gave [`Shelf`] a required `root`, so every `shelf.ron` written by
+//! 1. [`Shelf`] gained a required `root`, so every `shelf.ron` written by
 //!    an earlier build stopped parsing; the launch load reported the failure and
 //!    left the list empty, and the next shelve wrote that empty list over the
 //!    file. The first test pins the legacy shape reading back.
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use turbogit_domain::model::{Change, ChangeStatus, RootId, Shelf};
 use turbogit_services::shelve_stash::{self, shelf_path};
 
-/// What an **older build** wrote: the same row without the `root` field ticket 12
+/// What an **older build** wrote: the same row without the `root` field that was
 /// added. Serialising this shape rather than typing RON by hand keeps the legacy
 /// artefact coming from an independent source of truth — the old field list — so
 /// the test cannot drift from what the previous release actually emitted.
@@ -62,7 +62,7 @@ fn write_legacy_store(project_dir: &Path, names: &[&str]) {
     std::fs::write(shelf_path(project_dir), text).unwrap();
 }
 
-/// A `shelf.ron` from before ticket 12 — no `root` on any row — **loads** instead
+/// A legacy `shelf.ron` — no `root` on any row — **loads** instead
 /// of failing, and each legacy row is bound to the project directory (the one
 /// root a legacy store could only ever have meant), so the pane lists it and an
 /// unshelve can find it by name again.

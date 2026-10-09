@@ -1,4 +1,4 @@
-//! Ticket 04 — the Branches surface's four grouping and visibility toggles.
+//! The Branches surface's four grouping and visibility toggles.
 //!
 //! Four persisted toggles behind a settings gear: `Group by Directory`,
 //! `Group by Repository`, `Show Recent Branches`, `Show Tags`
