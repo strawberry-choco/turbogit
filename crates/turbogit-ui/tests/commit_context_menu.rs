@@ -2803,7 +2803,8 @@ mod surface {
         press(&mut harness, "Save to…");
         settle(&mut harness);
         assert_eq!(
-            harness.state().ui.dlg.create_patch_location, typed,
+            harness.state().ui.dlg.create_patch_location,
+            typed,
             "a declined chooser changes nothing"
         );
         press(&mut harness, "Cancel");

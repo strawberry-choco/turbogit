@@ -235,7 +235,7 @@ fn three_presses_paint_three_and_two_restores_paint_one() {
         settle(&mut harness);
         let count = press + 1;
         assert!(
-            painted(&mut harness, &format!("Remove Leading Directory [{count}]")),
+            painted(&harness, &format!("Remove Leading Directory [{count}]")),
             "the count is on the button that moved it, in the frame after the press"
         );
         assert!(
@@ -244,7 +244,10 @@ fn three_presses_paint_three_and_two_restores_paint_one() {
             patch_paths(&harness)
         );
         assert!(
-            !painted(&mut harness, &format!("Remove Leading Directory [{}]", count + 1)),
+            !painted(
+                &harness,
+                &format!("Remove Leading Directory [{}]", count + 1)
+            ),
             "one press is one segment — the count never runs ahead of the press"
         );
     }
@@ -252,7 +255,7 @@ fn three_presses_paint_three_and_two_restores_paint_one() {
     // Two restores, one step at a time: 3 → 2 → 1.
     click_counted(&mut harness, "Restore Leading Directory");
     settle(&mut harness);
-    assert_painted(&mut harness, "Remove Leading Directory [2]");
+    assert_painted(&harness, "Remove Leading Directory [2]");
     assert!(
         patch_paths(&harness).contains("java/App.java"),
         "one given back: {}",
@@ -260,7 +263,7 @@ fn three_presses_paint_three_and_two_restores_paint_one() {
     );
     click_counted(&mut harness, "Restore Leading Directory");
     settle(&mut harness);
-    assert_painted(&mut harness, "Remove Leading Directory [1]");
+    assert_painted(&harness, "Remove Leading Directory [1]");
     assert!(
         patch_paths(&harness).contains("main/java/App.java"),
         "and two: {}",
@@ -275,8 +278,8 @@ fn three_presses_paint_three_and_two_restores_paint_one() {
         click_counted(&mut harness, "Remove Leading Directory [");
         settle(&mut harness);
     }
-    assert_painted(&mut harness, "Remove Leading Directory [3]");
-    assert_not_painted(&mut harness, "Remove Leading Directory [4]");
+    assert_painted(&harness, "Remove Leading Directory [3]");
+    assert_not_painted(&harness, "Remove Leading Directory [4]");
     assert!(
         patch_paths(&harness).contains("App.java"),
         "the shallowest spelling is the file's own name, never nothing: {}",
@@ -409,10 +412,7 @@ fn the_four_settings_fields_are_painted_in_the_references_order() {
     let reverse = first_index(&harness, "Reverse patch");
     let encoding = first_index(&harness, "Encoding");
     assert!(
-        location < clipboard
-            && clipboard < base
-            && base < reverse
-            && reverse < encoding,
+        location < clipboard && clipboard < base && base < reverse && reverse < encoding,
         "location, `To clipboard`, base path, reverse, encoding — painted as \
          {location}, {clipboard}, {base}, {reverse}, {encoding}"
     );
@@ -512,7 +512,7 @@ fn the_encoding_field_is_read_back_off_the_written_file() {
 fn the_clipboard_route_opens_no_dialog_at_all() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = dirty_repo(tmp.path());
-    let state = state_over(&[dir.to_path_buf()], tmp.path());
+    let state = state_over(std::slice::from_ref(&dir), tmp.path());
     let mut harness = shell_harness_over(state, Vec2::new(1280.0, 900.0));
     // The verb runs against the live shell, so the copy lands in a frame this test can
     // see: an output command belongs to the frame that emitted it, and a harness built
@@ -578,7 +578,7 @@ fn a_patch_that_is_not_text_refuses_the_clipboard_rather_than_losing_bytes() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = clean_repo(tmp.path());
     std::fs::write(dir.join(DEEP), [b'x', 0xff, 0xfe, b'\n']).unwrap();
-    let state = state_over(&[dir.to_path_buf()], tmp.path());
+    let state = state_over(std::slice::from_ref(&dir), tmp.path());
     let mut harness = shell_harness_over(state, Vec2::new(1280.0, 900.0));
     run_action(harness.state_mut(), Action::CopyPatchToClipboard);
 
@@ -605,10 +605,11 @@ fn a_log_commit_skips_the_comment_and_names_the_file_from_its_subject() {
     let dir = clean_repo(tmp.path());
     let root = root_id(&dir);
     let id = head(&dir);
-    let mut state = state_over(&[dir.to_path_buf()], tmp.path());
-    state
-        .caches
-        .store_log(root.clone(), vec![cached(&root, &id, "Align the parser output")]);
+    let mut state = state_over(std::slice::from_ref(&dir), tmp.path());
+    state.caches.store_log(
+        root.clone(),
+        vec![cached(&root, &id, "Align the parser output")],
+    );
     state.open_create_patch_on(root.clone(), PatchOrigin::Commit { id: id.clone() });
     let harness = settled(state);
 
@@ -639,10 +640,11 @@ fn a_file_revision_routes_straight_to_the_settings_naming_one_file() {
     let dir = clean_repo(tmp.path());
     let root = root_id(&dir);
     let id = head(&dir);
-    let mut state = state_over(&[dir.to_path_buf()], tmp.path());
-    state
-        .caches
-        .store_log(root.clone(), vec![cached(&root, &id, "Align the parser output")]);
+    let mut state = state_over(std::slice::from_ref(&dir), tmp.path());
+    state.caches.store_log(
+        root.clone(),
+        vec![cached(&root, &id, "Align the parser output")],
+    );
     state.open_create_patch_on(
         root.clone(),
         PatchOrigin::FileRevision {
@@ -680,7 +682,10 @@ fn the_create_verbs_are_palette_routes_and_the_popup_stays_frozen() {
         create_patch::LOCAL_CHANGES_VERB,
         create_patch::CLIPBOARD_VERB,
     ] {
-        assert!(palette.contains(&route), "`{route}` is unreachable: {palette:?}");
+        assert!(
+            palette.contains(&route),
+            "`{route}` is unreachable: {palette:?}"
+        );
         assert!(
             !popup.contains(&route),
             "the VCS popup's documented action set stays frozen"
@@ -694,7 +699,7 @@ fn the_create_verbs_are_palette_routes_and_the_popup_stays_frozen() {
 fn a_checked_file_narrows_the_patch_to_that_file_alone() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = dirty_repo(tmp.path());
-    let mut state = state_over(&[dir.to_path_buf()], tmp.path());
+    let mut state = state_over(std::slice::from_ref(&dir), tmp.path());
     // Checked by the key the Commit window itself uses, so the fixture cannot be the
     // thing that makes the assert pass.
     let root = &state.multi.roots[0];
@@ -717,13 +722,16 @@ fn a_checked_file_narrows_the_patch_to_that_file_alone() {
     settle(&mut harness);
 
     let paths = patch_paths(&harness);
-    assert!(paths.contains("Util.java"), "the checked file is in it: {paths}");
+    assert!(
+        paths.contains("Util.java"),
+        "the checked file is in it: {paths}"
+    );
     assert!(
         !paths.contains("App.java"),
         "and the unchecked change is not: {paths}"
     );
     // And the same verb with nothing checked is the whole set: one route, two answers.
-    let mut nothing_checked = state_over(&[dir.to_path_buf()], tmp.path());
+    let mut nothing_checked = state_over(std::slice::from_ref(&dir), tmp.path());
     nothing_checked.open_create_patch_from_selection();
     assert_eq!(
         nothing_checked.ui.dlg.create_patch_origin,
