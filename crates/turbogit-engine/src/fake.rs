@@ -618,6 +618,18 @@ impl GitExecutor for FakeExecutor {
         ))
     }
 
+    fn patch_bytes(&self, root: &Path, _origin: &PatchOrigin, _reverse: bool) -> TgResult<Vec<u8>> {
+        // The same seeded text `diff_patch` parses, as bytes: a create-patch suite
+        // driving the fake needs the body it staged, and a read records no call —
+        // `Call` is the record of the mutations this fake stands in for.
+        Ok(self
+            .diffs
+            .get(root)
+            .cloned()
+            .unwrap_or_default()
+            .into_bytes())
+    }
+
     fn blame(&self, _root: &Path, _path: &Path, _rev: Option<&str>) -> TgResult<Vec<BlameLine>> {
         Ok(Vec::new())
     }
