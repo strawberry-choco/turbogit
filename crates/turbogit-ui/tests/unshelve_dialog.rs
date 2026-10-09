@@ -21,7 +21,7 @@ use test_support::harness::{
 };
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, Shelf};
-use turbogit_ui::ui::popups::Action;
+use turbogit_ui::ui::popups::{Action, run_action};
 
 // --------------------------------------------------------------- fixtures --
 
@@ -259,6 +259,12 @@ fn ticking_the_option_and_confirming_destroys_the_shelf_and_gits_copy() {
     h.run();
 
     assert!(
+        h.state().ui.confirm.is_none(),
+        "the window itself is the gate on the destructive path: an explicit tick plus a \
+         danger-labelled affirmative, and no second confirmation on top of it"
+    );
+
+    assert!(
         h.state().ui.shelves.is_empty(),
         "the ticked option takes the shelf record with it"
     );
@@ -389,6 +395,25 @@ fn both_the_pane_header_and_the_palette_open_the_same_dialog() {
         h.state().ui.dialog,
         Some(Dialog::Unshelve),
         "the pane's own route opens the dialog"
+    );
+
+    // And the palette route runs the *same* opener, so neither can arm defaults the
+    // other does not.
+    h.state_mut().ui.dialog = None;
+    run_action(h.state_mut(), Action::Unshelve);
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Unshelve),
+        "the menu route reaches the same window"
+    );
+    assert!(
+        !h.state().ui.dlg.unshelve_remove,
+        "and arms the same captured default: off"
+    );
+    assert_eq!(
+        h.state().ui.dlg.unshelve_root,
+        h.state().selected_root,
+        "on the root that was focused when it opened"
     );
 
     // The command palette is this app's menu route, and the VCS popup's action set
