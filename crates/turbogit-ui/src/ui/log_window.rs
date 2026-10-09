@@ -194,8 +194,6 @@ const PANE_COLUMN_GAP: f32 = 10.0;
 /// two pixels were the only thing separating content from edge — and nothing
 /// was removed here.
 const PANE_CARD_PAD: i8 = 8;
-/// Uppercase micro text (§3.3) — shared control role (T2).
-const MICRO_TEXT: f32 = crate::theme::TYPE_CONTROL;
 /// Mono cell font size — shared body role (T2).
 const MONO_TEXT: f32 = crate::theme::TYPE_BODY;
 
@@ -1131,7 +1129,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 }
                 ui.label(
                     RichText::new(format!("Path filter: {}", path.display()))
-                        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                        .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
                         .color(Palette::BRAND),
                 );
             });
@@ -1151,7 +1149,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 }
                 ui.label(
                     RichText::new(format!("Ref filter: {ref_name}"))
-                        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                        .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
                         .color(Palette::BRAND),
                 );
             });
@@ -1225,7 +1223,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
                 );
                 ui.label(
                     RichText::new(root.id.name())
-                        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                        .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
                         .color(Palette::INK_3),
                 );
             }
@@ -1380,7 +1378,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
             }
             ui.label(
                 RichText::new(format!("{} shown", display.len()))
-                    .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                    .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
                     .color(Palette::INK_3),
             );
         });
@@ -1975,7 +1973,7 @@ fn commit_row(
                 for r in labels {
                     ui.label(
                         RichText::new(&r.name)
-                            .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                            .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
                             .color(ref_kind(r.kind).accent()),
                     );
                 }
@@ -2375,7 +2373,7 @@ fn file_row(
     let colors = kind.colors();
     let badge_galley = painter.layout_no_wrap(
         change.status.short().to_owned(),
-        FontId::new(MICRO_TEXT, FontFamily::Proportional),
+        FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional),
         colors.fg,
     );
     let badge_rect = Rect::from_min_size(
@@ -2417,7 +2415,7 @@ fn file_row(
     // secondary text on the row's own band, so it takes the secondary step
     // rather than the muted one (see `row_meta_ink`).
     if let Some(dir) = change.path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        let dir_font = FontId::new(MICRO_TEXT, FontFamily::Proportional);
+        let dir_font = FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional);
         let dir_text = forward_slash_path(dir);
         let dir_ink = row_meta_ink();
         let dir_galley = elide(&painter, &dir_text, dir_font, dir_ink, text_right - mx);
@@ -2656,7 +2654,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     else {
         ui.label(
             RichText::new("Select a commit…")
-                .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+                .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
                 .color(Palette::INK_3),
         );
         return;
@@ -2783,7 +2781,8 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
 /// coincident call sites, and the values it names are [`Palette::INK`].
 ///
 /// [`Palette::INK_3`] is also the right step for it rather than a stale one: R3
-/// puts field labels and metadata on the muted step, at [`MICRO_TEXT`] on a
+/// puts field labels and metadata on the muted step, at
+/// [`crate::theme::TYPE_CONTROL`] on a
 /// content surface, which clears 4.5:1. The dim step is reserved for
 /// placeholders, dim path suffixes and hatches and may never be the only
 /// rendering of something the user needs — a commit's author is exactly that.
@@ -2791,7 +2790,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
 /// the dim one.
 fn micro_text(text: impl Into<String>) -> RichText {
     RichText::new(text)
-        .font(FontId::new(MICRO_TEXT, FontFamily::Proportional))
+        .font(FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional))
         .color(Palette::INK_3)
 }
 

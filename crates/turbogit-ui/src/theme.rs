@@ -556,6 +556,20 @@ pub const CELL_GAP: f32 = 8.0;
 pub const DENSITY_COMPACT_BUTTON: Vec2 = Vec2::new(8.0, 4.0);
 /// Dense control padding (6×2) for the status bar.
 pub const DENSITY_DENSE_BUTTON: Vec2 = Vec2::new(6.0, 2.0);
+/// Compressed control padding (8×1) for the command palette's action list. The
+/// whole action set has to stay listed and reachable without scrolling, so this
+/// is the tightest control band in the ramp — tighter than
+/// [`DENSITY_DENSE_BUTTON`], which answers a toolbar's question, not a list's.
+pub const DENSITY_COMMAND_BUTTON: Vec2 = Vec2::new(8.0, 1.0);
+/// One command-palette action row's interactive band (14 px), read together with
+/// [`DENSITY_COMMAND_BUTTON`]: the padding and the band set the row's rhythm
+/// between them.
+pub const DENSITY_COMMAND_ROW_HEIGHT: f32 = 14.0;
+/// Air (2 px) between the rows of a compressed list — the command palette's
+/// action list and the workspace picker's recents list. Tighter than
+/// [`ITEM_SPACING`]'s default gap by design: these rows are read as one column,
+/// not as separate controls.
+pub const DENSITY_LIST_GAP: f32 = 2.0;
 /// Air between the destructive verb and the two that carry on inside the status
 /// bar's in-flight item. Wider than any gap *within* the forward-going pair, and
 /// that contrast is the assertion: separated means separated from both, not just

@@ -395,9 +395,9 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
             ui.text_edit_singleline(&mut state.ui.command_query)
                 .request_focus();
             ui.separator();
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.spacing_mut().button_padding = egui::vec2(8.0, 1.0);
-            ui.spacing_mut().interact_size.y = 14.0;
+            ui.spacing_mut().item_spacing.y = crate::theme::DENSITY_LIST_GAP;
+            ui.spacing_mut().button_padding = crate::theme::DENSITY_COMMAND_BUTTON;
+            ui.spacing_mut().interact_size.y = crate::theme::DENSITY_COMMAND_ROW_HEIGHT;
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), list_h),
                 egui::Layout::top_down(egui::Align::Min),
@@ -517,7 +517,7 @@ pub fn workspace_picker(ui: &mut Ui, state: &mut AppState) {
             if rows.is_empty() {
                 widgets::empty_state(ui, "No recent workspaces");
             }
-            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.spacing_mut().item_spacing.y = crate::theme::DENSITY_LIST_GAP;
             for row in &rows {
                 let mut label = row.recent.name.clone();
                 if row.recent.kind == RecentKind::Workspace
