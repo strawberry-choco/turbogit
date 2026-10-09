@@ -9,7 +9,7 @@
 //! themselves, and the engine's own apply answer is the last word.
 
 use turbogit_domain::model::Patch;
-use turbogit_engine::patch::parse_patch;
+use turbogit_engine_api::patch::parse_patch;
 use turbogit_services::partial::{HunkSelection, Selection, compose};
 
 /// A hunk with no context lines at all: the whole hunk is the change.

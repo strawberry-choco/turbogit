@@ -742,7 +742,7 @@ mod tests {
     /// strip, which is what `git show` wants.
     #[test]
     fn pane_paths_are_repo_relative_because_the_value_says_so() {
-        let renamed = crate::diff_model::files_from(&turbogit_engine::patch::parse_patch(
+        let renamed = crate::diff_model::files_from(&turbogit_engine_api::patch::parse_patch(
             "diff --git a/old/dir/Art.png b/new/dir/Art.png\n\
              similarity index 100%\n\
              rename from old/dir/Art.png\n\

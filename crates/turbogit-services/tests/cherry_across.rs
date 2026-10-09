@@ -339,7 +339,7 @@ fn forecast_blocks_a_dirty_target() {
 /// A patch value, read from git's syntax. That reader belongs to the adapters,
 /// so a service's test reaches into the engine only to build a fixture.
 fn value(text: &str) -> turbogit_domain::model::Patch {
-    turbogit_engine::patch::parse_patch(text)
+    turbogit_engine_api::patch::parse_patch(text)
 }
 
 /// a reading of git's stderr prose. Real repository, real `git apply --check`.

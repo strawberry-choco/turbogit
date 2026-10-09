@@ -117,7 +117,7 @@ mod tests {
     /// adapters. A services test may build a value with it; nothing in this
     /// crate's production code does.
     fn patch(text: &str) -> Patch {
-        turbogit_engine::patch::parse_patch(text)
+        turbogit_engine_api::patch::parse_patch(text)
     }
 
     /// Two well-separated hunks in one file, as `git diff HEAD` emits.

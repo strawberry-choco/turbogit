@@ -37,7 +37,7 @@ fn repo_with_file() -> (tempfile::TempDir, PathBuf) {
 /// A patch against `file.txt` at "one\n": applies when `context` matches the
 /// file, does not when it does not.
 fn patch(context: &str, added: &str) -> turbogit_domain::model::Patch {
-    turbogit_engine::patch::parse_patch(&format!(
+    turbogit_engine_api::patch::parse_patch(&format!(
         "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1,2 @@\n {context}\n+{added}\n"
     ))
 }

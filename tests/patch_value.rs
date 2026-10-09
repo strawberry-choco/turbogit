@@ -18,7 +18,7 @@
 //! than with itself.
 
 use turbogit_domain::model::{Patch, PatchLineKind};
-use turbogit_engine::patch::parse_patch;
+use turbogit_engine_api::patch::parse_patch;
 
 /// The corpus is written with `concat!` rather than `\` continuations on
 /// purpose: a continuation strips the whitespace that follows it, and a
