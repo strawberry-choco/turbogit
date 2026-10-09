@@ -69,6 +69,11 @@ pub enum Action {
     // defined by the path it does not ask for.
     ApplyPatch,
     ApplyPatchFromClipboard,
+    // `Unshelve…` (surface 07): the reference reaches this dialog from a menu, and the
+    // palette is this app's menu. PALETTE-ONLY like the verbs above — the VCS popup's
+    // action set is a frozen pin — because the Shelf pane's own header already carries
+    // the verb where the shelves are listed.
+    Unshelve,
     // The same menu's other half: `Git | Patch | Create Patch from Local Changes`
     // and its dialog-free clipboard twin (surface `10-patches`). PALETTE-ONLY for
     // the reason the two above are, and the clipboard entry is separate because it
@@ -106,6 +111,7 @@ impl Action {
             Action::SkipCommit => "Skip Commit",
             Action::ApplyPatch => "Apply patch\u{2026}",
             Action::ApplyPatchFromClipboard => "Apply patch from Clipboard",
+            Action::Unshelve => "Unshelve\u{2026}",
             Action::CreatePatch => crate::ui::create_patch::LOCAL_CHANGES_VERB,
             Action::CopyPatchToClipboard => crate::ui::create_patch::CLIPBOARD_VERB,
         }
@@ -165,6 +171,7 @@ impl Action {
             Action::SkipCommit,
             Action::ApplyPatch,
             Action::ApplyPatchFromClipboard,
+            Action::Unshelve,
             Action::CreatePatch,
             Action::CopyPatchToClipboard,
         ]
@@ -264,6 +271,9 @@ pub fn run_action(state: &mut AppState, action: Action) {
         // the clipboard and asks nothing on the way.
         Action::CreatePatch => state.open_create_patch_from_selection(),
         Action::CopyPatchToClipboard => state.copy_patch_from_selection(),
+        // The unshelve window opens through the app's own opener, shared with the
+        // Shelf pane's header action, so the two routes cannot arm different defaults.
+        Action::Unshelve => state.open_unshelve_dialog(),
     }
 }
 

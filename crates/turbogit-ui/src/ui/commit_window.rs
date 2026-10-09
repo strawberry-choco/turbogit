@@ -394,6 +394,16 @@ fn shelf_pane(ui: &mut Ui, state: &mut AppState) {
                 {
                     state.ui.dialog = Some(Dialog::ImportPatches);
                 }
+                // The dialog route sits beside the verbs rather than replacing them:
+                // the row buttons carry the keep/remove choice in their names, while
+                // this window is where the choice is *asked for* — which shelf, and
+                // whether it survives the apply.
+                if widgets::ghost_button(ui, None, "Unshelve\u{2026}")
+                    .on_hover_text("Unshelve a shelf from this repository")
+                    .clicked()
+                {
+                    state.open_unshelve_dialog();
+                }
             },
             row: &mut shelf_row,
         },
