@@ -892,6 +892,38 @@ mod surface {
         test_support::harness::click_menu_item(harness, "Copy hash", label);
     }
 
+    /// Press a painted control by its exact label, whichever role carries it.
+    pub(crate) fn press(harness: &mut Harness<'_, AppState>, label: &str) {
+        let node = harness
+            .get_all_by_role(egui::accesskit::Role::Button)
+            .chain(
+                harness
+                    .get_all_by_role(egui::accesskit::Role::CheckBox)
+                    .collect::<Vec<_>>(),
+            )
+            .find(|n| n.accesskit_node().label().as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("no control labelled `{label}` is painted"));
+        node.click();
+        harness.step();
+    }
+
+    /// Walk the `Patch File Settings` dialog the commit's `Create patch` item opens:
+    /// the item no longer writes on its own, because the reference's create route ends
+    /// in the settings, and the settings' `OK` is what writes. `Save to…` is where the
+    /// substituted native chooser runs, so the seam [`choose_patch_path`] installs is
+    /// still the one thing a headless test cannot reach.
+    pub(crate) fn accept_patch_settings(harness: &mut Harness<'_, AppState>) {
+        assert_eq!(
+            harness.state().ui.dialog,
+            Some(turbogit_app::state::Dialog::PatchFileSettings),
+            "a commit already names itself, so the settings open without the comment step"
+        );
+        press(harness, "Save to…");
+        settle(harness);
+        press(harness, "OK");
+        settle(harness);
+    }
+
     /// What the last frame asked the platform to put on the clipboard. egui
     /// carries a copy as an output command rather than a field, so this reads
     /// the same gesture the window's clipboard handler would act on.
@@ -2562,8 +2594,9 @@ mod surface {
         harness.state_mut().patch_writer = Some(Box::new(move || choice.clone()));
     }
 
-    /// Create patch writes THAT commit's own change — first parent to commit,
-    /// never its ancestors — to a file the developer chooses, as text git applies.
+    /// Create patch reaches `Patch File Settings` for THAT commit's own change — first
+    /// parent to commit, never its ancestors — and the settings' `OK` writes it to the
+    /// file the developer chose, as bytes `git apply` reads.
     #[test]
     fn create_patch_writes_that_commit_s_own_change_and_nothing_above_it() {
         let seed = seeded_repo("patch");
@@ -2574,6 +2607,7 @@ mod surface {
         choose_patch_path(&mut harness, Some(out.clone()));
         click_menu_item(&mut harness, "Create patch");
         settle(&mut harness);
+        accept_patch_settings(&mut harness);
         let file = out;
 
         let text = std::fs::read_to_string(&file).expect("the patch was written");
@@ -2680,6 +2714,7 @@ mod surface {
         choose_patch_path(&mut harness, Some(file.clone()));
         click_menu_item(&mut harness, "Create patch");
         settle(&mut harness);
+        accept_patch_settings(&mut harness);
 
         let text = std::fs::read_to_string(&file).expect("the patch was written");
         assert!(
@@ -2702,10 +2737,12 @@ mod surface {
         bytes
     }
 
-    /// A commit that changed nothing is a legitimate commit: the item produces an
-    /// empty patch rather than failing.
+    /// A commit that changed nothing is a legitimate commit, and the settings dialog
+    /// says what that means here: there are no bytes to write, so the dialog stays open
+    /// with the reason in it and no file appears. "git answered nothing" is a different
+    /// fact from "the write failed", and the surface states the one that is true.
     #[test]
-    fn an_empty_commit_produces_an_empty_patch_not_an_error() {
+    fn an_empty_commit_refuses_the_write_and_says_so() {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
@@ -2726,13 +2763,23 @@ mod surface {
         choose_patch_path(&mut harness, Some(file.clone()));
         click_menu_item(&mut harness, "Create patch");
         settle(&mut harness);
-
         assert_eq!(
-            std::fs::read_to_string(&file)
-                .expect("a file was written")
-                .trim(),
-            "",
-            "an empty commit is an empty patch"
+            harness.state().ui.dialog,
+            Some(turbogit_app::state::Dialog::PatchFileSettings),
+            "the empty commit still opens its settings"
+        );
+        press(&mut harness, "OK");
+        settle(&mut harness);
+
+        assert_painted(&harness, "nothing to write");
+        assert_eq!(
+            harness.state().ui.dialog,
+            Some(turbogit_app::state::Dialog::PatchFileSettings),
+            "a dialog that failed stays open with its reason"
+        );
+        assert!(
+            !file.exists(),
+            "and the refusal writes no empty file to masquerade as a patch"
         );
     }
 
@@ -2749,7 +2796,20 @@ mod surface {
         choose_patch_path(&mut harness, None);
         click_menu_item(&mut harness, "Create patch");
         settle(&mut harness);
+        // The chooser is reached from the settings dialog, and a declined one leaves
+        // the typed location exactly as it was — which is the half of this claim that
+        // is still about a cancellation rather than about a route nobody took.
+        let typed = harness.state().ui.dlg.create_patch_location.clone();
+        press(&mut harness, "Save to…");
+        settle(&mut harness);
+        assert_eq!(
+            harness.state().ui.dlg.create_patch_location, typed,
+            "a declined chooser changes nothing"
+        );
+        press(&mut harness, "Cancel");
+        settle(&mut harness);
 
+        assert_eq!(harness.state().ui.dialog, None, "Cancel closes the flow");
         assert!(!path.exists(), "a cancelled dialog leaves no file behind");
         assert!(
             harness.state().ui.toast.is_none(),
