@@ -213,135 +213,38 @@ pub fn rebase_with_onto(
     vcs.rebase(root, old_base, &with_flag)
 }
 
-/// The operation that currently owns a repository — the one a rewrite verb must
-/// wait for.
+/// The operation that holds a repository, and the read that names it.
 ///
-/// This is a *named* state rather than a boolean on purpose: a refusal that says
-/// only "busy" cannot be acted on, and the four owners need different fixes
-/// (finish the cherry-pick, continue the rebase, resolve the merge). One
-/// repository has one owner, which is why [`owning_operation`] answers with a
-/// single `Option` and never a set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OwnedOperation {
-    /// `.git/CHERRY_PICK_HEAD` — a pick is held, usually mid-conflict.
-    CherryPick,
-    /// `.git/rebase-merge` / `.git/rebase-apply` — a rebase (plain or
-    /// interactive) is running.
-    Rebase,
-    /// `.git/MERGE_HEAD` — a merge is held uncommitted.
-    Merge,
-    /// `.git/REVERT_HEAD` — a revert is held, usually mid-conflict.
-    Revert,
-}
-
-impl OwnedOperation {
-    /// The one word a refusal names the owner with. Lowercase: it rides inside
-    /// a sentence that already starts with the repository's state.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::CherryPick => "cherry-pick",
-            Self::Rebase => "rebase",
-            Self::Merge => "merge",
-            Self::Revert => "revert",
-        }
-    }
-
-    /// The argv token git's own recovery flags hang off: `git <this> --abort`,
-    /// `git <this> --continue`.
-    ///
-    /// Spelled out per case rather than returned as [`Self::label`], even though
-    /// the four strings are identical today: `label` is prose owned by the
-    /// refusal sentences, and a reworded one ("Rebasing") would otherwise
-    /// silently change what runs. The operation's identity, not its wording, is
-    /// what the engine is addressed by.
-    pub fn git_subcommand(self) -> &'static str {
-        match self {
-            Self::CherryPick => "cherry-pick",
-            Self::Rebase => "rebase",
-            Self::Merge => "merge",
-            Self::Revert => "revert",
-        }
-    }
-}
-
-/// Where git keeps its operation markers for `root`.
-///
-/// `<root>/.git` for an ordinary repository — but a linked worktree or a
-/// submodule checkout has a `.git` FILE whose `gitdir:` line points at the real
-/// directory, and HEAD, `MERGE_HEAD`, `CHERRY_PICK_HEAD` and the rebase
-/// directories all live at THAT path. Reading `<worktree>/.git/…` instead would
-/// report every worktree as idle, which is the cross-root half of a multi-root
-/// gating bug: the app would rewrite inside a repository that is mid-operation.
-///
-/// A bare repository answers `<root>/.git` (no `.git` entry at all) and so reads
-/// as idle here, exactly as it did before this function existed.
-fn markers_dir(root: &Path) -> PathBuf {
-    let dot_git = root.join(".git");
-    let Ok(text) = std::fs::read_to_string(&dot_git) else {
-        return dot_git;
-    };
-    let Some(pointer) = text
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("gitdir:"))
-        .map(str::trim)
-        .filter(|target| !target.is_empty())
-    else {
-        return dot_git;
-    };
-    let target = Path::new(pointer);
-    if target.is_absolute() {
-        target.to_path_buf()
-    } else {
-        root.join(target)
-    }
-}
-
-/// Which operation owns the repository at `root`, if any.
-///
-/// The marker each state leaves behind is git's, not ours, and was measured
-/// against git 2.50 rather than assumed: a held cherry-pick leaves
-/// `CHERRY_PICK_HEAD`, a held revert `REVERT_HEAD`, a held merge `MERGE_HEAD`, a
-/// held rebase the `rebase-merge` directory (or `rebase-apply` with `--apply`,
-/// plus `REBASE_HEAD`). They are disjoint on that version, which is why each is
-/// asked on its own and why a refusal can name the owner instead of saying
-/// "busy".
-///
-/// The question order is still load-bearing, because a *sequence* also holds
-/// commits: the rebase directory outranks the holder files it may be stopped on
-/// (`CHERRY_PICK_HEAD` inside a rebase is the sequencer re-using the pick
-/// machinery — the pick is not the operation the developer started), and
-/// `MERGE_HEAD` is last because the merge machinery is what the other three run
-/// while they resolve. Ask in the other order and the refusal blames the wrong
-/// operation.
-pub fn owning_operation(root: &Path) -> Option<OwnedOperation> {
-    let git = markers_dir(root);
-    if git.join("rebase-merge").exists() || git.join("rebase-apply").exists() {
-        return Some(OwnedOperation::Rebase);
-    }
-    if git.join("CHERRY_PICK_HEAD").exists() {
-        return Some(OwnedOperation::CherryPick);
-    }
-    if git.join("REVERT_HEAD").exists() {
-        return Some(OwnedOperation::Revert);
-    }
-    if git.join("MERGE_HEAD").exists() {
-        return Some(OwnedOperation::Merge);
-    }
-    None
-}
+/// Both live at the git boundary (`turbogit_engine_api::repo_state`), because
+/// marker files are git's on-disk state: the code that interprets them sits in
+/// the port's own crate, and nothing above the port reaches `std::fs` for them.
+/// Production asks [`GitExecutor::holding_operation`]; these two names carry the
+/// same answer for a caller that holds a path and no executor — the suites that
+/// plant git's markers by hand to state a repository's condition.
+pub use turbogit_engine_api::OwnedOperation;
+pub use turbogit_engine_api::repo_state::holding_operation_at as owning_operation;
 
 /// Whether a merge / rebase / cherry-pick is currently in progress at `root`.
 ///
-/// **Not `owning_operation(root).is_some()`**, and deliberately: a held revert
-/// answers `true` to the latter, and the one caller that recovers from this
+/// A caller that has the engine asks [`operation_in_progress`] with the owner the
+/// port named; this path form is the same answer for a caller that has a
+/// repository and no executor.
+pub fn in_progress(root: &Path) -> bool {
+    operation_in_progress(owning_operation(root))
+}
+
+/// Whether `owner` is an operation the recovery path can abort as a rebase.
+///
+/// **Not `owner.is_some()`**, and deliberately: a held revert answers `true` to
+/// the wider question, and the one caller that recovers from this
 /// ([`crate::history_editor::abort_to_backup`]) reads it to decide whether to run
 /// `git rebase --abort` — a rebase abort in a revert state is a second failure on
 /// top of the one being recovered. So this stays the three states it was written
-/// for, and the revert state is available through [`owning_operation`] to
-/// anything that asks the wider question.
-pub fn in_progress(root: &Path) -> bool {
+/// for, and the revert state is available through [`GitExecutor::holding_operation`]
+/// to anything that asks the wider question.
+pub fn operation_in_progress(owner: Option<OwnedOperation>) -> bool {
     matches!(
-        owning_operation(root),
+        owner,
         Some(OwnedOperation::CherryPick | OwnedOperation::Rebase | OwnedOperation::Merge)
     )
 }

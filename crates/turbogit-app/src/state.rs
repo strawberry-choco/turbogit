@@ -17,7 +17,7 @@ use std::sync::Arc;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
 use turbogit_engine::build_executor;
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, OwnedOperation};
 use turbogit_services::branch_service;
 use turbogit_services::bulk_ops::{self, BulkOp, BulkPlan, Preflight};
 use turbogit_services::bulk_run;
@@ -2228,6 +2228,21 @@ impl AppState {
     /// instead of depending on the adapters.
     pub fn rebuild_executor(&mut self) {
         self.executor = build_executor(&self.settings);
+    }
+
+    /// Which operation, if any, holds `root` — the port's answer, reached through
+    /// the engine this app owns.
+    ///
+    /// The rewrite gate, the status bar's in-flight item and the conflict
+    /// resolver all ask it, and none of them may read git's marker files for
+    /// themselves: the day an engine answers differently, three surfaces
+    /// disagreeing about who holds one repository is the bug.
+    ///
+    /// Cheap enough to ask per root per frame for that reason — a `stat` inside
+    /// the repository's git directory, never a git process — which is the
+    /// property the adapters are held to by `tests/holding_operation.rs`.
+    pub fn holding_operation(&self, root: &Path) -> Option<OwnedOperation> {
+        self.executor.holding_operation(root)
     }
 
     /// The effective config dir for the global recents file (ADR-0005).

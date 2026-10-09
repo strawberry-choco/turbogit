@@ -23,7 +23,7 @@ use git2::{ApplyLocation, BranchType, ErrorCode, StashFlags};
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
-use turbogit_engine_api::{ApplyDirection, GitExecutor};
+use turbogit_engine_api::{ApplyDirection, GitExecutor, OwnedOperation};
 
 /// Executor that performs supported operations in-process through libgit2
 /// and falls back to the system `git` CLI for everything else.
@@ -856,6 +856,14 @@ impl GitExecutor for Git2Executor {
             });
         }
         Ok(result)
+    }
+
+    fn holding_operation(&self, root: &Path) -> Option<OwnedOperation> {
+        // Delegation, not a libgit2 read: the sequencer's markers are files in
+        // the git directory, and the CLI adapter is the one that ranks them.
+        // An answer that varied with the backend setting would gate a rewrite
+        // differently depending on which engine the developer selected.
+        self.cli.holding_operation(root)
     }
 
     fn worktree_dirty(&self, path: &Path) -> TgResult<bool> {

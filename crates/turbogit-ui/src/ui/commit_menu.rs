@@ -126,9 +126,9 @@ pub struct CommitFacts<'a> {
     pub multi_root: bool,
     /// The operation that currently holds this repository, if any.
     ///
-    /// Read from git's own marker files by
-    /// [`turbogit_services::integrate_service::owning_operation`] rather than
-    /// from a cached snapshot, and deliberately so: an operation started by
+    /// Asked of the engine by [`turbogit_app::state::AppState::holding_operation`]
+    /// rather than read from a cached snapshot, and deliberately so: an operation
+    /// started by
     /// another process, or by this app's own worker between two refreshes, has
     /// to gate the verb the moment the menu opens. It is the one fact here that
     /// touches the filesystem, it is per root — which is the whole of the

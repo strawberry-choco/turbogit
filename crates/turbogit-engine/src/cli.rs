@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
-use turbogit_engine_api::{ApplyDirection, GitExecutor};
+use turbogit_engine_api::{ApplyDirection, GitExecutor, OwnedOperation};
 
 /// Git-for-Windows rejects Windows verbatim (`\\?\`) prefixed paths handed
 /// to `git worktree …`. Canonicalized roots carry that prefix (Rust
@@ -1016,6 +1016,14 @@ impl GitExecutor for CliExecutor {
         }
         flush(cur_path.take(), cur_branch, root, &mut result);
         Ok(result)
+    }
+
+    fn holding_operation(&self, root: &Path) -> Option<OwnedOperation> {
+        // The status bar asks this per root per frame, so the answer is a `stat`
+        // over git's own marker directory and never a git process. The ranking
+        // lives at the boundary, in `repo_state`, so no caller can hold a
+        // different one.
+        turbogit_engine_api::repo_state::holding_operation_at(root)
     }
 
     fn worktree_dirty(&self, path: &Path) -> TgResult<bool> {

@@ -291,7 +291,7 @@ pub fn apply_to_root(
         match exec.cherry_pick(root, commit) {
             Ok(()) => applied += 1,
             Err(e) => {
-                let held = integrate_service::in_progress(root);
+                let held = integrate_service::operation_in_progress(exec.holding_operation(root));
                 if held && !stop_on_conflict {
                     // Policy off: release the held pick and move on.
                     let _ = exec.abort(root, "cherry-pick");
