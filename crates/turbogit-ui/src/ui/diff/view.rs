@@ -1005,10 +1005,10 @@ fn file_row(
             .max_rect(trailing)
             .layout(Layout::right_to_left(Align::Center)),
     );
-    // The diff viewer's settings menu (`⌃⇧D`), in the trailing slot the boolean
-    // "Ignore whitespace" checkbox used to hold: that checkbox could ask one of
-    // the ten questions answered here, and it asked it of `git` rather than of the
-    // view. `⌃⇧D` opens this from the keyboard by arming the flag the shell sets.
+    // The diff viewer's settings menu (`⌃⇧D`) takes the trailing slot. A lone
+    // "Ignore whitespace" checkbox there would ask one of the ten questions
+    // answered here, and ask it of `git` rather than of the view. `⌃⇧D` opens this
+    // from the keyboard by arming the flag the shell sets.
     let trigger = zone.button(
         RichText::new("Diff options").font(crate::theme::chrome_font(crate::theme::TYPE_BODY)),
     );
@@ -1046,8 +1046,8 @@ fn file_row(
 /// The pane's header for one file, painted in every state of the comparison —
 /// settled or not. It is the file row with a label that names the file even
 /// when there is no `diff --git` line to show, and `+0 −0` for a comparison
-/// with nothing in it, because the toggle it carries has to be reachable in
-/// exactly the states the toolbar used to reach it in.
+/// with nothing in it, because the toggle it carries has to be reachable in every
+/// state the comparison can be in.
 fn file_header(ui: &mut Ui, state: &mut AppState, path: Option<&std::path::Path>) {
     let Some(path) = path else {
         return;
@@ -1083,8 +1083,8 @@ fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &
 }
 /// One side-by-side cell: the highlight the policy chose for it, a muted gutter
 /// number, sign marker, and code text. Changed cells are clickable line
-/// toggles (Line granularity, spec R2 story 3); additions also take
-/// char-range drags (issue 19). `selected` paints the BRAND edge bar and
+/// toggles (Line granularity, spec R2 story 3); additions also take char-range
+/// drags. `selected` paints the BRAND edge bar and
 /// `caret` the pane's caret bar.
 /// Returns the cell's response so the row loop can track hover and
 /// toggle clicks.

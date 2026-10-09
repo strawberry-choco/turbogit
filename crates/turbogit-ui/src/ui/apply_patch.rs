@@ -4,7 +4,7 @@
 //! Two routes, because the reference has two verbs: `Git | Patch | Apply patch…`
 //! reads a file, and `Apply patch from Clipboard` **skips the file path entirely**.
 //! TurboGit has no main menu bar, so the command palette carries both routes — the
-//! substitution ticket 16 already records for the lifecycle verbs. The clipboard
+//! substitution the palette already makes for the lifecycle verbs. The clipboard
 //! route pastes into the window rather than reading the system clipboard
 //! unprompted: the patch text ends up visible in the field it was typed into, which
 //! is the same act with its payload on screen, and it is what makes the route
@@ -64,7 +64,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     // The per-root choice, painted whenever the workspace has more than one tree
     // an apply could mean. One apply writes one working tree; a window that
     // silently took the focused root would be the multi-root collapse the
-    // programme forbids (reverse gaps #1 and #16) wearing a dialog.
+    // programme forbids wearing a dialog.
     let roots: Vec<turbogit_domain::model::RootId> =
         state.multi.roots.iter().map(|r| r.id.clone()).collect();
     if roots.len() > 1 {

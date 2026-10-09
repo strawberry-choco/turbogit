@@ -320,7 +320,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 
                 ui.separator();
                 ui.horizontal(|ui| {
-                    // Through the one shared pluralisation helper (rebased-parity ticket 02),
+                    // Through the one shared pluralisation helper,
                     // not this file's own conditional.
                     ui.label(
                         RichText::new(components::counted(remaining, "conflict") + " remaining")

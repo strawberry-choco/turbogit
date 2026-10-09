@@ -444,8 +444,8 @@ fn toolbar(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// The gear's whole content: the Branches surface's four grouping and
-/// visibility toggles, in the reference's own wording (`manage-branches.md:70`,
-/// the four `action.git.branches.*` bundle keys).
+/// visibility toggles, in the reference's own wording (the four
+/// `action.git.branches.*` bundle keys).
 ///
 /// **The gear's own composition is the unverified part of this.** Whether the
 /// four are a menu of checkboxes or a popover with separators, whether they apply
@@ -927,10 +927,10 @@ fn apply_branch_action(
             state.open_new_branch(NewBranchBase::Branch(branch.name.clone()), true, None);
         }
         BranchMenuAction::CheckoutAndPull => {
-            // Ticket 21a scoped the pull family to remote rows, which both
-            // engines list with `tracking: None` — so no real row currently
-            // enables this composite. The dispatch stays: the gate is the
-            // product decision under review, the wiring is not.
+            // The pull family is scoped to remote rows, which both engines list
+            // with `tracking: None` — so no real row currently enables this
+            // composite. The dispatch stays: the gate is the product decision
+            // under review, the wiring is not.
             // One composite operation, modelled on the branches popup's
             // checkout-then-pull. It must not also fire the standalone
             // checkout confirmation — that guard belongs to `Checkout`.
@@ -1007,9 +1007,9 @@ fn apply_branch_action(
         }
         BranchMenuAction::Compare => state.open_compare(root, &branch.name),
         BranchMenuAction::DiffWithWorkingTree => {
-            // Ticket 17: the reference's verb-5 entry point. Opens the file-level
-            // comparison the app layer reads and snapshots; the window is per root,
-            // and the root the row belongs to is the root it compares.
+            // The reference's fifth integration verb's entry point. Opens the
+            // file-level comparison the app layer reads and snapshots; the window
+            // is per root, and the root the row belongs to is the root it compares.
             state.open_get_from_branch(root, &branch.name);
         }
         BranchMenuAction::Delete => match branch.kind {

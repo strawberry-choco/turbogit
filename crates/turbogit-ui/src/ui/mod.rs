@@ -45,7 +45,7 @@ pub mod conflicts;
 pub mod create_patch;
 pub mod dialogs;
 pub mod diff;
-/// The `Get from Branch` window (ticket 17, §4.8 verb 5) and its three-rung
+/// The `Get from Branch` window and its three-rung
 /// comparison list; internal to the dialog host like [`cherry_across`].
 pub mod get_from_branch;
 pub mod hunk_nav;
@@ -129,9 +129,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             // Issue 33: the remotes manager lives in its own module.
             remotes_dialog::show(ui, state);
         } else if d == Dialog::GetFromBranch {
-            // Ticket 17: the fifth integration verb's window lives in its own
-            // module — it owns a rung list of its own, and `dialogs.rs` is the host
-            // for the field-form dialogs, not for a second file tree.
+            // The fifth integration verb's window lives in its own module — it owns
+            // a rung list of its own, and `dialogs.rs` is the host for the
+            // field-form dialogs, not for a second file tree.
             get_from_branch::show(ui, state);
         } else if d == Dialog::Unshelve {
             // Surface 07: the unshelve window owns a per-root shelf picker and the
@@ -157,7 +157,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // coexist with `Cancel` on another window would be a policy that vanishes on contact.
     create_patch::created_patch_ask(ui, state);
     render_confirm(ui, state);
-    // The classified reply to a rejected push (ticket 13): unconditional, like
+    // The classified reply to a rejected push: unconditional, like
     // every other floating surface, because the Push dialog has already closed
     // by the time the rejection settles.
     push_rejected::render(ui, state);
@@ -525,8 +525,8 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
             }
             PendingConfirm::GetFileFromBranch { root, source, path } => {
                 // The whole blast radius, stated because the reference documents no
-                // confirm step at all for this verb (ticket 17 records that absence as
-                // a deliberate departure): one file, in one named root, losing its
+                // confirm step at all for this verb, an absence this app departs from
+                // on purpose: one file, in one named root, losing its
                 // entire current contents — and nothing committed, since the take is a
                 // working-tree write the developer then commits by hand.
                 ui.label(format!(

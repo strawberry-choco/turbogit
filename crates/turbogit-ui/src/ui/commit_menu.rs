@@ -190,7 +190,7 @@ pub fn commit_menu_items(commit: &Commit, facts: &CommitFacts<'_>) -> [MenuItemS
     // Root-ness and merge-ness are `parents` counts, like the commit they gate,
     // so they cost no git call and cannot contradict it; an enabled item that
     // can never work is a defect, and `targeted_plan` refuses a root commit
-    // outright, so the developer used to find out only by clicking.
+    // outright — so this gate is what keeps a doomed verb off the menu.
     let rewriteable = [
         (CommitMenuAction::DropCommit, RewriteVerb::Drop),
         (CommitMenuAction::RewordCommit, RewriteVerb::Reword),

@@ -1,5 +1,4 @@
-//! The status bar's in-flight operation item (rebased-parity ticket 16, surface
-//! `04-integrate` §4.8/§5.8).
+//! The status bar's in-flight operation item.
 //!
 //! The reference announces an operation a repository is holding **in the status
 //! bar, one announcement per root**, and puts its recovery verbs there: the doc
@@ -9,9 +8,9 @@
 //! `OpKind`, the executor's `--abort` / `--continue` — and no presentation of
 //! it, so a paused rebase was only visible in the conflict resolver.
 //!
-//! ## This is not ticket 11's status-hint channel, and the difference is load-bearing
+//! ## This is not the status-hint channel, and the difference is load-bearing
 //!
-//! The bar has two text sources now. [`crate::ui::widgets::take_status_hint`] is
+//! The bar has two text sources. [`crate::ui::widgets::take_status_hint`] is
 //! a **one-frame hover echo**: exactly one producer (a disabled menu row's
 //! `insert_temp`) and exactly one consumer (`ui/shell.rs`), and anything that
 //! hovers next frame replaces it. This module is the opposite: a **persistent**
@@ -144,7 +143,7 @@ pub fn target_for(state: &AppState, verb: LifecycleVerb) -> Option<(RootId, Owne
 /// ([`super::shell::STATUS_BAR_HEIGHT`]), and stacking a row per root would
 /// resize the shell's frozen chrome. The fallback chosen here is **side-by-side
 /// in registration order**, each item naming its own root, recorded as a
-/// divergence in the ticket.
+/// divergence from the reference.
 pub fn render(ui: &mut egui::Ui, state: &mut AppState) {
     let mut first = true;
     for item in held_by(state) {

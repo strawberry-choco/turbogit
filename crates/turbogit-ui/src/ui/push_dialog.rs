@@ -206,10 +206,10 @@ fn close(state: &mut AppState) {
 /// Returns `true` when the panel has no target at all — a repository with no
 /// remote and no commits — which is what disables the footer's Push.
 ///
-/// Three things the previous four lines of fields did not do: it fabricated
-/// `origin` for a repository that has no remote, it offered a text field where
-/// the reference offers a link, and it left the user to infer from a branch name
-/// whether the push creates a ref or moves one that already exists.
+/// Three things a plain field pair cannot carry: it must never name a remote the
+/// repository does not have, it must offer a link where the reference offers a
+/// link, and it must state whether the push creates a ref or moves one that
+/// already exists rather than leaving that to be inferred from a branch name.
 fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
     // The root's facts are read once, owned: every arm below mutates
     // `state.ui.dlg`, and a borrow of the manager held across one of those
@@ -577,10 +577,9 @@ fn empty_signature() -> Signature {
 /// Prefill Remote/Branch from the selected root's tracking config. Only fills
 /// while a field is empty so user edits persist across redraws.
 ///
-/// The remote half stays EMPTY for a repository that has no remote. It used to
-/// fabricate `origin` there, which painted a name the repository does not have,
-/// pushed at a remote nothing configured, and buried the one case the
-/// `Define remote` link exists for.
+/// The remote half stays EMPTY for a repository that has no remote: a fabricated
+/// `origin` would paint a name the repository does not have, push at a remote
+/// nothing configured, and bury the one case the `Define remote` link exists for.
 fn ensure_target_defaults(state: &mut AppState) {
     let Some(id) = state.selected_root.clone() else {
         return;
@@ -770,13 +769,14 @@ fn change_letter(status: ChangeStatus) -> &'static str {
 }
 
 /// Dispatch the push on a worker thread as a typed [`Operation::Push`], so a
-/// rejection can be classified and replayed (ticket 13). Issue #25: the
-/// resolved scope drives the engine call — `push_roots` for multi-repo scopes
-/// (with each root's per-call remote resolution and protected-branch gating),
-/// and `push` for the single-repo `ThisRepo` path with explicit Remote/Branch
-/// fields. Issue #24: subset selection narrows per root only when the selection
-/// is a suffix of the full outgoing list — non-suffix selections fall back to a
-/// full push (issue #24 fallback semantics).
+/// rejection can be classified and replayed.
+///
+/// The resolved scope drives the engine call — `push_roots` for multi-repo
+/// scopes (with each root's per-call remote resolution and protected-branch
+/// gating), and `push` for the single-repo `ThisRepo` path with explicit
+/// Remote/Branch fields. Subset selection narrows per root only when the
+/// selection is a suffix of the full outgoing list; a non-suffix selection falls
+/// back to a full push rather than pushing the wrong set.
 fn execute_push(state: &mut AppState) {
     let scope = scope_roots(state);
     let narrowed_sha: Option<String> = match &state.ui.dlg.push_subset {
@@ -790,7 +790,7 @@ fn execute_push(state: &mut AppState) {
 }
 
 /// Build the [`PushRequest`] the resolved scope describes, or `None` when there
-/// is nothing to push. Shared with the no-dialog push verb (ticket 14), which
+/// is nothing to push. Shared with the no-dialog push verb, which
 /// runs the same request against the same scope rules.
 pub(crate) fn push_request(
     state: &AppState,

@@ -387,7 +387,7 @@ fn shelf_pane(ui: &mut Ui, state: &mut AppState) {
                 // nothing is applied, and `Unshelve` is what later puts them in this
                 // root's tree. It sits in **this pane**, whose rows are already one
                 // root's, because that is what makes the root it parks under a stated
-                // fact rather than a guess at the focus (reverse gap #1).
+                // fact rather than a guess at the focus.
                 if widgets::ghost_button(ui, None, "Import Patches\u{2026}")
                     .on_hover_text("Park a patch file on this repository's shelf")
                     .clicked()
@@ -414,7 +414,7 @@ fn stash_pane(ui: &mut Ui, state: &mut AppState) {
     // **A cached git value, asked for through the app.** The pane never touches
     // the executor: it asks, the app admits at most one listing per root in
     // flight, and the frame before the answer arrives paints the loading word
-    // rather than an absence git has not confirmed (reverse gap #10).
+    // rather than an absence git has not confirmed.
     let cold = state
         .selected_root
         .clone()

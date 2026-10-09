@@ -187,7 +187,7 @@ pub fn abort_to_backup(vcs: &dyn GitExecutor, root: &Path) -> TgResult<()> {
     Ok(())
 }
 
-/// Post-hoc undo of the last targeted rewrite (ticket 09): restore the branch
+/// Post-hoc undo of the last targeted rewrite: restore the branch
 /// from the engine's rewrite backup and discard the spent backup — the same
 /// two verbs [`abort_to_backup`] runs once an abort is out of the way, without
 /// the reconstruction a `git reflog` walk would need.
