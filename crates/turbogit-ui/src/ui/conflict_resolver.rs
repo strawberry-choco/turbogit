@@ -28,6 +28,7 @@ use turbogit_app::state::{AppState, BulkApplyScope, ConflictBulkReport, Toast};
 use turbogit_domain::model::{
     CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, ConflictKind, RootId,
 };
+use turbogit_engine_api::OwnedOperation;
 use turbogit_services::conflict;
 
 use std::path::{Path, PathBuf};
@@ -322,10 +323,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     if conflicted.is_empty() && !state.ui.conflict_resolver_open {
         return;
     }
-    // Refresh auto-merged + merge-in-progress on every render; cheap.
+    // Refresh auto-merged + merge-in-progress on every render. Asked of the
+    // engine, not of `.git/MERGE_HEAD` here: a second reader of git's markers
+    // would be a second answer, and this one decides whether the window stays
+    // open. Cheap enough to ask in the frame because it is a `stat` of the
+    // repository's git directory and never a git process, and it is asked only
+    // once this root has conflicts or the window is already open.
     let root = state.selected_path();
     if let Some(r) = &root {
-        if r.join(".git").join("MERGE_HEAD").exists() {
+        if matches!(state.holding_operation(r), Some(OwnedOperation::Merge)) {
             state.ui.merge_in_progress = true;
             let root_id = RootId(r.clone().into());
             let conflicted_paths: Vec<PathBuf> =
@@ -729,14 +735,12 @@ fn apply_resolution(state: &mut AppState) {
 /// `git merge --abort` in a repository that is rebasing is a second failure on
 /// top of the one being recovered. Falls back to `Merge` when nothing is held
 /// anymore, which is what the header says and what the operation then reports.
-fn held_operation(
-    state: &turbogit_app::state::AppState,
-) -> turbogit_services::integrate_service::OwnedOperation {
+fn held_operation(state: &turbogit_app::state::AppState) -> OwnedOperation {
     state
         .selected_root
         .as_ref()
-        .and_then(|root| turbogit_services::integrate_service::owning_operation(root.as_path()))
-        .unwrap_or(turbogit_services::integrate_service::OwnedOperation::Merge)
+        .and_then(|root| state.holding_operation(root.as_path()))
+        .unwrap_or(OwnedOperation::Merge)
 }
 
 fn abort_merge(state: &mut AppState) {

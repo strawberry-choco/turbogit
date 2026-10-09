@@ -37,7 +37,7 @@ use turbogit_domain::model::{
     RebasePlanEntry, RecentCheckout, Remote, RootStatus, Stash, Submodule, TagSpec, Upstream,
     Worktree,
 };
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, OwnedOperation};
 // `engine::fake` is unit-test-only (`#[cfg(test)]`), so integration tests
 // assert flag selection at the executor boundary through this transparent
 // wrapper: every call delegates to a real inner engine while push /
@@ -467,6 +467,10 @@ impl GitExecutor for RecordingExecutor {
 
     fn worktree_dirty(&self, path: &Path) -> TgResult<bool> {
         self.inner.worktree_dirty(path)
+    }
+
+    fn holding_operation(&self, root: &Path) -> Option<OwnedOperation> {
+        self.inner.holding_operation(root)
     }
 
     fn conflict_versions(&self, root: &Path, path: &Path) -> TgResult<ConflictVersions> {

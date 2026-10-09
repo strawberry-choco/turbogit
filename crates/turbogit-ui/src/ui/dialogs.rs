@@ -797,7 +797,7 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
     let in_flight = state
         .selected_root
         .as_ref()
-        .and_then(|root| turbogit_services::integrate_service::owning_operation(root.as_path()));
+        .and_then(|root| state.holding_operation(root.as_path()));
     widgets::dialog_footer(ui, |ui| {
         {
             let label = match state.ui.dlg.rebase_mode {

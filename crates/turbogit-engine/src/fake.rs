@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::*;
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, OwnedOperation};
 
 use crate::patch::parse_patch;
 
@@ -96,6 +96,12 @@ pub struct FakeExecutor {
     pub remotes: HashMap<PathBuf, Vec<Remote>>,
     /// Status per repo path.
     pub status: HashMap<PathBuf, RootStatus>,
+    /// The operation holding a repository, served by `holding_operation` per
+    /// repo path. Absent means idle — the fixture states who holds the
+    /// repository instead of planting git's marker files, which is what lets a
+    /// suite drive the rewrite gate and the status bar's item with no working
+    /// tree at all.
+    pub holders: HashMap<PathBuf, OwnedOperation>,
     /// Config values served by `config_get`, keyed by `(root, key)`.
     pub config: HashMap<(PathBuf, String), String>,
     /// Patch text served by `diff` per repo path — the shapes a diff can take,
@@ -138,6 +144,7 @@ impl FakeExecutor {
             current_branch: HashMap::new(),
             remotes: HashMap::new(),
             status: HashMap::new(),
+            holders: HashMap::new(),
             config: HashMap::new(),
             logs: HashMap::new(),
             reject_force_branches: Vec::new(),
@@ -248,6 +255,10 @@ impl GitExecutor for FakeExecutor {
 
     fn worktree_dirty(&self, _path: &Path) -> TgResult<bool> {
         Ok(false)
+    }
+
+    fn holding_operation(&self, root: &Path) -> Option<OwnedOperation> {
+        self.holders.get(root).copied()
     }
 
     fn submodule_status(&self, _root: &Path) -> TgResult<Vec<Submodule>> {
