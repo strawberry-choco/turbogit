@@ -510,8 +510,8 @@ fn split_section_paths(rest: &[u8]) -> (Vec<u8>, Vec<u8>) {
     {
         let old = unescape(&inner[..end]);
         let tail = trim(&inner[end + 1..]);
-        let new = tail.strip_prefix(&[b'"'][..]).unwrap_or(tail);
-        let new = new.strip_suffix(&[b'"'][..]).unwrap_or(new);
+        let new = tail.strip_prefix(b"\"").unwrap_or(tail);
+        let new = new.strip_suffix(b"\"").unwrap_or(new);
         return (old, unescape(new));
     }
     match rest.windows(3).position(|w| w == b" b/") {
@@ -582,8 +582,8 @@ fn without_side(raw: &[u8], marker: &[u8]) -> Vec<u8> {
 
 /// A quoted header token resolved to its bytes; anything else is already plain.
 fn unquote(raw: &[u8]) -> Vec<u8> {
-    if let Some(inner) = raw.strip_prefix(&[b'"'][..])
-        && let Some(inner) = inner.strip_suffix(&[b'"'][..])
+    if let Some(inner) = raw.strip_prefix(b"\"")
+        && let Some(inner) = inner.strip_suffix(b"\"")
     {
         return unescape(inner);
     }
