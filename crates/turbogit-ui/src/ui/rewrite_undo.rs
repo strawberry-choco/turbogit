@@ -1,4 +1,4 @@
-//! Post-hoc undo for the targeted history verbs (ticket 09): the notification
+//! Post-hoc undo for the targeted history verbs: the notification
 //! a landed drop or reword leaves behind, carrying an `Undo` control.
 //!
 //! The reference's undo lives in the success notification; whether TurboGit's
@@ -9,7 +9,7 @@
 //! Coverage is deliberately asymmetric, matching the reference's own
 //! lifecycle: drop and reword are undoable by name, squash is not. This
 //! module is the post-hoc half only; the pre-flight half is the shared
-//! `Dialog::RewritePreflight`, and ticket 11 owns the gating state machine.
+//! `Dialog::RewritePreflight`, and the gating state machine is its own module.
 //!
 //! The guard is the substance: validity is checked at undo time, never
 //! assumed at rewrite time. [`AppState::guard_rewrite_undo`] re-runs it on

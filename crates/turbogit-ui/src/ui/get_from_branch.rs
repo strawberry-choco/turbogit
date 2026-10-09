@@ -1,8 +1,7 @@
-//! `Get from Branch` (ticket 17, §4.8 verb 5): the window the reference's
-//! `Show Diff with Working Tree` opens, and the only place its fifth integration
-//! verb lives.
+//! `Get from Branch`: the window the reference's `Show Diff with Working Tree`
+//! opens, and the only place its fifth integration verb lives.
 //!
-//! The flow (`apply-changes-from-one-branch-to-another.md:269-287`) is: select the
+//! The flow is: select the
 //! branch that HAS the file → compare it with the working tree → read the list of
 //! paths that differ, each on one of three rungs → pick a row → `Get from Branch`
 //! → commit and push. "Take that one file from over there" is a daily act that
@@ -99,9 +98,9 @@ fn body(ui: &mut Ui, state: &mut AppState) {
         if ui.button("Close").clicked() {
             state.ui.dialog = None;
         }
-        // The reference's repeated affordance (`manage-branches.md:120,136`;
-        // `apply-changes:283`), spelled exactly as the Compare Branches footer
-        // spells it so one link is one control across the two windows.
+        // The reference's repeated affordance, spelled exactly as the Compare
+        // Branches footer spells it so one link is one control across the two
+        // windows.
         if ui.button("Swap Branches").clicked() {
             state.swap_get_from_branch();
         }
@@ -156,8 +155,7 @@ fn status_word(status: BranchFileStatus) -> &'static str {
 
 /// The rung's ink, and the only place this surface names a colour: green = Added,
 /// blue = Modified, grey = Deleted. Every one is a shared token, so the grammar
-/// moves with the palette instead of being re-derived per call site (reverse gap
-/// #18).
+/// moves with the palette instead of being re-derived per call site.
 fn status_ink(status: BranchFileStatus) -> Color32 {
     match status {
         BranchFileStatus::Deleted => Palette::STATUS_DELETED,

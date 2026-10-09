@@ -46,7 +46,7 @@ pub enum OpKind {
     /// [`Operation::RewordCommit`] — one commit's message rewritten.
     RewordCommit,
     /// [`Operation::Push`] — a push dispatched from the Push dialog. Its own
-    /// identity so settlement can classify a rejection (ticket 13) instead of
+    /// identity so settlement can classify a rejection instead of
     /// reading label prose.
     Push,
     /// [`Operation::Push`] carrying a [`RecoveryPlan`] — the rejected-push
@@ -184,7 +184,7 @@ pub enum PushTargets {
     Scope(Vec<Root>),
 }
 
-/// How a rejected push recovers before its re-push (ticket 13).
+/// How a rejected push recovers before its re-push.
 #[derive(Clone, Debug)]
 pub enum RecoveryMode {
     /// Fetch, then integrate the upstream with the chosen update method —
@@ -209,8 +209,8 @@ pub struct RecoveryPlan {
 ///
 /// The dialog's inputs travel with the operation instead of being captured
 /// into a closure, because two consumers replay them: a rejected push re-pushes
-/// verbatim (ticket 13), and the no-dialog push verb builds the same request
-/// without ever opening the dialog (ticket 14).
+/// verbatim, and the no-dialog push verb builds the same request without ever
+/// opening the dialog.
 #[derive(Clone, Debug)]
 pub struct PushRequest {
     pub targets: PushTargets,
@@ -400,8 +400,8 @@ pub enum Operation {
     },
     /// `git push` from the Push dialog, from the no-dialog push verb, or from
     /// a rejected push's retry. This is the dispatch unit rather than a
-    /// [`Operation::Custom`] closure because the rejection classification
-    /// (ticket 13) settles on the operation's identity, and because a retry
+    /// [`Operation::Custom`] closure because rejection classification settles on
+    /// the operation's identity, and because a retry
     /// must replay the original request verbatim.
     Push {
         request: PushRequest,
@@ -487,8 +487,8 @@ impl Operation {
     }
 
     /// The push `request` runs as dispatched — no [`RecoveryPlan`], so it is
-    /// an [`OpKind::Push`]. Flag state rides on the request (ticket 14's
-    /// dialog-free verb needs the same defaults as the dialog's).
+    /// an [`OpKind::Push`]. Flag state rides on the request because the
+    /// dialog-free verb needs the same defaults as the dialog's.
     pub fn push(request: PushRequest) -> Self {
         Self::Push {
             request,
@@ -496,7 +496,7 @@ impl Operation {
         }
     }
 
-    /// The same push preceded by a recovery (ticket 13): the update or fetch
+    /// The same push preceded by a recovery: the update or fetch
     /// runs first, then the push replays verbatim. The recovery's presence is
     /// what makes this an [`OpKind::PushRecovery`].
     pub fn push_with_recovery(request: PushRequest, plan: RecoveryPlan) -> Self {
@@ -797,7 +797,7 @@ impl Operation {
             // reference's per-root shape, not a fleet: the verb is reached from a
             // row of one window opened against one branch of one repository, and
             // widening it here would be the multi-root collapse the programme
-            // forbids (reverse gaps #1 and #16) wearing an invalidation rule.
+            // forbids wearing an invalidation rule.
             | Self::GetFileFromBranch { root, .. }
             // An apply writes one root's working tree, so it invalidates exactly
             // that root: the record it writes is the tree's own contents, and a
@@ -993,7 +993,7 @@ impl Operation {
                     selected_oldest,
                     settings,
                 } = request;
-                // Recovery first (ticket 13): the update or fetch runs before
+                // Recovery first: the update or fetch runs before
                 // the re-push, so its failure classifies as an update outcome
                 // and the push is never attempted over a half-updated tree.
                 // A root with no current branch or no upstream has nothing to

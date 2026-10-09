@@ -367,8 +367,8 @@ pub fn revert_commit(
 
 // ------------------------------------------------- verb 5: Get from Branch ---
 //
-// The reference's fifth integration verb (`apply-changes-from-one-branch-to-
-// another.md:269-287`) is not a history operation at all: it compares ONE FILE
+// The reference's fifth integration verb is not a history operation at all: it
+// compares ONE FILE
 // across two sides and copies the other side's whole contents into the working
 // tree. Neither `cherry-pick` nor `merge` covers "take that one file from over
 // there", and it is the only verb that can bring across a file the target branch

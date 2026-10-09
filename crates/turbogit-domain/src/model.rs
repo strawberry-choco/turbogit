@@ -437,7 +437,7 @@ pub struct Change {
 /// `UD` deleted by them, `AU` added by us, `UA` added by them). This is a
 /// different axis from the per-hunk marker vocabulary an editor names
 /// (`Modified line` / `Conflicting lines`): one is about the FILE, one about a
-/// BLOCK inside it (rebased-parity ticket 02).
+/// BLOCK inside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConflictKind {
     BothDeleted,
@@ -800,7 +800,7 @@ pub struct VcsSettings {
     /// CLI-produced text path.
     #[serde(default = "default_true")]
     pub in_process_diffs: bool,
-    /// Ticket 13: update silently when a push of the current branch is
+    /// Update silently when a push of the current branch is
     /// rejected, using `update_method` — set by the Push dialog's
     /// "Remember the update method choice" checkbox, so the opt-in is a
     /// settings write-back the user can reverse in settings, never a per-push

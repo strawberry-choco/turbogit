@@ -146,8 +146,8 @@ fn settings(ui: &mut Ui, state: &mut AppState) {
 fn body(ui: &mut Ui, state: &mut AppState) {
     // One patch is generated from one working tree, and a multi-root workspace has more
     // than one it could mean. Painted whenever there is a choice, exactly as the apply
-    // window does it: collapsing this to the focused root would be the per-root rule
-    // (reverse gaps #1 and #16) reduced to a guess.
+    // window does it: collapsing this to the focused root would be the per-root
+    // rule reduced to a guess.
     let roots: Vec<RootId> = state.multi.roots.iter().map(|r| r.id.clone()).collect();
     if roots.len() > 1 {
         widgets::group_title(ui, "REPOSITORY");

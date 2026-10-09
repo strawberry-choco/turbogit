@@ -1,7 +1,7 @@
 //! Root caches (CONTEXT.md "Root caches"): the in-memory cache layer keyed
 //! by repository root — commit logs, ref decorations, changed-file lists,
 //! path-scoped logs, ahead/behind counts, worktree lists, submodule
-//! lists (issue 14), and stash listings (surface 07).
+//! lists, and stash listings.
 //!
 //! One deep module with a small interface: the maps are private,
 //! lazy-fill logic lives *inside* (`ensure_*`), and callers get typed

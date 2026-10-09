@@ -72,8 +72,7 @@ pub trait GitExecutor: Send + Sync {
     fn branches(&self, root: &Path) -> TgResult<Vec<Branch>>;
 
     /// Branches HEAD's reflog says were checked out in `root`, newest first —
-    /// the mechanism behind the branches surface's Recent group (parity
-    /// ticket 03, captured at `research/evidence/rebased/runtime/R3-SESSION-1.md`):
+    /// the mechanism behind the branches surface's Recent group:
     /// `git reflog --max-count 50 --grep-reflog "checkout:"`, each matching
     /// entry parsed to the branch its checkout moved to. Deriving recents
     /// here, rather than bookkeeping them in the app, is what makes them

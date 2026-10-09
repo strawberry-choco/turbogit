@@ -253,8 +253,8 @@ pub fn shelf_path(project_dir: &Path) -> PathBuf {
     project_dir.join(".turbogit").join("shelf.ron")
 }
 
-/// The wire's **absent** marker for [`StoredShelf::root`]: a row written before
-/// ticket 12 has no `root` key at all, and serde needs some value for it.
+/// The wire's **absent** marker for [`StoredShelf::root`]: a row written by an
+/// older build has no `root` key at all, and serde needs some value for it.
 ///
 /// An empty path is used rather than `Option<RootId>` because RON 0.12 reads an
 /// `Option` only in its `Some(..)` spelling, while this build writes `Shelf`'s
@@ -280,10 +280,10 @@ fn is_absent_root(root: &RootId) -> bool {
 /// It is a mirror rather than a flag day, because the two shapes are genuinely
 /// different facts. [`Shelf::root`] is required — an unshelve parks or restores
 /// work in exactly one repository, so a rootless shelf is not a thing the app can
-/// act on — while a row written by a build before ticket 12 simply predates the
-/// field. Reading the file into `Shelf` directly would make every legacy store
-/// unparseable *as a whole*, which is how one old row used to take the launch
-/// load down with it.
+/// act on — while a row written by an older build simply predates the field.
+/// Reading the file into `Shelf` directly would make every legacy store
+/// unparseable *as a whole*: one old row would take the whole launch load down
+/// with it.
 ///
 /// Constructing the `Shelf` here by name, with no `..` rest pattern, is the drift
 /// guard: when `Shelf` grows a field this mirror does not carry, the store fails
@@ -368,7 +368,7 @@ fn is_blank(text: &str) -> bool {
 /// Read the shelf store back. A file that is not there is an empty shelf — the
 /// store is created by the first shelve, not at launch.
 ///
-/// A row written before ticket 12 added [`Shelf::root`] is read, not dropped: see
+/// A row written before [`Shelf::root`] existed is read, not dropped: see
 /// [`StoredShelf`].
 ///
 /// A file this build cannot parse at all is an **error, not an empty list**: those

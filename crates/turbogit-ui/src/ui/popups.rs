@@ -52,7 +52,7 @@ pub enum Action {
     // File filter (spec R7): palette-only discoverability for the `/`
     // shortcut over the Commit tool window's changed-file list.
     FilterFiles,
-    // In-flight operation lifecycle (ticket 16): the reference's own docs say the
+    // In-flight operation lifecycle: the reference's own docs say the
     // recovery survives a dismissed notification — "from the main menu choose
     // `Git | Continue rebase` to resume it". TurboGit has no main menu bar, so
     // the palette is its menu route for these three verbs, and the status bar's
@@ -119,8 +119,7 @@ impl Action {
 
     /// The VCS operations popup's action set: the pre-existing list plus the
     /// direct push verb, which the reference ranks as the DEFAULT of its three
-    /// push actions (issue #22 keeps everything else unchanged while the palette
-    /// grows).
+    /// push actions; nothing else in the list changes while the palette grows.
     pub fn all() -> &'static [Action] {
         &[
             Action::Refresh,
@@ -257,7 +256,7 @@ pub fn run_action(state: &mut AppState, action: Action) {
             state.ui.tab = Tab::Commit;
             state.ui.focus_file_filter = true;
         }
-        // The in-flight lifecycle verbs (ticket 16): the menu route to exactly the
+        // The in-flight lifecycle verbs: the menu route to exactly the
         // operation the status bar's clickable item runs.
         Action::AbortOperation => run_lifecycle_verb(state, LifecycleVerb::Abort),
         Action::ContinueOperation => run_lifecycle_verb(state, LifecycleVerb::Continue),

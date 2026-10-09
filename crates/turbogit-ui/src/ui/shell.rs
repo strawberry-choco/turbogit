@@ -728,14 +728,14 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState, hint: Option<&str>) {
                     if let Some(reason) = hint {
                         status_hint(ui, reason);
                     }
-                    // The in-flight operation items, one per holding root
-                    // (ticket 16). They are NOT this band's one-frame hint slot:
+                    // The in-flight operation items, one per holding root. They
+                    // are NOT this band's one-frame hint slot:
                     // the hint is a hover echo taken once per frame, and a
                     // persistent announcement routed through it would flicker and
                     // be dropped by the next hover. This channel has no slot and
                     // no producer — it reads git's own markers every frame — which
                     // is what keeps the hint's one-producer/one-consumer invariant
-                    // provable after this ticket landed.
+                    // provable.
                     super::status_inflight::render(ui, state);
                     version_line(ui, state);
                     aggregated_status_chips(ui, &agg);

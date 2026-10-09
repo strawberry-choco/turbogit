@@ -1099,7 +1099,7 @@ fn hidden_jump_band(ui: &mut Ui, state: &mut AppState, root: RootId, cid: Commit
 // --- Pane 2: graph ------------------------------------------------------------------
 
 fn graph_pane(ui: &mut Ui, state: &mut AppState) {
-    // The post-hoc undo notification (ticket 09) rides above the list it
+    // The post-hoc undo notification rides above the list it
     // undoes into: success title + Undo control while the guard holds it
     // valid, the named impossible reason once the repository has moved.
     super::rewrite_undo::banner(ui, state);
@@ -1193,7 +1193,7 @@ fn graph_pane(ui: &mut Ui, state: &mut AppState) {
         state.ui.log_hidden_jump = None;
     }
     // A jump the built rows cannot show is recorded here and answered after the
-    // scroll area, where `state` is free again (deferred mutations, plan §1.3).
+    // scroll area, where `state` is free again (deferred mutations).
     let mut missed_jump: Option<String> = None;
     let colors = display.lanes();
     let date_mode = state.settings.date_format;
@@ -2082,7 +2082,7 @@ enum FileAction {
     /// Row right-clicked: open the shared menu on this row.
     OpenMenu(PathBuf),
     /// The state's own `Refresh`, taken while the pane still holds the cached
-    /// file list: the re-ask lands after the frame (plan §1.3).
+    /// file list: the re-ask lands after the frame.
     Refresh,
 }
 
@@ -2482,7 +2482,7 @@ enum DetailAction {
     SelectParent(CommitId),
     /// The pane's `Refresh` control, taken during the frame that could not
     /// apply it: the pane borrows the cached commit for its whole body, so the
-    /// re-ask is deferred like every other mutation here (plan §1.3).
+    /// re-ask is deferred like every other mutation here.
     Refresh,
 }
 
@@ -2756,7 +2756,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
         DetailAction::SelectParent(parent) => {
             state.ui.selected_commit = Some(parent.clone());
             state.ui.log_selected_file = None;
-            // Following history has to show where it landed (issue 08): the parent
+            // Following history has to show where it landed: the parent
             // is the next row DOWN, which the list may not have built, and the
             // scroll area is the only thing that can bring it into view.
             state.ui.log_scroll_to = Some(parent);
