@@ -435,8 +435,8 @@ pub enum Operation {
     /// reason as [`Operation::Resolve`]: the verb has to settle, and settlement
     /// here has two jobs a `Custom` op cannot be trusted with — the durable record
     /// names the path it took and the branch it came from, and the changes window
-    /// that offered the verb re-reads its rung list once the take lands (ticket
-    /// 17). Per root by construction: one `root`, one `path`, never a fleet.
+    /// that offered the verb re-reads its rung list once the take lands. Per root
+    /// by construction: one `root`, one `path`, never a fleet.
     GetFileFromBranch {
         root: RootId,
         source: String,

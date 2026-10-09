@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(window.lane("nope"), None, "an unwalked commit has no lane");
     }
 
-    /// The whole point of the ticket: the walk runs over the WHOLE loaded
+    /// The property this pins: the walk runs over the WHOLE loaded
     /// window, so a commit the live filter hides keeps the lane the walk gave
     /// it. Scoping the walk to the filtered subset would renumber the lanes
     /// every time a search term narrowed the list.

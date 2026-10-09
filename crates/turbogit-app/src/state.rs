@@ -6121,7 +6121,7 @@ impl AppState {
     /// so the swap is a re-reading of the same list — which side a one-sided path
     /// is missing *from* — and the list's rung order is what makes that visible as
     /// the grey and green rows trading **positions** rather than the same rows
-    /// changing tint (the inversion the ticket names as the wrong answer).
+    /// changing tint, which is the inversion this shape exists to avoid.
     pub fn swap_get_from_branch(&mut self) {
         self.ui.dlg.get_from_branch_swapped = !self.ui.dlg.get_from_branch_swapped;
         self.reload_get_from_branch_rows();

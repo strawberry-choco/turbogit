@@ -2080,8 +2080,9 @@ fn named_density_variants_cover_shell_and_status_bar() {
 }
 
 /// The compressed-list density roles are named in `theme.rs`, not spelled at the
-/// call site. Each value is the one the command palette and the workspace picker
-/// used to set inline, so this pins the extraction as a move and not a change.
+/// call site. Each value is pinned because the command palette's action rows and
+/// the workspace picker's recents list wear the same gap, and only the palette
+/// wears the compressed padding and band.
 #[test]
 fn compressed_list_density_is_a_named_role_not_a_call_site_literal() {
     assert_eq!(theme::DENSITY_COMMAND_BUTTON, egui::vec2(8.0, 1.0));

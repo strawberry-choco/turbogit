@@ -410,7 +410,8 @@ pub enum BranchFileStatus {
 /// list the window paints is that order, and the two one-sided rows exchanging
 /// **positions** under `Swap Branches` is a fact about the ordering, not about the
 /// tint; reordering these fields would silently re-sort the window by path and turn
-/// the swap into the re-colouring the ticket names as the wrong answer.
+/// the swap into a re-colouring, which is the wrong answer: it discloses nothing
+/// about which side lost the path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BranchFileRow {
     pub status: BranchFileStatus,
