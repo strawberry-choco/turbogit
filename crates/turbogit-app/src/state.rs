@@ -4739,22 +4739,30 @@ impl AppState {
                         )
                     });
                     if let Some(record) = record {
-                        let offer = branch_divergence_for(&record);
-                        if let Some(offer) = &offer {
-                            // The divergence is a durable feed entry, not just
-                            // the offer: the offer is dismissed and the feed is
-                            // what makes a multi-root operation auditable later.
+                        let diverged = branch_divergence_for(&record);
+                        if let Some(diverged) = &diverged {
+                            // The divergence is a durable feed entry for ANY
+                            // run that moved some roots and failed others —
+                            // reversible or not. The offer below can be declined
+                            // or dismissed, but the feed is what makes a
+                            // multi-root operation auditable later, so it arms
+                            // even when no rollback can be offered (Custom).
                             self.ui.activity.push(crate::activity::ActivityEntry {
                                 at: chrono::Local::now(),
                                 repo: Some("project".to_string()),
-                                message: divergence_report(offer, "diverged"),
+                                message: divergence_report(diverged, "diverged"),
                                 kind: crate::activity::ActivityKind::Warning,
                             });
                         }
-                        // One offer at a time, and always the newest run's: a
-                        // later run that lands everywhere replaces a stale
+                        // The offer alone stays gated on `reversible()`: the
+                        // record names what diverged for every run, but a
+                        // `Rollback` the app cannot honour (arbitrary git under
+                        // Custom) is a false promise, so the control must not
+                        // appear. One offer at a time, always the newest run's —
+                        // a later run that lands everywhere replaces a stale
                         // divergence rather than stacking a second modal on it.
-                        self.ui.branch_divergence = offer;
+                        self.ui.branch_divergence =
+                            if record.reversible() { diverged } else { None };
                         crate::bulk_history::record_into(&mut self.ui.bulk_history, record);
                         self.persist_ui();
                     }
@@ -5957,29 +5965,31 @@ fn activity_repo_label(affected: &Affected) -> Option<String> {
     }
 }
 
-/// The roots a completed branch run left in disagreement, or `None` when there
-/// is nothing to offer.
+/// The roots a completed run left in disagreement, or `None` when nothing
+/// diverged.
 ///
-/// Three facts must hold together, and each one is the reason a near-miss must
+/// Two facts must hold together, and each one is the reason a near-miss must
 /// not fire:
 /// 1. the run CHANGED at least one root — a run that failed everywhere moved
-///    nothing, so there is nothing to roll back;
+///    nothing, so there is nothing to report;
 /// 2. it FAILED in at least one other root — a run that landed everywhere left
-///    the roots agreeing, which is the outcome everybody wanted;
-/// 3. a rollback can be *honoured* ([`crate::bulk_history::BulkRunRecord::reversible`]).
-///    Offering to undo an operation the app cannot undo is a promise the control
-///    would break on the spot.
+///    the roots agreeing, which is the outcome everybody wanted.
+///
+/// This is the *record* of a divergence and deliberately says nothing about
+/// whether a rollback can be *honoured* — that is `reversible()`'s call, made
+/// at the offer's arm site, never here. A `Custom` run moves arbitrary git and
+/// is not reversible, so it must still produce this record (the roots disagree
+/// and nothing repairs them) while producing no offer (the app cannot undo what
+/// it did not arrange). Fusing the two decisions is the bug: it would either
+/// promise a rollback that fails on the spot or leave a divergence unrecorded.
 ///
 /// A `Skipped` row is in none of the lists deliberately. The preflight matrix
 /// refused it before anything ran and the monitor says why, which is the
-/// multi-root *skip* policy the sync family runs on; this offer is the other,
+/// multi-root *skip* policy the sync family runs on; this record is the other,
 /// opposite theory of failure and the two are not to be unified.
 fn branch_divergence_for(record: &crate::bulk_history::BulkRunRecord) -> Option<BranchDivergence> {
     use crate::bulk_history::RepoOutcome;
 
-    if !record.reversible() {
-        return None;
-    }
     let mut changed: Vec<DivergentRoot> = Vec::new();
     let mut failed: Vec<DivergentRoot> = Vec::new();
     for row in &record.repos {
