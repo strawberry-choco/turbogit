@@ -146,6 +146,36 @@ impl CliExecutor {
         Ok(output.stdout)
     }
 
+    /// One `git apply` invocation with the patch handed in on **stdin**, which
+    /// is the whole of what the engine's three patch verbs share: the flags say
+    /// index-or-worktree and check-or-write, the payload never changes. Feeding
+    /// it through stdin rather than a temporary file is what keeps a failed
+    /// `--check` from leaving a stray `.patch` in the repository the developer
+    /// then has to explain to git status.
+    fn apply_patch_via_stdin(&self, root: &Path, patch: &Patch, args: &[&str]) -> TgResult<()> {
+        use std::io::Write;
+        let bin = turbogit_domain::model::git_binary(&self.settings);
+        let text = patch.to_string();
+        let mut child = Command::new(&bin)
+            .args(args)
+            .current_dir(root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())?;
+        }
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Err(TgError::Cli {
+                code: output.status.code().unwrap_or(-1),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// [`Self::run`] variant with extra environment overrides (issue 31: the
     /// tag dialog's tagger identity rides on `GIT_COMMITTER_*`, which is how
     /// `git tag -a` picks the tagger). Error mapping is identical.
@@ -1749,55 +1779,19 @@ impl GitExecutor for CliExecutor {
         patch: &Patch,
         direction: ApplyDirection,
     ) -> TgResult<()> {
-        let patch = patch.to_string();
-        let bin = turbogit_domain::model::git_binary(&self.settings);
         let mut args: Vec<&str> = vec!["apply", "--cached", "--recount"];
         if direction == ApplyDirection::Reverse {
             args.push("--reverse");
         }
-        let mut child = Command::new(&bin)
-            .args(&args)
-            .current_dir(root)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-        use std::io::Write;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(patch.as_bytes())?;
-        }
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            return Err(TgError::Cli {
-                code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
-        }
-        Ok(())
+        self.apply_patch_via_stdin(root, patch, &args)
+    }
+
+    fn apply_patch_to_worktree(&self, root: &Path, patch: &Patch) -> TgResult<()> {
+        self.apply_patch_via_stdin(root, patch, &["apply", "--recount"])
     }
 
     fn check_patch(&self, root: &Path, patch: &Patch) -> TgResult<()> {
-        let patch = patch.to_string();
-        let bin = turbogit_domain::model::git_binary(&self.settings);
-        let mut child = Command::new(&bin)
-            .args(["apply", "--check", "--recount"])
-            .current_dir(root)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()?;
-        use std::io::Write;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(patch.as_bytes())?;
-        }
-        let output = child.wait_with_output()?;
-        if !output.status.success() {
-            return Err(TgError::Cli {
-                code: output.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
-        }
-        Ok(())
+        self.apply_patch_via_stdin(root, patch, &["apply", "--check", "--recount"])
     }
 
     fn add_intent_to_add(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
