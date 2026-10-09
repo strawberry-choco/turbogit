@@ -47,9 +47,18 @@ impl AppState {
     /// `None` when there is no current branch to be unmerged *into*, which is
     /// the same answer the consequence line gives.
     ///
-    /// The subjects come from one bounded log of the branch, read **now** — the
-    /// list outlives the ref it describes, and a viewer that looked them up
-    /// after the delete would be asking for a branch that is gone.
+    /// The subjects come from one bounded log over **the same range the ids
+    /// came from**, read **now** — the list outlives the ref it describes, and
+    /// a viewer that looked them up after the delete would be asking for a
+    /// branch that is gone.
+    ///
+    /// The range is not an optimisation, it is the pairing. A log over the
+    /// branch itself is its recent history, and `git log` orders by commit
+    /// date: a branch that merged the current branch back into itself reaches
+    /// the shared commits too, and one of those newer than an outgoing commit
+    /// takes its slot in a listing capped at the outgoing count — which leaves
+    /// a row of the disclosure with no subject at all. Both calls compiles
+    /// either way; only this one keeps them the same commit set.
     pub fn unmerged_commits(&self, root: &RootId, branch: &str) -> Option<UnmergedCommits> {
         let merged_target = self
             .multi
@@ -68,7 +77,7 @@ impl AppState {
                 root.as_path(),
                 &LogOpts {
                     max_count: Some(shas.len()),
-                    branch: Some(branch.to_string()),
+                    branch: Some(format!("HEAD..{branch}")),
                     ..Default::default()
                 },
             )
