@@ -363,7 +363,7 @@ impl Palette {
     /// Unversioned file letter (`U`) — olive.
     pub const STATUS_UNVERSIONED: Color32 = Color32::from_rgb(0xb5, 0xb3, 0x7e);
     /// Absent-on-the-base-side letter (`D`) — **grey**, the third rung of the
-    /// change-kind grammar: green = Added, blue = Modified, grey = Deleted
+    /// change-kind grammar: green = Added, blue = Modified, grey = Deleted.
     /// The grammar is a design-system rule and not
     /// a per-call-site choice, so all three rungs are named here; the other two are
     /// the existing [`Self::STATUS_ADDED`] and [`Self::STATUS_MODIFIED`], which is
