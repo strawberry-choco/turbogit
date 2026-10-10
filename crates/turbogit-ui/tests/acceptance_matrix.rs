@@ -34,8 +34,20 @@
 //! ([`SEEDED_COMMIT_DATE`]) so their SHAs and their age labels cannot move, the
 //! paths a pane titles with are the repo-relative form the changelist itself
 //! carries, and the one host value the shell reads (`git --version`) is pinned
-//! ([`CAPTURED_GIT_VERSION`]). A page that moves between two runs here moved
-//! because the UI changed.
+//! ([`CAPTURED_GIT_VERSION`]).
+//!
+//! One fact about the machine stays in the frames anyway, and it is named because
+//! the mac budget is **0 px**, which makes it a red run rather than a quietly
+//! stale capture: a `DATE` cell renders the pinned instant through the machine's
+//! own zone. Measured with `TZ=Pacific/Auckland` against baselines captured at
+//! `+0800` — `03-git-log` 26 px, `03-git-log-selected`, `05-branches-popup` and
+//! `06-push-dialog` 52 px each, every box inside the date column at x 1015-1220,
+//! and the other seven pages 0 px. So a diff confined to that column is the zone
+//! doing this, not a layout change; re-capture after a daylight-saving transition
+//! on the machine that owns the baselines.
+//!
+//! Apart from that, a page that moves between two runs here moved because the UI
+//! changed.
 //!
 //! The harness is [`CAPTURE_SIZE`] — 1440×900, the size `design-exports/` was
 //! drawn and validated at. The frames are 2× exports of that box, so a capture
@@ -207,6 +219,10 @@ fn capture_dir(name: &str) -> PathBuf {
 /// moves once a year rather than once a minute, hour, day or week. `05-branches-popup`
 /// therefore reads `1y` until this seed passes two years old, and that tick is
 /// the suite's one scheduled re-capture that is not a UI change.
+///
+/// What is pinned here is the instant, not what a frame shows: a `DATE` cell
+/// renders it through the machine's own zone, so the hour is still a host fact on
+/// a daylight-saving machine. The file header names the four pages that carry it.
 const SEEDED_COMMIT_DATE: &str = "2025-09-01T12:00:00+00:00";
 
 /// `git commit -m message` in `repo` with both stamp fields pinned to
