@@ -340,7 +340,7 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
 #[test]
 fn a_destructive_command_still_runs_on_an_unprotected_root() {
     let (_tmp, project, alpha, _ui) = project("cc-grammar");
-    let mut state = app_with_selection(&project, &[alpha.clone()], &[&alpha]);
+    let mut state = app_with_selection(&project, std::slice::from_ref(&alpha), &[&alpha]);
 
     let plan = BulkPlan {
         op: BulkOp::Custom,
