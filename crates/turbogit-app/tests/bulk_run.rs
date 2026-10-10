@@ -397,3 +397,141 @@ fn retry_skipped_lands_the_branch_on_repos_that_became_clean() {
     assert_eq!(view.tally(), (3, 0, 0, 0, 0), "retry cleared the skip");
     assert_eq!(git(&ui, &["branch", "--show-current"]).trim(), "feature/x");
 }
+
+// -- Protected-branch policy -----------------------------------------------------
+
+/// Advance `name`'s bare origin with one commit made through a scratch clone:
+/// the repo is behind, so a rebasing pull that RAN would move its HEAD —
+/// and a refused one provably did not.
+fn seed_incoming(parent: &Path, name: &str) -> String {
+    let bare = parent.join(format!("{name}.origin"));
+    let scratch = parent.join(format!("{name}-scratch"));
+    git(
+        parent,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            scratch.to_str().unwrap(),
+        ],
+    );
+    git(&scratch, &["config", "user.email", "test@example.com"]);
+    git(&scratch, &["config", "user.name", "Test"]);
+    std::fs::write(scratch.join("base.txt"), "base\nincoming\n").unwrap();
+    git(&scratch, &["add", "."]);
+    git(&scratch, &["commit", "-q", "-m", "incoming"]);
+    git(&scratch, &["push", "-q", "origin", "main"]);
+    git(&scratch, &["rev-parse", "HEAD"]).trim().to_string()
+}
+
+/// A fleet whose every root is protected plans no roots at all, so the run
+/// completes with an EMPTY result set — which must settle as a loud report
+/// of what was skipped, never as the success an unguarded `ok == len` reads
+/// zero-as-everything.
+#[test]
+fn a_run_that_planned_nothing_settles_loudly_and_never_as_a_success() {
+    let (_tmp, project, alpha, ui) = project("br-protected-all");
+    let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone()], &[&alpha, &ui]);
+
+    // Shipped defaults protect `main`; both repos sit on it and the run
+    // rebases, so the matrix plans nothing.
+    let plan = BulkPlan {
+        op: BulkOp::PullAll,
+        roots: Vec::new(),
+        rebase: true,
+        branch: String::new(),
+        command: String::new(),
+    };
+    state.run_bulk_confirmed(plan);
+    wait_for_run_end(&mut state);
+
+    let toast = state.ui.toast.as_ref().expect("the run reports");
+    assert!(
+        !matches!(toast.kind, turbogit_app::state::ToastKind::Success),
+        "a run that executed nothing is never a success"
+    );
+    assert!(
+        toast.message.contains("nothing ran")
+            && toast.message.contains("2 root(s) skipped")
+            && toast.message.contains("protected branch — main"),
+        "the message says how many were skipped and why: {}",
+        toast.message
+    );
+
+    // Durable, per root: the feed carries one refusal entry per repo
+    // naming the branch, plus the aggregate that is not a Success.
+    let per_root: Vec<String> = state
+        .ui
+        .activity
+        .entries
+        .iter()
+        .filter(|e| e.repo.as_deref() == Some("alpha") || e.repo.as_deref() == Some("ui"))
+        .map(|e| e.message.clone())
+        .collect();
+    assert_eq!(per_root.len(), 2, "one durable refusal per root");
+    assert!(
+        per_root
+            .iter()
+            .all(|m| m.contains("'main' is a protected branch")),
+        "the entries name the branch: {per_root:?}"
+    );
+    let aggregate = state
+        .ui
+        .activity
+        .entries
+        .iter()
+        .find(|e| e.message.contains("nothing ran"))
+        .expect("the settlement is in the feed, not only the toast");
+    assert_eq!(aggregate.kind, turbogit_app::activity::ActivityKind::Warning);
+}
+
+/// Retry re-dispatches every Skipped row — forcing the attempt the policy
+/// refused — so the refusal that BEARS the policy is the one in `run_step`:
+/// the forced pull refuses again, rewrites nothing, and records itself.
+#[test]
+fn retry_cannot_force_a_rebasing_pull_onto_a_protected_branch() {
+    let (_tmp, project, alpha, _ui) = project("br-retry-protected");
+    let parent = project.join("frontend");
+    seed_incoming(&parent, "alpha");
+    let mut state = app_with_selection(&project, &[alpha.clone()], &[&alpha]);
+
+    let plan = BulkPlan {
+        op: BulkOp::PullAll,
+        roots: Vec::new(),
+        rebase: true,
+        branch: String::new(),
+        command: String::new(),
+    };
+    state.run_bulk_confirmed(plan);
+    wait_for_run_end(&mut state);
+
+    let head_before = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
+
+    state.bulk_retry_skipped();
+    wait_for_run_end(&mut state);
+
+    let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
+    let row = view.rows.iter().find(|r| r.name == "alpha").unwrap();
+    match &row.state {
+        RowState::Failed { error } => {
+            assert!(
+                error.contains("'main' is a protected branch"),
+                "the forced step refused, naming the branch: {error}"
+            );
+        }
+        other => panic!("the retry reached the branch it was refused: {other:?}"),
+    }
+    assert_eq!(
+        git(&alpha, &["rev-parse", "HEAD"]).trim(),
+        head_before,
+        "the protected branch was not rewritten"
+    );
+    assert!(
+        state.ui.activity.entries.iter().any(|e| {
+            e.repo.as_deref() == Some("alpha")
+                && e.message.contains("'main' is a protected branch")
+                && e.kind == turbogit_app::activity::ActivityKind::Error
+        }),
+        "the refusal is durable in the feed"
+    );
+}
