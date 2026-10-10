@@ -419,6 +419,48 @@ fn a_checkout_and_pull_of_an_unprotected_branch_rebases_and_records_its_backup()
 
 // ---------------------------------------------------------------- the sweep --
 
+/// The text a pin is matched against for one call site: the call expression
+/// itself — its wrapped argument lines included — plus the statements of its
+/// own block that lead up to it.
+///
+/// One line could not pin the bulk pull's seam, because the arguments that
+/// matter are not on the line that names the call: `run_step` decides `method`
+/// one statement earlier, and hands it and `root.current_branch` on the lines
+/// after. Matching only the call's own line pinned the *name* of the seam and
+/// nothing that crosses it, so the site could stop rebasing, or stop naming the
+/// branch it guards, and the sweep would stay green. The run-back stops at the
+/// block's opener — the first line indented less than the call — so a pin
+/// reaches the statements the call actually sits in and no further.
+fn call_site_text(lines: &[&str], line: usize) -> String {
+    let start = line - 1;
+    let indent = |text: &str| text.len() - text.trim_start().len();
+    // Forward: the call's own expression, until its parentheses balance.
+    let mut end = start;
+    let mut depth = 0isize;
+    while end + 1 < lines.len() {
+        depth +=
+            lines[end].matches('(').count() as isize - lines[end].matches(')').count() as isize;
+        if depth <= 0 {
+            break;
+        }
+        end += 1;
+    }
+    // Back: the statements that lead up to it inside the same block.
+    let mut begin = start;
+    while begin > 0 {
+        let prior = lines[begin - 1];
+        if prior.trim().is_empty() || indent(prior) < indent(lines[start]) {
+            break;
+        }
+        begin -= 1;
+    }
+    lines[begin..=end]
+        .iter()
+        .map(|text| text.trim())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The claim "every user-initiated pull is guarded" is checked against the
 /// sources rather than against a list a later verb can forget to join.
 ///
@@ -427,9 +469,11 @@ fn a_checkout_and_pull_of_an_unprotected_branch_rebases_and_records_its_backup()
 /// call added to another, and a file exempted by name lets that file's merge-only
 /// pull flip its rebase flag to `true` and stay green — which is exactly the
 /// protected-branch rebase the guarded seam exists to prevent. So every crate
-/// that can integrate an upstream is walked, each call of `pull` must match a
-/// permitted site *by its own call text*, and a permitted site that has gone is
-/// itself a failure, so the list cannot silently outgrow the code.
+/// that can integrate an upstream is walked, each call of `pull` must carry
+/// *every needle* its permitted site lists — read off the call's own statement
+/// sequence, [`call_site_text`], not off the one line that names it — and a
+/// permitted site that has gone is itself a failure, so the list cannot silently
+/// outgrow the code.
 ///
 /// The port layer is walked too, deliberately: forwarding `rebase` unchanged is
 /// the port's job, and pinning those lines one by one is what makes the port's
@@ -451,85 +495,97 @@ fn no_surface_pulls_the_executor_beyond_the_guarded_seam() {
     let mut found: Vec<(String, String)> = Vec::new();
     for dir in walked {
         for (file, src) in test_support::srcscan::sources_under(crates.join(dir)) {
+            let lines: Vec<&str> = src.lines().collect();
             // `pull` and its guarded form: a site that calls `pull_guarded`
             // is on the seam, but it must still be *named* here — the sweep
             // is the list of every executor pull any surface can reach.
             for name in ["pull", "pull_guarded"] {
                 for line in test_support::srcscan::call_lines(&src, name) {
-                    let text = src
-                        .lines()
-                        .nth(line - 1)
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-                    found.push((format!("{dir}/{file}"), text));
+                    found.push((format!("{dir}/{file}"), call_site_text(&lines, line)));
                 }
             }
         }
     }
 
-    // `(site, its call text)`. The text is the pin: a site may be edited into a
-    // different call, but not into one that rewrites a branch under guard.
-    let permitted: &[(&str, &str)] = &[
+    // `(site, every needle its call text must carry)`. The needles are the pin:
+    // a site may be edited into a different call, but not into one that
+    // rewrites a branch under guard — and not into one that stops naming what
+    // it hands the guard.
+    let permitted: &[(&str, &[&str])] = &[
         // The guarded seam — the only place a rebasing update may be integrated,
         // refusing a protected branch and saving the backup before either call.
         (
             "turbogit-services/src/sync_service.rs",
-            "pull(vcs, root, false)",
+            &["pull(vcs, root, false)"],
         ),
         (
             "turbogit-services/src/sync_service.rs",
-            "pull(vcs, root, true)",
+            &["pull(vcs, root, true)"],
         ),
         // The service-level forward onto the port: no policy of its own, the
         // rebase flag is its caller's, which is why calling it is a bypass.
         (
             "turbogit-services/src/sync_service.rs",
-            "vcs.pull(root, rebase)",
+            &["vcs.pull(root, rebase)"],
         ),
         // Calls of the guarded seam itself — every site that reaches a pull
         // through the guard is named here.
         (
             "turbogit-services/src/sync_service.rs",
-            "pull_guarded(vcs, root, method, settings, branch)",
+            &["pull_guarded(vcs, root, method, settings, branch)"],
         ),
-        ("turbogit-app/src/state.rs", "sync_service::pull_guarded("),
+        (
+            "turbogit-app/src/state.rs",
+            &["sync_service::pull_guarded("],
+        ),
         // The bulk run's `PullAll`, now guarded like every other site: the
         // matrix refuses at preflight, and a forced (Retry) step refuses
-        // again in `run_step`, which is why this line is on the seam.
+        // again in `run_step`, which is why this line is on the seam. The
+        // two extra needles are what the seam is *handed* — the method the
+        // step picks from the plan's own rebase flag, and the branch read
+        // off the root rather than assumed. Flip the bulk pull to merge
+        // unconditionally, or hand it somebody else's branch, and this site
+        // stops being listed.
         (
             "turbogit-services/src/bulk_ops.rs",
-            "sync_service::pull_guarded(",
+            &[
+                "sync_service::pull_guarded(",
+                "if rebase { UpdateMethod::Rebase",
+                "vcs, &root.path, method, settings, root.current_branch.as_deref()",
+            ],
         ),
         // The sidebar's `Pull selection`: merge-only *by construction*, and the
         // construction is what is pinned here — flip this `false` to `true` and
         // the site stops being listed.
-        ("turbogit-ui/src/ui/sidebar.rs", "v.pull(p, false)?"),
+        ("turbogit-ui/src/ui/sidebar.rs", &["v.pull(p, false)?"]),
         // The port's own adapters, each a pass-through of the caller's flag.
         (
             "turbogit-engine/src/git2_exec.rs",
-            "self.cli.pull(root, rebase)",
+            &["self.cli.pull(root, rebase)"],
         ),
-        ("test-support/src/lib.rs", "self.inner.pull(root, rebase)"),
+        (
+            "test-support/src/lib.rs",
+            &["self.inner.pull(root, rebase)"],
+        ),
     ];
 
     let unlisted: Vec<String> = found
         .iter()
         .filter(|(file, text)| {
-            !permitted
-                .iter()
-                .any(|&(pin_file, pin_text)| file.as_str() == pin_file && text.contains(pin_text))
+            !permitted.iter().any(|(pin_file, needles)| {
+                file.as_str() == *pin_file && needles.iter().all(|needle| text.contains(needle))
+            })
         })
         .map(|(file, text)| format!("{file}: {text}"))
         .collect();
     let stale: Vec<String> = permitted
         .iter()
-        .filter(|&&(pin_file, pin_text)| {
-            !found
-                .iter()
-                .any(|(file, text)| file.as_str() == pin_file && text.contains(pin_text))
+        .filter(|(pin_file, needles)| {
+            !found.iter().any(|(file, text)| {
+                file.as_str() == *pin_file && needles.iter().all(|n| text.contains(n))
+            })
         })
-        .map(|&(file, needle)| format!("{file}: {needle}"))
+        .map(|(file, needles)| format!("{file}: {:?}", needles))
         .collect();
 
     assert!(
