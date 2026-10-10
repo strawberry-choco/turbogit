@@ -16,6 +16,7 @@ turbogit-engine-api = { workspace = true }
 turbogit-services = { workspace = true }
 
 [dev-dependencies]
+dify = { workspace = true }
 egui_kittest = { workspace = true }
 ron = { workspace = true }
 tempfile = { workspace = true }

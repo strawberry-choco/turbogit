@@ -1,10 +1,26 @@
 //! Issue #24 — acceptance-matrix verification with per-page screenshots.
 //!
-//! Renders every redesigned page through the headless harness and saves one
-//! PNG per page under egui_kittest's default snapshot directory
-//! (`tests/snapshots/`, resolved against this crate's root at test time).
-//! Assertions here are deliberately structural (the page paints its defining
-//! chrome); pixel-level checks live in each page's own suite.
+//! Renders every redesigned page through the headless harness and compares one
+//! PNG per page against its committed baseline under
+//! `tests/snapshots/` (egui_kittest's default snapshot directory, resolved
+//! against this crate's root at test time). A plain run **writes nothing**: it
+//! fails a page whose diff exceeds `kittest.toml`'s pixel budget and prints the
+//! measured diff and its box for every page, over budget or not.
+//!
+//! A baseline changes only when the run is told to capture it, explicitly:
+//!
+//! ```text
+//! UPDATE_SNAPSHOTS=force cargo test -p turbogit-ui --test acceptance_matrix
+//! ```
+//!
+//! which repaints all eleven PNGs and leaves the previous ones beside them as
+//! `{name}.old.png` for review (gitignored; the pair is what a reviewer compares
+//! before committing). `force` is the only value this suite documents — see the
+//! note on [`acceptance_matrix_screenshots`] for why `UPDATE_SNAPSHOTS=1` is not
+//! a capture, and for the budget's floor.
+//! Assertions here stay structural (the page paints its defining chrome); the
+//! pixel-level check is the comparison above, and each page's own suite pins
+//! its behaviour.
 //!
 //! The harness is [`CAPTURE_SIZE`] — 1440×900, the size `design-exports/` was
 //! drawn and validated at. The frames are 2× exports of that box, so a capture
@@ -41,6 +57,80 @@ fn settle(h: &mut Harness<'_, AppState>) {
     for _ in 0..8 {
         h.step();
     }
+}
+
+// ---- the snapshot seam -----------------------------------------------------
+
+/// How many pixels does [`dify`] count as failing at `threshold` — the same
+/// call, with the same arguments, that egui_kittest makes to decide the verdict.
+///
+/// Recomputed here only to be *printed*: egui_kittest reports a count when a
+/// snapshot fails and stays silent when it passes, so without this the suite
+/// would show nothing about drift under the budget, which is the whole band the
+/// stale captures live in.
+fn diff_pixels(a: &image::RgbaImage, b: &image::RgbaImage, threshold: f32) -> i32 {
+    dify::diff::get_results(a.clone(), b.clone(), threshold, true, None, &None, &None)
+        .map_or(0, |(wrong, _)| wrong)
+}
+
+/// The box around every pixel pair that differs at all, at any tolerance.
+///
+/// Printed with the count because the count alone cannot be reviewed: 2 000 px
+/// spread over a row of text and 2 000 px in one pane corner are different
+/// findings. `(u32::MAX, ..)` when nothing differs.
+fn differing_bbox(a: &image::RgbaImage, b: &image::RgbaImage) -> (u32, u32, u32, u32) {
+    let mut box_ = (u32::MAX, u32::MAX, 0u32, 0u32);
+    for (x, y, p) in a.enumerate_pixels() {
+        if b.get_pixel(x, y) != p {
+            box_.0 = box_.0.min(x);
+            box_.1 = box_.1.min(y);
+            box_.2 = box_.2.max(x);
+            box_.3 = box_.3.max(y);
+        }
+    }
+    box_
+}
+
+/// Compare one page's render against its committed baseline, print the measured
+/// diff, and record the verdict with the harness.
+///
+/// The budget is `kittest.toml`'s, read through [`egui_kittest::SnapshotOptions`]
+/// rather than restated here, so the number a reader sees and the number the
+/// verdict is taken against cannot drift apart.
+fn snapshot(h: &mut Harness<'_, AppState>, name: &str) {
+    let options = egui_kittest::SnapshotOptions::default();
+    let new = h
+        .render()
+        .unwrap_or_else(|err| panic!("{name}: the renderer produced no image: {err}"));
+
+    let baseline = options.output_path.join(format!("{name}.png"));
+    match image::open(&baseline) {
+        Ok(previous) => {
+            let previous = previous.to_rgba8();
+            if previous.dimensions() == new.dimensions() {
+                println!(
+                    "GOLDEN {name}: {} differing px of {} budget, box {:?}",
+                    diff_pixels(&previous, &new, options.threshold),
+                    options.max_failed_pixels,
+                    differing_bbox(&previous, &new),
+                );
+            } else {
+                println!(
+                    "GOLDEN {name}: no pixel count, baseline is {:?} and this render is {:?}",
+                    previous.dimensions(),
+                    new.dimensions(),
+                );
+            }
+        }
+        // The comparison itself reports a missing baseline; this only keeps the
+        // printed line from being the silence a reviewer reads as "unchanged".
+        Err(_) => println!(
+            "GOLDEN {name}: no committed baseline at {}",
+            baseline.display()
+        ),
+    }
+
+    h.snapshot_options(name, &options);
 }
 
 /// Seed a repo with history worth looking at: two branches, a tag, a remote
@@ -219,24 +309,45 @@ fn seed_worktree_and_submodule_panes(state: &mut AppState) {
 
 #[test]
 fn acceptance_matrix_screenshots() {
-    // This suite produces acceptance-matrix EVIDENCE, not a pixel-CI gate:
-    // every run refreshes the committed renders (wgpu antialiasing jitters
-    // a few hundred pixels between runs, which would flake a comparison).
-    // Real regression protection lives in each page's own assertion suite.
-    // Safe: single-threaded test process; no other thread reads the env
-    // concurrently while this runs.
+    // A plain run COMPARES and writes nothing; capture is the explicit
+    // `UPDATE_SNAPSHOTS=force` invocation documented at the top of this file.
     //
-    // "force", not "1": egui_kittest maps `UPDATE_SNAPSHOTS=1` to
-    // `UpdateFailing`, which only rewrites a golden that already exceeds
-    // `kittest.toml`'s pixel budget. A small visual change stays under that
-    // budget, so the run reports green and the committed render goes quietly
-    // stale — which is exactly what happened after the 0.35 → 0.36 upgrade
-    // changed the meaning of "1". `force` is `UpdateAll`.
-    unsafe { std::env::set_var("UPDATE_SNAPSHOTS", "force") };
+    // The budget's floor is not anti-aliasing. Two renders of the same frame
+    // inside one process are byte-identical here (0 px on all eleven pages), so
+    // the run-to-run noise the old comment blamed on wgpu is not what forces a
+    // budget above zero. What forces it is the fixtures: every repo-backed page
+    // paints the `tempfile` directory's random name in the shell header, the
+    // seeded repo's two abbreviated commit SHAs change every run because git
+    // stamps the commit time, and two pages paint the full temp path in a title
+    // (`04-diff`, `07-merge-editor`). Measured on macOS (Apple GPU, 2026-10-10)
+    // across separate processes, that is 0 px on `01-welcome` and 109-2 033 px
+    // on the rest, worst on `07-merge-editor` — hence `kittest.toml`'s mac
+    // budget of 4 000 (≈2× the floor) instead of the 8 000 that sat above it
+    // with no measurement behind it.
+    //
+    // The same fact has a sharper edge than the number: a baseline that bakes
+    // in a machine-local path and a per-run SHA can only ever match on the
+    // machine and the fixtures that produced it. `04-diff` and
+    // `07-merge-editor` are the two pages that paint a full `/var/folders/…`
+    // path into their frame, which is the shape of the pair on record as
+    // failing on macOS against a Windows-taken baseline. No threshold fixes
+    // that; pinning the painted path and the seeded commit timestamps would,
+    // and that is a fixture change, not one to make by editing a budget. The
+    // printed per-page diff is what makes the band below the budget readable
+    // in the meantime.
+    //
+    // `UPDATE_SNAPSHOTS=1` is deliberately NOT the documented capture: egui_kittest
+    // maps it to `UpdateFailing`, which rewrites only a golden already over the
+    // budget, so an under-budget visual change lands as a silent refresh — which
+    // is exactly how the committed renders went stale once before, when the
+    // 0.35 → 0.36 upgrade changed the meaning of "1".
+    //
     // Headless CI runners (ubuntu-latest) expose no GPU adapter, so
     // egui_kittest's wgpu renderer cannot initialize there ("No adapter
     // found"). Upstream egui also only runs snapshot tests on GPU-backed
-    // runners. Renders refreshed here are never consumed by CI, so skip.
+    // runners. This is the workspace's only `snapshot` caller, so under CI the
+    // comparison above never runs anywhere: the goldens are human evidence on a
+    // developer machine, not a gate.
     if std::env::var_os("CI").is_some() {
         eprintln!("skipping acceptance-matrix screenshots: no GPU adapter on CI runners");
         return;
@@ -272,7 +383,7 @@ fn acceptance_matrix_screenshots() {
         "the welcome capture must not photograph the developer's recent \
          projects; point `recents_config_dir` at a temp dir. Painted:\n{painted}"
     );
-    h.snapshot("01-welcome");
+    snapshot(&mut h, "01-welcome");
     results.extend_harness(&mut h);
     drop(h);
     drop(project);
@@ -285,7 +396,7 @@ fn acceptance_matrix_screenshots() {
 
     // Commit tool window (default tab) with changelist + preview.
     settle(&mut h);
-    h.snapshot("02-commit");
+    snapshot(&mut h, "02-commit");
 
     // Git Log four panes with decorated history.
     h.state_mut().ui.tab = turbogit_app::state::Tab::Log;
@@ -294,7 +405,7 @@ fn acceptance_matrix_screenshots() {
         h.state().caches.log(&RootId(repo.clone().into())).is_some(),
         "log should be loaded"
     );
-    h.snapshot("03-git-log");
+    snapshot(&mut h, "03-git-log");
 
     // The same page with a commit selected, so the redesigned changed-files
     // rows and the commit-details blocks carry content (logs-panels redesign).
@@ -306,7 +417,7 @@ fn acceptance_matrix_screenshots() {
         std::thread::sleep(std::time::Duration::from_millis(25));
         h.step();
     }
-    h.snapshot("03-git-log-selected");
+    snapshot(&mut h, "03-git-log-selected");
 
     // Diff viewer over the working-tree change.
     //
@@ -322,26 +433,26 @@ fn acceptance_matrix_screenshots() {
     h.state_mut().ui.preview_change = Some(repo.join("lib.txt"));
     h.state_mut().ui.tab = turbogit_app::state::Tab::Commit;
     settle(&mut h);
-    h.snapshot("04-diff");
+    snapshot(&mut h, "04-diff");
     h.state_mut().ui.tab = turbogit_app::state::Tab::Log;
     settle(&mut h);
 
     // Branches popup.
     h.state_mut().ui.branches_popup = true;
     settle(&mut h);
-    h.snapshot("05-branches-popup");
+    snapshot(&mut h, "05-branches-popup");
     h.state_mut().ui.branches_popup = false;
 
     // Push dialog.
     h.state_mut().ui.dialog = Some(Dialog::Push);
     settle(&mut h);
-    h.snapshot("06-push-dialog");
+    snapshot(&mut h, "06-push-dialog");
     h.state_mut().ui.dialog = None;
 
     // Settings modal from the gear state.
     h.state_mut().ui.settings_open = true;
     settle(&mut h);
-    h.snapshot("08-settings-modal");
+    snapshot(&mut h, "08-settings-modal");
     results.extend_harness(&mut h);
     drop(h);
 
@@ -352,7 +463,7 @@ fn acceptance_matrix_screenshots() {
     state.ui.conflict_open = Some(crepo.join("conf.txt"));
     let mut h = harness(state);
     settle(&mut h);
-    h.snapshot("07-merge-editor");
+    snapshot(&mut h, "07-merge-editor");
     results.extend_harness(&mut h);
     drop(h);
 
@@ -376,11 +487,11 @@ fn acceptance_matrix_screenshots() {
             .is_some(),
         "the Worktrees pane's rows should be in the cache before it is captured"
     );
-    h.snapshot("09-worktrees");
+    snapshot(&mut h, "09-worktrees");
 
     h.state_mut().ui.tab = turbogit_app::state::Tab::Submodules;
     settle(&mut h);
-    h.snapshot("10-submodules");
+    snapshot(&mut h, "10-submodules");
     results.extend_harness(&mut h);
     drop(h);
 }
