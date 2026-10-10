@@ -41,8 +41,19 @@ fn project(tag: &str) -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
     (tmp, project, alpha, ui)
 }
 
+/// Settings with nothing protected: the fan-out mechanics below predate the
+/// per-root protected-branch refusal, and the shipped default would refuse
+/// every repo they run on (`main`). The refusal itself is asserted with the
+/// default settings in the protected suite at the bottom of this file.
+fn unprotected() -> turbogit_domain::model::VcsSettings {
+    turbogit_domain::model::VcsSettings {
+        protected_branch_patterns: Vec::new(),
+        ..Default::default()
+    }
+}
+
 fn app_with_selection(project: &Path, roots: &[PathBuf], selected: &[&PathBuf]) -> AppState {
-    let mut state = AppState::for_roots(project, roots);
+    let mut state = AppState::for_roots(project, roots).with_settings(unprotected());
     state.ui.repo_selection = selected
         .iter()
         .map(|p| turbogit_domain::model::RootId((*p).clone().into()))
@@ -55,7 +66,13 @@ fn rid(path: &Path) -> turbogit_domain::model::RootId {
 }
 
 /// Step the event pump until every monitor row is in a terminal state
-/// (Done / Failed / Skipped) or the deadline passes.
+/// (Done / Failed / Skipped), the run has settled, or the deadline passes.
+///
+/// The settle is part of the wait, not a courtesy: terminal rows arrive as
+/// progress events, and the pass's completion is a separate event that lands
+/// afterwards — so a wait that reads only the rows can return before the
+/// aggregate toast and the per-root feed entries exist, and a later feed
+/// assertion then races the worker.
 fn wait_for_run_end(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -67,7 +84,7 @@ fn wait_for_run_end(state: &mut AppState) {
             .rows
             .iter()
             .any(|r| matches!(r.state, RowState::Queued { .. } | RowState::Running));
-        if !busy_row {
+        if !busy_row && !state.ui.busy {
             return;
         }
         assert!(Instant::now() < deadline, "run did not end within 10s");
@@ -87,7 +104,7 @@ fn a_typed_command_runs_on_every_selected_repo_through_the_monitor() {
     state.open_bulk_preflight(BulkOp::Custom);
     state.ui.bulk_command = "git branch bulk-marker".to_string();
     let pf = state.bulk_preflight(BulkOp::Custom);
-    assert_eq!(pf.will_run(), 2, "custom commands never preflight-skip");
+    assert_eq!(pf.will_run(), 2, "an unprotected fleet all runs");
     assert_eq!(pf.total(), 2);
 
     // Confirming runs the will-run rows through the run monitor.
@@ -242,4 +259,165 @@ fn the_recent_list_is_capped_and_stays_newest_first() {
     assert_eq!(recents[0], "git cmd-9", "a re-run moves to the front");
     assert_eq!(recents[1], "git cmd-8");
     assert!(!recents.iter().any(|c| c == "git cmd-0"), "oldest dropped");
+}
+
+// -- Protected-branch policy ----------------------------------------------------
+
+/// The refusal is per root and about the root: a command typed against a
+/// protected branch is refused whatever it was, its monitor row and feed
+/// entry name the branch (never the command), and nothing runs.
+#[test]
+fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
+    let (_tmp, project, alpha, ui) = project("cc-protected");
+    // Shipped defaults: `main` is protected, and both repos sit on it.
+    let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
+    state.ui.repo_selection = [rid(&alpha), rid(&ui)].into_iter().collect();
+
+    state.open_bulk_preflight(BulkOp::Custom);
+    state.ui.bulk_command = "git branch bulk-marker".to_string();
+    let pf = state.bulk_preflight(BulkOp::Custom);
+    assert_eq!(
+        pf.will_run(),
+        0,
+        "an ordinary command buys a protected root nothing"
+    );
+
+    let plan = BulkPlan {
+        op: BulkOp::Custom,
+        roots: Vec::new(),
+        rebase: false,
+        branch: String::new(),
+        command: "git branch bulk-marker".to_string(),
+    };
+    state.run_bulk_confirmed(plan);
+    wait_for_run_end(&mut state);
+
+    // The monitor's row labels name the branch, not the command.
+    let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
+    assert_eq!(view.rows.len(), 2);
+    for row in &view.rows {
+        match &row.state {
+            RowState::Skipped { reason } => {
+                assert!(
+                    reason.contains("protected branch — main"),
+                    "the row names the refused branch: {reason:?}"
+                );
+                assert!(
+                    !reason.contains("bulk-marker"),
+                    "the row never quotes the command: {reason:?}"
+                );
+            }
+            other => panic!("a protected root is skipped with a reason: {other:?}"),
+        }
+    }
+
+    // The same reason is durable in the activity feed, one entry per root.
+    let per_root: Vec<&str> = state
+        .ui
+        .activity
+        .entries
+        .iter()
+        .filter(|e| e.repo.as_deref() == Some("alpha") || e.repo.as_deref() == Some("ui"))
+        .map(|e| e.message.as_str())
+        .collect();
+    assert_eq!(per_root.len(), 2, "one durable refusal per root");
+    for message in per_root {
+        assert!(
+            message.contains("'main' is a protected branch"),
+            "the feed entry names the branch: {message}"
+        );
+        assert!(
+            !message.contains("bulk-marker"),
+            "not the command: {message}"
+        );
+    }
+
+    for repo in [&alpha, &ui] {
+        assert!(
+            git(repo, &["branch", "--list", "bulk-marker"]).is_empty(),
+            "the refused command ran nowhere"
+        );
+    }
+}
+
+/// Retry re-dispatches every Skipped row — forcing the attempt the policy
+/// refused — so for `Custom` the refusal that BEARS the policy is the one on
+/// the step: the matrix's seeding can be skipped past by a plan that names no
+/// roots, and the row must then still be refused where the command would
+/// otherwise reach git. The command here moves HEAD if it runs, so the
+/// refusal is legible as a branch that did not.
+#[test]
+fn retry_cannot_force_a_custom_command_onto_a_protected_branch() {
+    let (_tmp, project, alpha, _ui) = project("cc-retry-protected");
+    // Shipped defaults: `main` is protected, and `alpha` sits on it.
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    state.ui.repo_selection = [rid(&alpha)].into_iter().collect();
+
+    let plan = BulkPlan {
+        op: BulkOp::Custom,
+        roots: Vec::new(),
+        rebase: false,
+        branch: String::new(),
+        command: "git commit --allow-empty -m bulk-ran".to_string(),
+    };
+    state.run_bulk_confirmed(plan);
+    wait_for_run_end(&mut state);
+    let head_before = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
+
+    state.bulk_retry_skipped();
+    wait_for_run_end(&mut state);
+
+    let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
+    let row = view.rows.iter().find(|r| r.name == "alpha").unwrap();
+    match &row.state {
+        RowState::Failed { error } => {
+            assert!(
+                error.contains("'main' is a protected branch"),
+                "the forced step refused, naming the branch: {error}"
+            );
+            assert!(
+                !error.contains("bulk-ran"),
+                "the step's refusal is about the root, never the command: {error}"
+            );
+        }
+        other => panic!("the retry reached the branch it was refused: {other:?}"),
+    }
+    assert_eq!(
+        git(&alpha, &["rev-parse", "HEAD"]).trim(),
+        head_before,
+        "the refused command ran nothing on the protected branch"
+    );
+    // `Error` and not the seeding's `Warning`: a preflight refusal records
+    // itself per root too, with the same words, so only the kind tells this
+    // entry apart from the one the matrix wrote before anything ran.
+    assert!(
+        state.ui.activity.entries.iter().any(|e| {
+            e.repo.as_deref() == Some("alpha")
+                && e.message.contains("'main' is a protected branch")
+                && e.kind == turbogit_app::activity::ActivityKind::Error
+        }),
+        "the step's refusal is durable in the feed"
+    );
+}
+
+/// The grammar is unrestricted: the policy refuses roots, not commands. A
+/// destructive-looking command still runs — the confirmation gate is unchanged
+/// and this seam dispatches past it exactly as before.
+#[test]
+fn a_destructive_command_still_runs_on_an_unprotected_root() {
+    let (_tmp, project, alpha, _ui) = project("cc-grammar");
+    let mut state = app_with_selection(&project, std::slice::from_ref(&alpha), &[&alpha]);
+
+    let plan = BulkPlan {
+        op: BulkOp::Custom,
+        roots: vec![rid(&alpha)],
+        rebase: false,
+        branch: String::new(),
+        command: "git reset --hard".to_string(),
+    };
+    state.run_bulk_confirmed(plan);
+    wait_for_run_end(&mut state);
+
+    let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
+    assert_eq!(view.tally(), (1, 0, 0, 0, 0), "the command ran");
 }

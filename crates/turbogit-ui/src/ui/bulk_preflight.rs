@@ -262,14 +262,16 @@ fn skip_detail(reason: SkipReason) -> &'static str {
         SkipReason::Diverged => "requires manual resolve",
         SkipReason::NoUpstream => "nothing to sync with",
         SkipReason::CleanTree => "nothing to stash",
+        SkipReason::ProtectedBranch => "the run may not touch it",
     }
 }
 
 // -- Custom command (issue 13, screen 04) -------------------------------------
 
 /// The custom-command variant of the modal: a command input with the
-/// workspace's recent commands for reuse, the same matrix (custom commands
-/// never preflight-skip), and — for a destructive-looking command (reset,
+/// workspace's recent commands for reuse, the same matrix (a root on a
+/// protected branch is refused whatever the command typed), and — for a
+/// destructive-looking command (reset,
 /// clean, history rewrites, force pushes, `-D`) — a two-stage confirmation:
 /// the first Run click only arms an explicit "Yes, run <command>" button.
 fn command_body(ui: &mut Ui, state: &mut AppState) {
