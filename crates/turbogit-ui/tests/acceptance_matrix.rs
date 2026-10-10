@@ -7,6 +7,12 @@
 //! fails a page whose diff exceeds `kittest.toml`'s pixel budget and prints the
 //! measured diff and its box for every page, over budget or not.
 //!
+//! Those printed numbers appear only under `-- --nocapture`, because `cargo test`
+//! captures a *passing* test's stdout. A green run that says nothing therefore did
+//! not measure nothing — it measured and stayed under the budget, which is the one
+//! case a reviewer most needs to see, since a page can drift silently for weeks
+//! inside a generous budget before it fails.
+//!
 //! A baseline changes only when the run is told to capture it, explicitly:
 //!
 //! ```text
