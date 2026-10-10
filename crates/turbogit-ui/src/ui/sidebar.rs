@@ -324,6 +324,12 @@ fn fetch_selection(state: &mut AppState) {
 }
 
 /// `git pull` on every selected root, one operation (issue #08).
+///
+/// Merge-only by construction: the rebase flag is the literal `false` below, so
+/// this fleet verb rewrites nothing and owes neither the protected-branch
+/// refusal nor the rewrite backup. Wiring it to the configured update method
+/// would move it onto the guarded `AppState::dispatch_pull` path — per root, and
+/// so not by widening this loop.
 fn pull_selection(state: &mut AppState) {
     let paths: Vec<PathBuf> = state
         .ui

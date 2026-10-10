@@ -543,21 +543,29 @@ pub fn fetch(vcs: &dyn GitExecutor, root: &Path, remote: Option<&str>) -> TgResu
 pub fn pull(vcs: &dyn GitExecutor, root: &Path, rebase: bool) -> TgResult<()> {
     vcs.pull(root, rebase)
 }
-/// Fetch everything, then pull using the configured update method.
-pub fn update_project(vcs: &dyn GitExecutor, root: &Path, method: UpdateMethod) -> TgResult<()> {
-    fetch(vcs, root, None)?;
-    pull(vcs, root, method == UpdateMethod::Rebase)
-}
 
-/// Fetch, then integrate the upstream into `root` as a rejected push's
-/// recovery, paying both guards every other rewrite pays.
+/// Pull the way a developer asking to pull is answered — the guarded form of
+/// [`pull`], paying the two dues a rebasing update owes and a merging one does
+/// not: a protected branch refuses before anything runs, and a rebase records
+/// the tip it is about to rewrite.
 ///
-/// `branch` is the root's current branch: the question the guard answers is
-/// "is the branch this update would rewrite protected?", and only a caller that
-/// has just read `HEAD` can answer it. A merging update rewrites nothing, so it
-/// owes neither the refusal nor the backup — which is why the method, not the
-/// branch, decides what is checked.
-pub fn update_for_recovery(
+/// `branch` is the branch the update lands on, when the caller already knows it
+/// (a `Checkout and pull` names it from the row it clicked). The repository's own
+/// HEAD wins when it can be read, because it is the fact rather than the
+/// caller's belief about it, and a caller that checked a branch out before
+/// calling here has HEAD as exactly that branch. With neither — a detached HEAD —
+/// there is no branch to guard, and so no rewrite to allow either.
+///
+/// **The order is load-bearing and compiles either way.**
+/// [`crate::integrate_service::ensure_rebase_allowed`] must refuse BEFORE
+/// [`GitExecutor::save_rewrite_backup`]: one backup reference exists per
+/// repository, it is the Undo verb's only target, and a refusal that had already
+/// written it would overwrite the record of an earlier rewrite that succeeded.
+/// And the backup must be written BEFORE the pull, or the rebase rewrites history
+/// with nothing to undo. That is why a rebasing pull cannot be inlined as a bare
+/// `vcs.pull(root, rebase)` at a call site — which is precisely what the shell's
+/// pull verbs used to do.
+pub fn pull_guarded(
     vcs: &dyn GitExecutor,
     root: &Path,
     method: UpdateMethod,
@@ -565,25 +573,47 @@ pub fn update_for_recovery(
     branch: &str,
 ) -> TgResult<()> {
     let rebase = method == UpdateMethod::Rebase;
-    if rebase {
+    if !rebase {
+        // A merging update rewrites nothing, so it owes neither the refusal nor
+        // the backup — and must not consume the repository's one backup slot.
+        return pull(vcs, root, false);
+    }
+    let target = vcs
+        .current_branch(root)?
+        .unwrap_or_else(|| branch.to_string());
+    if target.is_empty() {
+        return Err(TgError::Other(
+            "detached HEAD — a rebasing update has no branch to rewrite".to_string(),
+        ));
+    }
+    crate::integrate_service::ensure_rebase_allowed(settings, &target)?;
+    vcs.save_rewrite_backup(root)?;
+    pull(vcs, root, true)
+}
+
+/// Fetch, then integrate the upstream into `root` as a rejected push's
+/// recovery. The two guards are [`pull_guarded`]'s; what is specific to a
+/// recovery is the fetch it must do first — the push was rejected because a
+/// remote moved, so the update works from a freshly fetched set of remotes —
+/// and the fact that the caller has just read `HEAD` to decide whether there is
+/// an upstream to update at all, so it hands that branch down rather than
+/// asking again.
+pub fn update_for_recovery(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    method: UpdateMethod,
+    settings: &VcsSettings,
+    branch: &str,
+) -> TgResult<()> {
+    if method == UpdateMethod::Rebase {
+        // The refusal [`pull_guarded`] also makes, made one step earlier and
+        // deliberately twice: a recovery's fetch is a git command too, and a
+        // protected branch owes the recovery nothing at all. Asking after the
+        // fetch would be the ordinary `Pull` verb's behavior, not this one's.
         crate::integrate_service::ensure_rebase_allowed(settings, branch)?;
     }
     fetch(vcs, root, None)?;
-    if rebase {
-        // Order-bearing, and silent either way.
-        //
-        // The check above must refuse BEFORE this reference is written: one
-        // rewrite backup exists per repository, and it is the Undo verb's only
-        // target, so a refused update that wrote it would overwrite the record
-        // of an earlier rewrite that succeeded. And this must run BEFORE the
-        // pull, or the rebase rewrites history with nothing to undo.
-        //
-        // A rebasing pull therefore cannot be inlined as `fetch` + `pull` at a
-        // call site: the two guards are the difference between an update the
-        // user can reverse and one they cannot.
-        vcs.save_rewrite_backup(root)?;
-    }
-    pull(vcs, root, rebase)
+    pull_guarded(vcs, root, method, settings, branch)
 }
 #[allow(clippy::too_many_arguments)]
 pub fn push(

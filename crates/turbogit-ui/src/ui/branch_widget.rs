@@ -806,19 +806,11 @@ fn apply_branch_row_action(state: &mut AppState, id: &RootId, intent: BranchRowA
         },
         BranchRowAction::Compare(e) => state.open_compare(id, e.branch_name()),
         BranchRowAction::Pull(name) => {
-            let root = id.clone();
-            let affected = Affected::Root(id.clone());
-            let rebase =
-                state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
-            state.dispatch(Operation::custom(
-                format!("Pull {name}"),
-                affected,
-                move |v| {
-                    let path = root.as_path();
-                    v.branch_checkout(path, &name)?;
-                    v.pull(path, rebase)
-                },
-            ));
+            // The quick-action checks the row's branch out and pulls it, so the
+            // row's own name is the branch a rebasing update would rewrite —
+            // which is what lets the guarded seam refuse a protected one before
+            // the checkout runs.
+            state.dispatch_pull(format!("Pull {name}"), id.clone(), Some(name));
             state.ui.branches_popup = false;
         }
         BranchRowAction::Merge(name) => state.open_merge_into(id, &name),
