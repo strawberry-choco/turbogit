@@ -36,7 +36,8 @@ Numbers are a snapshot; the conclusions below are the durable part.
   spaces, so the duplication is a latent bug, not merely a smell.
 
 Tickets `00` through `12` moved the figures again, and the measurements above are
-the 2026-09-23 snapshot they were written from. The port is now **75 methods**:
+the 2026-09-23 snapshot they were written from. The port stood at **75 methods**
+there, not as a standing count:
 69 at the branch's start, 67 after `00` deleted the two dead ones, and eight
 raised reads since — the eight enumerated below. That is one fewer than the 76
 this record first reported, because the `add_all` staging read has since been
