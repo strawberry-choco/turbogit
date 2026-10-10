@@ -934,31 +934,12 @@ fn apply_branch_action(
             // One composite operation, modelled on the branches popup's
             // checkout-then-pull. It must not also fire the standalone
             // checkout confirmation — that guard belongs to `Checkout`.
-            let root_id = root.clone();
-            let name = branch.name.clone();
-            let rebase =
-                state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
-            state.dispatch(Operation::custom(
-                "Checkout and pull",
-                Affected::Root(root_id.clone()),
-                move |v| {
-                    let path = root_id.as_path();
-                    v.branch_checkout(path, &name)?;
-                    v.pull(path, rebase)
-                },
-            ));
+            state.dispatch_pull("Checkout and pull", root.clone(), Some(branch.name.clone()));
         }
         BranchMenuAction::Pull => {
             // The port's pull has no branch parameter, which is exactly why
             // this item is gated to the checked-out branch.
-            let rebase =
-                state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
-            let r = root.clone();
-            state.dispatch(Operation::custom(
-                "Pull",
-                Affected::Root(r.clone()),
-                move |v| v.pull(r.as_path(), rebase),
-            ));
+            state.dispatch_pull("Pull", root.clone(), None);
         }
         BranchMenuAction::Push => {
             // Prefilled at that branch, consistent with Ctrl+Shift+K: the

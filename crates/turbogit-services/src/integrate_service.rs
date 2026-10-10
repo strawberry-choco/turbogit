@@ -161,10 +161,15 @@ pub fn rebase_affected(roots: &[Root], focused: &RootId) -> Vec<RootId> {
 /// Guard (issue 29, product spec §I safety note): history-rewriting actions
 /// are blocked on protected branches. Rebase rewrites the current branch,
 /// so a protected current branch refuses before git is touched.
-/// `pub(crate)`: the interactive rebase editor's guarded dispatch
-/// ([`history_editor::execute_with_backup`]) must guard *before* it writes
-/// the backup ref, not after.
-pub(crate) fn ensure_rebase_allowed(settings: &VcsSettings, branch: &str) -> TgResult<()> {
+/// `pub`: every guarded rewrite calls it — the dialog dispatches here, the
+/// interactive rebase editor's [`history_editor::execute_with_backup`] must
+/// guard *before* it writes the backup ref, and
+/// [`crate::sync_service::pull_guarded`] guards the pull that rebases. A surface
+/// that answers the same question before
+/// it even dispatches (the checkout half of a `Checkout and pull`) asks here too,
+/// because one refusal text is the point: a rewrite that refuses differently from
+/// another is two rules wearing one name.
+pub fn ensure_rebase_allowed(settings: &VcsSettings, branch: &str) -> TgResult<()> {
     if is_protected(settings, branch) {
         return Err(TgError::Other(format!(
             "'{branch}' is a protected branch — rebasing it is not allowed"

@@ -189,14 +189,8 @@ pub fn run_action(state: &mut AppState, action: Action) {
             }
         }
         Action::Pull => {
-            let rebase =
-                state.settings.update_method == turbogit_domain::model::UpdateMethod::Rebase;
             if let Some(r) = root {
-                state.dispatch(Operation::custom(
-                    "Pull",
-                    Affected::Root(r.clone()),
-                    move |v| v.pull(r.as_path(), rebase),
-                ));
+                state.dispatch_pull("Pull", r, None);
             }
         }
         // The direct verb falls back to the panel when the workspace needs it:
