@@ -66,7 +66,13 @@ fn merge_preflight_skips_dirty_worktrees_but_runs_without_an_upstream() {
     for p in [&clean, &dirty] {
         register(&mut mgr, build_root(&engine, p).expect("root snapshot"));
     }
-    let pf = bulk_ops::preflight(BulkOp::Merge, &mgr.roots, &|_| (0, 0));
+    let pf = bulk_ops::preflight(
+        BulkOp::Merge,
+        &mgr.roots,
+        &VcsSettings::default(),
+        false,
+        &|_| (0, 0),
+    );
     assert_eq!(pf.total(), 2);
     assert_eq!(pf.will_run(), 1, "only the dirty repo is skipped");
     let skipped = pf

@@ -5644,14 +5644,51 @@ impl AppState {
                     self.ui.busy = false;
                     self.refresh(Affected::All);
                     let ok = results.iter().filter(|(_, r)| r.is_ok()).count();
-                    let kind = if ok == results.len() {
-                        ToastKind::Success
-                    } else if ok > 0 {
-                        ToastKind::Warning
+                    // An empty result set would satisfy `ok == results.len()`
+                    // and settle as a success — but a run that planned no
+                    // roots ran nothing, so the zero case is decided here,
+                    // loudly, from the monitor's own skip rows.
+                    let (kind, message) = if results.is_empty() {
+                        let mut reasons: Vec<String> = self
+                            .ui
+                            .bulk_run
+                            .as_ref()
+                            .map(|view| {
+                                view.rows
+                                    .iter()
+                                    .filter_map(|r| match &r.state {
+                                        bulk_run::RowState::Skipped { reason } => {
+                                            Some(reason.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let skipped = reasons.len();
+                        if skipped == 0 {
+                            (ToastKind::Error, format!("{label} · nothing ran"))
+                        } else {
+                            reasons.sort();
+                            reasons.dedup();
+                            (
+                                ToastKind::Warning,
+                                format!(
+                                    "{label} · nothing ran — {skipped} root(s) skipped ({})",
+                                    reasons.join(", ")
+                                ),
+                            )
+                        }
                     } else {
-                        ToastKind::Error
+                        let kind = if ok == results.len() {
+                            ToastKind::Success
+                        } else if ok > 0 {
+                            ToastKind::Warning
+                        } else {
+                            ToastKind::Error
+                        };
+                        (kind, bulk_report_message(&label, &results))
                     };
-                    let message = bulk_report_message(&label, &results);
                     self.ui.toast = Some(Toast {
                         kind,
                         message: message.clone(),
@@ -5684,6 +5721,36 @@ impl AppState {
                             _ => crate::activity::ActivityKind::Error,
                         },
                     });
+                    // An execution-time guard refusal (a Retry forcing a
+                    // protected root lands in `run_step`, which refuses) is
+                    // durable per root too, naming the branch the guard
+                    // named — the aggregate above only names the repos.
+                    let refusals: Vec<(String, String)> = self
+                        .ui
+                        .bulk_run
+                        .as_ref()
+                        .map(|view| {
+                            view.rows
+                                .iter()
+                                .filter_map(|r| match &r.state {
+                                    bulk_run::RowState::Failed { error }
+                                        if error.contains("is a protected branch") =>
+                                    {
+                                        Some((r.name.clone(), error.clone()))
+                                    }
+                                    _ => None,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for (name, error) in refusals {
+                        self.ui.activity.push(crate::activity::ActivityEntry {
+                            at: chrono::Local::now(),
+                            repo: Some(name),
+                            message: format!("{label}: {error}"),
+                            kind: crate::activity::ActivityKind::Error,
+                        });
+                    }
                     // Recent bulk operations (issue 12, screen 04): the
                     // completed run lands in the history list — merged into
                     // the same record on a retry pass. The monitor's rows
@@ -5855,7 +5922,7 @@ impl AppState {
     /// cached counts reads as (0, 0)).
     pub fn bulk_preflight(&self, op: BulkOp) -> Preflight {
         let roots = self.bulk_selected_roots();
-        bulk_ops::preflight(op, &roots, &|id| {
+        bulk_ops::preflight(op, &roots, &self.settings, self.ui.bulk_rebase, &|id| {
             self.caches.ahead_behind(id).unwrap_or((0, 0))
         })
     }
@@ -6539,7 +6606,29 @@ impl AppState {
                     .collect()
             }
             _ => {
-                let pf = self.bulk_preflight(plan.op);
+                let roots = self.bulk_selected_roots();
+                // Seed from the plan's own pull policy, not the live modal
+                // toggle: the rows must predict what THIS run will execute.
+                let pf = bulk_ops::preflight(plan.op, &roots, &self.settings, plan.rebase, &|id| {
+                    self.caches.ahead_behind(id).unwrap_or((0, 0))
+                });
+                // A protected-branch refusal is durable per root: one feed
+                // entry naming the branch, outliving the modal and the toast.
+                for row in pf.rows.iter().filter(|r| {
+                    r.outcome == Err(bulk_ops::SkipReason::ProtectedBranch)
+                        && !plan.roots.contains(&r.root)
+                }) {
+                    self.ui.activity.push(crate::activity::ActivityEntry {
+                        at: chrono::Local::now(),
+                        repo: Some(row.name.clone()),
+                        message: format!(
+                            "{}: '{}' is a protected branch — skipped",
+                            plan.op.label(),
+                            row.branch.as_deref().unwrap_or("?")
+                        ),
+                        kind: crate::activity::ActivityKind::Warning,
+                    });
+                }
                 pf.rows
                     .iter()
                     .map(|row| {
@@ -6547,6 +6636,13 @@ impl AppState {
                             None
                         } else {
                             Some(match row.outcome {
+                                // The row label names the branch the policy
+                                // refused, not just the policy.
+                                Err(bulk_ops::SkipReason::ProtectedBranch) => format!(
+                                    "{} — {}",
+                                    bulk_ops::SkipReason::ProtectedBranch.label(),
+                                    row.branch.as_deref().unwrap_or("?")
+                                ),
                                 Err(reason) => reason.label().to_string(),
                                 Ok(()) => "out of scope".to_string(),
                             })

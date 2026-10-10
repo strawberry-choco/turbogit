@@ -508,8 +508,9 @@ fn an_offer_whose_record_is_gone_refuses_and_says_so() {
 // -- the record arms even when the offer cannot -------------------------------
 
 /// The offer and the record are two different promises, and `Custom` is where
-/// they part. An arbitrary git cascade never consults the preflight matrix, so
-/// it can leave some roots moved and others failed; but `reversible()` is
+/// they part. An arbitrary git cascade handed its roots directly (as Retry
+/// re-dispatches skipped rows) can leave some roots moved and others
+/// failed; but `reversible()` is
 /// `op == CreateBranch` — the app did not arrange the change and cannot undo
 /// it, so offering a rollback would be a false promise. The divergence is
 /// still a fact the durable feed must record, because root divergence is
@@ -518,10 +519,13 @@ fn an_offer_whose_record_is_gone_refuses_and_says_so() {
 fn a_custom_run_that_moved_one_root_and_failed_in_another_records_without_offering() {
     let (_tmp, project, alpha, broken) = diverging_project("custom-diverge");
     let mut state = app_two(&project, &alpha, &broken);
+    // Both roots sit on `main`, which the shipped default protects; this
+    // suite is about the divergence bookkeeping, so the policy is off here.
+    state.settings.protected_branch_patterns.clear();
 
     // `git branch feature/x` lands in `alpha` and hits `broken`'s ref-directory
-    // collision at run time — a Failed row, not a skip, because Custom never
-    // consults the preflight matrix.
+    // collision at run time — both roots are handed to the run directly, so
+    // the failure is a Failed row, not a skip.
     state.run_bulk_confirmed(BulkPlan {
         op: BulkOp::Custom,
         roots: vec![rid(&alpha), rid(&broken)],
