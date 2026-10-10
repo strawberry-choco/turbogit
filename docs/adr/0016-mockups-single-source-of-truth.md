@@ -75,11 +75,15 @@ while the frames are 1440×900. So the captures re-render at **1440×900**, the 
 the design was drawn and validated at, and the cost of larger PNGs in the repository
 is accepted. The regeneration happens **once, at the end of the migration**: rendering
 mid-sweep produces baselines that mix old and new chrome, which is worse than no
-baseline at all. `UPDATE_SNAPSHOTS` is set to the force form in that suite, so an
-ordinary `cargo test` run rewrites every golden — a run that is not the
-regeneration leaves the working tree dirty, and the committed captures are restored
-from git in that case. **That regeneration is done**: `CAPTURE_SIZE` is now
-`vec2(1440.0, 900.0)` (`acceptance_matrix.rs:29`) and all eleven committed PNGs
+baseline at all. At the time, `UPDATE_SNAPSHOTS` was set to the force form in
+that suite, so an ordinary `cargo test` run rewrote every golden — a run that is
+not the regeneration left the working tree dirty, and the committed captures were
+restored from git in that case. **That harness no longer works that way**: a plain
+run compares against the committed PNG and writes nothing, and the force form is
+now an explicit capture invocation rather than something a run does to itself; a
+golden that is repainted by every run is not evidence for any of them.
+**That regeneration is done**: `CAPTURE_SIZE` is now `vec2(1440.0, 900.0)`
+(`acceptance_matrix.rs`, the `CAPTURE_SIZE` constant) and all eleven committed PNGs
 measure 1440×900.
 
 This is a deliberate deviation from the obvious "code follows the written

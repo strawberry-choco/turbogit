@@ -28,6 +28,27 @@
 //! pixel-level check is the comparison above, and each page's own suite pins
 //! its behaviour.
 //!
+//! Every page is a fixture of this file and not a fact about the machine it ran
+//! on: the repos build under one fixed capture root ([`CAPTURE_ROOT`]) instead
+//! of a random `tempfile` name, their commits carry one pinned date
+//! ([`SEEDED_COMMIT_DATE`]) so their SHAs and their age labels cannot move, the
+//! paths a pane titles with are the repo-relative form the changelist itself
+//! carries, and the one host value the shell reads (`git --version`) is pinned
+//! ([`CAPTURED_GIT_VERSION`]).
+//!
+//! One fact about the machine stays in the frames anyway, and it is named because
+//! the mac budget is **0 px**, which makes it a red run rather than a quietly
+//! stale capture: a `DATE` cell renders the pinned instant through the machine's
+//! own zone. Measured with `TZ=Pacific/Auckland` against baselines captured at
+//! `+0800` — `03-git-log` 26 px, `03-git-log-selected`, `05-branches-popup` and
+//! `06-push-dialog` 52 px each, every box inside the date column at x 1015-1220,
+//! and the other seven pages 0 px. So a diff confined to that column is the zone
+//! doing this, not a layout change; re-capture after a daylight-saving transition
+//! on the machine that owns the baselines.
+//!
+//! Apart from that, a page that moves between two runs here moved because the UI
+//! changed.
+//!
 //! The harness is [`CAPTURE_SIZE`] — 1440×900, the size `design-exports/` was
 //! drawn and validated at. The frames are 2× exports of that box, so a capture
 //! at any other size is not comparable with a frame at all, and a golden at the
@@ -35,7 +56,7 @@
 //! behaviour under a constraint the design never had.
 
 use egui_kittest::Harness;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::shell_harness_over;
 use turbogit_app::state::{AppState, Dialog};
@@ -109,6 +130,25 @@ fn snapshot(h: &mut Harness<'_, AppState>, name: &str) {
         .render()
         .unwrap_or_else(|err| panic!("{name}: the renderer produced no image: {err}"));
 
+    // A capture is a picture of its own fixtures, so it must not name a path
+    // outside them. Every fixture repo lives under `CAPTURE_ROOT`, and a pane
+    // handed an absolute path titles itself with that whole string — which is
+    // what `04-diff` and `07-merge-editor` did, baking one machine's temp dir
+    // into a tracked PNG. `HOME` is the same defect from the other side: the
+    // developer's own directories, reached through a setting the capture forgot
+    // to inject. The ratchet is here rather than in one page's setup because a
+    // *new* page is the case that would reintroduce either.
+    let painted = test_support::harness::painted_text(&*h);
+    let home = std::env::var("HOME").unwrap_or_default();
+    for banned in [CAPTURE_ROOT, home.as_str()]
+        .into_iter()
+        .filter(|needle| !needle.is_empty())
+    {
+        if let Some(leaked) = painted.iter().find(|text| text.contains(banned)) {
+            panic!("{name}: the capture paints a path outside its fixtures ({banned}): {leaked}");
+        }
+    }
+
     let baseline = options.output_path.join(format!("{name}.png"));
     match image::open(&baseline) {
         Ok(previous) => {
@@ -139,24 +179,111 @@ fn snapshot(h: &mut Harness<'_, AppState>, name: &str) {
     h.snapshot_options(name, &options);
 }
 
+// ---- the capture root ------------------------------------------------------
+
+/// The one directory tree every fixture in this file builds under.
+///
+/// A `tempfile::tempdir()` name is random, and the shell header paints the
+/// project directory's **name** in its root chip on all eleven pages, so a
+/// random root puts a different string in every frame of every run. This root
+/// is fixed instead, one level below the system temp dir, under a name no
+/// developer's work collides with. It is one per machine, so a second run of
+/// this suite on that machine empties the first one's repos: a worktree is
+/// single-tenant while its tests run, and so is this root.
+const CAPTURE_ROOT: &str = "turbogit-acceptance-goldens";
+
+/// `<tmp>/turbogit-acceptance-goldens/<name>`, emptied before it is handed back
+/// so a repo left by an interrupted run cannot seed a history this file no
+/// longer builds.
+fn capture_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(CAPTURE_ROOT).join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("capture dir");
+    dir
+}
+
+/// The date every seeded commit carries, in both stamp fields.
+///
+/// Two separate leaks get plugged at once. `git` folds the committer timestamp
+/// into the object it writes, so an unstamped seed has a **different SHA every
+/// run** — and the abbreviated SHA is painted in the log rows, the selected
+/// commit's details panel and the SHA chip, which is fixture content wearing a
+/// render diff's costume. And every age label in the shell is computed against
+/// the wall clock, so a seed stamped *now* paints "3s ago", which ticks between
+/// two runs and across the log's `d < 60` boundary.
+///
+/// The date is then chosen, not just fixed: more than the 30 days at which the
+/// log's relative format falls through to an absolute date
+/// (`log_window::fmt_date`), and past the 365 days that put the branch badge
+/// (`branch_widget::stale_badge`) in its yearly band — the one band whose value
+/// moves once a year rather than once a minute, hour, day or week. `05-branches-popup`
+/// therefore reads `1y` until this seed passes two years old, and that tick is
+/// the suite's one scheduled re-capture that is not a UI change.
+///
+/// What is pinned here is the instant, not what a frame shows: a `DATE` cell
+/// renders it through the machine's own zone, so the hour is still a host fact on
+/// a daylight-saving machine. The file header names the four pages that carry it.
+const SEEDED_COMMIT_DATE: &str = "2025-09-01T12:00:00+00:00";
+
+/// `git commit -m message` in `repo` with both stamp fields pinned to
+/// [`SEEDED_COMMIT_DATE`].
+///
+/// Local to this suite rather than a parameter on the shared `git_seed::git`:
+/// every other caller of that helper wants the environment it is handed, and a
+/// pinned commit date is this file's need alone.
+fn seed_commit(repo: &Path, message: &str) {
+    let out = std::process::Command::new("git")
+        .args(["commit", "-q", "-m", message])
+        .current_dir(repo)
+        .env("GIT_AUTHOR_DATE", SEEDED_COMMIT_DATE)
+        .env("GIT_COMMITTER_DATE", SEEDED_COMMIT_DATE)
+        .output()
+        .expect("git on PATH");
+    assert!(
+        out.status.success(),
+        "seeded commit {message:?} in {} failed: {}",
+        repo.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The git version the Welcome status line paints, whatever this machine has
+/// installed.
+///
+/// `AppState` resolves `git --version` once at launch and the version line
+/// prints the answer, so an unpinned capture photographs the host: on the run
+/// that pinned it, the host's `2.54.0 (Apple Git-157)` and this fixture value
+/// differed by 368 px of one line (box 84,875–259,885), which is a red run with
+/// no UI behind it and no re-capture that keeps it from recurring on the next
+/// upgrade. The other way to take it — leave the host value in the frame and let
+/// the pixel budget absorb its drift — is how the mac budget got its size, and a
+/// budget sized to a host fact hides every smaller *real* change with it. So the
+/// fixture overwrites the field instead, and the number means nothing: it is a
+/// row of text that must stay put, not a claim about any machine. Only
+/// `01-welcome` paints it (the status bar is Welcome's chrome) and no behaviour
+/// reads it.
+const CAPTURED_GIT_VERSION: &str = "2.50.1";
+
 /// Seed a repo with history worth looking at: two branches, a tag, a remote
 /// ref decoration, and one uncommitted modification for the Commit page.
-fn seeded_repo() -> (tempfile::TempDir, PathBuf) {
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let repo = tmp.path().join("repo");
+///
+/// Returns the repository path; its parent is the project directory the shell
+/// header names.
+fn seeded_repo() -> PathBuf {
+    let repo = capture_dir("seeded").join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "test@example.com"]);
     git(&repo, &["config", "user.name", "Test"]);
     std::fs::write(repo.join("lib.txt"), "alpha\nbeta\ngamma\n").unwrap();
     git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "initial import"]);
+    seed_commit(&repo, "initial import");
     let base = git(&repo, &["rev-parse", "HEAD"]);
     git(&repo, &["tag", "v1.0"]);
     git(&repo, &["checkout", "-q", "-b", "feature/tokens"]);
     std::fs::write(repo.join("lib.txt"), "alpha\nBETA\ngamma\n").unwrap();
     git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "feature: retokenize beta"]);
+    seed_commit(&repo, "feature: retokenize beta");
     git(&repo, &["checkout", "-q", "main"]);
     // A fake remote decoration without needing a network.
     git(
@@ -164,13 +291,12 @@ fn seeded_repo() -> (tempfile::TempDir, PathBuf) {
         &["update-ref", "refs/remotes/origin/main", base.trim()],
     );
     std::fs::write(repo.join("lib.txt"), "alpha\nbeta\nGAMMA\n").unwrap();
-    (tmp, repo)
+    repo
 }
 
 /// Seed a repo with a real two-hunk merge conflict (mirrors `merge_editor`).
-fn conflicted_repo() -> (tempfile::TempDir, PathBuf) {
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let repo = tmp.path().join("conflict");
+fn conflicted_repo() -> PathBuf {
+    let repo = capture_dir("merge").join("conflict");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "test@example.com"]);
@@ -181,7 +307,7 @@ fn conflicted_repo() -> (tempfile::TempDir, PathBuf) {
     )
     .unwrap();
     git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "base"]);
+    seed_commit(&repo, "base");
     git(&repo, &["checkout", "-q", "-b", "side"]);
     std::fs::write(
         repo.join("conf.txt"),
@@ -189,7 +315,7 @@ fn conflicted_repo() -> (tempfile::TempDir, PathBuf) {
     )
     .unwrap();
     git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "side"]);
+    seed_commit(&repo, "side");
     git(&repo, &["checkout", "-q", "main"]);
     std::fs::write(
         repo.join("conf.txt"),
@@ -197,33 +323,32 @@ fn conflicted_repo() -> (tempfile::TempDir, PathBuf) {
     )
     .unwrap();
     git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "main"]);
+    seed_commit(&repo, "main");
     let _ = std::process::Command::new("git")
         .args(["merge", "--no-edit", "side"])
         .current_dir(&repo)
         .output()
         .expect("git on PATH");
-    (tmp, repo)
+    repo
 }
 
 /// A repo with a little history, for the two captures whose subject is a pane
 /// the shell fills from the root caches rather than from a git read of its own.
-fn context_repo() -> (tempfile::TempDir, PathBuf) {
-    let tmp = tempfile::tempdir().expect("temp dir");
-    let repo = tmp.path().join("workbench");
+fn context_repo() -> PathBuf {
+    let repo = capture_dir("panes").join("workbench");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "test@example.com"]);
     git(&repo, &["config", "user.name", "Test"]);
     std::fs::write(repo.join("README.md"), "# workbench\n").unwrap();
     git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "initial import"]);
+    seed_commit(&repo, "initial import");
     git(&repo, &["checkout", "-q", "-b", "feature/tokens"]);
     std::fs::write(repo.join("tokens.txt"), "accent\n").unwrap();
     git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "feature: add tokens"]);
+    seed_commit(&repo, "feature: add tokens");
     git(&repo, &["checkout", "-q", "main"]);
-    (tmp, repo)
+    repo
 }
 
 /// Fill the Worktrees and Submodules caches with one row per state each pane can
@@ -318,29 +443,20 @@ fn acceptance_matrix_screenshots() {
     // A plain run COMPARES and writes nothing; capture is the explicit
     // `UPDATE_SNAPSHOTS=force` invocation documented at the top of this file.
     //
-    // The budget's floor is not anti-aliasing. Two renders of the same frame
-    // inside one process are byte-identical here (0 px on all eleven pages), so
-    // the run-to-run noise the old comment blamed on wgpu is not what forces a
-    // budget above zero. What forces it is the fixtures: every repo-backed page
-    // paints the `tempfile` directory's random name in the shell header, the
-    // seeded repo's two abbreviated commit SHAs change every run because git
-    // stamps the commit time, and two pages paint the full temp path in a title
-    // (`04-diff`, `07-merge-editor`). Measured on macOS (Apple GPU, 2026-10-10)
-    // across separate processes, that is 0 px on `01-welcome` and 109-2 033 px
-    // on the rest, worst on `07-merge-editor` — hence `kittest.toml`'s mac
-    // budget of 4 000 (≈2× the floor) instead of the 8 000 that sat above it
-    // with no measurement behind it.
+    // Two renders of the same frame inside one process are byte-identical on all
+    // eleven pages. That is the fact that says what this suite's run-to-run diff
+    // actually was: the noise was never wgpu antialiasing — the claim a
+    // force-write-every-run harness was rested on for as long as it took eleven
+    // baselines to stop being evidence for anything — it was the *fixtures*,
+    // painting a random temp directory name, a per-run commit SHA, a live
+    // `git --version` and an age label that ticks every second. Rasterization
+    // here is deterministic, so a page that moves between two runs moved because
+    // the UI changed, which is the only thing a golden is for.
     //
-    // The same fact has a sharper edge than the number: a baseline that bakes
-    // in a machine-local path and a per-run SHA can only ever match on the
-    // machine and the fixtures that produced it. `04-diff` and
-    // `07-merge-editor` are the two pages that paint a full `/var/folders/…`
-    // path into their frame, which is the shape of the pair on record as
-    // failing on macOS against a Windows-taken baseline. No threshold fixes
-    // that; pinning the painted path and the seeded commit timestamps would,
-    // and that is a fixture change, not one to make by editing a budget. The
-    // printed per-page diff is what makes the band below the budget readable
-    // in the meantime.
+    // The consequence for the budget in `kittest.toml` is that it buys tolerance
+    // for nothing, and a budget sized to absorb *anything* hides real change with
+    // it: the diff viewer's whitespace control becoming a menu once went unseen
+    // inside a generous one.
     //
     // `UPDATE_SNAPSHOTS=1` is deliberately NOT the documented capture: egui_kittest
     // maps it to `UpdateFailing`, which rewrites only a golden already over the
@@ -361,7 +477,7 @@ fn acceptance_matrix_screenshots() {
     let mut results = egui_kittest::SnapshotResults::default();
 
     // --- Welcome (no project open) -------------------------------------
-    let project = tempfile::tempdir().unwrap();
+    let project = capture_dir("welcome");
     // Recents live in ONE global file under the OS config dir (ADR-0005), and
     // they are loaded *eagerly* inside `launch_in`, so the config dir has to be
     // injected at construction — setting `recents_config_dir` afterwards is
@@ -369,11 +485,11 @@ fn acceptance_matrix_screenshots() {
     // the *developer's* recent projects: real absolute paths and last-opened
     // timestamps committed into a tracked binary asset, and a capture that can
     // never match on another machine.
-    let recents_config = tempfile::tempdir().unwrap();
-    let state = AppState::launch_in(
-        Some(project.path().to_path_buf()),
-        Some(recents_config.path().to_path_buf()),
-    );
+    let recents_config = capture_dir("welcome-config");
+    let mut state = AppState::launch_in(Some(project.clone()), Some(recents_config.clone()));
+    // The status line's version is the one value this page reads from the host
+    // rather than from a fixture. See [`CAPTURED_GIT_VERSION`].
+    state.git_version = CAPTURED_GIT_VERSION.to_string();
     let mut h = harness(state);
     settle(&mut h);
     assert!(
@@ -385,18 +501,16 @@ fn acceptance_matrix_screenshots() {
     let home = std::env::var("HOME").unwrap_or_default();
     assert!(
         (home.is_empty() || !painted.contains(&home))
-            && !painted.contains(&*recents_config.path().to_string_lossy()),
+            && !painted.contains(&*recents_config.to_string_lossy()),
         "the welcome capture must not photograph the developer's recent \
-         projects; point `recents_config_dir` at a temp dir. Painted:\n{painted}"
+         projects; point `recents_config_dir` at the capture dir. Painted:\n{painted}"
     );
     snapshot(&mut h, "01-welcome");
     results.extend_harness(&mut h);
     drop(h);
-    drop(project);
-    drop(recents_config);
 
     // --- Repo-backed pages ---------------------------------------------
-    let (_tmp, repo) = seeded_repo();
+    let repo = seeded_repo();
     let state = AppState::for_roots(repo.parent().unwrap(), std::slice::from_ref(&repo));
     let mut h = harness(state);
 
@@ -436,7 +550,12 @@ fn acceptance_matrix_screenshots() {
     // had nothing to be read off. The tab is switched here and switched back
     // below, because the three captures after this one are overlays taken over
     // the Log page and must stay over the Log page.
-    h.state_mut().ui.preview_change = Some(repo.join("lib.txt"));
+    //
+    // The preview titles itself with the path form it is handed, and the
+    // changelist hands it the repo-relative path a row click stores. The
+    // absolute form was the fixture's own invention: it painted this machine's
+    // temp dir into a tracked PNG.
+    h.state_mut().ui.preview_change = Some(PathBuf::from("lib.txt"));
     h.state_mut().ui.tab = turbogit_app::state::Tab::Commit;
     settle(&mut h);
     snapshot(&mut h, "04-diff");
@@ -463,10 +582,12 @@ fn acceptance_matrix_screenshots() {
     drop(h);
 
     // --- Merge editor ----------------------------------------------------
-    let (_ctmp, crepo) = conflicted_repo();
+    let crepo = conflicted_repo();
     let mut state = AppState::for_roots(crepo.parent().unwrap(), std::slice::from_ref(&crepo));
-    // Open the merge editor for the conflicted file directly.
-    state.ui.conflict_open = Some(crepo.join("conf.txt"));
+    // Open the merge editor for the conflicted file directly, in the repo-relative
+    // form `conflicts::open_conflict_editor` stores: the window's title paints
+    // whatever it is handed, and the absolute form named this machine's temp dir.
+    state.ui.conflict_open = Some(PathBuf::from("conf.txt"));
     let mut h = harness(state);
     settle(&mut h);
     snapshot(&mut h, "07-merge-editor");
@@ -480,7 +601,7 @@ fn acceptance_matrix_screenshots() {
     // than inserted, so the nine existing captures keep the names a reviewer
     // has already looked at, and so the log's two variants under one number
     // stays the only place the scheme repeats itself.
-    let (_ctmp2, wrepo) = context_repo();
+    let wrepo = context_repo();
     let mut state = AppState::for_roots(wrepo.parent().unwrap(), std::slice::from_ref(&wrepo));
     seed_worktree_and_submodule_panes(&mut state);
     let mut h = harness(state);
