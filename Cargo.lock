@@ -3588,6 +3588,7 @@ name = "turbogit-ui"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dify",
  "egui",
  "egui_kittest",
  "image",
