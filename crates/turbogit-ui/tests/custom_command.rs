@@ -16,6 +16,7 @@ use test_support::harness::{
     assert_not_painted, assert_painted, settle, shell_harness_over_unstyled,
 };
 use turbogit_app::state::AppState;
+use turbogit_domain::model::VcsSettings;
 use turbogit_services::bulk_ops::BulkOp;
 use turbogit_services::bulk_run::RowState;
 
@@ -27,6 +28,17 @@ use turbogit_services::bulk_run::RowState;
 /// creating it, so the caller makes the parent.)
 fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     repo_with_one_commit(parent, name)
+}
+
+/// Settings with nothing protected: these suites drive the custom-command
+/// dialog's own mechanics (input, confirmation arming, recents) on repos
+/// that sit on `main`, which the shipped default protects. The per-root
+/// refusal itself is owned by the services and app suites.
+fn unprotected() -> VcsSettings {
+    VcsSettings {
+        protected_branch_patterns: Vec::new(),
+        ..VcsSettings::default()
+    }
 }
 
 /// A project with both repos under one group so a single group click
@@ -78,7 +90,8 @@ fn open_custom_command(h: &mut Harness<'_, AppState>) {
 #[test]
 fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
     let (project, alpha, ui) = two_repo_project("tile");
-    let state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
+    let state =
+        AppState::for_roots(&project, &[alpha.clone(), ui.clone()]).with_settings(unprotected());
     let mut h = harness(state);
     settle(&mut h);
 
@@ -135,7 +148,8 @@ fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
 #[test]
 fn a_destructive_command_needs_a_second_explicit_confirmation() {
     let (project, alpha, ui) = two_repo_project("destructive");
-    let state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
+    let state =
+        AppState::for_roots(&project, &[alpha.clone(), ui.clone()]).with_settings(unprotected());
     let mut h = harness(state);
     settle(&mut h);
 
@@ -170,7 +184,8 @@ fn a_destructive_command_needs_a_second_explicit_confirmation() {
 #[test]
 fn recent_commands_are_offered_in_the_modal_and_refill_the_input() {
     let (project, alpha, ui) = two_repo_project("recents");
-    let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
+    let mut state =
+        AppState::for_roots(&project, &[alpha.clone(), ui.clone()]).with_settings(unprotected());
     state.ui.recent_custom_commands = vec!["git gc".to_string()];
     let mut h = harness(state);
     settle(&mut h);

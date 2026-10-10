@@ -624,7 +624,10 @@ fn pull_all_refuses_a_rebase_onto_a_protected_root_before_touching_anything() {
     let results = run_bulk(&engine, &mgr, &VcsSettings::default(), &plan);
 
     assert_eq!(result_roots(&results), vec![id(&alpha)]);
-    let err = results[0].1.as_ref().expect_err("a protected branch refuses");
+    let err = results[0]
+        .1
+        .as_ref()
+        .expect_err("a protected branch refuses");
     assert!(
         err.to_string().contains("'main' is a protected branch"),
         "the refusal names the branch: {err}"

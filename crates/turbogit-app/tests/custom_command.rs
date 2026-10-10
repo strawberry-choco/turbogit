@@ -270,7 +270,11 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
     state.open_bulk_preflight(BulkOp::Custom);
     state.ui.bulk_command = "git branch bulk-marker".to_string();
     let pf = state.bulk_preflight(BulkOp::Custom);
-    assert_eq!(pf.will_run(), 0, "an ordinary command buys a protected root nothing");
+    assert_eq!(
+        pf.will_run(),
+        0,
+        "an ordinary command buys a protected root nothing"
+    );
 
     let plan = BulkPlan {
         op: BulkOp::Custom,
@@ -307,9 +311,7 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
         .activity
         .entries
         .iter()
-        .filter(|e| {
-            e.repo.as_deref() == Some("alpha") || e.repo.as_deref() == Some("ui")
-        })
+        .filter(|e| e.repo.as_deref() == Some("alpha") || e.repo.as_deref() == Some("ui"))
         .map(|e| e.message.as_str())
         .collect();
     assert_eq!(per_root.len(), 2, "one durable refusal per root");
@@ -318,7 +320,10 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
             message.contains("'main' is a protected branch"),
             "the feed entry names the branch: {message}"
         );
-        assert!(!message.contains("bulk-marker"), "not the command: {message}");
+        assert!(
+            !message.contains("bulk-marker"),
+            "not the command: {message}"
+        );
     }
 
     for repo in [&alpha, &ui] {

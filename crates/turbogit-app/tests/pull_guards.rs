@@ -493,10 +493,7 @@ fn no_surface_pulls_the_executor_beyond_the_guarded_seam() {
             "turbogit-services/src/sync_service.rs",
             "pull_guarded(vcs, root, method, settings, branch)",
         ),
-        (
-            "turbogit-app/src/state.rs",
-            "sync_service::pull_guarded(",
-        ),
+        ("turbogit-app/src/state.rs", "sync_service::pull_guarded("),
         // The bulk run's `PullAll`, now guarded like every other site: the
         // matrix refuses at preflight, and a forced (Retry) step refuses
         // again in `run_step`, which is why this line is on the seam.
