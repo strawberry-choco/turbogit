@@ -7,12 +7,16 @@
 //! - **Fetch all** never skips: fetching is safe on any tree.
 //! - **Pull all** skips dirty worktrees (local changes could be clobbered),
 //!   diverged roots (a merge needs a human decision first), and roots with
-//!   no upstream to pull from.
+//!   no upstream to pull from; when the run rebases, it also skips roots
+//!   whose current branch is protected (a rebase rewrites that branch).
 //! - **Push all** skips diverged roots (the remote would reject a
 //!   non-fast-forward) and roots with no upstream to push to; a dirty tree
 //!   does not block a push.
 //! - **Stash all** is the inverse of pull: it skips clean trees (nothing to
 //!   stash) and runs wherever there are local changes.
+//! - **Custom command** skips roots whose current branch is protected,
+//!   whatever the command typed — an arbitrary command's effect on that
+//!   branch is unknowable.
 
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
@@ -71,6 +75,9 @@ pub enum SkipReason {
     NoUpstream,
     /// A clean tree has nothing to stash.
     CleanTree,
+    /// The current branch is protected, so the run may not rewrite it
+    /// (pull-all in rebase mode) or run arbitrary git on it (custom).
+    ProtectedBranch,
 }
 
 impl SkipReason {
@@ -81,6 +88,7 @@ impl SkipReason {
             SkipReason::Diverged => "diverged",
             SkipReason::NoUpstream => "no upstream",
             SkipReason::CleanTree => "clean tree",
+            SkipReason::ProtectedBranch => "protected branch",
         }
     }
 }
@@ -138,10 +146,15 @@ impl Preflight {
 
 /// Compute the preflight matrix: classify every selected root for `op`.
 /// `ahead_behind` supplies each root's ↑/↓ counts vs its upstream (the root
-/// caches in the app; test fixtures otherwise).
+/// caches in the app; test fixtures otherwise). `settings` carries the
+/// protected-branch patterns and `rebase` the pull policy the confirmed run
+/// will execute (`BulkOp::PullAll` only), so the matrix predicts the plan
+/// the user is looking at, not a default.
 pub fn preflight(
     op: BulkOp,
     roots: &[Root],
+    settings: &VcsSettings,
+    rebase: bool,
     ahead_behind: &dyn Fn(&RootId) -> (usize, usize),
 ) -> Preflight {
     Preflight {
@@ -160,7 +173,13 @@ pub fn preflight(
                             .and_then(|b| b.tracking.as_ref())
                     })
                     .is_some();
-                let outcome = classify(op, dirty, ahead, behind, upstream);
+                // A root with no current branch is never protected — the
+                // same rule `sync_service::protected_roots` states.
+                let protected = root
+                    .current_branch
+                    .as_deref()
+                    .is_some_and(|branch| super::sync_service::is_protected(settings, branch));
+                let outcome = classify(op, dirty, ahead, behind, upstream, protected, rebase);
                 PreflightRow {
                     root: root.id.clone(),
                     name: root
@@ -189,15 +208,31 @@ fn classify(
     ahead: usize,
     behind: usize,
     upstream: bool,
+    protected: bool,
+    rebase: bool,
 ) -> Result<(), SkipReason> {
     match op {
         BulkOp::FetchAll => Ok(()),
-        // An arbitrary command has no per-repo precondition TurboGit could
-        // reason about, so — like fetch — it never skips; the safety gate
-        // is the destructive confirmation, not the matrix.
-        BulkOp::Custom => Ok(()),
+        // A root on a protected branch is refused whatever the command was
+        // typed: an arbitrary command's effect on that branch is unknowable.
+        // The refusal is about the root, not the command — the grammar stays
+        // unrestricted (no per-command parsing beyond the destructive
+        // confirmation, which still gates the command itself) because the
+        // branch predicate holds for every command equally.
+        BulkOp::Custom => {
+            if protected {
+                Err(SkipReason::ProtectedBranch)
+            } else {
+                Ok(())
+            }
+        }
         BulkOp::PullAll => {
-            if dirty > 0 {
+            // A rebasing pull rewrites the current branch, so a protected
+            // branch skips before any per-tree condition is weighed; a
+            // merging pull rewrites nothing and so never skips for it.
+            if rebase && protected {
+                Err(SkipReason::ProtectedBranch)
+            } else if dirty > 0 {
                 Err(SkipReason::DirtyWorktree)
             } else if ahead > 0 && behind > 0 {
                 Err(SkipReason::Diverged)
@@ -419,13 +454,41 @@ pub fn run_step(
     let command = plan.command.as_str();
     match op {
         BulkOp::FetchAll => super::sync_service::fetch(vcs, &root.path, None),
-        BulkOp::PullAll => super::sync_service::pull(vcs, &root.path, rebase),
+        // The guarded seam, not the raw pull: a Retry-forced step lands here
+        // on a protected branch too, and only `pull_guarded` refuses it (a
+        // merge-mode step passes the guard by design — it rewrites nothing).
+        BulkOp::PullAll => {
+            let method = if rebase {
+                UpdateMethod::Rebase
+            } else {
+                UpdateMethod::Merge
+            };
+            super::sync_service::pull_guarded(
+                vcs,
+                &root.path,
+                method,
+                settings,
+                root.current_branch.as_deref().unwrap_or_default(),
+            )
+        }
         BulkOp::PushAll => push_root(vcs, root, settings),
         BulkOp::StashAll => {
             super::shelve_stash::stash(vcs, &root.path, "TurboGit bulk stash", false)
         }
         BulkOp::CreateBranch => run_branch_step(vcs, root, branch, rebase),
         BulkOp::Custom => {
+            // The execution-time half of the preflight's per-root refusal:
+            // a Retry forces a skipped row back through here, so the guard
+            // lives on the step, not only on the matrix. The reason names
+            // the branch, never the command; a detached HEAD has no branch
+            // to protect.
+            if let Some(branch) = root.current_branch.as_deref()
+                && super::sync_service::is_protected(settings, branch)
+            {
+                return Err(TgError::Other(format!(
+                    "'{branch}' is a protected branch — custom commands do not run on it"
+                )));
+            }
             let args = parse_command(command)
                 .ok_or_else(|| TgError::Other("empty custom command".into()))?;
             vcs.run_raw(&root.path, &args).map(|_| ())
@@ -755,12 +818,17 @@ mod tests {
         }
     }
 
+    /// The shipped protection default: `main`/`master` are protected.
+    fn settings() -> VcsSettings {
+        VcsSettings::default()
+    }
+
     #[test]
     fn preflight_classifies_every_selected_repo_per_operation() {
         let roots = fleet();
 
-        // Fetch never skips.
-        let pf = preflight(BulkOp::FetchAll, &roots, &ab);
+        // Fetch never skips — not even on a protected branch.
+        let pf = preflight(BulkOp::FetchAll, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
             &[
@@ -771,8 +839,9 @@ mod tests {
             ],
         );
 
-        // Pull skips dirty, diverged, and no-upstream roots.
-        let pf = preflight(BulkOp::PullAll, &roots, &ab);
+        // Pull in merge mode skips dirty, diverged, and no-upstream roots —
+        // a merge rewrites nothing, so a protected branch is not a skip here.
+        let pf = preflight(BulkOp::PullAll, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
             &[
@@ -784,7 +853,7 @@ mod tests {
         );
 
         // Push only needs an upstream; a dirty tree does not block it.
-        let pf = preflight(BulkOp::PushAll, &roots, &ab);
+        let pf = preflight(BulkOp::PushAll, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
             &[
@@ -796,7 +865,7 @@ mod tests {
         );
 
         // Stash is the inverse of pull: clean trees are skipped.
-        let pf = preflight(BulkOp::StashAll, &roots, &ab);
+        let pf = preflight(BulkOp::StashAll, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
             &[
@@ -811,7 +880,7 @@ mod tests {
     #[test]
     fn preflight_rows_carry_the_per_repo_state_the_matrix_renders() {
         let roots = fleet();
-        let pf = preflight(BulkOp::PullAll, &roots, &ab);
+        let pf = preflight(BulkOp::PullAll, &roots, &settings(), false, &ab);
 
         let ui_row = pf.rows.iter().find(|r| r.name == "ui").unwrap();
         assert_eq!(ui_row.branch.as_deref(), Some("main"));
@@ -827,7 +896,7 @@ mod tests {
     fn preflight_totals_state_what_will_run_and_why_roots_are_skipped() {
         let roots = fleet();
 
-        let pf = preflight(BulkOp::PullAll, &roots, &ab);
+        let pf = preflight(BulkOp::PullAll, &roots, &settings(), false, &ab);
         assert_eq!(pf.will_run(), 1, "only alpha runs");
         assert_eq!(pf.total(), 4);
         // Skip reasons totaled for the header line ("2 skipped (dirty
@@ -844,7 +913,7 @@ mod tests {
 
         // A fleet where everything runs totals to nothing.
         let clean = vec![root("/w/alpha", Some("main"), Some("origin/main"), 0)];
-        let pf = preflight(BulkOp::PullAll, &clean, &|_| (0, 0));
+        let pf = preflight(BulkOp::PullAll, &clean, &settings(), false, &|_| (0, 0));
         assert_eq!(pf.will_run(), 1);
         assert_eq!(pf.skip_totals().len(), 0);
     }
@@ -943,23 +1012,48 @@ mod tests {
     }
 
     #[test]
-    fn custom_command_preflight_runs_on_every_selected_repo() {
-        // An arbitrary command has no per-repo precondition TurboGit could
-        // reason about, so — like fetch — custom commands never skip. The
-        // safety gate is the destructive confirmation, not the matrix.
+    fn custom_command_preflight_refuses_protected_roots_and_runs_on_the_rest() {
+        // A root on a protected branch is refused whatever the command was
+        // typed; the refusal is per root and the matrix's rows name it.
         let roots = fleet();
-        let pf = preflight(BulkOp::Custom, &roots, &ab);
+        let pf = preflight(BulkOp::Custom, &roots, &settings(), false, &ab);
         assert_outcomes(
             &pf,
             &[
-                ("alpha", true, None),
-                ("ui", true, None),
+                ("alpha", false, Some(SkipReason::ProtectedBranch)),
+                ("ui", false, Some(SkipReason::ProtectedBranch)),
                 ("engine", true, None),
                 ("lib", true, None),
             ],
         );
-        assert_eq!(pf.will_run(), 4);
-        assert!(pf.skip_totals().is_empty());
+        assert_eq!(pf.will_run(), 2);
+        assert_eq!(pf.skip_totals(), vec![(SkipReason::ProtectedBranch, 2)]);
+        // The rows carry the branch the refusal is about, so the reason text
+        // can name it.
+        let alpha = pf.rows.iter().find(|r| r.name == "alpha").unwrap();
+        assert_eq!(alpha.branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn pull_all_preflight_skips_protected_roots_only_when_the_run_rebases() {
+        let roots = fleet();
+        // Rebase mode: the run would rewrite the current branch, so a
+        // protected branch skips — before any per-tree condition.
+        let pf = preflight(BulkOp::PullAll, &roots, &settings(), true, &ab);
+        assert_outcomes(
+            &pf,
+            &[
+                ("alpha", false, Some(SkipReason::ProtectedBranch)),
+                // ui is dirty AND protected: the branch refusal dominates.
+                ("ui", false, Some(SkipReason::ProtectedBranch)),
+                ("engine", false, Some(SkipReason::Diverged)),
+                ("lib", false, Some(SkipReason::NoUpstream)),
+            ],
+        );
+        assert_eq!(pf.will_run(), 0);
+        // Merge mode: nothing is rewritten, so protection skips nothing.
+        let pf = preflight(BulkOp::PullAll, &roots, &settings(), false, &ab);
+        assert_eq!(pf.will_run(), 1, "alpha runs in merge mode");
     }
 
     // -- Custom command (issue 13) -------------------------------------------
