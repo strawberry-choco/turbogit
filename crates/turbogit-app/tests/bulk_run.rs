@@ -496,7 +496,7 @@ fn retry_cannot_force_a_rebasing_pull_onto_a_protected_branch() {
     let (_tmp, project, alpha, _ui) = project("br-retry-protected");
     let parent = project.join("frontend");
     seed_incoming(&parent, "alpha");
-    let mut state = app_with_selection(&project, &[alpha.clone()], &[&alpha]);
+    let mut state = app_with_selection(&project, std::slice::from_ref(&alpha), &[&alpha]);
 
     let plan = BulkPlan {
         op: BulkOp::PullAll,

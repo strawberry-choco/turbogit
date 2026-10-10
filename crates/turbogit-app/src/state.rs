@@ -5649,7 +5649,7 @@ impl AppState {
                     // roots ran nothing, so the zero case is decided here,
                     // loudly, from the monitor's own skip rows.
                     let (kind, message) = if results.is_empty() {
-                        let skips: Vec<String> = self
+                        let mut reasons: Vec<String> = self
                             .ui
                             .bulk_run
                             .as_ref()
@@ -5665,17 +5665,16 @@ impl AppState {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        if skips.is_empty() {
+                        let skipped = reasons.len();
+                        if skipped == 0 {
                             (ToastKind::Error, format!("{label} · nothing ran"))
                         } else {
-                            let mut reasons = skips.clone();
                             reasons.sort();
                             reasons.dedup();
                             (
                                 ToastKind::Warning,
                                 format!(
-                                    "{label} · nothing ran — {} root(s) skipped ({})",
-                                    skips.len(),
+                                    "{label} · nothing ran — {skipped} root(s) skipped ({})",
                                     reasons.join(", ")
                                 ),
                             )
