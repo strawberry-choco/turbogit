@@ -451,14 +451,19 @@ fn no_surface_pulls_the_executor_beyond_the_guarded_seam() {
     let mut found: Vec<(String, String)> = Vec::new();
     for dir in walked {
         for (file, src) in test_support::srcscan::sources_under(crates.join(dir)) {
-            for line in test_support::srcscan::call_lines(&src, "pull") {
-                let text = src
-                    .lines()
-                    .nth(line - 1)
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                found.push((format!("{dir}/{file}"), text));
+            // `pull` and its guarded form: a site that calls `pull_guarded`
+            // is on the seam, but it must still be *named* here — the sweep
+            // is the list of every executor pull any surface can reach.
+            for name in ["pull", "pull_guarded"] {
+                for line in test_support::srcscan::call_lines(&src, name) {
+                    let text = src
+                        .lines()
+                        .nth(line - 1)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    found.push((format!("{dir}/{file}"), text));
+                }
             }
         }
     }
@@ -482,12 +487,22 @@ fn no_surface_pulls_the_executor_beyond_the_guarded_seam() {
             "turbogit-services/src/sync_service.rs",
             "vcs.pull(root, rebase)",
         ),
-        // The bulk run's `PullAll`, the one site this branch knowingly leaves
-        // unguarded. Pinned so it cannot gain a second form or a rebase flag of
-        // its own without this sweep saying so.
+        // Calls of the guarded seam itself — every site that reaches a pull
+        // through the guard is named here.
+        (
+            "turbogit-services/src/sync_service.rs",
+            "pull_guarded(vcs, root, method, settings, branch)",
+        ),
+        (
+            "turbogit-app/src/state.rs",
+            "sync_service::pull_guarded(",
+        ),
+        // The bulk run's `PullAll`, now guarded like every other site: the
+        // matrix refuses at preflight, and a forced (Retry) step refuses
+        // again in `run_step`, which is why this line is on the seam.
         (
             "turbogit-services/src/bulk_ops.rs",
-            "sync_service::pull(vcs, &root.path, rebase)",
+            "sync_service::pull_guarded(",
         ),
         // The sidebar's `Pull selection`: merge-only *by construction*, and the
         // construction is what is pinned here — flip this `false` to `true` and
