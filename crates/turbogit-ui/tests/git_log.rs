@@ -1344,7 +1344,12 @@ fn the_guardrail_reason_now_sits_on_the_item_it_blocks() {
     let mut harness = log_harness(&seed);
     let row_label = format!("{} alpha: second commit", short(&seed.c2));
     select_second_commit(&mut harness, &seed);
-    assert_not_painted(&harness, "'main' is a protected branch — revert blocked");
+    // The sentence the guard would have put in that box, not a paraphrase of it:
+    // asserting a string no code emits proves only that nobody ever wrote it.
+    assert_not_painted(
+        &harness,
+        "'main' is a protected branch — reverting commits on it is not allowed",
+    );
 
     right_click_row(&mut harness, &row_label);
     assert_stated_on_hover(
