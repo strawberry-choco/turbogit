@@ -84,7 +84,7 @@ fn run_rows(
                 RowState::Skipped { reason } => {
                     (format!("Skipped ({reason})"), Palette::INK_3, String::new())
                 }
-                RowState::Failed { error } => (
+                RowState::Failed { error, .. } => (
                     "Failed".to_string(),
                     Palette::STATE_ERROR,
                     first_line(error),

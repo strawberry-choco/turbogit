@@ -140,7 +140,7 @@ pub fn from_run_view(view: &crate::bulk_run_view::BulkRunView, at: i64) -> BulkR
                 created: undo.map(|u| u.created).unwrap_or(false),
                 outcome: match &row.state {
                     RowState::Done => RepoOutcome::Done,
-                    RowState::Failed { error } => RepoOutcome::Failed {
+                    RowState::Failed { error, .. } => RepoOutcome::Failed {
                         error: error.clone(),
                     },
                     RowState::Skipped { reason } => RepoOutcome::Skipped {

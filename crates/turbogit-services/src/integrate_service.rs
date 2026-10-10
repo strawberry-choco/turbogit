@@ -171,9 +171,10 @@ pub fn rebase_affected(roots: &[Root], focused: &RootId) -> Vec<RootId> {
 /// another is two rules wearing one name.
 pub fn ensure_rebase_allowed(settings: &VcsSettings, branch: &str) -> TgResult<()> {
     if is_protected(settings, branch) {
-        return Err(TgError::Other(format!(
-            "'{branch}' is a protected branch — rebasing it is not allowed"
-        )));
+        return Err(TgError::ProtectedBranch {
+            branch: branch.to_string(),
+            consequence: "rebasing it is not allowed",
+        });
     }
     Ok(())
 }
@@ -358,9 +359,10 @@ pub fn revert_commit(
     if let Some(branch) = vcs.current_branch(root)?
         && is_protected(settings, &branch)
     {
-        return Err(TgError::Other(format!(
-            "'{branch}' is a protected branch — reverting commits on it is not allowed"
-        )));
+        return Err(TgError::ProtectedBranch {
+            branch,
+            consequence: "reverting commits on it is not allowed",
+        });
     }
     if !vcs.status(root)?.changes.is_empty() {
         return Err(TgError::Other(
