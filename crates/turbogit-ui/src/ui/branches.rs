@@ -639,9 +639,8 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     if let Some((root_id, name)) = state.ui.branches_tree.context_menu.clone() {
         let target = widgets::menu_host::target_of(&root_id, &name);
         let root_name = root_id.name();
-        // The one verb here that needs the platform: a clipboard write can only
-        // happen in a frame holding the `egui::Context`, which is why it is taken
-        // here rather than asked of `AppState`.
+        // The copy arm below writes the clipboard, and only a frame holding the
+        // Context can.
         let ctx = ui.ctx().clone();
         widgets::menu_host::host_row_menu(
             ui,
@@ -926,14 +925,12 @@ fn apply_branch_action(
 ) {
     match action {
         BranchMenuAction::CopyBranchName => {
-            // Clipboard writes are not git work and are not an `Operation`: this
-            // is the branch side of the app's single clipboard route, the frame
-            // that owns the `egui::Context` calling `copy_text` — the same shape
-            // `Copy hash` and `Copy commit message` hold in the log window, and
-            // the reason the copy is NOT a slot on `AppState`. The toast is
-            // raised AFTER the call in this same arm for the ordering rule the
-            // route exists: a success reported before `copy_text` has run would
-            // describe an act nobody performed.
+            // Not git work, so not an `Operation`: the app's clipboard route is
+            // the frame that owns the `egui::Context` calling `copy_text`, as
+            // `Copy hash` does in the log window — which is why `ctx` is a
+            // parameter here and the copy is no slot on `AppState`.
+            // The copy precedes the toast on purpose: a success raised before
+            // `copy_text` had run would describe an act nobody performed.
             ctx.copy_text(branch.name.clone());
             state.ui.toast_shown_at = None;
             state.ui.toast = Some(Toast::success(format!("Copied {}", branch.name)));
