@@ -16,7 +16,8 @@
 # nine pages between 109 and 1 111 px. That is what the 4 000 below is
 # calibrated against — the measured floor doubled — and it is the reason the
 # mac budget is no longer 8 000, which sat above the floor with nothing behind
-# it and let a 2 920 px stale page pass.
+# it: the page that had gone stale by 2 400-2 900 px under that budget (the
+# diff viewer's whitespace control becoming a menu) still reported green.
 #
 # Windows and Linux are NOT measured: the Windows values are inherited from the
 # unmeasured 8 000, and Linux software rendering is a guess. Tighten either only

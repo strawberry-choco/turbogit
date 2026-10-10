@@ -327,12 +327,14 @@ fn acceptance_matrix_screenshots() {
     //
     // The same fact has a sharper edge than the number: a baseline that bakes
     // in a machine-local path and a per-run SHA can only ever match on the
-    // machine and the fixtures that produced it, which is why `04-diff` and
-    // `07-merge-editor` are on record as failing on macOS while a Windows run
-    // called them passing. No threshold fixes that; pinning the painted path
-    // and the seeded commit timestamps would, and that is a fixture change, not
-    // one to make by editing a budget. The printed per-page diff is what makes
-    // the band below the budget readable in the meantime.
+    // machine and the fixtures that produced it. `04-diff` and
+    // `07-merge-editor` are the two pages that paint a full `/var/folders/…`
+    // path into their frame, which is the shape of the pair on record as
+    // failing on macOS against a Windows-taken baseline. No threshold fixes
+    // that; pinning the painted path and the seeded commit timestamps would,
+    // and that is a fixture change, not one to make by editing a budget. The
+    // printed per-page diff is what makes the band below the budget readable
+    // in the meantime.
     //
     // `UPDATE_SNAPSHOTS=1` is deliberately NOT the documented capture: egui_kittest
     // maps it to `UpdateFailing`, which rewrites only a golden already over the
