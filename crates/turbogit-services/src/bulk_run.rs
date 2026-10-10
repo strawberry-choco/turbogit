@@ -75,8 +75,15 @@ pub enum RowState {
     /// Skipped before the run (preflight) or stopped while queued; `reason`
     /// is display-ready.
     Skipped { reason: String },
-    /// The step failed; `error` is display-ready.
-    Failed { error: String },
+    /// The step failed. `error` is display-ready, and `protected_branch` says
+    /// whether that error was a protected-branch guard's refusal — decided
+    /// while the step's `TgResult` is still a type, because a row is the point
+    /// the error becomes a string and settlement owes a durable per-root entry
+    /// for refusals it must not re-read as prose.
+    Failed {
+        error: String,
+        protected_branch: bool,
+    },
 }
 
 /// One row of the live monitor (screen 03).

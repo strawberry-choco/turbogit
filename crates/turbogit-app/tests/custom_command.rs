@@ -157,10 +157,17 @@ fn a_failed_command_surfaces_the_git_stderr_on_the_row() {
     let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
     let row = view.rows.first().unwrap();
     match &row.state {
-        RowState::Failed { error } => {
+        RowState::Failed {
+            error,
+            protected_branch,
+        } => {
             assert!(
                 error.contains("definitely-not-a-git-command"),
                 "git stderr surfaced: {error:?}"
+            );
+            assert!(
+                !protected_branch,
+                "a git failure is not a guard refusal, so it owes no per-root refusal entry"
             );
         }
         other => panic!("an unknown command must fail: {other:?}"),
@@ -370,7 +377,7 @@ fn retry_cannot_force_a_custom_command_onto_a_protected_branch() {
     let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
     let row = view.rows.iter().find(|r| r.name == "alpha").unwrap();
     match &row.state {
-        RowState::Failed { error } => {
+        RowState::Failed { error, .. } => {
             assert!(
                 error.contains("'main' is a protected branch"),
                 "the forced step refused, naming the branch: {error}"

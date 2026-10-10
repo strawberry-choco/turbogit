@@ -239,7 +239,7 @@ fn a_failed_row_carries_the_git_error_and_resolve_jumps_to_the_repo() {
     let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
     let alpha_row = view.rows.iter().find(|r| r.name == "alpha").unwrap();
     match &alpha_row.state {
-        RowState::Failed { error } => {
+        RowState::Failed { error, .. } => {
             assert!(error.contains("fatal"), "git stderr surfaced: {error:?}");
         }
         other => panic!("alpha should have failed: {other:?}"),
@@ -516,7 +516,7 @@ fn retry_cannot_force_a_rebasing_pull_onto_a_protected_branch() {
     let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
     let row = view.rows.iter().find(|r| r.name == "alpha").unwrap();
     match &row.state {
-        RowState::Failed { error } => {
+        RowState::Failed { error, .. } => {
             assert!(
                 error.contains("'main' is a protected branch"),
                 "the forced step refused, naming the branch: {error}"

@@ -5733,11 +5733,10 @@ impl AppState {
                             view.rows
                                 .iter()
                                 .filter_map(|r| match &r.state {
-                                    bulk_run::RowState::Failed { error }
-                                        if error.contains("is a protected branch") =>
-                                    {
-                                        Some((r.name.clone(), error.clone()))
-                                    }
+                                    bulk_run::RowState::Failed {
+                                        error,
+                                        protected_branch: true,
+                                    } => Some((r.name.clone(), error.clone())),
                                     _ => None,
                                 })
                                 .collect()
@@ -7399,9 +7398,16 @@ fn advance_run_rows(rows: &mut [bulk_run::RunRow], event: bulk_run::RunEvent) ->
             if let Some(row) = rows.iter_mut().find(|r| r.root == root) {
                 row.state = match result {
                     Ok(()) => bulk_run::RowState::Done,
-                    Err(e) => bulk_run::RowState::Failed {
-                        error: e.to_string(),
-                    },
+                    Err(e) => {
+                        // The refusal is typed here or not at all: `to_string`
+                        // is where the step's error stops being a `TgError`, and
+                        // the durable per-root entry is decided from this fact.
+                        let protected_branch = matches!(&e, TgError::ProtectedBranch { .. });
+                        bulk_run::RowState::Failed {
+                            error: e.to_string(),
+                            protected_branch,
+                        }
+                    }
                 };
                 row.duration = Some(duration);
             }
