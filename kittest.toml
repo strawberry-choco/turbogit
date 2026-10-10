@@ -1,13 +1,26 @@
 # egui_kittest golden-image comparison config (loaded automatically from
 # the directory containing Cargo.lock).
 #
-# Baselines are pixel-exact on the authoring machine, but rasterization
-# differs slightly across GPUs/drivers (anti-aliasing at text and curve
-# edges), so CI runners legitimately produce small per-pixel diffs.
-# `failed_pixel_count_threshold` allows that noise while still failing any
-# real regression (layout shifts and color changes move far more pixels).
-# Values are calibrated against observed CI diff counts with headroom;
-# tighten them if whole goldens start passing with visible regressions.
+# `failed_pixel_count_threshold` is the number of pixels allowed to exceed the
+# per-pixel colour tolerance (0.6, dify's anti-aliasing detection on) before a
+# snapshot comparison FAILS. It is not a statement about anti-aliasing: the only
+# caller in the workspace is `crates/turbogit-ui/tests/acceptance_matrix.rs`,
+# which skips rendering entirely under CI, so no CI diff count was ever observed
+# and no CI run consumes these comparisons.
+#
+# The floor under these budgets is the suite's own fixtures: the repo-backed
+# pages paint a random `tempfile` directory name, two seeded commit SHAs that
+# change with the commit timestamp, and (on two pages) a full temp path.
+# Measured run-to-run diff, separate processes, macOS with the Apple GPU on
+# 2026-10-10: 0 px (`01-welcome`) to 2 033 px (`07-merge-editor`), the other
+# nine pages between 109 and 1 111 px. That is what the 4 000 below is
+# calibrated against — the measured floor doubled — and it is the reason the
+# mac budget is no longer 8 000, which sat above the floor with nothing behind
+# it and let a 2 920 px stale page pass.
+#
+# Windows and Linux are NOT measured: the Windows values are inherited from the
+# unmeasured 8 000, and Linux software rendering is a guess. Tighten either only
+# from a run on that platform.
 
 failed_pixel_count_threshold = 8_000
 
@@ -20,4 +33,6 @@ failed_pixel_count_threshold = 8_000
 failed_pixel_count_threshold = 20_000
 
 [mac]
-failed_pixel_count_threshold = 8_000
+# Measured floor 2 033 px (worst of eleven pages, macOS, Apple GPU, 2026-10-10)
+# doubled for headroom. See the header.
+failed_pixel_count_threshold = 4_000
