@@ -485,9 +485,10 @@ pub fn run_step(
             if let Some(branch) = root.current_branch.as_deref()
                 && super::sync_service::is_protected(settings, branch)
             {
-                return Err(TgError::Other(format!(
-                    "'{branch}' is a protected branch — custom commands do not run on it"
-                )));
+                return Err(TgError::ProtectedBranch {
+                    branch: branch.to_string(),
+                    consequence: "custom commands do not run on it",
+                });
             }
             let args = parse_command(command)
                 .ok_or_else(|| TgError::Other("empty custom command".into()))?;
