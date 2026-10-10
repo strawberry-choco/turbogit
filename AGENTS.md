@@ -76,8 +76,11 @@ All are choices to make once the layer boundaries exist; none is a prerequisite.
 - `cargo test --workspace --all-targets --no-fail-fast` — run all unit and
   integration tests. Redirect output to a file; never pipe it into `head`/`tail`,
   because SIGPIPE kills git mid-write and leaves a `config.lock` that makes every
-  later run fail. `interactive_rebase_editor.rs` fails ~3 of 5 parallel runs from a
-  temp-filename race — not your change.
+  later run fail. The UI's `interactive_rebase_editor.rs` fails when the machine is
+  busy, because `wait_until` polls a spawned git worker against a wall-clock
+  deadline — not from a shared temp name, since every test gets its own
+  `tempfile::tempdir()`. Re-run the failing target alone before reading a red there
+  as a defect, and never write a failure off as known flakiness without that re-run.
 
 All four gates must pass; a failure in any one blocks the change.
 

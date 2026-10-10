@@ -243,8 +243,10 @@ Pure-ish services over the engine seam; no egui, no `AppState`:
 - **`turbogit-engine-api`** — `GitExecutor` is the **only** thing that talks to
   git, plus `ApplyDirection` and the port's two value modules: `patch`, the one
   reader of unified-diff syntax, and `repo_state`, the marker read behind
-  `holding_operation` (ADR-0022). 75 methods, all synchronous; callers run them on
-  worker threads so the UI never blocks.
+  `holding_operation` (ADR-0022). Every method is synchronous, so callers run them
+  on worker threads and the UI never blocks. The port is wide by design; ADR 0022
+  records its size at each reconciliation, since every read raised out of the
+  adapters changes it.
 - **`turbogit-engine`** — the adapters and the factory:
   - `cli::CliExecutor` — shells out to system `git`; handles **all mutating ops**.
   - `git2_exec::Git2Executor` — in-process libgit2 for supported reads, falling
