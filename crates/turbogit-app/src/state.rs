@@ -2872,6 +2872,62 @@ impl AppState {
         self.dispatch(op);
     }
 
+    /// Dispatch a user-initiated pull of one root, optionally checking
+    /// `checkout` out first.
+    ///
+    /// Every pull verb in the shell arrives here — the palette's `Pull`, the
+    /// branch menu's `Pull` and `Checkout and pull`, the branch row's hover
+    /// `Pull` — because a pull whose update method is `Rebase` rewrites the
+    /// branch it lands on, and a verb that handed the flag straight to the port
+    /// rewrote a protected branch with no refusal and no rewrite backup to undo
+    /// to. The guards themselves are
+    /// [`turbogit_services::sync_service::pull_guarded`]'s; this is the seam that
+    /// makes forgetting them impossible from a surface.
+    ///
+    /// `checkout` is the branch the pull will integrate into, named by the row
+    /// the developer clicked, so the protected-branch refusal can be answered
+    /// before even that checkout runs.
+    ///
+    /// One root per dispatch, always: a pull is per-repository work. The rail's
+    /// `Pull selection` is the fleet form and a merge-only pull, so it keeps its
+    /// own shape.
+    pub fn dispatch_pull(
+        &mut self,
+        label: impl Into<String>,
+        root: RootId,
+        checkout: Option<String>,
+    ) {
+        let settings = self.settings.clone();
+        let rebase = settings.update_method == UpdateMethod::Rebase;
+        self.dispatch(Operation::custom(
+            label,
+            Affected::Root(root.clone()),
+            move |v| {
+                let path = root.as_path();
+                if let Some(branch) = &checkout {
+                    if rebase {
+                        // Refuse a protected branch before the checkout, not after
+                        // it: a pull that will not be allowed to rebase must not
+                        // leave the developer on the branch the verb was going to
+                        // move them to. `pull_guarded` checks again against HEAD —
+                        // here the two are the same name.
+                        turbogit_services::integrate_service::ensure_rebase_allowed(
+                            &settings, branch,
+                        )?;
+                    }
+                    v.branch_checkout(path, branch)?;
+                }
+                turbogit_services::sync_service::pull_guarded(
+                    v,
+                    path,
+                    settings.update_method,
+                    &settings,
+                    checkout.as_deref().unwrap_or_default(),
+                )
+            },
+        ));
+    }
+
     /// Run a cache fill on the same seam an [`Operation`] dispatches on.
     ///
     /// A fill is not an Operation: it has no identity, no label, no invalidation
