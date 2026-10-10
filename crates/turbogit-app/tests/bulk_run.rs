@@ -482,7 +482,10 @@ fn a_run_that_planned_nothing_settles_loudly_and_never_as_a_success() {
         .iter()
         .find(|e| e.message.contains("nothing ran"))
         .expect("the settlement is in the feed, not only the toast");
-    assert_eq!(aggregate.kind, turbogit_app::activity::ActivityKind::Warning);
+    assert_eq!(
+        aggregate.kind,
+        turbogit_app::activity::ActivityKind::Warning
+    );
 }
 
 /// Retry re-dispatches every Skipped row — forcing the attempt the policy

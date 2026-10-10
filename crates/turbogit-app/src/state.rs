@@ -5923,13 +5923,9 @@ impl AppState {
     /// cached counts reads as (0, 0)).
     pub fn bulk_preflight(&self, op: BulkOp) -> Preflight {
         let roots = self.bulk_selected_roots();
-        bulk_ops::preflight(
-            op,
-            &roots,
-            &self.settings,
-            self.ui.bulk_rebase,
-            &|id| self.caches.ahead_behind(id).unwrap_or((0, 0)),
-        )
+        bulk_ops::preflight(op, &roots, &self.settings, self.ui.bulk_rebase, &|id| {
+            self.caches.ahead_behind(id).unwrap_or((0, 0))
+        })
     }
 
     /// The cascade create-&-checkout preflight matrix (issue 11, screen 02)
@@ -6614,13 +6610,9 @@ impl AppState {
                 let roots = self.bulk_selected_roots();
                 // Seed from the plan's own pull policy, not the live modal
                 // toggle: the rows must predict what THIS run will execute.
-                let pf = bulk_ops::preflight(
-                    plan.op,
-                    &roots,
-                    &self.settings,
-                    plan.rebase,
-                    &|id| self.caches.ahead_behind(id).unwrap_or((0, 0)),
-                );
+                let pf = bulk_ops::preflight(plan.op, &roots, &self.settings, plan.rebase, &|id| {
+                    self.caches.ahead_behind(id).unwrap_or((0, 0))
+                });
                 // A protected-branch refusal is durable per root: one feed
                 // entry naming the branch, outliving the modal and the toast.
                 for row in pf.rows.iter().filter(|r| {
