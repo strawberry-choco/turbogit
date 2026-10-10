@@ -66,7 +66,13 @@ fn rid(path: &Path) -> turbogit_domain::model::RootId {
 }
 
 /// Step the event pump until every monitor row is in a terminal state
-/// (Done / Failed / Skipped) or the deadline passes.
+/// (Done / Failed / Skipped), the run has settled, or the deadline passes.
+///
+/// The settle is part of the wait, not a courtesy: terminal rows arrive as
+/// progress events, and the pass's completion is a separate event that lands
+/// afterwards — so a wait that reads only the rows can return before the
+/// aggregate toast and the per-root feed entries exist, and a later feed
+/// assertion then races the worker.
 fn wait_for_run_end(state: &mut AppState) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -78,7 +84,7 @@ fn wait_for_run_end(state: &mut AppState) {
             .rows
             .iter()
             .any(|r| matches!(r.state, RowState::Queued { .. } | RowState::Running));
-        if !busy_row {
+        if !busy_row && !state.ui.busy {
             return;
         }
         assert!(Instant::now() < deadline, "run did not end within 10s");
@@ -332,6 +338,66 @@ fn a_protected_root_is_refused_whatever_the_command_and_names_the_branch() {
             "the refused command ran nowhere"
         );
     }
+}
+
+/// Retry re-dispatches every Skipped row — forcing the attempt the policy
+/// refused — so for `Custom` the refusal that BEARS the policy is the one on
+/// the step: the matrix's seeding can be skipped past by a plan that names no
+/// roots, and the row must then still be refused where the command would
+/// otherwise reach git. The command here moves HEAD if it runs, so the
+/// refusal is legible as a branch that did not.
+#[test]
+fn retry_cannot_force_a_custom_command_onto_a_protected_branch() {
+    let (_tmp, project, alpha, _ui) = project("cc-retry-protected");
+    // Shipped defaults: `main` is protected, and `alpha` sits on it.
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    state.ui.repo_selection = [rid(&alpha)].into_iter().collect();
+
+    let plan = BulkPlan {
+        op: BulkOp::Custom,
+        roots: Vec::new(),
+        rebase: false,
+        branch: String::new(),
+        command: "git commit --allow-empty -m bulk-ran".to_string(),
+    };
+    state.run_bulk_confirmed(plan);
+    wait_for_run_end(&mut state);
+    let head_before = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
+
+    state.bulk_retry_skipped();
+    wait_for_run_end(&mut state);
+
+    let view = state.ui.bulk_run.as_ref().expect("monitor stays open");
+    let row = view.rows.iter().find(|r| r.name == "alpha").unwrap();
+    match &row.state {
+        RowState::Failed { error } => {
+            assert!(
+                error.contains("'main' is a protected branch"),
+                "the forced step refused, naming the branch: {error}"
+            );
+            assert!(
+                !error.contains("bulk-ran"),
+                "the step's refusal is about the root, never the command: {error}"
+            );
+        }
+        other => panic!("the retry reached the branch it was refused: {other:?}"),
+    }
+    assert_eq!(
+        git(&alpha, &["rev-parse", "HEAD"]).trim(),
+        head_before,
+        "the refused command ran nothing on the protected branch"
+    );
+    // `Error` and not the seeding's `Warning`: a preflight refusal records
+    // itself per root too, with the same words, so only the kind tells this
+    // entry apart from the one the matrix wrote before anything ran.
+    assert!(
+        state.ui.activity.entries.iter().any(|e| {
+            e.repo.as_deref() == Some("alpha")
+                && e.message.contains("'main' is a protected branch")
+                && e.kind == turbogit_app::activity::ActivityKind::Error
+        }),
+        "the step's refusal is durable in the feed"
+    );
 }
 
 /// The grammar is unrestricted: the policy refuses roots, not commands. A
