@@ -109,6 +109,15 @@ fn scratch_clone(tmp: &Path, remote: &Path) -> PathBuf {
     scratch
 }
 
+/// Settings with nothing protected — the shape the pre-policy suites of this
+/// file assume when they exercise the fan-out mechanics themselves.
+fn unprotected() -> VcsSettings {
+    VcsSettings {
+        protected_branch_patterns: Vec::new(),
+        ..VcsSettings::default()
+    }
+}
+
 #[test]
 fn run_bulk_pushes_only_the_planned_roots_and_reports_each_outcome() {
     let engine = CliExecutor {
@@ -261,7 +270,7 @@ fn run_bulk_pull_honors_the_rebase_policy() {
         branch: String::new(),
         command: String::new(),
     };
-    let results = run_bulk(&engine, &mgr, &VcsSettings::default(), &plan);
+    let results = run_bulk(&engine, &mgr, &unprotected(), &plan);
 
     assert_eq!(result_roots(&results), vec![id(&alpha)]);
     assert_all_ok(&results);
@@ -497,7 +506,7 @@ fn run_bulk_executes_a_custom_command_on_every_planned_root() {
         branch: String::new(),
         command: "git branch bulk-marker".to_string(),
     };
-    let results = run_bulk(&engine, &mgr, &VcsSettings::default(), &plan);
+    let results = run_bulk(&engine, &mgr, &unprotected(), &plan);
     assert_all_ok(&results);
     assert_eq!(result_roots(&results), vec![id(&alpha), id(&ui)]);
 
@@ -530,7 +539,7 @@ fn a_failing_custom_command_reports_the_git_error_per_root_without_stopping_the_
         branch: String::new(),
         command: "branch bulk-marker".to_string(),
     };
-    let results = run_bulk(&engine, &mgr, &VcsSettings::default(), &plan);
+    let results = run_bulk(&engine, &mgr, &unprotected(), &plan);
     assert_eq!(results[0].0, id(&alpha));
     assert!(
         results[0].1.is_ok(),
@@ -561,10 +570,139 @@ fn an_unparseable_custom_command_fails_the_step_before_touching_git() {
         branch: String::new(),
         command: "git".to_string(),
     };
-    let results = run_bulk(&engine, &mgr, &VcsSettings::default(), &plan);
+    let results = run_bulk(&engine, &mgr, &unprotected(), &plan);
     assert!(
         results[0].1.is_err(),
         "an empty command list cannot run: {:?}",
         results[0].1
+    );
+}
+
+// -- Protected-branch policy ---------------------------------------------------
+
+/// Whether a reference exists at all — the repository's single rewrite-backup
+/// slot, which a refused rebase must not claim.
+fn ref_exists(dir: &Path, name: &str) -> bool {
+    std::process::Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", name])
+        .current_dir(dir)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// The same diverged work that a rebasing pull would rewrite, so "the refusal
+/// refused" is checkable against real history.
+fn diverge(repo: &Path, remote: &Path, tmp: &Path) {
+    commit(repo, "local work");
+    let scratch = scratch_clone(tmp, remote);
+    std::fs::write(scratch.join("other.txt"), "upstream\n").expect("upstream file");
+    git(&scratch, &["add", "."]);
+    git(&scratch, &["commit", "-m", "incoming"]);
+    git(&scratch, &["push", "-q", "origin", "main"]);
+}
+
+#[test]
+fn pull_all_refuses_a_rebase_onto_a_protected_root_before_touching_anything() {
+    let engine = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (alpha, alpha_remote) = repo_with_upstream(tmp.path(), "alpha");
+    let mgr = manager(&engine, std::slice::from_ref(&alpha));
+    diverge(&alpha, &alpha_remote, tmp.path());
+    let tip_before = git(&alpha, &["rev-parse", "HEAD"]).trim().to_string();
+
+    // The shipped default protects `main`, and `alpha` sits on it.
+    let plan = BulkPlan {
+        op: BulkOp::PullAll,
+        roots: vec![id(&alpha)],
+        rebase: true,
+        branch: String::new(),
+        command: String::new(),
+    };
+    let results = run_bulk(&engine, &mgr, &VcsSettings::default(), &plan);
+
+    assert_eq!(result_roots(&results), vec![id(&alpha)]);
+    let err = results[0].1.as_ref().expect_err("a protected branch refuses");
+    assert!(
+        err.to_string().contains("'main' is a protected branch"),
+        "the refusal names the branch: {err}"
+    );
+    assert_eq!(
+        git(&alpha, &["rev-parse", "HEAD"]).trim(),
+        tip_before,
+        "the refused rebase rewrote nothing"
+    );
+    assert!(
+        !ref_exists(&alpha, "refs/turbogit/preflight-backup"),
+        "a refusal precedes the backup: the repository's one Undo slot is \
+         still free for an earlier rewrite"
+    );
+}
+
+#[test]
+fn pull_all_still_merges_into_a_protected_root() {
+    let engine = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (alpha, alpha_remote) = repo_with_upstream(tmp.path(), "alpha");
+    let mgr = manager(&engine, std::slice::from_ref(&alpha));
+
+    // Incoming work only: a merging pull fast-forwards, rewriting nothing.
+    let scratch = scratch_clone(tmp.path(), &alpha_remote);
+    let incoming = commit(&scratch, "incoming");
+    git(&scratch, &["push", "-q", "origin", "main"]);
+
+    let plan = BulkPlan {
+        op: BulkOp::PullAll,
+        roots: vec![id(&alpha)],
+        rebase: false,
+        branch: String::new(),
+        command: String::new(),
+    };
+    let results = run_bulk(&engine, &mgr, &VcsSettings::default(), &plan);
+
+    assert_all_ok(&results);
+    assert_eq!(
+        git(&alpha, &["rev-parse", "HEAD"]).trim(),
+        incoming,
+        "a merge owes the protected branch nothing — it integrated"
+    );
+}
+
+#[test]
+fn a_protected_root_refuses_a_custom_command_whatever_it_was_typed() {
+    let engine = CliExecutor {
+        settings: VcsSettings::default(),
+    };
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (alpha, _remote) = repo_with_upstream(tmp.path(), "alpha");
+    let mgr = manager(&engine, std::slice::from_ref(&alpha));
+
+    // An entirely ordinary command — the refusal is about the root, so the
+    // grammar being unrestricted earns it nothing here.
+    let plan = BulkPlan {
+        op: BulkOp::Custom,
+        roots: vec![id(&alpha)],
+        rebase: false,
+        branch: String::new(),
+        command: "git branch bulk-marker".to_string(),
+    };
+    let results = run_bulk(&engine, &mgr, &VcsSettings::default(), &plan);
+
+    let err = results[0].1.as_ref().expect_err("a protected root refuses");
+    assert!(
+        err.to_string().contains("'main' is a protected branch"),
+        "the reason names the branch: {err}"
+    );
+    assert!(
+        !err.to_string().contains("bulk-marker"),
+        "the reason never names the command: {err}"
+    );
+    assert!(
+        git(&alpha, &["branch", "--list", "bulk-marker"]).is_empty(),
+        "the command did not run"
     );
 }
