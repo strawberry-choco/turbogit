@@ -6,18 +6,27 @@
 # snapshot comparison FAILS. It is not a statement about anti-aliasing: the only
 # caller in the workspace is `crates/turbogit-ui/tests/acceptance_matrix.rs`,
 # which skips rendering entirely under CI, so no CI diff count was ever observed
-# and no CI run consumes these comparisons.
+# and no CI run consumes these comparisons. The root value below is the fallback
+# for a platform with no table of its own; all three platforms this workspace
+# builds on have one, so it is never read here.
 #
-# The floor under these budgets is the suite's own fixtures: the repo-backed
-# pages paint a random `tempfile` directory name, two seeded commit SHAs that
-# change with the commit timestamp, and (on two pages) a full temp path.
-# Measured run-to-run diff, separate processes, macOS with the Apple GPU on
-# 2026-10-10: 0 px (`01-welcome`) to 2 033 px (`07-merge-editor`), the other
-# nine pages between 109 and 1 111 px. That is what the 4 000 below is
-# calibrated against — the measured floor doubled — and it is the reason the
-# mac budget is no longer 8 000, which sat above the floor with nothing behind
-# it: the page that had gone stale by 2 400-2 900 px under that budget (the
-# diff viewer's whitespace control becoming a menu) still reported green.
+# Every budget above 0 in this file's history was sized to the suite's own
+# fixtures, not to the renderer: the repo-backed pages painted a random
+# `tempfile` directory name in the shell header, two seeded commit SHAs that
+# changed with the commit timestamp, an age label that ticks every second and,
+# on two pages, a full temp path. `acceptance_matrix.rs` pins all of it now —
+# capture root, commit dates, painted path form, the host `git --version` — and
+# the floor went with it. Measured on macOS with the Apple GPU on 2026-10-10,
+# three separate processes against freshly captured baselines: 0 differing px on
+# all eleven pages, no diff box anywhere. The mac budget is that number.
+#
+# Which is also the reason a generous one is dangerous rather than merely loose:
+# the page that had gone stale by two and a half thousand pixels — the diff
+# viewer's whitespace control becoming a menu — reported green under the 8 000
+# that was sized to absorb fixture noise. A count above the measured floor
+# licenses exactly that, so it is set from a measurement and not from a feeling.
+# If a future mac run reports a nonzero count on a page whose fixtures have not
+# changed, that count is a finding to attribute, not a floor to adopt.
 #
 # Windows and Linux are NOT measured: the Windows values are inherited from the
 # unmeasured 8 000, and Linux software rendering is a guess. Tighten either only
@@ -34,6 +43,8 @@ failed_pixel_count_threshold = 8_000
 failed_pixel_count_threshold = 20_000
 
 [mac]
-# Measured floor 2 033 px (worst of eleven pages, macOS, Apple GPU, 2026-10-10)
-# doubled for headroom. See the header.
-failed_pixel_count_threshold = 4_000
+# Measured 2026-10-10: 0 differing px on all eleven pages, three separate
+# processes, macOS with the Apple GPU, against the deterministic fixtures
+# (`01-welcome` through `10-submodules`). Upstream's default is 0 for the same
+# reason and its docs call a count above 0 a last resort. See the header.
+failed_pixel_count_threshold = 0
