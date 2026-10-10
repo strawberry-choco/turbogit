@@ -2,11 +2,13 @@
 //! (`ui::branch_menu`).
 //!
 //! Two seams. The gating table is a pure function over one `Branch` and the
-//! repository's current branch — every row's eleven outcomes are asserted
+//! repository's current branch — every row's twelve outcomes are asserted
 //! without rendering. The component itself is props-in / action-out: the
-//! designed item order, the three rules, the multi-repo wording, and the
+//! designed item order, the four rules, the multi-repo wording, and the
 //! `BranchMenuAction` each clicked item returns, asserted through painted
-//! output and the accessibility tree.
+//! output and the accessibility tree. What a pick DOES — including the copy
+//! verb's clipboard request and the toast that follows it — is asserted on the
+//! production path, against the real `AppState`.
 
 use turbogit_domain::model::{Branch, BranchKind, Upstream};
 use turbogit_ui::ui::branch_menu::{BranchMenuAction, MenuItemState, branch_menu_items};
@@ -232,9 +234,44 @@ fn merge_rebase_compare_and_delete_state_why_the_row_blocks_them() {
 /// so this is the one check that they do not.
 #[test]
 fn the_designed_order_is_the_array_slots() {
-    assert_eq!(BranchMenuAction::ORDER.len(), 11);
+    assert_eq!(BranchMenuAction::ORDER.len(), 12);
     for (slot, action) in BranchMenuAction::ORDER.iter().enumerate() {
         assert_eq!(action.index(), slot, "{action:?} is painted in slot {slot}");
+    }
+}
+
+// --- the copy verb is ungated, and copies the row it was opened on ---------------
+
+/// `Copy branch name` reads the `Branch` the menu was handed, so nothing about
+/// that branch can block it: no checkout, no upstream, no local-vs-remote kind,
+/// no detached HEAD. The row's OWN name is what the verb means — the menu is
+/// invoked on a row, which may well be a branch that is not checked out — and
+/// every row below is one where the checked-out branch is a different row, so a
+/// gate or a name-substitution anywhere here would silently copy the wrong thing.
+#[test]
+fn copy_branch_name_is_offered_on_every_row() {
+    let current = local("main", Some("origin/main"), 0, 0);
+    let other = local("side", None, 0, 0);
+    let mut gone = local("stale", Some("origin/removed"), 0, 0);
+    gone.gone = true;
+    let remote = Branch {
+        kind: BranchKind::Remote,
+        remote: Some("origin".to_string()),
+        ..local("up", Some("origin/up"), 0, 0)
+    };
+
+    for (label, branch, current_name) in [
+        ("the checked-out row", &current, Some("main")),
+        ("an untracked local row", &other, Some("main")),
+        ("a row whose upstream is gone", &gone, Some("main")),
+        ("a remote-tracking row", &remote, Some("main")),
+        ("any row under a detached HEAD", &other, None),
+    ] {
+        assert_eq!(
+            state(branch, current_name, BranchMenuAction::CopyBranchName),
+            MenuItemState::enabled(),
+            "{label} must be copyable"
+        );
     }
 }
 
@@ -321,12 +358,12 @@ fn menu_harness(
     (harness, returned)
 }
 
-/// The union of the three affordances in the designed order — Checkout
-/// strongest, the name in the data face, three rules splitting switch /
-/// history / update / edit — with Push's real accelerator in the shortcut
-/// column.
+/// The union of the three affordances in the designed order — the copy verb
+/// leading its own group, Checkout strongest, the name in the data face, four
+/// rules splitting copy / switch / history / update / edit — with Push's real
+/// accelerator in the shortcut column.
 #[test]
-fn the_menu_renders_the_eleven_items_in_the_designed_order() {
+fn the_menu_renders_the_twelve_items_in_the_designed_order() {
     let target = local("feature/cascade-views", Some("origin/f"), 1, 0);
     let (harness, _returned) = menu_harness(target, || BranchMenuProps {
         repo_name: "alpha",
@@ -353,6 +390,8 @@ fn the_menu_renders_the_eleven_items_in_the_designed_order() {
     assert_eq!(
         texts,
         vec![
+            "Copy branch name",
+            "feature/cascade-views",
             "Checkout",
             "New branch from",
             "feature/cascade-views",
@@ -370,20 +409,26 @@ fn the_menu_renders_the_eleven_items_in_the_designed_order() {
         "item order, the data segment, and the one accelerator"
     );
 
-    // The branch name reads in the data face, the prose in the chrome face.
-    let data = galleys
+    // The branch name reads in the data face on both rows that carry it — the
+    // copy verb's value and `New branch from`'s base — never as a label.
+    let names: Vec<&egui::FontFamily> = galleys
         .iter()
-        .find(|g| g.text == "feature/cascade-views")
-        .expect("name painted");
-    assert_eq!(data.family, egui::FontFamily::Monospace);
+        .filter(|g| g.text == "feature/cascade-views")
+        .map(|g| &g.family)
+        .collect();
+    assert_eq!(
+        names,
+        vec![&egui::FontFamily::Monospace, &egui::FontFamily::Monospace],
+        "the copied value and the base are both data"
+    );
 
-    // Three rules: history, update and editing each start behind a hairline.
+    // Four rules: copy, history, update and editing each start behind a hairline.
     let rules: Vec<Color32> = filled_rects(&harness)
         .into_iter()
         .filter(|(_, fill)| *fill == Palette::LINE_SUBTLE)
         .map(|(_, fill)| fill)
         .collect();
-    assert_eq!(rules.len(), 3, "exactly three menu rules");
+    assert_eq!(rules.len(), 4, "exactly four menu rules");
 
     // Checkout is the primary item.
     assert!(
@@ -477,6 +522,38 @@ fn clicking_an_item_returns_its_action() {
             .accesskit_node()
             .is_disabled(),
         "the accessibility node carries the gate"
+    );
+}
+
+/// The copy verb is a row like any other as far as the component is concerned:
+/// it reports its own action and nothing more, leaving the clipboard to the
+/// host. `branch_menu` never touches a `Context` — that is what keeps the
+/// component props-in / action-out.
+#[test]
+fn clicking_the_copy_item_returns_its_action_and_nothing_else() {
+    use egui_kittest::kittest::Queryable as _;
+
+    let target = local("side", Some("origin/side"), 0, 0);
+    let (mut harness, returned) = menu_harness(target, || BranchMenuProps {
+        repo_name: "alpha",
+        multi_repo: false,
+        current_branch: Some("main"),
+    });
+    harness.get_by_label("Copy branch name").click();
+    harness.step();
+    assert_eq!(
+        *returned.borrow(),
+        Some(BranchMenuAction::CopyBranchName),
+        "the component reports the pick and nothing else"
+    );
+    assert!(
+        harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .all(|command| !matches!(command, egui::OutputCommand::CopyText(_))),
+        "the menu paints; the copy is the host's act"
     );
 }
 
@@ -833,6 +910,58 @@ pub(crate) mod surface {
         assert_eq!(st.ui.dlg.new_branch_name, "");
         assert!(st.ui.dlg.new_branch_checkout);
         assert_eq!(context_menu_target(&harness), None);
+    }
+
+    // --- the copy verb: the app's clipboard request, on the production path ---
+
+    /// What the last frame asked the platform to put on the clipboard. egui
+    /// carries a copy as an output command rather than a field, so this reads
+    /// the same gesture the window's clipboard handler would act on.
+    fn copied_text(harness: &Harness<'_, AppState>) -> Option<String> {
+        harness
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                _ => None,
+            })
+    }
+
+    fn toast(harness: &Harness<'_, AppState>) -> Option<String> {
+        harness.state().ui.toast.as_ref().map(|t| t.message.clone())
+    }
+
+    /// `Copy branch name` copies the ROW it was opened on, which under this
+    /// menu's contract is not necessarily the checked-out branch — the point the
+    /// reference's `Copy current branch name` does not have to answer, because it
+    /// is not invoked on a row. The confirmation is read from the same frame as
+    /// the request, which is what makes the pair assertable: a toast with no
+    /// `CopyText` command behind it would say the copy ran when nothing did.
+    #[test]
+    fn copy_branch_name_copies_the_row_it_was_opened_on() {
+        let project = one_repo_project("dispatch-copy");
+        let mut harness = branches_harness(project);
+        open_branches(&mut harness);
+        assert_eq!(current_branch(&harness).as_deref(), Some("main"));
+
+        right_click_row(&mut harness, "plain-b");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Copy branch name");
+        assert_eq!(copied_text(&harness).as_deref(), Some("plain-b"));
+        assert_eq!(toast(&harness).as_deref(), Some("Copied plain-b"));
+        assert_eq!(context_menu_target(&harness), None, "and closes");
+
+        // The checked-out row copies itself too — the verb never substitutes
+        // HEAD for the row, so the two can never disagree.
+        right_click_row(&mut harness, "main");
+        click_menu_item(&mut harness, MENU_SENTINEL, "Copy branch name");
+        assert_eq!(copied_text(&harness).as_deref(), Some("main"));
+        assert_eq!(toast(&harness).as_deref(), Some("Copied main"));
+
+        // Inert: no dialog, no confirmation, no operation in flight.
+        let st = harness.state();
+        assert!(st.ui.dialog.is_none() && st.ui.confirm.is_none() && !st.ui.busy);
     }
 
     // --- the pull family is a remote-branch verb -------------------------

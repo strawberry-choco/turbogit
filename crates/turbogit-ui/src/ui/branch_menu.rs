@@ -1,12 +1,14 @@
 //! The branch context menu: one right-click action list for a branch row.
 //!
-//! Eleven items for one `(RootId, Branch)` target — the union of every branch
+//! Twelve items for one `(RootId, Branch)` target — the union of every branch
 //! action the surface offers — rendered through the shared
 //! [`crate::ui::widgets::menu_item`] primitive. Props in, action out — the
 //! same contract [`crate::ui::branch_tree_view`] holds: the component decides
 //! no policy, dispatches nothing, and never touches `AppState`. The eleven
-//! gating rules live here once, in [`branch_menu_items`], so the wording and
-//! enablement of a blocked action can never drift between surfaces.
+//! gating rules live here once, in [`branch_menu_items`] — and they are the
+//! whole set, because the copy item reads the name it was handed and so has
+//! nothing to be blocked by — so the wording and enablement of a blocked action
+//! can never drift between surfaces.
 
 use turbogit_domain::model::{Branch, BranchKind};
 
@@ -16,6 +18,9 @@ use crate::ui::widgets::{MenuItemKind, MenuItemProps, menu_item, menu_rule};
 /// What the user picked. Plain data — the surface owns what it means.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BranchMenuAction {
+    /// Copy THIS row's name — not the checked-out branch's, which may be another
+    /// row. Inert: no ref moves and no repository state is consulted.
+    CopyBranchName,
     Checkout,
     NewBranchFrom,
     CheckoutAndPull,
@@ -36,10 +41,14 @@ pub enum BranchMenuAction {
 impl BranchMenuAction {
     /// The designed item order, top of the menu to bottom.
     ///
-    /// The two read-only comparisons sit together in the middle group: neither
+    /// The copy verb leads, in a group of its own, exactly as it does in
+    /// [`crate::ui::commit_menu`]: two menus opened in one window read as one
+    /// kit, and the inert verb goes where the inert verb goes. The two
+    /// read-only comparisons sit together in the middle group: neither
     /// moves a ref, and the item that opens the file-level list belongs beside the
     /// one that opens the commit-level list rather than down with the pull family.
-    pub const ORDER: [Self; 11] = [
+    pub const ORDER: [Self; 12] = [
+        Self::CopyBranchName,
         Self::Checkout,
         Self::NewBranchFrom,
         Self::CheckoutAndPull,
@@ -56,17 +65,18 @@ impl BranchMenuAction {
     /// The item's slot in the array [`branch_menu_items`] returns.
     pub const fn index(self) -> usize {
         match self {
-            Self::Checkout => 0,
-            Self::NewBranchFrom => 1,
-            Self::CheckoutAndPull => 2,
-            Self::Merge => 3,
-            Self::Rebase => 4,
-            Self::Compare => 5,
-            Self::DiffWithWorkingTree => 6,
-            Self::Pull => 7,
-            Self::Push => 8,
-            Self::Rename => 9,
-            Self::Delete => 10,
+            Self::CopyBranchName => 0,
+            Self::Checkout => 1,
+            Self::NewBranchFrom => 2,
+            Self::CheckoutAndPull => 3,
+            Self::Merge => 4,
+            Self::Rebase => 5,
+            Self::Compare => 6,
+            Self::DiffWithWorkingTree => 7,
+            Self::Pull => 8,
+            Self::Push => 9,
+            Self::Rename => 10,
+            Self::Delete => 11,
         }
     }
 }
@@ -78,14 +88,16 @@ impl BranchMenuAction {
 /// and stays.
 pub use crate::ui::widgets::MenuItemState;
 
-/// The eleven gates, in [`BranchMenuAction::ORDER`] — one function, one set of
-/// strings. Every rule is a field read off the branch the listing already
-/// carries; none costs a git call.
-pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemState; 11] {
+/// The twelve items' gates, in [`BranchMenuAction::ORDER`] — one function, one
+/// set of strings. Every rule is a field read off the branch the listing
+/// already carries; none costs a git call. [`BranchMenuAction::CopyBranchName`]
+/// takes the array's default because the name it copies is the one it was
+/// handed: a row that can be pointed at can be copied.
+pub fn branch_menu_items(branch: &Branch, current: Option<&str>) -> [MenuItemState; 12] {
     let is_current = current == Some(branch.name.as_str());
     let is_local = branch.kind == BranchKind::Local;
     let has_upstream = branch.tracking.is_some() && !branch.gone;
-    let mut items = [MenuItemState::enabled(); 11];
+    let mut items = [MenuItemState::enabled(); 12];
     items[BranchMenuAction::Checkout.index()] = if is_current {
         MenuItemState::disabled("already checked out")
     } else {
@@ -177,7 +189,7 @@ pub struct BranchMenuProps<'a> {
     pub current_branch: Option<&'a str>,
 }
 
-/// Paint the eleven items for one branch and report which was clicked.
+/// Paint the twelve items for one branch and report which was clicked.
 ///
 /// The menu is 296 px wide and grows to 320 px before the branch name
 /// middle-truncates — no wrapping inside a menu row. "Checkout and pull"
@@ -236,6 +248,23 @@ pub fn branch_menu(
         }
     };
 
+    row(
+        ui,
+        BranchMenuAction::CopyBranchName,
+        &states[BranchMenuAction::CopyBranchName.index()],
+        // `FILES` is this app's copy glyph — the one [`crate::ui::commit_menu`]
+        // gives both of its copy verbs, because the embedded set has no
+        // clipboard. `GIT_BRANCH` would be the literal match and would collide
+        // with `New branch from` two rows below it.
+        Icon::FILES,
+        "Copy branch name",
+        // The name is the value being copied, so it rides the data face — the
+        // same slot and face `Copy hash` uses for the short reference.
+        Some(&target.name),
+        None,
+        MenuItemKind::Default,
+    );
+    menu_rule(ui);
     row(
         ui,
         BranchMenuAction::Checkout,
