@@ -18,7 +18,7 @@ use egui::{Align, Layout, Pos2, Rect, RichText, Ui, UiBuilder};
 use turbogit_app::operation::Operation;
 use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm};
+use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm, Toast};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
 use turbogit_services::sync_service::PushScope;
 
@@ -368,7 +368,7 @@ fn handle_keys(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         // The current branch can never be deleted (issue 12); everything
         // else gets the same "what will be lost" ask as the click path.
         if current.as_deref() != Some(branch.name.as_str()) {
-            apply_branch_action(state, rid, branch, BranchMenuAction::Delete);
+            apply_branch_action(state, ui.ctx(), rid, branch, BranchMenuAction::Delete);
         }
     }
 }
@@ -639,6 +639,10 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
     if let Some((root_id, name)) = state.ui.branches_tree.context_menu.clone() {
         let target = widgets::menu_host::target_of(&root_id, &name);
         let root_name = root_id.name();
+        // The one verb here that needs the platform: a clipboard write can only
+        // happen in a frame holding the `egui::Context`, which is why it is taken
+        // here rather than asked of `AppState`.
+        let ctx = ui.ctx().clone();
         widgets::menu_host::host_row_menu(
             ui,
             state,
@@ -666,7 +670,7 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
                     .by_id(&root_id)
                     .and_then(|r| r.branches.iter().find(|b| b.name == name).cloned());
                 if let Some(branch) = branch {
-                    apply_branch_action(state, &root_id, &branch, action);
+                    apply_branch_action(state, &ctx, &root_id, &branch, action);
                 }
             },
         );
@@ -915,11 +919,25 @@ fn checkout_branch(state: &mut AppState, root: &RootId, branch: &Branch) {
 /// acting never leaves a stale one behind.
 fn apply_branch_action(
     state: &mut AppState,
+    ctx: &egui::Context,
     root: &RootId,
     branch: &Branch,
     action: BranchMenuAction,
 ) {
     match action {
+        BranchMenuAction::CopyBranchName => {
+            // Clipboard writes are not git work and are not an `Operation`: this
+            // is the branch side of the app's single clipboard route, the frame
+            // that owns the `egui::Context` calling `copy_text` — the same shape
+            // `Copy hash` and `Copy commit message` hold in the log window, and
+            // the reason the copy is NOT a slot on `AppState`. The toast is
+            // raised AFTER the call in this same arm for the ordering rule the
+            // route exists: a success reported before `copy_text` has run would
+            // describe an act nobody performed.
+            ctx.copy_text(branch.name.clone());
+            state.ui.toast_shown_at = None;
+            state.ui.toast = Some(Toast::success(format!("Copied {}", branch.name)));
+        }
         BranchMenuAction::Checkout => checkout_branch(state, root, branch),
         BranchMenuAction::NewBranchFrom => {
             // The same prefill `CreateBranchRequested` performs, with the
