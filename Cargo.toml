@@ -11,6 +11,11 @@ resolver = "3"
 [workspace.dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
 crossbeam-channel = "0.5.16"
+# The pixel-diff metric egui_kittest uses to decide a snapshot comparison; a
+# direct dependency so a suite can report the same number the verdict is made
+# from. `default-features = false` mirrors egui_kittest's own declaration — with
+# defaults on, dify drags `image/default` (AVIF, EXR, GIF codecs) into the lock.
+dify = { version = "0.8.0", default-features = false }
 dirs = "6.0"
 eframe = "0.36.1"
 egui = "0.36.1"
