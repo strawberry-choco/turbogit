@@ -220,6 +220,8 @@ mod tab_spelling {
     fn tab_of(label: &str) -> Tab {
         // Legacy persisted "History" (removed in issue #19)
         // gracefully falls back to the Commit tab.
+        // Its own arm though the catch-all below answers the same: a file from
+        // a build that HAD the tab is a courtesy, and should not read as a typo.
         if label == "History" {
             return Tab::Commit;
         }
