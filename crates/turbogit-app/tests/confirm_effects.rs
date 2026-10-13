@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use test_support::git_seed::{commit, git, repo_with_one_commit};
 use turbogit_app::confirm::{ConfirmAction, apply};
 use turbogit_app::state::{AppState, Dialog, PendingConfirm, UnmergedCommit, UnmergedCommits};
-use turbogit_domain::model::{Change, ChangeStatus};
+use turbogit_domain::model::{BranchKind, Change, ChangeStatus};
 
 /// A repo `alpha` with `main` pushed to a bare `origin.git`, and a local
 /// `work` off `main` carrying one commit **and tracking `origin/work`**, so a
@@ -145,6 +145,93 @@ fn modified(names: &[&str]) -> Vec<Change> {
             orig_path: None,
         })
         .collect()
+}
+
+/// A repo on `main` with one committed file, a local `work` branch to switch
+/// to, and that file modified in the working tree — so a checkout of `work` has
+/// to answer the dirty-checkout question.
+fn dirty_checkout_project() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().to_path_buf();
+    let alpha = repo_with_one_commit(&project, "alpha");
+    commit(&alpha, "notes.txt", "committed\n", "notes");
+    git(&alpha, &["branch", "work"]);
+    std::fs::write(alpha.join("notes.txt"), "modified\n").unwrap();
+    (tmp, project)
+}
+
+/// The dirty-checkout question a branch row raises: the working tree has changes
+/// and the developer asked for `work`.
+fn checkout_dirty(root: turbogit_domain::model::RootId) -> PendingConfirm {
+    PendingConfirm::CheckoutDirty {
+        root,
+        target: "work".to_string(),
+        kind: BranchKind::Local,
+        detach: false,
+    }
+}
+
+/// "Set aside" is the answer that promises the changes will still be there
+/// afterwards, so the promise is the assertion: the switch happened, and the
+/// changes are parked rather than left behind.
+#[test]
+fn the_dirty_checkouts_set_aside_parks_the_changes_and_switches() {
+    let (_tmp, project) = dirty_checkout_project();
+    let alpha = project.join("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let verb = checkout_dirty(state.selected_root.clone().unwrap());
+
+    apply(&mut state, &verb, ConfirmAction::SetAside);
+    state.drain_events();
+
+    assert!(state.ui.confirm.is_none(), "the question is answered");
+    assert_eq!(
+        git(&alpha, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "work",
+        "the switch the question was about to happen"
+    );
+    let status = git(&alpha, &["status", "--porcelain"]);
+    assert!(
+        status.trim().is_empty(),
+        "the worktree is clean because the changes were set aside; got {status:?}"
+    );
+    let parked = git(&alpha, &["stash", "list"]);
+    assert!(
+        !parked.trim().is_empty(),
+        "the changes are recoverable afterwards, which is the whole reason for this answer; \
+         got {parked:?}"
+    );
+}
+
+/// "Bring along" is the answer that promises nothing is set aside, and the
+/// difference between the two answers is only visible in the repository: same
+/// switch, changes still in the working tree, no stash entry.
+#[test]
+fn the_dirty_checkouts_bring_along_carries_the_changes_and_stashes_nothing() {
+    let (_tmp, project) = dirty_checkout_project();
+    let alpha = project.join("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let verb = checkout_dirty(state.selected_root.clone().unwrap());
+
+    apply(&mut state, &verb, ConfirmAction::BringAlong);
+    state.drain_events();
+
+    assert!(state.ui.confirm.is_none(), "the question is answered");
+    assert_eq!(
+        git(&alpha, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "work",
+        "the switch the question was about to happen"
+    );
+    let carried = std::fs::read_to_string(alpha.join("notes.txt")).unwrap();
+    assert_eq!(
+        carried, "modified\n",
+        "the changes came along: this is what distinguishes the two answers"
+    );
+    let parked = git(&alpha, &["stash", "list"]);
+    assert!(
+        parked.trim().is_empty(),
+        "nothing was set aside; got {parked:?}"
+    );
 }
 
 /// The link's click is a thing the app does: it opens the viewer over the

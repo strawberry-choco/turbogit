@@ -213,7 +213,11 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
                 ]),
             ],
             disclosure: None,
-            buttons: vec![Button::cancel()],
+            buttons: vec![
+                Button::new("Bring along", ConfirmAction::BringAlong),
+                Button::new("Set aside", ConfirmAction::SetAside),
+                Button::new("Cancel", ConfirmAction::Close),
+            ],
         },
         PendingConfirm::CheckoutInWorktree { branch, worktree } => Prompt {
             // Issue 07: refused up front, naming the worktree — no confusing
@@ -366,11 +370,34 @@ pub fn apply(state: &mut AppState, c: &PendingConfirm, action: ConfirmAction) {
             ConfirmAction::Close => clear_branch_delete(state),
             _ => {}
         },
-        PendingConfirm::CheckoutDirty { .. } => {
-            if action == ConfirmAction::Close {
+        PendingConfirm::CheckoutDirty {
+            root,
+            target,
+            kind,
+            detach,
+        } => match action {
+            // Each answer closes the question **before** it dispatches: the
+            // checkout resolves asynchronously and the dialog must not be there
+            // to answer a second time when it lands.
+            ConfirmAction::BringAlong => {
                 state.ui.confirm = None;
+                if *detach {
+                    state.checkout_detached_op(root, target);
+                } else {
+                    state.checkout_branch_op(root, *kind, target);
+                }
             }
-        }
+            ConfirmAction::SetAside => {
+                state.ui.confirm = None;
+                if *detach {
+                    state.checkout_detached_set_aside(root, target);
+                } else {
+                    state.checkout_branch_set_aside(root, *kind, target);
+                }
+            }
+            ConfirmAction::Close => state.ui.confirm = None,
+            _ => {}
+        },
         // The ten questions whose row is `OK` / `Cancel` and whose `OK` is the
         // verb's own app-side effect — including `CheckoutInWorktree`, whose
         // arm there is empty because acknowledging it is the whole answer.
