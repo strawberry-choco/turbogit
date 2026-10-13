@@ -7,6 +7,9 @@
 //! suite holds the two facts about it that are strings the user reads: how many
 //! files a discard names before it summarises the rest, and what a branch
 //! delete offers as the way to look at what it is about to lose.
+//!
+//! The effect side of the same module is in `confirm_effects.rs`: what a
+//! control does, over a real repository.
 
 use std::path::PathBuf;
 use std::sync::Arc;
