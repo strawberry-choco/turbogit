@@ -39,3 +39,4 @@
 //!   index `0` and one over a commit window's index — they stay two entries.
 
 pub mod branch;
+pub mod conflict;
