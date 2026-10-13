@@ -45,7 +45,7 @@ use turbogit_services::shelve_stash::stash_ref;
 
 use crate::operation::Operation;
 use crate::root_caches::Affected;
-use crate::state::{AppState, PendingConfirm, short_sha};
+use crate::state::{AppState, BranchDeletePending, PendingConfirm, short_sha};
 
 /// How many paths the discard question names before it counts the rest.
 const DISCARD_PATHS_NAMED: usize = 8;
@@ -319,8 +319,30 @@ pub fn apply(state: &mut AppState, c: &PendingConfirm, action: ConfirmAction) {
             ConfirmAction::Close => state.ui.confirm = None,
             _ => {}
         },
-        PendingConfirm::DeleteLocalBranch { .. } => match action {
+        PendingConfirm::DeleteLocalBranch { name } => match action {
+            ConfirmAction::OpenUnmerged => {
+                if let Some(unmerged) = state.ui.branches_delete_unmerged.clone() {
+                    state.open_unmerged_commits(&unmerged);
+                }
+            }
             ConfirmAction::Confirm => {
+                // Capture the tip for the undo window **before** the branch is
+                // gone (issue 12). The delete removes the local ref, and with it
+                // the upstream entry and the commits the branch alone reached,
+                // so these reads cannot be repeated afterwards.
+                if let Some(root) = state.selected_root.clone()
+                    && let Some(tip_sha) = state.branch_tip(&root, name)
+                {
+                    let upstream = state.branch_upstream(&root, name);
+                    let unmerged = state.ui.branches_delete_unmerged.clone();
+                    state.ui.branches_delete_pending = Some(BranchDeletePending {
+                        root,
+                        name: name.clone(),
+                        tip_sha,
+                        upstream,
+                        unmerged,
+                    });
+                }
                 run(state, c.clone());
                 clear_branch_delete(state);
             }
