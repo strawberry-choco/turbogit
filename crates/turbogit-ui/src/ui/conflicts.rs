@@ -10,8 +10,7 @@ use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::kit::conflict_pane::Side;
 use egui::{RichText, ScrollArea, Ui};
-use turbogit_app::operation::Operation;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::shell_writes::conflict as writes;
 use turbogit_app::state::{AppState, Toast};
 use turbogit_domain::model::{
     CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, RootId,
@@ -186,27 +185,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     for path in &conflicted {
         ui.horizontal(|ui| {
             ui.label(path.display().to_string());
-            if ui.button("Ours").clicked() {
-                let r = root.clone();
-                let p = path.clone();
-                if let Some(r) = r {
-                    state.dispatch(Operation::custom(
-                        "Accept ours",
-                        Affected::Root(r.clone()),
-                        move |v| conflict::accept_ours(v, r.as_path(), &p),
-                    ));
-                }
+            if ui.button("Ours").clicked()
+                && let Some(r) = &root
+            {
+                state.dispatch(writes::accept_ours(r, path));
             }
-            if ui.button("Theirs").clicked() {
-                let r = root.clone();
-                let p = path.clone();
-                if let Some(r) = r {
-                    state.dispatch(Operation::custom(
-                        "Accept theirs",
-                        Affected::Root(r.clone()),
-                        move |v| conflict::accept_theirs(v, r.as_path(), &p),
-                    ));
-                }
+            if ui.button("Theirs").clicked()
+                && let Some(r) = &root
+            {
+                state.dispatch(writes::accept_theirs(r, path));
             }
             if ui.button("Merge…").clicked()
                 && let Some(r) = &root
@@ -224,24 +211,11 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             }
         });
     }
-    let r = root.clone();
     let st = state.multi.by_id(&id).map(|r| r.status.clone());
     if ui.button("Resolve all simple").clicked()
-        && let (Some(r), Some(status)) = (r.clone(), st.clone())
+        && let (Some(r), Some(status)) = (root.clone(), st.clone())
     {
-        state.dispatch(Operation::custom(
-            "Resolve simple conflicts",
-            Affected::Root(r.clone()),
-            move |v| {
-                // Every per-file outcome counts: a resolution that failed has
-                // to surface, not be discarded (issue #04's honest feed).
-                let results = conflict::resolve_all_simple(v, r.as_path(), &status);
-                match results.into_iter().find_map(|(_, res)| res.err()) {
-                    Some(e) => Err(e),
-                    None => Ok(()),
-                }
-            },
-        ));
+        state.dispatch(writes::resolve_simple(&r, &status));
     }
     // Structured 3-way merge editor window (issue #15 redesign): three equal
     // panes Local | Result | Incoming over discrete conflict blocks.
@@ -368,16 +342,12 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             .add_enabled(remaining == 0, egui::Button::new("Apply"))
                             .clicked()
                         {
-                            let r = state.selected_root.clone();
-                            let p = path.clone();
                             let content = compose(&segs, &state.ui.conflict_res);
-                            if let Some(r) = r {
-                                state.dispatch(Operation::custom(
-                                    "Apply merge resolution",
-                                    Affected::Root(r.clone()),
-                                    move |v| {
-                                        conflict::write_resolution(v, r.as_path(), &p, &content)
-                                    },
+                            if let Some(r) = &state.selected_root {
+                                state.dispatch(writes::apply_merge_resolution(
+                                    r,
+                                    path.as_path(),
+                                    &content,
                                 ));
                             }
                             state.ui.conflict_open = None;

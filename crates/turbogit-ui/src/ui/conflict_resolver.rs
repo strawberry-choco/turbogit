@@ -27,13 +27,12 @@ use crate::ui::conflicts::{
 use crate::ui::kit::conflict_pane::{self, Side};
 use egui::{Key, Modifiers, RichText, TextEdit, Ui};
 use turbogit_app::operation::Operation;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::shell_writes::conflict as writes;
 use turbogit_app::state::{AppState, BulkApplyScope, ConflictBulkReport};
 use turbogit_domain::model::{
     CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, ConflictKind, RootId,
 };
 use turbogit_engine_api::OwnedOperation;
-use turbogit_services::conflict;
 
 use std::path::{Path, PathBuf};
 
@@ -656,11 +655,7 @@ fn apply_resolution(state: &mut AppState) {
     let r = state.selected_root.clone();
     let p = state.ui.conflict_resolver_selected.clone();
     if let (Some(r), Some(p)) = (r, p) {
-        state.dispatch(Operation::custom(
-            "Apply merge resolution",
-            Affected::Root(r.clone()),
-            move |v| conflict::write_resolution(v, r.as_path(), &p, &content),
-        ));
+        state.dispatch(writes::apply_merge_resolution(&r, &p, &content));
     }
     // Keep the resolver open while a merge is still pending Continue —
     // the file is staged but the merge commit hasn't been written yet.
