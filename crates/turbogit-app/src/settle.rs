@@ -373,12 +373,18 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
     let (conflicts, message) = record_completion_in_activity(state, kind, label, affected);
     report_what_the_fetch_changed(state, rules, &message);
     open_conflict_handoff(state, kind, conflicts);
-    // Issue 12: a confirmed local-branch deletion arms
-    // the short-window undo with the captured tip. The
-    // disclosure the notification carries — what was
-    // unmerged, and what remote was left tracking
-    // nothing — is the pending record's, because the
-    // branch it describes no longer exists to be read.
+    arm_branch_delete_undo(state, rules);
+    remove_shelf_record(state, rules);
+}
+
+/// Rule ten (issue 12): a confirmed local-branch deletion arms the short-window
+/// undo with the captured tip. The disclosure the notification carries — what
+/// was unmerged, and what remote was left tracking nothing — is the pending
+/// record's, because the branch it describes no longer exists to be read.
+///
+/// The pending is taken whatever the kind, exactly as it always was: a
+/// confirmation the user opened and never completed must not leave one behind.
+fn arm_branch_delete_undo(state: &mut AppState, rules: RuleSet) {
     if let Some(pending) = state.ui.branches_delete_pending.take()
         && rules.branch_delete_undo
     {
@@ -392,13 +398,14 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
         });
         state.ui.branches_delete_unmerged = None;
     }
-    // Surface 07: `Unshelve and Remove` is the only verb
-    // on this surface whose removal spans both sides of
-    // the boundary — the stash entry goes in git, the
-    // shelf record goes here. The record drops only on
-    // this arm: a pop that failed left the shelved
-    // content in the stash list, and the row that points
-    // at it has to stay painted.
+}
+
+/// Rule eleven (surface 07): `Unshelve and Remove` is the only verb on this
+/// surface whose removal spans both sides of the boundary — the stash entry goes
+/// in git, the shelf record goes here. The record drops only on this arm: a pop
+/// that failed left the shelved content in the stash list, and the row that
+/// points at it has to stay painted.
+fn remove_shelf_record(state: &mut AppState, rules: RuleSet) {
     if rules.shelf_removal
         && let Some((root, name)) = state.ui.shelf_removal_pending.take()
     {
