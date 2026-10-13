@@ -41,10 +41,10 @@
 
 use egui::{Color32, CornerRadius, Response, RichText};
 
+use turbogit_app::OwnedOperation;
 use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{Root, RootId};
-use turbogit_engine_api::OwnedOperation;
 
 use crate::theme::{self, Palette, chrome_font};
 

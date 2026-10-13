@@ -488,9 +488,9 @@ pub(super) fn hunk_gutter_actions(
 pub(super) fn viewer_hunk_staged_state(
     state: &AppState,
     path: &Option<std::path::PathBuf>,
-    span: Option<turbogit_services::hunk_stats::HunkSpan>,
-) -> Option<turbogit_services::hunk_stats::StagedState> {
-    use turbogit_services::hunk_stats;
+    span: Option<turbogit_app::hunk_stats::HunkSpan>,
+) -> Option<turbogit_app::hunk_stats::StagedState> {
+    use turbogit_app::hunk_stats;
     let span = span?;
     if state.ui.diff_comparison != DiffComparison::Repo {
         return None;
@@ -522,7 +522,7 @@ pub(super) fn hunk_header_extras(
     changed_lines: usize,
     collapsed: bool,
     hidden_rows: usize,
-    staged_state: Option<turbogit_services::hunk_stats::StagedState>,
+    staged_state: Option<turbogit_app::hunk_stats::StagedState>,
 ) {
     const BTN: f32 = 18.0;
     const PAD_X: f32 = 6.0;
@@ -533,13 +533,13 @@ pub(super) fn hunk_header_extras(
     } else {
         let lines = components::counted(changed_lines, "line", "lines");
         match staged_state {
-            Some(turbogit_services::hunk_stats::StagedState::Staged) => {
+            Some(turbogit_app::hunk_stats::StagedState::Staged) => {
                 format!("{lines} · staged")
             }
-            Some(turbogit_services::hunk_stats::StagedState::Partial) => {
+            Some(turbogit_app::hunk_stats::StagedState::Partial) => {
                 format!("{lines} · part")
             }
-            Some(turbogit_services::hunk_stats::StagedState::Unstaged) => {
+            Some(turbogit_app::hunk_stats::StagedState::Unstaged) => {
                 format!("{lines} · not staged")
             }
             None => lines,

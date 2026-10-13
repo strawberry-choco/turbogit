@@ -1,5 +1,5 @@
 //! Push dialog (issue #20): an aggregated outgoing-commit tree over every
-//! registered root, fed by [`turbogit_services::sync_service::outgoing_per_root`]
+//! registered root, fed by [`turbogit_app::sync_service::outgoing_per_root`]
 //! behind the executor seam (ADR-0001).
 //!
 //! Issue #21 adds the safety layer: a Preview button running a REAL
@@ -14,7 +14,7 @@
 //! Project subtree / All M). The control replaces the old "Push current branch
 //! only" checkbox — `ThisRepo` keeps the explicit Remote/Branch target fields
 //! for the per-repo path, the other variants push every root the scope covers
-//! through [`turbogit_services::sync_service::push_roots`]. The dry-run
+//! through [`turbogit_app::sync_service::push_roots`]. The dry-run
 //! preview runs once per root in scope and aggregates into a single
 //! "N commits → R remotes · X refs · Y rejected" line above the verbatim
 //! per-root reports. Protected branches in scope render as a remediation
@@ -28,10 +28,10 @@ use crate::ui::widgets;
 use egui::{RichText, Ui};
 use turbogit_app::operation::PushRequest;
 use turbogit_app::state::{AppState, OutgoingRoot, PushPreview};
+use turbogit_app::sync_service::{self, PushScope, SubsetPushState};
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, Root, RootId, Signature, SignatureState,
 };
-use turbogit_services::sync_service::{self, PushScope, SubsetPushState};
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();

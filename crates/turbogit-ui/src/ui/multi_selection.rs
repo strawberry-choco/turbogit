@@ -97,9 +97,9 @@ use super::tree_selection;
 use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::bulk_history::RepoOutcome;
+use turbogit_app::bulk_ops::BulkOp;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
-use turbogit_services::bulk_ops::BulkOp;
 
 /// The selection summary's table columns: the per-repo table's offsets, from
 /// the surface's left content edge, matching screen 04's column rhythm.

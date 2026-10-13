@@ -6,8 +6,8 @@ use egui::{Align, FontFamily, FontId, Layout, RichText, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType, UnmergedCommits};
+use turbogit_app::{integrate_service, shelve_stash, sync_service, tag_service};
 use turbogit_domain::model::{BranchKind, MergeStrategy};
-use turbogit_services::{integrate_service, shelve_stash, sync_service, tag_service};
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, data_font};
 use crate::ui::components::{KitButton, counted, kit_button};

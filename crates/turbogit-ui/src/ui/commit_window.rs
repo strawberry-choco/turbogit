@@ -502,7 +502,7 @@ fn shelf_row(ui: &mut Ui, state: &mut AppState, shelf: &turbogit_domain::model::
 fn stash_row(ui: &mut Ui, state: &mut AppState, stash: &turbogit_domain::model::Stash) {
     let root = stash.root.clone();
     let index = stash.index;
-    let stash_ref = turbogit_services::shelve_stash::stash_ref(index);
+    let stash_ref = turbogit_app::shelve_stash::stash_ref(index);
     ui.horizontal(|ui| {
         widgets::column_cell(ui, &STASH_COLUMNS, 0, |ui| {
             ui.label(RichText::new(&stash_ref).color(Palette::INK));
@@ -1724,7 +1724,7 @@ fn changes_header_overflow(trigger: &egui::Response) {
 /// staged hunk's region. A chip click previews that file. Rendered only
 /// when at least one hunk is staged.
 fn staged_hunks_rail(ui: &mut Ui, state: &mut AppState) {
-    use turbogit_services::hunk_stats;
+    use turbogit_app::hunk_stats;
     let Some(root_id) = state.selected_root.clone() else {
         return;
     };

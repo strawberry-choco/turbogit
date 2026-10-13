@@ -20,11 +20,11 @@
 //! building a plan by hand, and these verbs have already built one.
 
 use egui::{Align, Layout, RichText, Ui};
+use turbogit_app::history_editor::{self, PlanPreview, plan_preview};
 use turbogit_app::operation::Operation;
+use turbogit_app::reselection::{RewrittenAnchor, subject_of_message};
 use turbogit_app::state::{AppState, HistoryVerb, RewritePreflight};
 use turbogit_domain::model::RebasePlanEntry;
-use turbogit_services::history_editor::{self, PlanPreview, plan_preview};
-use turbogit_services::reselection::{RewrittenAnchor, subject_of_message};
 
 use crate::theme::Palette;
 use crate::ui::components;

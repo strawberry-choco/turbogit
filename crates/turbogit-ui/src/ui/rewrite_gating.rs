@@ -35,8 +35,8 @@
 
 use std::collections::HashSet;
 
+use turbogit_app::integrate_service::OwnedOperation;
 use turbogit_domain::model::{Commit, RootId};
-use turbogit_services::integrate_service::OwnedOperation;
 
 use crate::ui::commit_menu::{CommitFacts, reason};
 

@@ -478,13 +478,19 @@ fn call_site_text(lines: &[&str], line: usize) -> String {
 /// The port layer is walked too, deliberately: forwarding `rebase` unchanged is
 /// the port's job, and pinning those lines one by one is what makes the port's
 /// exclusion a named decision rather than a blind spot.
+///
+/// `turbogit-ui` is absent from the walked set and that is now a fact about the
+/// crate graph rather than a gap in the sweep: it names neither the port nor
+/// the services, so there is no `pull` in it to find. What its one entry used
+/// to assert — that the sidebar's selection is merge-only — is a live test in
+/// `crates/turbogit-ui/tests/pull_guards.rs`, and the construction it pinned
+/// now sits beside `AppState::dispatch_pull` in `shell_writes::pull`.
 #[test]
 fn no_surface_pulls_the_executor_beyond_the_guarded_seam() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let walked = [
         "turbogit-app/src",
         "turbogit-services/src",
-        "turbogit-ui/src",
         // The port and its adapters: called here so the list below says *which*
         // sites are the port's, rather than the sweep not looking at them.
         "turbogit-engine/src",
@@ -556,8 +562,14 @@ fn no_surface_pulls_the_executor_beyond_the_guarded_seam() {
         ),
         // The sidebar's `Pull selection`: merge-only *by construction*, and the
         // construction is what is pinned here — flip this `false` to `true` and
-        // the site stops being listed.
-        ("turbogit-ui/src/ui/sidebar.rs", &["v.pull(p, false)?"]),
+        // the site stops being listed. It lives beside
+        // `AppState::dispatch_pull` so that "is this pull guarded?" is answered
+        // by reading that file and `shell_writes/pull.rs` rather than by
+        // consulting this list.
+        (
+            "turbogit-app/src/shell_writes/pull.rs",
+            &["v.pull(p, false)?"],
+        ),
         // The port's own adapters, each a pass-through of the caller's flag.
         (
             "turbogit-engine/src/git2_exec.rs",

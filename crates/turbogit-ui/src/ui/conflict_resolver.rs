@@ -26,13 +26,13 @@ use crate::ui::conflicts::{
 };
 use crate::ui::kit::conflict_pane::{self, Side};
 use egui::{Key, Modifiers, RichText, TextEdit, Ui};
+use turbogit_app::OwnedOperation;
 use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes::conflict as writes;
 use turbogit_app::state::{AppState, BulkApplyScope, ConflictBulkReport};
 use turbogit_domain::model::{
     CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, ConflictKind, RootId,
 };
-use turbogit_engine_api::OwnedOperation;
 
 use std::path::{Path, PathBuf};
 

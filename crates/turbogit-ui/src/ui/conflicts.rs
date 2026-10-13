@@ -10,13 +10,13 @@ use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::kit::conflict_pane::Side;
 use egui::{RichText, ScrollArea, Ui};
+use turbogit_app::conflict;
+use turbogit_app::diff_engine;
 use turbogit_app::shell_writes::conflict as writes;
 use turbogit_app::state::{AppState, Toast};
 use turbogit_domain::model::{
     CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, RootId,
 };
-use turbogit_services::conflict;
-use turbogit_services::diff_engine;
 
 use std::path::Path;
 

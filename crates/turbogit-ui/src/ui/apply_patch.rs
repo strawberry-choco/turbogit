@@ -25,8 +25,8 @@
 
 use egui::{Key, Ui};
 
+use turbogit_app::patch_apply::{ApplyOutcome, Preflight};
 use turbogit_app::state::{AppState, PatchSource};
-use turbogit_services::patch_apply::{ApplyOutcome, Preflight};
 
 use crate::theme::{Palette, TYPE_BODY, data_font};
 use crate::ui::components::{KitButton, kit_button};

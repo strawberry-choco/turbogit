@@ -6,10 +6,10 @@
 //! with per-repo outcomes (routed through the bulk-completed pipeline).
 
 use egui::Ui;
+use turbogit_app::remote_service::RemoteChange;
 use turbogit_app::shell_writes::remote as writes;
 use turbogit_app::state::{AppState, RemoteRowAction};
 use turbogit_domain::model::{BranchKind, RootId};
-use turbogit_services::remote_service::RemoteChange;
 
 use crate::theme::Palette;
 use crate::ui::widgets;

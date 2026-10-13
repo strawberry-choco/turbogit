@@ -3,7 +3,7 @@
 //! "Your push was rejected" is one string for six situations that need six
 //! different replies, so this surface paints ONE message per outcome class and
 //! only the next step that class can honour. The classes come from
-//! [`turbogit_services::sync_service::classify_push_failure`]; the wording is
+//! [`turbogit_app::sync_service::classify_push_failure`]; the wording is
 //! TurboGit's own except where the reference states a remediation clause
 //! directly (`push.notification.description.*`) — that phrasing carries the
 //! distinction the surface exists to make.
@@ -27,8 +27,8 @@ use crate::ui::widgets;
 use egui::{RichText, Ui};
 use turbogit_app::operation::{RecoveryMode, RecoveryPlan};
 use turbogit_app::state::{AppState, PushRejection};
+use turbogit_app::sync_service::{PushOutcome, UpdateChoice};
 use turbogit_domain::model::{RootId, UpdateMethod};
-use turbogit_services::sync_service::{PushOutcome, UpdateChoice};
 
 /// The reply one class offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

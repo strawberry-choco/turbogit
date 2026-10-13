@@ -8,6 +8,27 @@
 /// crate only depends on this crate — the engine stays below the seam.
 pub use turbogit_engine::resolve_git_version;
 
+/// The service modules the presentation crate paints with, re-exported so that
+/// `turbogit-ui` can hold no dependency on `turbogit-services`: a modal's row
+/// type, a scoped push target and a couple of pure classifiers are data the
+/// Shell is handed, not reach. None of it is a way to git, because every
+/// function in these modules that reaches the port takes a `&dyn GitExecutor`
+/// and that handle is `pub(crate)` here — re-exporting the module hands over the
+/// vocabulary, never the port. The write side of the same rule is
+/// [`shell_writes`]; a verb that *does* git is named there, not borrowed from
+/// a module path.
+pub use turbogit_services::{
+    bulk_ops, bulk_run, cherry_across, conflict, diff_engine, history_editor, hunk_stats,
+    integrate_service, patch_apply, patch_create, remote_service, reselection, shelve_stash,
+    sync_service, tag_service,
+};
+
+/// The in-flight operation's owner, the one engine-api type the Shell paints:
+/// the status bar's announcement and the rewrite gate's refusals both name it,
+/// and `integrate_service` re-exports the same type, so both paths converge
+/// here rather than leaving the UI to pick a crate for one enum.
+pub use turbogit_engine_api::OwnedOperation;
+
 pub mod activity;
 pub mod banner;
 pub mod bulk_history;

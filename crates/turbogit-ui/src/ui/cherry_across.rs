@@ -9,9 +9,9 @@
 
 use egui::{Align, Color32, FontFamily, FontId, Layout, ScrollArea, Ui};
 
+use turbogit_app::cherry_across::{PickForecast, TargetForecast, TargetRisk};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{Commit, Patch, PatchFile, PatchHeaderLine, PatchLine};
-use turbogit_services::cherry_across::{PickForecast, TargetForecast, TargetRisk};
 
 use crate::theme::Palette;
 use crate::ui::components;

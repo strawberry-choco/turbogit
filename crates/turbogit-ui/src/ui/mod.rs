@@ -567,7 +567,7 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
                 ui.label(format!(
                     "Delete stash {}? The entry is removed, and with it the only copy of what it \
                      holds.",
-                    turbogit_services::shelve_stash::stash_ref(*index)
+                    turbogit_app::shelve_stash::stash_ref(*index)
                 ));
                 ui.horizontal(|ui| {
                     if ui.button("OK").clicked() {

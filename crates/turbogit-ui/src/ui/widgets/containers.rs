@@ -12,7 +12,7 @@ use super::inputs::INPUT_ICON_SIZE;
 use crate::theme::{CONTROL_RADIUS, Palette, TYPE_CONTROL, TYPE_SECTION};
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
-use turbogit_services::history_editor::RebaseCaution;
+use turbogit_app::history_editor::RebaseCaution;
 
 const CHURN_BAR_HEIGHT: f32 = 4.0;
 const ALERT_ICON_SIZE: f32 = INPUT_ICON_SIZE;

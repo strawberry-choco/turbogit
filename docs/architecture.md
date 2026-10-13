@@ -14,7 +14,7 @@ on worker threads, with results delivered back to the UI thread over a channel.
 | `turbogit-engine` | the adapters, the factory, the fake | domain, engine-api, `git2` |
 | `turbogit-services` | pure domain services over the port | domain, engine-api |
 | `turbogit-app` | `AppState`, worker dispatch, events, caches, persistence, granular | domain, engine-api, engine, services |
-| `turbogit-ui` | `theme` + all of `ui/` | app, domain, engine-api, services |
+| `turbogit-ui` | `theme` + all of `ui/` | app, domain |
 | `test-support` | headless harness + kittest helpers | domain, engine-api (+ `harness` feature) |
 | `turbogit` (root) | `main.rs`, `app.rs` — the composition root | app, ui, `eframe`, `rfd` |
 
