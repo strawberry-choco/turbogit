@@ -356,22 +356,15 @@ pub fn bulk_completed(state: &mut AppState, label: String, results: Vec<(RootId,
 }
 
 /// The success-side post-completion rules, in the order they run.
+///
+/// The order is the behaviour, not the formatting: `refresh` interleaves with
+/// the conflict count further down, so a line moved here is a behaviour
+/// changed and not a refactor.
 fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, affected: &Affected) {
-    state.show_toast(Toast::success(label.to_string()));
-    // A push that landed needs no replay request kept
-    // around: what it recorded is only ever read by the
-    // rejection arm.
-    state.ui.push_in_flight = None;
-    state.refresh(affected.clone());
-    // Arm the post-hoc undo while the
-    // rewrite's own tip is still the fact to compare
-    // against. A pending that does not match this
-    // completion's kind is dropped with it.
-    if let Some(pending) = state.ui.rewrite_undo_pending.take()
-        && rules.rewrite_undo
-    {
-        state.arm_rewrite_undo(pending);
-    }
+    report_success(state, label);
+    clear_push_in_flight(state);
+    refresh_affected(state, affected);
+    arm_landed_rewrite_undo(state, rules);
     granular::settle(state);
     // A take rewrote one working-tree file, so
     // the changes window that offered it re-reads its rung
@@ -448,6 +441,34 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
         && let Some((root, name)) = state.ui.shelf_removal_pending.take()
     {
         state.remove_shelf(&root, &name);
+    }
+}
+
+/// Rule one: the success toast, under the operation's own label. The rules
+/// after it are what the label cannot say.
+fn report_success(state: &mut AppState, label: &str) {
+    state.show_toast(Toast::success(label.to_string()));
+}
+
+/// Rule two: a push that landed needs no replay request kept around — what it
+/// recorded is only ever read by the rejection arm.
+fn clear_push_in_flight(state: &mut AppState) {
+    state.ui.push_in_flight = None;
+}
+
+/// Rule three: the invalidation every completed operation runs.
+fn refresh_affected(state: &mut AppState, affected: &Affected) {
+    state.refresh(affected.clone());
+}
+
+/// Rule four: arm the post-hoc undo while the rewrite's own tip is still the
+/// fact to compare against. A pending that does not match this completion's
+/// kind is dropped with it.
+fn arm_landed_rewrite_undo(state: &mut AppState, rules: RuleSet) {
+    if let Some(pending) = state.ui.rewrite_undo_pending.take()
+        && rules.rewrite_undo
+    {
+        state.arm_rewrite_undo(pending);
     }
 }
 
