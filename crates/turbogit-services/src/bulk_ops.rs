@@ -163,16 +163,7 @@ pub fn preflight(
             .map(|root| {
                 let (ahead, behind) = ahead_behind(&root.id);
                 let dirty = root.status.changes.len();
-                let upstream = root
-                    .current_branch
-                    .as_deref()
-                    .and_then(|branch| {
-                        root.branches
-                            .iter()
-                            .find(|b| b.name == branch)
-                            .and_then(|b| b.tracking.as_ref())
-                    })
-                    .is_some();
+                let upstream = super::sync_service::tracked_upstream(root).is_some();
                 // A root with no current branch is never protected — the
                 // same rule `sync_service::protected_roots` states.
                 let protected = root
@@ -540,12 +531,7 @@ fn run_branch_step(
         return super::branch_service::checkout(vcs, &root.path, name);
     }
     let start_point: Option<String> = if from_upstream {
-        let tracking = root.current_branch.as_deref().and_then(|cur| {
-            root.branches
-                .iter()
-                .find(|b| b.name == cur)
-                .and_then(|b| b.tracking.clone())
-        });
+        let tracking = super::sync_service::tracked_upstream(root).cloned();
         match (root.current_branch.as_deref(), tracking) {
             (Some(cur), Some(up))
                 if vcs
@@ -684,12 +670,7 @@ pub fn branch_preflight(
             .map(|root| {
                 let (ahead, behind) = ahead_behind(&root.id);
                 let dirty = root.status.changes.len();
-                let tracking = root.current_branch.as_deref().and_then(|branch| {
-                    root.branches
-                        .iter()
-                        .find(|b| b.name == branch)
-                        .and_then(|b| b.tracking.clone())
-                });
+                let tracking = super::sync_service::tracked_upstream(root).cloned();
                 let exists = root
                     .branches
                     .iter()

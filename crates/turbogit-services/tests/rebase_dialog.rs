@@ -176,6 +176,89 @@ fn affected_repos_cover_checked_out_and_tracking_shared_siblings() {
     );
 }
 
+/// The focused root's current branch has NO tracking entry, alongside a
+/// sibling root whose current branch does.
+///
+/// The fifth inline derivation walked `root.branches` for the current branch
+/// with an extra `b.kind == BranchKind::Local` filter that the fold into
+/// `sync_service::tracked_upstream` drops. The filter is redundant, not lost:
+/// every value-producing adapter (`cli.rs:757`, `git2_exec.rs:657`,
+/// `fake.rs:160`) leaves `tracking` `None` on a remote row, and `git branch -a`
+/// lists local rows ahead of remote rows, so the first match for a current
+/// branch is always its local row. A focus with no tracking entry therefore
+/// answers exactly as it did with the filter: the upstream half is `None`, and
+/// only the current-branch comparison decides the siblings.
+#[test]
+fn a_focus_with_no_tracking_entry_answers_from_the_current_branch_comparison_only() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (mut roots, _focused, _siblings) = affected_fixtures(tmp.path());
+
+    // A root whose current branch tracks nothing: it was checked out of a
+    // sibling's remote-tracking ref, so its local row has no upstream and the
+    // upstream half of the filter is `None`.
+    let lonely = rebase_repo(tmp.path(), "lonely");
+    git(&lonely, &["checkout", "-q", "-b", "lonely-branch"]);
+    append_commit(&lonely, "c.txt", "lonely-1");
+    let engine = engine();
+    let subject = build_root(&engine, &lonely).expect("root snapshot");
+    let subject_id = subject.id.clone();
+    assert!(
+        subject
+            .branches
+            .iter()
+            .find(|b| b.name == "lonely-branch")
+            .is_some_and(|b| b.tracking.is_none()),
+        "the fixture's current branch must carry no tracking entry",
+    );
+    roots.push(subject);
+
+    let affected = integrate_service::rebase_affected(&roots, &subject_id);
+    assert!(
+        affected.is_empty(),
+        "a focus whose branch tracks nothing and shares its name with no \
+         sibling affects nothing; got {affected:?}",
+    );
+}
+
+/// The same shape with the upstream half populated: the focused root tracks
+/// `origin/feature`, and the branch list behind it carries the remote row the
+/// dropped filter existed for — `origin/feature` shares the short name
+/// `feature` with the local row. The answer is unchanged, which is the point.
+#[test]
+fn a_focus_whose_branch_list_carries_a_remote_row_of_the_same_short_name_answers_as_before() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let (roots, focused, _siblings) = affected_fixtures(tmp.path());
+
+    let focused_root = roots.iter().find(|r| r.id == focused).expect("focused");
+    let branch = focused_root
+        .current_branch
+        .clone()
+        .expect("the fixture's focus is on a branch");
+    let rows: Vec<_> = focused_root
+        .branches
+        .iter()
+        .filter(|b| b.name == branch)
+        .map(|b| (b.kind, b.tracking.is_some()))
+        .collect();
+    assert!(
+        rows.contains(&(turbogit_domain::model::BranchKind::Local, true)),
+        "the focus's local row must be the tracked one; got {rows:?}",
+    );
+    assert!(
+        rows.contains(&(turbogit_domain::model::BranchKind::Remote, false)),
+        "the focus's branch list must carry the remote row that shares the \
+         short name, which is the row the dropped filter existed for; got {rows:?}",
+    );
+
+    let affected = integrate_service::rebase_affected(&roots, &focused);
+    assert_eq!(
+        affected.len(),
+        2,
+        "the tracked focus still affects its same-branch and same-upstream \
+         siblings; got {affected:?}",
+    );
+}
+
 // -------------------------------------------------------- protected guard --
 
 fn settings_protecting(pattern: &str) -> VcsSettings {

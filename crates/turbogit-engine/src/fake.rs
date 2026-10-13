@@ -431,7 +431,7 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn abort(&self, _root: &Path, _op: &str) -> TgResult<()> {
+    fn abort(&self, _root: &Path, _op: OwnedOperation) -> TgResult<()> {
         Ok(())
     }
 
@@ -451,7 +451,7 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn continue_op(&self, _root: &Path, _op: &str) -> TgResult<()> {
+    fn continue_op(&self, _root: &Path, _op: OwnedOperation) -> TgResult<()> {
         Ok(())
     }
 

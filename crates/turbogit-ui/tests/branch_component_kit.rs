@@ -32,8 +32,8 @@ use turbogit_ui::theme::{Palette, RAIL_WIDTH};
 use turbogit_ui::ui::branch_tree_view::{TreeProps, branch_tree};
 use turbogit_ui::ui::branches_tree::build_branch_view;
 use turbogit_ui::ui::components::{
-    CLICK_TARGET_MIN, KIT_ICON_LARGE, KitButton, RowState, SyncKind, current_row_fill, fill,
-    middle_truncate, row_fill, row_ink, sync_badge,
+    CLICK_TARGET_MIN, KIT_ICON_LARGE, KitButton, RowShell, RowState, SyncKind, current_row_fill,
+    middle_truncate, row_fill, row_ink, row_shell, sync_badge,
 };
 use turbogit_ui::ui::widgets::WidgetState;
 
@@ -779,11 +779,11 @@ fn the_row_shell_paints_the_handed_fill_at_the_handed_rect_and_nothing_else() {
                 .show(ui, |ui| {
                     let (_, selected) =
                         ui.allocate_exact_size(egui::vec2(300.0, 28.0), egui::Sense::hover());
-                    fill(ui, selected.rect, RowState::RowSelected);
+                    row_shell(ui, selected.rect, RowState::RowSelected, RowShell::Fill);
                     ui.end_row();
                     let (_, plain) =
                         ui.allocate_exact_size(egui::vec2(300.0, 28.0), egui::Sense::hover());
-                    fill(ui, plain.rect, RowState::Hover);
+                    row_shell(ui, plain.rect, RowState::Hover, RowShell::Fill);
                     ui.end_row();
                 });
         });
@@ -1535,6 +1535,7 @@ const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
         "ui/widgets/rows.rs",
         &[
             "commit_window",
+            "diff",
             "interactive_rebase",
             "multi_selection",
             "settings_modal",
@@ -1570,24 +1571,20 @@ const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
 /// The row-vocabulary painters that are **not** screen-facing primitives, named
 /// here so the classification above stays total.
 ///
-/// `fill` is the row fill's construction site: the fill decision, the control
-/// radius and the "no text geometry" rule in one place, which is exactly what
-/// ticket 03 moved it there for. It is reached through the shared row module's
-/// `widgets::paint_row` — the seven-call-site spelling screens actually call — so
-/// it has no screen caller of its own and is not a primitive a second screen
-/// could adopt or drift from.
-///
-/// `row_shell` is its sibling (ticket 14): the one painter that lays a row's
-/// shell down — the fill, and the leading-edge rail for a chosen row — for both
-/// of the shell's variants. It is reached two ways, neither of which is a screen
-/// calling a screen-facing primitive: through `widgets::paint_row` for
-/// `RowShell::Fill` (the five call sites above), and directly by the log's own
-/// rows for `RowShell::Railed`, which is the escape hatch that lets a
-/// virtualised list adopt the vocabulary without a shell that re-measures per
-/// row. One caller of the railed variant is not a case for a shared primitive
-/// *yet* — the shell is where the two variants are defined, and the rail itself
-/// is a primitive with three screens behind it either way.
-const ROW_CONSTRUCTION_SITES: [&str; 2] = ["fill", "row_shell"];
+/// `row_shell` is the one painter that lays a row's shell down (ticket 14) —
+/// the fill, and the leading-edge rail for a chosen row — for both of the
+/// shell's variants, and it is also the row fill's construction site: the
+/// former `fill` was the same `(ui, rect, state)` call, so its decision, its
+/// control radius and its "no text geometry" rule now live in the shell's own
+/// `Fill` arm rather than in a sibling spelling. It is reached two ways,
+/// neither of which is a screen calling a screen-facing primitive: through
+/// `widgets::paint_row` for `RowShell::Fill` (the six call sites above), and
+/// directly by the log's own rows for `RowShell::Railed`, which is the escape
+/// hatch that lets a virtualised list adopt the vocabulary without a shell that
+/// re-measures per row. One caller of the railed variant is not a case for a
+/// shared primitive *yet* — the shell is where the two variants are defined, and
+/// the rail itself is a primitive with three screens behind it either way.
+const ROW_CONSTRUCTION_SITES: [&str; 1] = ["row_shell"];
 
 /// Every primitive the shared row module exports is used by at least two
 /// screens, and the set is pinned against the module's own source.
@@ -1608,6 +1605,41 @@ fn every_shared_row_primitive_is_used_by_at_least_two_screens() {
     //    a declared primitive or a declared construction site. This is the half
     //    that catches a primitive added *with* a caller, which the table alone
     //    would not notice.
+    //
+    //    Step 0 is the deletion's own half, and it lives here rather than in a
+    //    test of its own because the loop below is what makes it a ratchet:
+    //    `rect_primitives` stops reporting `fill` the moment the function is
+    //    gone, so the closed-set claim is what would have caught a second one.
+    //    Spelling the absent name here also pins the other direction — a
+    //    `components::fill` reappearing returns to the set with no screen of its
+    //    own and fails as unclassified, which is the same failure in the same
+    //    words.
+    //
+    //    Free function at column zero, not a method: `declared_fns` trims, so
+    //    `KitButton::fill` — the branch-kit button's own fill decision, a
+    //    different role — would otherwise satisfy the claim it is meant to
+    //    catch. Reading column 0 by hand is the same assertion the struct-field
+    //    reader in `menu_item.rs` makes: srcscan has no free-standing-fn-only
+    //    seam, so the precision is written where the claim is made.
+    let components = Path::new(CRATE_SRC).join("ui/components.rs");
+    let free = |name: &str| {
+        srcscan::code_lines(&components)
+            .iter()
+            .any(|line| line.starts_with(&format!("pub fn {name}(")))
+    };
+    assert!(
+        !free("fill"),
+        "`components::fill` is back: the row fill's construction site is \
+         `row_shell`'s `Fill` arm, and a second spelling of it is the \
+         two-opinion case the row vocabulary exists to prevent"
+    );
+    // The positive half, so the claim cannot pass by the file being unread:
+    // the surviving name really is declared there, and it really is the one
+    // the fill's body now lives inside.
+    assert!(
+        free("row_shell"),
+        "`components::row_shell` must still be declared in ui/components.rs"
+    );
     for (home, primitives) in [
         (
             "ui/widgets/rows.rs",
@@ -2571,10 +2603,13 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
              `RepoState::color()` map at the call site. {src}"
         );
     }
-    // …and it really is a dot, from the helper it delegates to.
+    // …and it really is a dot: the circle is painted by `state_mark` itself, in
+    // the same function, at the caller's colour. Both assertions read one
+    // function now, which is the point — the dot's geometry and the words
+    // beside it are one thing's business.
     let dot = srcscan::fn_code(
         &srcscan::read_source(Path::new(CRATE_SRC).join("ui/components.rs")),
-        "state_dot",
+        "state_mark",
     );
     assert!(
         dot.contains("circle_filled"),
@@ -2584,6 +2619,20 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
         !dot.contains("Palette::"),
         "the dot takes its colour as an argument; a literal here would be a \
          second state map. {dot}"
+    );
+
+    // The forwarder is gone: `state_dot` had an interface identical to the egui
+    // primitive it called, and exactly one caller, so it taught a reader
+    // nothing `Painter::circle_filled` would not have. The positive claim
+    // above is what proves the behaviour survived rather than being dropped.
+    let components = Path::new(CRATE_SRC).join("ui/components.rs");
+    assert!(
+        !srcscan::code_lines(&components)
+            .iter()
+            .any(|line| line.starts_with("pub fn state_dot(")),
+        "`components::state_dot` is back: the dot's one caller is `state_mark`, \
+         and a one-caller forwarder over `Painter::circle_filled` is a spelling \
+         of the primitive rather than a role"
     );
 
     // And the painted half, at the render seam too: one state mark, one circle,
@@ -2691,4 +2740,186 @@ fn the_branch_view_builder_is_git_free_styling_free_and_egui_free() {
              one thing that would make them vacuous. Missing `{expected}`."
         );
     }
+}
+
+// --- R6: count pluralisation answers from the one helper ------------------------
+
+/// The one count-pluralisation helper takes the noun pair, and the pair is the
+/// interface rather than a detail of its body.
+///
+/// The blocker on folding the per-call-site conditionals was the signature: a
+/// two-argument `counted` could not express `repositories`, so every site kept
+/// its private answer to "one reads singular, every other count reads plural".
+/// Reading the declaration from the source — rather than calling the function
+/// and trusting it — is what makes a later narrowing fail here instead of
+/// silently re-opening the bypass question.
+#[test]
+fn the_count_helper_owns_the_noun_pair_and_the_six_former_bypasses() {
+    let code = srcscan::fn_code(
+        &srcscan::read_source(Path::new(CRATE_SRC).join("ui/components.rs")),
+        "counted",
+    );
+    let params: Vec<&str> = code
+        .split_once('(')
+        .expect("counted's declaration carries a parameter list")
+        .1
+        .split(')')
+        .next()
+        .expect("the parameter list is closed")
+        .split(',')
+        .filter(|p| !p.trim().is_empty())
+        .collect();
+    assert_eq!(
+        params.len(),
+        3,
+        "`counted` must take the singular and the plural, got {params:?}"
+    );
+
+    // The values, so the rule itself is pinned and not only its shape: one
+    // reads singular, every other count reads plural — zero included, which is
+    // the case a hand-rolled conditional most often gets wrong.
+    use turbogit_ui::ui::components::counted;
+    assert_eq!(counted(1, "repo", "repos"), "1 repo");
+    assert_eq!(counted(2, "repo", "repos"), "2 repos");
+    assert_eq!(counted(0, "branch", "branches"), "0 branches");
+}
+
+/// No file under `src/ui/` answers the pluralisation question for itself, with
+/// two named keeps.
+///
+/// The rebased-parity spec mandates a SINGLE shared helper, and a per-call-site
+/// conditional is exactly what drifts: six of them existed, and they were the
+/// reason the helper could not be adopted until it took the noun pair; fifteen
+/// more survived that ticket, and eight of them were invisible to a reader that
+/// matched one physical line. So the scan is the tree's — every `.rs` under
+/// `src/ui/`, no allowlist — and a new one anywhere fails.
+///
+/// The shape is spelled literally — a count compared to one, with a `} else {`
+/// inside the same block — because that is the only form that *is* the bypass:
+/// the noun sits in the branch, so the rule is answered where the text is
+/// painted. Both arm layouts are read, because the arms are the same rule
+/// whether rustfmt kept them on one line or spread them over five, and the eight
+/// that hid behind that distinction are what made the one-line reader
+/// worthless. What is not the bypass is an `if` on a count whose arms are
+/// computed elsewhere and decide no plural.
+///
+/// The two keeps are named, because neither is a bypass. `rollback_reason` in
+/// `branch_divergence.rs` wants a bare noun with no count — "You may roll back
+/// the repositories where it succeeded" — which `counted` does not return, and
+/// `components.rs` holds the helper's own `if n == 1`, which is the rule itself
+/// rather than a copy of it. `branch_divergence.rs` is asserted by line, so its
+/// keep cannot grow quietly; `components.rs` is a path keep alone, because
+/// pinning the destination's implementation would contradict the fold.
+#[test]
+fn no_file_under_ui_answers_pluralisation_for_itself() {
+    /// The bypass shape, and nothing else: a count compared to one, with a
+    /// `} else {` inside the same block. Returns the 1-based line of each
+    /// opening `if`, so one shape cannot be counted twice under two readers.
+    fn suffix_pluraliser_lines(lines: &[String]) -> Vec<usize> {
+        let mut hits = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            if !line.contains("== 1 {") {
+                continue;
+            }
+            // Walk to the block's own closing brace, so a later `} else {` in
+            // the same function cannot be read as this `if`'s other arm.
+            let mut arms = String::new();
+            for follower in &lines[index..] {
+                arms.push_str(follower);
+                arms.push('\n');
+                if arms.matches('{').count() <= arms.matches('}').count() {
+                    break;
+                }
+            }
+            if arms.contains("} else {") {
+                hits.push(index + 1);
+            }
+        }
+        hits
+    }
+
+    // Every module under `src/ui/`, at any depth: no pluraliser in any spelling.
+    let src_root = Path::new(CRATE_SRC).join("ui");
+    let offenders: Vec<(String, Vec<usize>)> = srcscan::rust_files(&src_root)
+        .into_iter()
+        .filter_map(|path| {
+            let hits = suffix_pluraliser_lines(&srcscan::code_lines(&path));
+            (!hits.is_empty()).then(|| {
+                (
+                    path.file_name().unwrap().to_string_lossy().into_owned(),
+                    hits,
+                )
+            })
+        })
+        .collect();
+    let keeps: [&str; 2] = ["branch_divergence.rs", "components.rs"];
+    let survivors: Vec<&(String, Vec<usize>)> = offenders
+        .iter()
+        .filter(|(file, _)| !keeps.contains(&file.as_str()))
+        .collect();
+    assert!(
+        survivors.is_empty(),
+        "a module under src/ui/ answers pluralisation for itself: {survivors:?}. \
+         The two allowed keepers are branch_divergence.rs, whose `repositories` \
+         helper builds a bare noun with no count — which `counted` does not \
+         return — for its rollback-reason sentence, and components.rs, which is \
+         where `counted`'s own `if n == 1` lives."
+    );
+
+    // …and the recorded keep really is the only one in its own file, so the
+    // residual above cannot grow quietly.
+    let divergence = srcscan::code_lines(Path::new(CRATE_SRC).join("ui/branch_divergence.rs"));
+    let suffix: Vec<usize> = suffix_pluraliser_lines(&divergence);
+    assert_eq!(
+        suffix,
+        vec![121],
+        "branch_divergence.rs carries more than its recorded `repositories` keep: \
+         the suffix pluraliser lines are {suffix:?}"
+    );
+}
+
+// --- Shell edges: two rules, both direct calls on the one shared painter --------
+
+/// The shell's two structural edges are two **direct** calls on the shared
+/// painter.
+///
+/// The shell paints exactly two edge rules. The tab strip's went straight to
+/// [`widgets::edge_rule`]; the status bar's went through a private wrapper
+/// whose whole job was to fix the tone to [`Palette::LINE`]. Same call, two
+/// spellings, one of them with a single caller — so the count of
+/// `edge_rule` call sites dropping from three to two is the concentration
+/// asserted as a number: the wrapper's forwarding call is gone, and what is
+/// left is the tab strip's and the status bar's.
+///
+/// The reader choice is load-bearing: a plain `fn` at column 0 **is** read by
+/// `top_level_items`, whose head list is `pub fn` / `fn` / `pub const` /
+/// `const`, whereas `declared_fns` only sees `pub fn` and would pass vacuously
+/// on a private function. `top_level_items` is the right seam here and
+/// `declared_fns` would be the wrong one.
+#[test]
+fn the_shell_has_no_private_alias_for_the_edge_painter() {
+    let shell = srcscan::read_source(Path::new(CRATE_SRC).join("ui/shell.rs"));
+    let items = srcscan::top_level_items(&shell);
+    assert!(
+        !items.iter().any(|item| item.name == "paint_edge_line"),
+        "`shell::paint_edge_line` is back: a private wrapper over the shared \
+         painter with one caller is a second spelling of the call, and the \
+         half-pixel offset it forwards is exactly what a shell-local copy \
+         eventually loses"
+    );
+
+    // Two edges, two direct calls — the number is the claim.
+    let calls: Vec<usize> = shell
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains("widgets::edge_rule("))
+        .map(|(index, _)| index + 1)
+        .collect();
+    assert_eq!(
+        calls.len(),
+        2,
+        "the shell must call `widgets::edge_rule` exactly twice, both direct. \
+         Found {calls:?} — three is the wrapper's forwarding call coming back, \
+         one is an edge losing its shared tone."
+    );
 }

@@ -647,11 +647,7 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     if project.kind == turbogit_app::recents::RecentKind::Workspace
         && let Some(count) = project.repo_count
     {
-        let count_text = if count == 1 {
-            "1 repo".to_string()
-        } else {
-            format!("{count} repos")
-        };
+        let count_text = components::counted(count, "repo", "repos");
         let count_galley = painter.layout_no_wrap(
             count_text,
             crate::theme::chrome_font(crate::theme::TYPE_CONTROL),

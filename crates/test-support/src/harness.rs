@@ -320,6 +320,167 @@ pub fn painted_ink<S>(harness: &Harness<'_, S>, needle: &str) -> Option<Color32>
         })
 }
 
+/// egui's default `Spacing::item_spacing.y`, named here as a test-local
+/// constant because these harnesses are **unstyled**
+/// (`shell_harness_over_unstyled`): the app installs
+/// [`turbogit_ui::theme::ITEM_SPACING`] (6.0) at runtime and this frame never
+/// sees it, so the vertical pitch between two bands is 3.0. A future suite that
+/// styles its frame must not inherit a silently-wrong pitch.
+const ITEM_SPACING_Y: f32 = 3.0;
+
+/// Hold one matrix's column geometry to the numbers its painter was handed, read
+/// off the frame.
+///
+/// The ratchet, in the order it is applied: the header row is picked out by the
+/// **anchor galley's own line** — every header label must be found on that one
+/// line, so a frame carrying two tables cannot lend this matrix the other's
+/// header. Each header label must then start at its own column offset measured
+/// from the **matrix's own left edge** (the first column's origin), not from
+/// the frame's: one table, not a second one for the header. Each row cell is
+/// paired by **same line and same first-column origin**, so a neighbouring
+/// table's identically-named row is not read as this matrix's. Exactly one cell
+/// may sit under each column x, so a column narrow in the header and wide in the
+/// rows fails. Both band heights are pinned absolutely, against the **unstyled**
+/// pitch [`ITEM_SPACING_Y`] rather than the themed one. Finally the chrome step
+/// is pinned — `INK_3` ink on the header label, `INK` on the first cell, both in
+/// `Proportional`.
+///
+/// `anchor` is the header label that identifies **this** matrix's header row
+/// and no other. `columns` is the matrix's `(label, offset)` pairs, `rows` the
+/// first column's cell texts in paint order, and the two heights are the bands.
+///
+/// This is the worktrees ratchet (`worktrees_submodules_tabs.rs`) applied to
+/// the fleet matrices. They carried no geometry pin at all beyond one column
+/// of one variant, so a painter that used 22 where 24 belonged, 26 where 30
+/// belonged, or a column narrow in the header and wide in the rows, moved
+/// pixels nothing in the tree was watching.
+#[track_caller]
+pub fn assert_matrix_geometry<S>(
+    harness: &Harness<'_, S>,
+    anchor: &str,
+    columns: &[(&str, f32)],
+    rows: &[&str],
+    header_h: f32,
+    row_h: f32,
+) {
+    let galleys = painted_galleys(harness);
+    let same_line = |a: f32, b: f32| (a - b).abs() < 1.0;
+    let same_x = |a: f32, b: f32| (a - b).abs() < 0.01;
+
+    // The header row, picked out by the anchor's own line.
+    let anchor_galley = galleys
+        .iter()
+        .find(|g| g.text == anchor)
+        .unwrap_or_else(|| panic!("`{anchor}` is not painted: no matrix header row"));
+    let header_cy = anchor_galley.rect.center().y;
+    let origins: Vec<f32> = columns
+        .iter()
+        .map(|(label, _)| {
+            galleys
+                .iter()
+                .find(|g| g.text == *label && same_line(g.rect.center().y, header_cy))
+                .unwrap_or_else(|| panic!("`{label}` is not painted on the matrix's header row"))
+                .pos
+                .x
+        })
+        .collect();
+
+    // The header labels start at their own column offsets, measured from the
+    // first column's own start — one table, not a second one for the header.
+    let left = origins[0];
+    for ((label, offset), origin) in columns.iter().zip(&origins) {
+        assert!(
+            (origin - (left + offset)).abs() < 0.01,
+            "the `{label}` header label starts at {origin}, not at its column offset {offset} \
+             from the matrix's own left edge {left}"
+        );
+    }
+
+    // The rows, paired with their first-column cell by the two facts that
+    // identify it — the same line and the same first-column origin. A
+    // neighbouring table's row of the same name sits at a different x and is
+    // not read as this matrix's.
+    let row_cys: Vec<f32> = rows
+        .iter()
+        .map(|name| {
+            let mut ys: Vec<f32> = galleys
+                .iter()
+                .filter(|g| {
+                    g.text == *name && same_x(g.pos.x, origins[0]) && g.rect.center().y > header_cy
+                })
+                .map(|g| g.rect.center().y)
+                .collect();
+            ys.sort_by(|a, b| a.partial_cmp(b).expect("a finite y centre"));
+            ys.into_iter().next().unwrap_or_else(|| {
+                panic!("the matrix's first column has no `{name}` cell under its header")
+            })
+        })
+        .collect();
+
+    // Every column's header label sits over its cell, and exactly one cell is
+    // there to sit over.
+    for ((label, _), origin) in columns.iter().zip(&origins) {
+        for cy in &row_cys {
+            let hits = galleys
+                .iter()
+                .filter(|g| same_line(g.rect.center().y, *cy) && same_x(g.pos.x, *origin))
+                .count();
+            assert_eq!(
+                hits, 1,
+                "the `{label}` column starts {hits} galleys on the row at y {cy} at the \
+                 header's own x {origin}: a column narrow in the header and wide in the rows \
+                 moves pixels nothing was watching"
+            );
+        }
+    }
+
+    // Both band heights, absolutely: the header's centre to the first row's
+    // centre, and one row's centre to the next.
+    assert!(
+        (row_cys[0] - header_cy - (header_h / 2.0 + row_h / 2.0 + ITEM_SPACING_Y)).abs() < 0.01,
+        "the header band is not {header_h} tall: its centre sits {:.3} from the first row's, \
+         expected {:.3}",
+        row_cys[0] - header_cy,
+        header_h / 2.0 + row_h / 2.0 + ITEM_SPACING_Y,
+    );
+    if let (Some(first), Some(second)) = (row_cys.first(), row_cys.get(1)) {
+        assert!(
+            (second - first - (row_h + ITEM_SPACING_Y)).abs() < 0.01,
+            "the row band is not {row_h} tall: consecutive rows are {:.3} apart, expected \
+             {:.3}",
+            second - first,
+            row_h + ITEM_SPACING_Y,
+        );
+    }
+
+    // The muted chrome header step and the chrome face, one per matrix — the
+    // two things a painter could most easily "tidy" without a golden.
+    assert_eq!(
+        anchor_galley.color,
+        turbogit_ui::theme::Palette::INK_3,
+        "the header label's ink is not the muted step"
+    );
+    assert_eq!(
+        anchor_galley.family,
+        egui::FontFamily::Proportional,
+        "the header label is not in the chrome face"
+    );
+    let first_cell = galleys
+        .iter()
+        .find(|g| same_line(g.rect.center().y, row_cys[0]) && same_x(g.pos.x, origins[0]))
+        .expect("the first row's first cell is painted");
+    assert_eq!(
+        first_cell.color,
+        turbogit_ui::theme::Palette::INK,
+        "the first cell's ink is not the primary step"
+    );
+    assert_eq!(
+        first_cell.family,
+        egui::FontFamily::Proportional,
+        "the first cell is not in the chrome face"
+    );
+}
+
 /// Every filled rectangle painted by the last frame as `(rect, fill)`.
 ///
 /// Panel frames, toolbars, rails, tabs, and buttons all emit `Shape::Rect`

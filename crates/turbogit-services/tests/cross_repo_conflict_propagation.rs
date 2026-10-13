@@ -27,6 +27,7 @@ use turbogit_domain::model::{MultiRootManager, Root, RootId, RootStatus};
 use turbogit_engine::build_executor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::conflict_propagation::{apply_to_matches, find_matches};
+use turbogit_services::multi_root::register;
 
 /// Run `git` without asserting success (a merge that conflicts exits non-zero).
 /// Run `git` WITHOUT asserting success, and deliberately NOT
@@ -72,7 +73,7 @@ fn snapshot_root(executor: &dyn GitExecutor, path: &Path) -> Root {
 fn manager_with(executor: &dyn GitExecutor, paths: &[PathBuf]) -> MultiRootManager {
     let mut mgr = MultiRootManager::default();
     for p in paths {
-        mgr.register_root(snapshot_root(executor, p));
+        register(&mut mgr, snapshot_root(executor, p));
     }
     mgr
 }
@@ -87,16 +88,24 @@ fn manager_with_ghost(
 ) -> MultiRootManager {
     let mut mgr = manager_with(real_executor, real_paths);
     for ghost in ghost_paths {
-        mgr.register_root(Root {
-            id: RootId(ghost.clone().into()),
-            path: ghost.clone(),
-            remotes: Vec::new(),
-            branches: Vec::new(),
-            current_branch: None,
-            head: None,
-            status: RootStatus::default(),
-        });
+        register(
+            &mut mgr,
+            Root {
+                id: RootId(ghost.clone().into()),
+                path: ghost.clone(),
+                remotes: Vec::new(),
+                branches: Vec::new(),
+                current_branch: None,
+                head: None,
+                status: RootStatus::default(),
+            },
+        );
     }
+    assert_eq!(
+        mgr.roots.len(),
+        real_paths.len() + ghost_paths.len(),
+        "every ghost must land in the manager alongside the real roots"
+    );
     mgr
 }
 

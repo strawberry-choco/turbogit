@@ -263,11 +263,11 @@ pub trait GitExecutor: Send + Sync {
 
     /// Abort an in-progress `merge` / `rebase` / `cherry-pick`
     /// (`git <op> --abort`).
-    fn abort(&self, root: &Path, op: &str) -> TgResult<()>;
+    fn abort(&self, root: &Path, op: OwnedOperation) -> TgResult<()>;
 
     /// Continue an in-progress `merge` / `rebase` / `cherry-pick`
     /// (`git <op> --continue`).
-    fn continue_op(&self, root: &Path, op: &str) -> TgResult<()>;
+    fn continue_op(&self, root: &Path, op: OwnedOperation) -> TgResult<()>;
 
     /// `git rebase --skip`: abandon the commit a paused rebase stopped on and
     /// replay the rest. Rebase-only by construction, so it is its own method

@@ -174,33 +174,21 @@ pub enum RowShell {
 /// failure it prevents is not observable in a frame: a shell that re-measured
 /// would still paint a correct-looking row, one pitch out of step with the
 /// virtualised list that asked for it.
+///
+/// The `Fill` variant is the row fill's one construction site. It is the
+/// former `fill`, with its decision, its control radius and its "no text
+/// geometry" rule absorbed here; the two spellings were the same
+/// `(ui, rect, state)` call, and a screen that reached the fill directly rather
+/// than through the shell is the two-opinion case the row vocabulary exists to
+/// prevent.
 pub fn row_shell(ui: &Ui, rect: egui::Rect, state: RowState, variant: RowShell) {
-    fill(ui, rect, state);
-    if variant == RowShell::Railed && state.is_selected() {
-        paint_rail(ui.painter(), rect);
-    }
-}
-
-/// Lay the row's fill down behind its content: the row-state decision, plus the
-/// control radius every shared row has always rounded at.
-///
-/// One decision and one radius, and nothing else — in particular **no text
-/// geometry**: a caller's name, metadata and columns sit at the coordinates it
-/// measured for the *unselected* row, so selecting a row never moves its
-/// content. (A rail is paint over this fill, never padding beside it.)
-///
-/// The caller's row is not laid out here. The rows that need an interaction
-/// registered before their contents allocate the rect first and hand it in,
-/// which is the only order in which a row's own buttons keep their clicks.
-///
-/// This is the row fill's construction site, reached as [`RowShell::Fill`] by
-/// [`row_shell`] — the one shell every row in the app paints through, whether
-/// it wants the fill alone or the fill and the rail.
-pub fn fill(ui: &Ui, rect: egui::Rect, state: RowState) {
     let fill = row_fill(state);
     if fill != Color32::TRANSPARENT {
         ui.painter()
             .rect_filled(rect, CornerRadius::same(crate::theme::CONTROL_RADIUS), fill);
+    }
+    if variant == RowShell::Railed && state.is_selected() {
+        paint_rail(ui.painter(), rect);
     }
 }
 
@@ -316,15 +304,6 @@ pub fn row_ink(stale: bool) -> Color32 {
 /// marks at one radius would be indistinguishable by shape alone.
 pub const STATE_DOT_R: f32 = 3.0;
 
-/// The leading dot of a mark pair: a filled circle, and nothing else.
-///
-/// Takes the colour from the one repository-state map
-/// ([`crate::theme::RepoState::color`]) at the call site — this function holds
-/// no state vocabulary of its own, so a second colour map cannot start here.
-pub fn state_dot(painter: &egui::Painter, center: Pos2, color: Color32, radius: f32) {
-    painter.circle_filled(center, radius, color);
-}
-
 /// How wide [`state_mark`] will paint `text` — the dot, its gap, and the
 /// measured words. A row that lays its zones out up front reserves through this
 /// rather than guessing.
@@ -345,6 +324,14 @@ pub fn state_mark_width(ui: &Ui, text: &str) -> f32 {
 /// coloured word, coloured from [`crate::theme::RepoState::color`], with no
 /// fill behind the text and no chip geometry anywhere in it.
 ///
+/// The dot is painted here, by this function, because this is the only place
+/// the mark's geometry is decided: a circle at the leading edge's
+/// [`STATE_DOT_R`] offset and the row's vertical centre, taking its colour as
+/// an argument and holding no state vocabulary of its own — so a second colour
+/// map cannot start here. It is **not** a fill rect either, which is the whole
+/// of "a mark has no chip body": a state behind a rect stops reading as state
+/// and starts reading as a category.
+///
 /// The text is interface, not data, so it reads in the proportional face at the
 /// chip's type size: a state is a sentence, and `2 behind` is a count beside a
 /// word rather than a ref name.
@@ -353,11 +340,10 @@ pub fn state_mark(ui: &mut Ui, text: &str, color: Color32) -> Response {
     let h = super::widgets::CHIP_HEIGHT;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     if ui.is_rect_visible(rect) {
-        state_dot(
-            ui.painter(),
+        ui.painter().circle_filled(
             Pos2::new(rect.left() + STATE_DOT_R, rect.center().y),
-            color,
             STATE_DOT_R,
+            color,
         );
         let galley = ui
             .painter()
@@ -666,11 +652,17 @@ pub fn middle_truncate(name: &str, max_chars: usize) -> String {
 /// spec mandates a SINGLE shared helper for pluralisation — per-call-site
 /// conditionals drift, and the reference's progress strings distinguish
 /// `1#Conflict|2#Conflicts` deliberately.
-pub fn counted(n: usize, noun: &str) -> String {
+///
+/// The noun pair is the interface: a caller names the singular and the plural
+/// it already means, so the "one reads singular, every other count reads
+/// plural" rule stops being restated per call site. Every pluraliser in the
+/// tree but [`crate::ui::branch_divergence::repositories`] — which wants a bare
+/// noun with no count — now answers from here.
+pub fn counted(n: usize, singular: &str, plural: &str) -> String {
     if n == 1 {
-        format!("{n} {noun}")
+        format!("{n} {singular}")
     } else {
-        format!("{n} {noun}s")
+        format!("{n} {plural}")
     }
 }
 
@@ -756,17 +748,7 @@ pub fn kit_button_at(ui: &mut Ui, kind: KitButton, label: &str, width: f32) -> R
         },
     );
 
-    let state = if ui.is_enabled() {
-        if response.is_pointer_button_down_on() {
-            WidgetState::Active
-        } else if response.hovered() {
-            WidgetState::Hovered
-        } else {
-            WidgetState::Idle
-        }
-    } else {
-        WidgetState::Disabled
-    };
+    let state = WidgetState::from_response(ui.is_enabled(), &response);
 
     let painter = ui.painter().clone();
     let radius = CornerRadius::same(crate::theme::CONTROL_RADIUS);

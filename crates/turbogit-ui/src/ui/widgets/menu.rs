@@ -65,10 +65,11 @@ pub struct MenuItemProps<'a> {
     pub data: Option<&'a str>,
     /// An optional right-aligned accelerator column.
     pub shortcut: Option<&'a str>,
-    /// A disabled item stays rendered and swallows its own click.
-    pub enabled: bool,
-    /// Why a disabled item is blocked, bound as the disabled hover text.
-    pub disabled_reason: Option<&'a str>,
+    /// The row's gate: whether it acts, and what it says when it cannot.
+    ///
+    /// One field, not two, because the pairing is the invariant: an item
+    /// cannot be enabled with a reason, and cannot be blocked without one.
+    pub state: MenuItemState,
     pub kind: MenuItemKind,
 }
 
@@ -79,7 +80,7 @@ pub struct MenuItemProps<'a> {
 /// own ink to 45 %, swallows its click, and hands the reason to
 /// `on_disabled_hover_text` — the gating convention of `branch_widget.rs`.
 pub fn menu_item(ui: &mut Ui, props: MenuItemProps<'_>) -> Response {
-    if props.enabled {
+    if props.state.enabled {
         return menu_item_row(ui, &props);
     }
     disabled_child_scope(ui, false, |child| menu_item_row(child, &props))
@@ -89,7 +90,7 @@ fn menu_item_row(ui: &mut Ui, props: &MenuItemProps<'_>) -> Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(
         Vec2::new(width, GROUP_ROW_HEIGHT),
-        if props.enabled {
+        if props.state.enabled {
             Sense::click()
         } else {
             Sense::hover()
@@ -99,15 +100,7 @@ fn menu_item_row(ui: &mut Ui, props: &MenuItemProps<'_>) -> Response {
     // The row-state ladder: transparent at rest, SURFACE_2 on hover,
     // SURFACE_3 while held; the primary item instead keeps the shared
     // brand-button fill decision. A disabled row never changes fill.
-    let state = if !props.enabled {
-        WidgetState::Disabled
-    } else if response.is_pointer_button_down_on() {
-        WidgetState::Active
-    } else if response.hovered() {
-        WidgetState::Hovered
-    } else {
-        WidgetState::Idle
-    };
+    let state = WidgetState::from_response(props.state.enabled, &response);
     let fill = match props.kind {
         MenuItemKind::Primary => ButtonVariant::Primary.fill(state),
         _ => match state {
@@ -126,7 +119,7 @@ fn menu_item_row(ui: &mut Ui, props: &MenuItemProps<'_>) -> Response {
         MenuItemKind::Danger => (Palette::DANGER, Palette::DANGER),
         MenuItemKind::Default => (Palette::INK, icon_color()),
     };
-    if !props.enabled {
+    if !props.state.enabled {
         label_ink = label_ink.gamma_multiply(0.45);
         glyph_ink = glyph_ink.gamma_multiply(0.45);
     }
@@ -143,7 +136,7 @@ fn menu_item_row(ui: &mut Ui, props: &MenuItemProps<'_>) -> Response {
     // at the 8 px inset and never moves to make content fit.
     let mut content_right = rect.right() - 8.0;
     if let Some(shortcut) = props.shortcut {
-        let shortcut_ink = if props.enabled {
+        let shortcut_ink = if props.state.enabled {
             Palette::T_MUTED
         } else {
             Palette::T_MUTED.gamma_multiply(0.45)
@@ -217,7 +210,7 @@ fn menu_item_row(ui: &mut Ui, props: &MenuItemProps<'_>) -> Response {
     // reports no hover for its widgets — which is exactly why egui needs
     // `on_disabled_hover_text` for the tooltip at all. Asking the rect is the one
     // question that has the same answer for a live row and a blocked one.
-    let response = match props.disabled_reason {
+    let response = match props.state.reason {
         Some(reason) => {
             if ui.rect_contains_pointer(rect) {
                 ui.ctx().data_mut(|d| {
@@ -232,7 +225,8 @@ fn menu_item_row(ui: &mut Ui, props: &MenuItemProps<'_>) -> Response {
         }
         None => response,
     };
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, props.enabled, props.label));
+    response
+        .widget_info(|| WidgetInfo::labeled(WidgetType::Button, props.state.enabled, props.label));
     focus_ring(ui, &response);
     response
 }

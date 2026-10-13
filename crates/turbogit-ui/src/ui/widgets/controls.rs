@@ -53,6 +53,27 @@ pub enum WidgetState {
     Disabled,
 }
 
+impl WidgetState {
+    /// The interactive-state ladder every widget paints from (task/spec §2.5):
+    /// disabled wins; else pointer-held is Active; else hovered is Hovered;
+    /// else Idle.
+    ///
+    /// This is the producer half of the seam [`ButtonVariant::fill`] owns as
+    /// consumer: `enabled` is the host's own disabled axis, so a host with no
+    /// such axis passes `true` rather than inventing one.
+    pub fn from_response(enabled: bool, response: &Response) -> Self {
+        if !enabled {
+            Self::Disabled
+        } else if response.is_pointer_button_down_on() {
+            Self::Active
+        } else if response.hovered() {
+            Self::Hovered
+        } else {
+            Self::Idle
+        }
+    }
+}
+
 /// Button families in the vocabulary (spec §7.1).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonVariant {
@@ -270,15 +291,7 @@ pub fn ghost_icon_button(
         },
     );
 
-    let state = if !enabled {
-        WidgetState::Disabled
-    } else if response.is_pointer_button_down_on() {
-        WidgetState::Active
-    } else if response.hovered() {
-        WidgetState::Hovered
-    } else {
-        WidgetState::Idle
-    };
+    let state = WidgetState::from_response(enabled, &response);
 
     let painter = ui.painter().clone();
     let fill = ButtonVariant::Ghost.fill(state);
@@ -403,15 +416,7 @@ fn button_response_sized(
         },
     );
 
-    let state = if !enabled {
-        WidgetState::Disabled
-    } else if response.is_pointer_button_down_on() {
-        WidgetState::Active
-    } else if response.hovered() {
-        WidgetState::Hovered
-    } else {
-        WidgetState::Idle
-    };
+    let state = WidgetState::from_response(enabled, &response);
 
     let painter = ui.painter().clone();
     let radius = CornerRadius::same(CONTROL_RADIUS);

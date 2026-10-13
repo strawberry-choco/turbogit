@@ -19,6 +19,7 @@ use egui::{
     Rect, RichText, Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 
+use super::components;
 use super::icons::{self, Icon};
 use super::widgets;
 use crate::theme::Palette;
@@ -483,17 +484,6 @@ fn switch_tab(state: &mut AppState, tab: Tab) {
 
 // --- Shared painting helpers ---------------------------------------------------
 
-/// 1px `LINE` border along one edge of the shell's own `ui`, without affecting
-/// layout (spec §6.2: bottom stroke on the tab strip, top stroke on the status
-/// bar).
-///
-/// A thin wrapper over the shared [`widgets::edge_rule`], which owns the
-/// half-pixel offset that makes a 1px stroke land in one pixel row — the offset
-/// a shell-local copy would eventually lose.
-fn paint_edge_line(ui: &Ui, edge: widgets::Edge) {
-    widgets::edge_rule(ui.painter(), ui.max_rect(), edge, Palette::LINE);
-}
-
 // --- Tab strip ---------------------------------------------------------------------
 
 /// Shell tabs in strip order (issue #03). The legacy History tab was
@@ -754,7 +744,12 @@ fn render_status_bar(ui: &mut Ui, state: &mut AppState, hint: Option<&str>) {
                     );
                 });
             });
-            paint_edge_line(ui, widgets::Edge::Top);
+            widgets::edge_rule(
+                ui.painter(),
+                ui.max_rect(),
+                widgets::Edge::Top,
+                Palette::LINE,
+            );
         });
 }
 
@@ -848,7 +843,7 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
     chip(
         ui,
         STATUS_BAR_INK,
-        format!("{scope} repo{} in scope", if scope == 1 { "" } else { "s" }),
+        format!("{} in scope", components::counted(scope, "repo", "repos")),
     );
 }
 

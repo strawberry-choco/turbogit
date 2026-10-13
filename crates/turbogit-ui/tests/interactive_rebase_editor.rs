@@ -21,7 +21,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use egui::accesskit::Role;
 use egui::{Color32, Pos2, Rect};
@@ -33,6 +32,7 @@ use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys,
     shell_harness_over_unstyled,
 };
+use test_support::wait_until;
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -124,20 +124,6 @@ fn nearest<'h>(h: &'h Harness<'_, AppState>, label: &'h str, anchor: &str) -> No
         }
     }
     best.expect("no node with the label").1
-}
-
-/// Poll until `f` is true or the deadline elapses.
-fn wait_until<F: FnMut() -> bool>(ms: u64, mut f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 /// The interactive plans recorded at the executor boundary.

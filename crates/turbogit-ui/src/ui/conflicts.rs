@@ -37,7 +37,7 @@ fn parse_conflicts(content: &str) -> (Vec<(String, String, bool)>, usize) {
 /// parser over the working-tree file, verbatim. Both produce the same
 /// `(ours, theirs, is_conflict)` tuple stream, so pane rendering, per-block
 /// resolution, and Apply gating are unchanged either way.
-fn merge_editor_segments(
+pub(crate) fn merge_editor_segments(
     state: &AppState,
     root: &Option<std::path::PathBuf>,
     path: &std::path::Path,
@@ -58,34 +58,67 @@ fn merge_editor_segments(
     parse_conflicts(content)
 }
 
+/// Per-conflict resolution choice, as `compose_impl` interprets it and as
+/// both surfaces' read-only Result composition does. Spelled raw inside this
+/// module's own matches; the resolver, which carries no raw spelling of its
+/// own, imports these names.
+pub(crate) const CHOICE_OURS: u8 = 0;
+pub(crate) const CHOICE_THEIRS: u8 = 1;
+pub(crate) const CHOICE_BOTH_OURS_FIRST: u8 = 2; // existing "Ignore"
+pub(crate) const CHOICE_BOTH_THEIRS_FIRST: u8 = 3; // "Take both · theirs first" (issue #22)
+
+/// The opener prologue both conflict surfaces repeat: read the file, build its
+/// segments, and seed `conflict_segs` / `conflict_res` together. Handing back
+/// the fresh resolution vector is what lets each opener keep composing its own
+/// way — display text with the inline placeholder here, the final buffer in
+/// the resolver.
+///
+/// A file that cannot be read sets the toast and NO other field, so a caller
+/// that early-returns on `None` leaves the state exactly as it was.
+pub(crate) fn seed_conflict_state(
+    state: &mut AppState,
+    root: &Path,
+    path: &Path,
+) -> Option<Vec<Option<u8>>> {
+    let full = root.join(path);
+    let Ok(content) = std::fs::read_to_string(&full) else {
+        state.ui.toast = Some(Toast::error("Could not read conflicted file."));
+        return None;
+    };
+    let (segs, _n) = merge_editor_segments(state, &Some(root.to_path_buf()), path, &content);
+    let res: Vec<Option<u8>> = segs.iter().filter(|(_, _, c)| *c).map(|_| None).collect();
+    state.ui.conflict_segs = segs;
+    state.ui.conflict_res = res.clone();
+    Some(res)
+}
+
 /// Open the structured 3-way merge editor for one conflicted file of
 /// `root` — the changelist's "Merge…" button and the cascade monitor's
 /// Resolve deep link (issue 10) both land here.
 pub(crate) fn open_conflict_editor(state: &mut AppState, root: &Path, path: &Path) {
-    let full = root.join(path);
-    if let Ok(content) = std::fs::read_to_string(&full) {
-        let (segs, _n) = merge_editor_segments(state, &Some(root.to_path_buf()), path, &content);
-        let res: Vec<Option<u8>> = segs.iter().filter(|(_, _, c)| *c).map(|_| None).collect();
-        state.ui.conflict_segs = segs;
-        state.ui.conflict_res = res.clone();
-        state.ui.conflict_text = compose_display(&state.ui.conflict_segs, &res);
-        state.ui.conflict_open = Some(path.to_path_buf());
-    } else {
-        state.ui.toast = Some(Toast::error("Could not read conflicted file."));
-    }
+    let Some(res) = seed_conflict_state(state, root, path) else {
+        return;
+    };
+    state.ui.conflict_text = compose_display(&state.ui.conflict_segs, &res);
+    state.ui.conflict_open = Some(path.to_path_buf());
 }
 
 /// Compose the final file text from segments + per-conflict resolutions.
 ///
 /// Unresolved blocks fall back to our side; this is only reachable before
 /// Apply, which is gated at zero remaining.
-fn compose(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
+///
+/// That fallback is the one behavioural difference the two surfaces keep: the
+/// resolver's Result buffer IS this text, so an unresolved block reads as ours
+/// there, while the inline editor paints `compose_display`, which renders
+/// `<< unresolved >>` instead. One composer, two readings, on purpose.
+pub(crate) fn compose(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
     compose_impl(segs, res, false)
 }
 
 /// Compose the READ-ONLY display text: unresolved blocks render a visible
 /// placeholder so the user sees what is still missing.
-fn compose_display(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
+pub(crate) fn compose_display(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
     compose_impl(segs, res, true)
 }
 
@@ -323,8 +356,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     // Through the one shared pluralisation helper,
                     // not this file's own conditional.
                     ui.label(
-                        RichText::new(components::counted(remaining, "conflict") + " remaining")
-                            .color(Palette::INK_2),
+                        RichText::new(
+                            components::counted(remaining, "conflict", "conflicts") + " remaining",
+                        )
+                        .color(Palette::INK_2),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Apply enables ONLY at zero remaining and writes the

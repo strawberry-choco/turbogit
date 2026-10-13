@@ -729,20 +729,11 @@ pub fn outgoing_per_root(
         .iter()
         .map(|root| {
             let result = match &root.current_branch {
-                Some(branch) => {
-                    match root
-                        .branches
-                        .iter()
-                        .find(|b| &b.name == branch)
-                        .and_then(|b| b.tracking.as_ref())
-                    {
-                        Some(upstream) => {
-                            vcs.outgoing_commits(&root.path, branch, &upstream.git_ref())
-                        }
-                        // No tracking ref = nothing known to be ahead.
-                        None => Ok(Vec::new()),
-                    }
-                }
+                Some(branch) => match tracked_upstream(root) {
+                    Some(upstream) => vcs.outgoing_commits(&root.path, branch, &upstream.git_ref()),
+                    // No tracking ref = nothing known to be ahead.
+                    None => Ok(Vec::new()),
+                },
                 None => Ok(Vec::new()),
             };
             (root.id.clone(), result)

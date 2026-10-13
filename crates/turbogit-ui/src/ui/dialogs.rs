@@ -12,7 +12,7 @@ use turbogit_services::{
 };
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, data_font};
-use crate::ui::components::{KitButton, kit_button};
+use crate::ui::components::{KitButton, counted, kit_button};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::widgets::{self, group_title};
 
@@ -509,37 +509,17 @@ fn preview_box(ui: &mut Ui, preview: integrate_service::MergePreview, strategy: 
         let commits_line = match strategy {
             MergeStrategy::FastForward => "Will fast-forward — no merge commit".to_string(),
             _ => format!(
-                "Will create {} merge {}",
-                preview.merge_commits,
-                if preview.merge_commits == 1 {
-                    "commit"
-                } else {
-                    "commits"
-                }
+                "Will create {}",
+                counted(preview.merge_commits, "merge commit", "merge commits")
             ),
         };
         ui.strong(commits_line);
         ui.label(
             egui::RichText::new(format!(
-                "{} {} · {} {} · {} {}",
-                preview.files,
-                if preview.files == 1 {
-                    "file changed"
-                } else {
-                    "files changed"
-                },
-                preview.insertions,
-                if preview.insertions == 1 {
-                    "insertion"
-                } else {
-                    "insertions"
-                },
-                preview.deletions,
-                if preview.deletions == 1 {
-                    "deletion"
-                } else {
-                    "deletions"
-                }
+                "{} changed · {} · {}",
+                counted(preview.files, "file", "files"),
+                counted(preview.insertions, "insertion", "insertions"),
+                counted(preview.deletions, "deletion", "deletions")
             ))
             .monospace(),
         );
@@ -549,12 +529,14 @@ fn preview_box(ui: &mut Ui, preview: integrate_service::MergePreview, strategy: 
 /// The cascade banner (screen 14): a warning-toned strip naming how many
 /// sibling repos share the branch, with the "View plan →" hand-off.
 fn cascade_banner(ui: &mut Ui, state: &mut AppState, siblings: usize) {
-    let noun = if siblings == 1 { "repo" } else { "repos" };
     widgets::note(ui, Some(Palette::STATE_WARNING), |ui| {
         ui.horizontal(|ui| {
             ui.colored_label(
                 Palette::STATE_WARNING,
-                format!("⚠ Cascade with {siblings} other {noun} after this merge"),
+                format!(
+                    "⚠ Cascade with {} after this merge",
+                    counted(siblings, "other repo", "other repos")
+                ),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.button("View plan →").clicked() {
@@ -1014,12 +996,14 @@ fn root_display_name(state: &AppState) -> String {
 /// commits the rewrite replays across how many repos, with the
 /// "View affected →" hand-off to the affected-repo list.
 fn rebase_banner(ui: &mut Ui, state: &mut AppState, commits: usize, repos: usize) {
-    let noun = if repos == 1 { "repo" } else { "repos" };
     widgets::note(ui, Some(Palette::STATE_WARNING), |ui| {
         ui.horizontal(|ui| {
             ui.colored_label(
                 Palette::STATE_WARNING,
-                format!("⚠ Rewrites {commits} commits across {repos} {noun}"),
+                format!(
+                    "⚠ Rewrites {commits} commits across {}",
+                    counted(repos, "repo", "repos")
+                ),
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.button("View affected →").clicked() {

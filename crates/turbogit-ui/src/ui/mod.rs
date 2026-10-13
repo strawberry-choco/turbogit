@@ -34,8 +34,8 @@ pub mod branches_tree;
 pub mod bulk_monitor;
 pub mod bulk_preflight;
 pub mod cherry_across;
-/// Column-table tool pane shared by `worktrees` and `submodules`; internal like
-/// [`kit`].
+/// The one column-table grammar: the tool panes of `worktrees`, `submodules` and
+/// the commit window, plus the fleet matrices; internal like [`kit`].
 pub(crate) mod column_table;
 pub mod commit_menu;
 pub mod commit_window;

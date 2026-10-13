@@ -14,17 +14,21 @@
 //! screen 07's "Edit manually" button). When untouched, the resolved content
 //! is the auto-composed buffer built from per-conflict choices.
 //!
-//! Conflict parsing reuses [`turbogit_services::conflict::parse_conflict_markers`]
-//! over the working-tree file's markers; the structured 3-way merge path
-//! (`diff_engine::merge_segments`) is unchanged.
+//! Conflict segment reading, result composition and the choice ordinals are
+//! `crate::ui::conflicts`' editor core — one implementation shared with the
+//! inline merge editor over the same `conflict_segs` / `conflict_res` state.
 
 use crate::theme::Palette;
 use crate::ui::components::{self, KitButton};
+use crate::ui::conflicts::{
+    CHOICE_BOTH_OURS_FIRST, CHOICE_BOTH_THEIRS_FIRST, CHOICE_OURS, CHOICE_THEIRS, compose,
+    seed_conflict_state,
+};
 use crate::ui::kit::conflict_pane::{self, Side};
 use egui::{Key, Modifiers, RichText, TextEdit, Ui};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, BulkApplyScope, ConflictBulkReport, Toast};
+use turbogit_app::state::{AppState, BulkApplyScope, ConflictBulkReport};
 use turbogit_domain::model::{
     CONFLICT_MARKER_OURS, CONFLICT_MARKER_SEPARATOR, CONFLICT_MARKER_THEIRS, ConflictKind, RootId,
 };
@@ -32,65 +36,6 @@ use turbogit_engine_api::OwnedOperation;
 use turbogit_services::conflict;
 
 use std::path::{Path, PathBuf};
-
-/// Per-conflict resolution choice (matches [`crate::ui::conflicts::compose_impl`]).
-const CHOICE_OURS: u8 = 0;
-const CHOICE_THEIRS: u8 = 1;
-const CHOICE_BOTH_OURS_FIRST: u8 = 2; // existing "Ignore"
-const CHOICE_BOTH_THEIRS_FIRST: u8 = 3; // "Take both · theirs first" (issue #22)
-
-/// Build the segments list for the resolver's selected file, using the
-/// in-process 3-way merge when enabled and available, otherwise the raw
-/// marker parser (same path the inline editor uses).
-fn merge_editor_segments(
-    state: &AppState,
-    root: &Option<PathBuf>,
-    path: &Path,
-    content: &str,
-) -> (Vec<(String, String, bool)>, usize) {
-    if state.settings.in_process_diffs
-        && let Some(root) = root
-        && let Some(v) = state.merge_versions(&RootId(root.clone().into()), path)
-    {
-        let segs = turbogit_services::diff_engine::merge_segments(
-            v.base.as_deref().unwrap_or_default(),
-            v.ours.as_deref().unwrap_or_default(),
-            v.theirs.as_deref().unwrap_or_default(),
-        );
-        let n = segs.iter().filter(|(_, _, c)| *c).count();
-        return (segs, n);
-    }
-    conflict::parse_conflict_markers(content)
-}
-
-/// Compose the final file text from segments + per-conflict resolutions.
-/// Unresolved blocks fall back to our side; this is only reachable before
-/// Apply, which is gated at zero remaining.
-fn compose(segs: &[(String, String, bool)], res: &[Option<u8>]) -> String {
-    let mut out = String::new();
-    let mut ci = 0usize;
-    for (a, b, is_conf) in segs {
-        if *is_conf {
-            ci += 1;
-            match res.get(ci - 1).copied().flatten() {
-                Some(CHOICE_THEIRS) => out.push_str(b),
-                Some(CHOICE_BOTH_OURS_FIRST) => {
-                    out.push_str(a);
-                    out.push_str(b);
-                }
-                Some(CHOICE_BOTH_THEIRS_FIRST) => {
-                    out.push_str(b);
-                    out.push_str(a);
-                }
-                Some(_) => out.push_str(a),
-                None => out.push_str(a),
-            }
-        } else {
-            out.push_str(a);
-        }
-    }
-    out
-}
 
 /// Editable Result cell for the ACTIVE conflict. Wires a multiline TextEdit
 /// over `state.ui.conflict_text`; typing flips `conflict_resolver_edited`
@@ -278,25 +223,19 @@ fn advance_active(state: &mut AppState) {
 
 /// Open the redesigned resolver for one conflicted file.
 pub(crate) fn open_resolver(state: &mut AppState, root: &Path, path: &Path) {
-    let full = root.join(path);
-    if let Ok(content) = std::fs::read_to_string(&full) {
-        let (segs, _n) = merge_editor_segments(state, &Some(root.to_path_buf()), path, &content);
-        let res: Vec<Option<u8>> = segs.iter().filter(|(_, _, c)| *c).map(|_| None).collect();
-        state.ui.conflict_segs = segs;
-        state.ui.conflict_res = res.clone();
-        state.ui.conflict_resolver_undo = res.iter().map(|_| None).collect();
-        state.ui.conflict_text = compose(&state.ui.conflict_segs, &state.ui.conflict_res);
-        state.ui.conflict_resolver_edited = false;
-        state.ui.conflict_resolver_active_idx = 0;
-        state.ui.conflict_resolver_selected = Some(path.to_path_buf());
-        state.ui.conflict_overwrite_pending = None;
-        // A bulk verdict belongs to the file it was clicked on; a new file
-        // starts with nothing reported.
-        state.ui.conflict_bulk_report = None;
-        state.ui.conflict_resolver_open = true;
-    } else {
-        state.ui.toast = Some(Toast::error("Could not read conflicted file."));
-    }
+    let Some(res) = seed_conflict_state(state, root, path) else {
+        return;
+    };
+    state.ui.conflict_resolver_undo = res.iter().map(|_| None).collect();
+    state.ui.conflict_text = compose(&state.ui.conflict_segs, &res);
+    state.ui.conflict_resolver_edited = false;
+    state.ui.conflict_resolver_active_idx = 0;
+    state.ui.conflict_resolver_selected = Some(path.to_path_buf());
+    state.ui.conflict_overwrite_pending = None;
+    // A bulk verdict belongs to the file it was clicked on; a new file
+    // starts with nothing reported.
+    state.ui.conflict_bulk_report = None;
+    state.ui.conflict_resolver_open = true;
 }
 
 /// Render the redesigned Resolve Conflicts tool window. No-op when the
@@ -461,7 +400,7 @@ fn render_file_list(
             .size(crate::theme::TYPE_CONTROL)
             .color(Palette::INK_2),
     );
-    ui.label(RichText::new(components::counted(n_auto, "file")).color(Palette::INK_2));
+    ui.label(RichText::new(components::counted(n_auto, "file", "files")).color(Palette::INK_2));
     for path in &state.ui.auto_merged_files {
         ui.label(path.display().to_string());
     }
@@ -542,7 +481,10 @@ fn render_resolver_body(
     let counter = if total == 0 {
         "0 conflicts".to_string()
     } else {
-        format!("{} remaining", components::counted(unresolved, "conflict"))
+        format!(
+            "{} remaining",
+            components::counted(unresolved, "conflict", "conflicts")
+        )
     };
     ui.horizontal(|ui| {
         ui.label(RichText::new(path_disp).strong().color(Palette::INK));

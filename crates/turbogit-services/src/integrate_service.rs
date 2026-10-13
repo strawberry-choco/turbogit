@@ -1,7 +1,7 @@
 //! Integration service: high-level merge / rebase / cherry-pick orchestration
 //! plus abort/continue and a "smart merge" that stashes a dirty tree first.
 
-use crate::sync_service::is_protected;
+use crate::sync_service::{is_protected, tracked_upstream};
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
@@ -136,11 +136,7 @@ pub fn rebase_affected(roots: &[Root], focused: &RootId) -> Vec<RootId> {
     let Some(branch) = focused.current_branch.clone() else {
         return Vec::new();
     };
-    let tracking = focused
-        .branches
-        .iter()
-        .find(|b| b.kind == BranchKind::Local && b.name == branch)
-        .and_then(|b| b.tracking.clone());
+    let tracking = tracked_upstream(focused).cloned();
     roots
         .iter()
         .filter(|r| r.id != focused.id)
@@ -519,11 +515,6 @@ pub fn get_file_from_branch(
     }
     std::fs::write(&target, bytes)?;
     Ok(())
-}
-
-/// Abort an in-progress `op` (merge / rebase / cherry-pick).
-pub fn abort(vcs: &dyn GitExecutor, root: &Path, op: &str) -> TgResult<()> {
-    vcs.abort(root, op)
 }
 
 /// Merge `target` while automatically stashing a dirty tree first.

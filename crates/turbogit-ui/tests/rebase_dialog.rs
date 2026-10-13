@@ -20,7 +20,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use egui_kittest::kittest::Queryable as _;
 use egui_kittest::{Harness, Node};
@@ -29,6 +28,7 @@ use test_support::git_seed::{commit as git_seed_commit, git};
 use test_support::harness::{
     KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, shell_harness_over_unstyled,
 };
+use test_support::wait_until;
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RebaseMode, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -113,20 +113,6 @@ fn dialog_node<'h>(h: &'h Harness<'_, AppState>, label: &'h str) -> Node<'h> {
         }
     }
     best.expect("no in-dialog node with the label").1
-}
-
-/// Poll until `f` is true or the deadline elapses.
-fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 // ------------------------------------------------------------------ tests --

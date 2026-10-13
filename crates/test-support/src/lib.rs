@@ -29,6 +29,7 @@ pub mod srcscan;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::{
@@ -584,11 +585,11 @@ impl GitExecutor for RecordingExecutor {
         self.inner.cherry_pick(root, commit)
     }
 
-    fn abort(&self, root: &Path, op: &str) -> TgResult<()> {
+    fn abort(&self, root: &Path, op: OwnedOperation) -> TgResult<()> {
         self.inner.abort(root, op)
     }
 
-    fn continue_op(&self, root: &Path, op: &str) -> TgResult<()> {
+    fn continue_op(&self, root: &Path, op: OwnedOperation) -> TgResult<()> {
         self.inner.continue_op(root, op)
     }
 
@@ -818,5 +819,29 @@ impl GitExecutor for RecordingExecutor {
         // Transparent wrapper: the merge preview (issue 28) reads its
         // numstat through the raw path, and the wrapped engine must answer.
         self.inner.run_raw(root, args)
+    }
+}
+
+/// Poll `f` every 25 ms until it returns `true` or `ms` elapses.
+///
+/// The predicate is checked **before** the deadline, so a check landing on the
+/// final instant still counts. That ordering is what lets a spawned git worker
+/// that finishes just inside its budget pass; swapping the two checks is the
+/// busy-machine flake class AGENTS.md records.
+///
+/// Returns `false` on timeout rather than panicking: what a timeout means
+/// differs per suite, so that wording is the caller's.
+///
+/// `FnMut`, not `Fn`, because some pollers repaint the harness between checks.
+pub fn wait_until<F: FnMut() -> bool>(ms: u64, mut f: F) -> bool {
+    let start = Instant::now();
+    loop {
+        if f() {
+            return true;
+        }
+        if start.elapsed() >= Duration::from_millis(ms) {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }

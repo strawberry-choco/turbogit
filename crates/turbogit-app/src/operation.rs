@@ -138,6 +138,51 @@ impl LifecycleVerb {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The port's lifecycle verbs address git by the owner's own subcommand
+    /// rather than by a caller-spelled string, and the value the three current
+    /// call sites hand the engine is the one `OwnedOperation` owns. This is the
+    /// assertion the narrowed parameter is load-bearing: a change that made
+    /// any of these differ would send a spell out to the engine that git then
+    /// refuses.
+    #[test]
+    fn the_lifecycle_verbs_address_git_by_the_owner_s_own_subcommand() {
+        assert_eq!(OwnedOperation::Rebase.git_subcommand(), "rebase");
+        assert_eq!(OwnedOperation::CherryPick.git_subcommand(), "cherry-pick");
+        assert_eq!(OwnedOperation::Merge.git_subcommand(), "merge");
+    }
+
+    /// Every owner the verb table hands Abort / Continue out to is an owner the
+    /// narrowed parameter can name: the four `OwnedOperation` variants are the
+    /// whole state space the two verbs accept.
+    #[test]
+    fn every_owner_offering_abort_or_continue_is_nameable_by_the_value_the_port_carries() {
+        for owner in [
+            OwnedOperation::Rebase,
+            OwnedOperation::CherryPick,
+            OwnedOperation::Merge,
+            OwnedOperation::Revert,
+        ] {
+            let offered = LifecycleVerb::offered_for(owner);
+            assert!(
+                offered.contains(&LifecycleVerb::Abort),
+                "{owner:?} must still offer Abort",
+            );
+            assert!(
+                offered.contains(&LifecycleVerb::Continue),
+                "{owner:?} must still offer Continue",
+            );
+        }
+        assert!(
+            !LifecycleVerb::offered_for(OwnedOperation::Merge).contains(&LifecycleVerb::Skip),
+            "merge has no --skip, and the table must not offer one",
+        );
+    }
+}
+
 /// How a [`Operation::Rebase`] is being run.
 ///
 /// The kind exists only to produce the label wording and pick the plan;
@@ -1071,8 +1116,8 @@ impl Operation {
             Self::Resolve { root, owner, verb } => {
                 let path = root.as_path();
                 match verb {
-                    LifecycleVerb::Abort => vcs.abort(path, owner.git_subcommand()),
-                    LifecycleVerb::Continue => vcs.continue_op(path, owner.git_subcommand()),
+                    LifecycleVerb::Abort => vcs.abort(path, owner),
+                    LifecycleVerb::Continue => vcs.continue_op(path, owner),
                     // No `owner` read: the verb table only hands `Skip` out with a
                     // rebase, and re-deriving the state here from `owner` would let
                     // a stale announcement run `git merge --skip`, which git has no

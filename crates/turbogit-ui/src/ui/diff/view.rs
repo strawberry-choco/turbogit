@@ -3,7 +3,7 @@
 use super::actions::{
     Axis, axis_group, commit_current_hunk, comparison_chips, diff_options_menu, granularity_toggle,
     hunk_gutter_actions, hunk_header_extras, hunk_nav, line_selected, paint_selection_bar,
-    preview_status, viewer_hunk_staged_state,
+    viewer_hunk_staged_state,
 };
 use super::model::{
     DiffModel, DisplayRow, Highlight, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W,
@@ -180,7 +180,7 @@ pub fn render_diff(
 
     // Gutter staging controls need the previewed file's status (spec R2);
     // resolved once per frame from the cached changelists.
-    let status = preview_status(state, path.as_deref());
+    let status = granular::preview_status(state, path.as_deref());
 
     let side_by_side = state.ui.diff_side_by_side;
     // Per-frame paint plan (issue 20): collapsed hunks drop their body rows
@@ -971,7 +971,7 @@ fn header_band(ui: &mut Ui, width: f32, label: &str) {
 /// [`TEXT_X`], exactly where every other row in this stream puts its text — the
 /// two new occupants are placed *from that one rect*, right-aligned inside it,
 /// and the row's own fill is the one row-fill decision
-/// ([`components::fill`]). A file row is therefore a row like any other, and
+/// ([`widgets::paint_row`]). A file row is therefore a row like any other, and
 /// gaining two occupants cannot give it a second selection treatment, a second
 /// height, or a second text origin.
 fn file_row(
@@ -983,7 +983,7 @@ fn file_row(
     font: &FontId,
     hovered: bool,
 ) {
-    components::fill(ui, *rect, components::RowState::from_flags(false, hovered));
+    widgets::paint_row(ui, *rect, components::RowState::from_flags(false, hovered));
     paint_cell(
         ui.painter(),
         rect.left() + TEXT_X,

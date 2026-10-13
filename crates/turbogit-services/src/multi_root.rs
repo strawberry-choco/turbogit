@@ -161,6 +161,21 @@ mod tests {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
     }
 
+    /// A `Root` snapshot for a directory that is a repo marker on disk but has
+    /// no engine ready to read through — the tests that only need the
+    /// manager's data shape snapshot by hand.
+    fn root_snapshot_at(path: &Path) -> Root {
+        Root {
+            id: RootId(path.into()),
+            path: path.to_path_buf(),
+            remotes: Vec::new(),
+            branches: Vec::new(),
+            current_branch: None,
+            head: None,
+            status: RootStatus::default(),
+        }
+    }
+
     /// The ancestor walk is the whole point: a directory *inside* a checkout is
     /// "under Git", while an untouched sibling tree is not. A `.git` **file**
     /// (worktree / submodule shape) counts exactly like a directory.
@@ -286,5 +301,39 @@ mod tests {
         let results = register_all(&engine, &mut mgr, &paths);
         assert!(results.iter().all(|r| r.is_ok()));
         assert_eq!(mgr.roots.len(), 1, "same id registered once");
+    }
+
+    /// The one surviving registration rule is replace-in-place: the leaf used
+    /// to own an append-if-absent copy of this operation, and a re-registration
+    /// through it silently kept a stale snapshot. Now every caller reaches
+    /// this rule, so the second registration must leave the later snapshot.
+    #[test]
+    fn register_replaces_the_earlier_snapshot_of_the_same_root_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("r");
+        repo_at(&repo);
+
+        let mut mgr = MultiRootManager::default();
+        register(
+            &mut mgr,
+            Root {
+                current_branch: Some("first".into()),
+                ..root_snapshot_at(&repo)
+            },
+        );
+        register(
+            &mut mgr,
+            Root {
+                current_branch: Some("second".into()),
+                ..root_snapshot_at(&repo)
+            },
+        );
+
+        assert_eq!(mgr.roots.len(), 1, "same id registered once");
+        assert_eq!(
+            mgr.roots[0].current_branch.as_deref(),
+            Some("second"),
+            "the later snapshot must replace the earlier one",
+        );
     }
 }

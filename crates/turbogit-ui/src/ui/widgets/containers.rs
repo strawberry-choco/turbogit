@@ -10,6 +10,7 @@ use super::chips::count_chip;
 use super::controls::tint_over_bg;
 use super::inputs::INPUT_ICON_SIZE;
 use crate::theme::{CONTROL_RADIUS, Palette, TYPE_CONTROL, TYPE_SECTION};
+use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use turbogit_services::history_editor::RebaseCaution;
 
@@ -372,13 +373,15 @@ pub fn cautions_rail(ui: &mut Ui, cautions: &[RebaseCaution]) {
     group_title(ui, &format!("CAUTIONS · {}", cautions.len()));
     for caution in cautions {
         let text = match caution {
-            RebaseCaution::ConflictRisk { files } => format!(
-                "Conflicts likely on {files} {}",
-                if *files == 1 { "file" } else { "files" }
-            ),
+            RebaseCaution::ConflictRisk { files } => {
+                format!(
+                    "Conflicts likely on {}",
+                    components::counted(*files, "file", "files")
+                )
+            }
             RebaseCaution::MixedIdentities { authors } => format!(
-                "Mixed committer identities ({authors} {}) — verify signatures",
-                if *authors == 1 { "author" } else { "authors" }
+                "Mixed committer identities ({}) — verify signatures",
+                components::counted(*authors, "author", "authors")
             ),
         };
         ui.colored_label(Palette::STATE_WARNING, format!("⚠ {text}"));

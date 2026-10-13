@@ -18,13 +18,13 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable as _};
 use test_support::git_seed::git;
 use test_support::harness::{KITTEST_DEFAULT_BOX, filled_rects, shell_harness_over_unstyled};
-use test_support::{RecordedCall, RecordingExecutor};
+use test_support::{RecordedCall, RecordingExecutor, wait_until};
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -178,20 +178,6 @@ fn pump_until(h: &mut Harness<'_, AppState>, what: &str, mut pred: impl FnMut(&A
         std::thread::sleep(Duration::from_millis(10));
     }
     panic!("timed out waiting for: {what}");
-}
-
-/// Poll until `f` is true or the deadline elapses.
-fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 #[test]

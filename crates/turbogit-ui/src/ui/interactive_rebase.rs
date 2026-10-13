@@ -157,9 +157,8 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     let mut dispatched = false;
     ui.horizontal(|ui| {
         ui.label(format!(
-            "Ready to rebase {} {}",
-            plan.len(),
-            if plan.len() == 1 { "commit" } else { "commits" }
+            "Ready to rebase {}",
+            components::counted(plan.len(), "commit", "commits")
         ));
         ui.label(
             egui::RichText::new(format!("· {}", history_editor::estimate(&plan)))
@@ -472,13 +471,8 @@ fn preview_tab(ui: &mut Ui, plan: &[turbogit_domain::model::RebasePlanEntry]) {
         if preview.dropped > 0 {
             ui.label(
                 egui::RichText::new(format!(
-                    "{} {} dropped",
-                    preview.dropped,
-                    if preview.dropped == 1 {
-                        "commit"
-                    } else {
-                        "commits"
-                    }
+                    "{} dropped",
+                    components::counted(preview.dropped, "commit", "commits")
                 ))
                 .color(Palette::STATE_WARNING),
             );

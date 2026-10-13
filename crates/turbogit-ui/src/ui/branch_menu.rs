@@ -237,8 +237,7 @@ pub fn branch_menu(
                 label,
                 data,
                 shortcut,
-                enabled: state.enabled,
-                disabled_reason: state.reason,
+                state: *state,
                 kind,
             },
         )

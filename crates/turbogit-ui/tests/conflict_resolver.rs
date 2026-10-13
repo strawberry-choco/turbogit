@@ -27,7 +27,6 @@
 //!   the merge once every conflicted file is resolved
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use test_support::harness::{
     KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, filled_rects, galley_origin,
     painted_galleys, shell_harness_over_unstyled,
@@ -39,8 +38,20 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use turbogit_app::state::AppState;
 
 use test_support::git_seed::git;
+use test_support::srcscan;
+use test_support::wait_until;
 use turbogit_ui::theme::Palette;
 // ---------------------------------------------------------------- helpers --
+
+/// The resolver module's own source, read at compile time.
+const RESOLVER_SRC: &str = include_str!("../src/ui/conflict_resolver.rs");
+
+/// Composed text for resolutions [ours, theirs] on the seeded two-conflict
+/// file. Spelled out here, in the resolver's own suite, because this is where
+/// the cross-surface comparison lives: the same two choices must land the
+/// same bytes whichever surface took them.
+const PARITY_COMPOSED: &str =
+    "MAIN-one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nSIDE-nine\nten\n";
 
 /// Run `git` WITHOUT asserting success, and deliberately NOT
 /// `test_support::git_seed::git`: the seeds below end in a `git merge` expected
@@ -205,21 +216,6 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 /// here are measured against egui's default face.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 4096)
-}
-
-/// Poll `f` until it returns true or the deadline elapses (worker threads run
-/// asynchronously, so completion is observed by polling).
-fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 // --------------------------------------------- tint + geometry mirror fns --
@@ -1052,5 +1048,109 @@ fn bulk_apply_scope_resolves_remaining_from_one_side_without_reference_strings()
     assert!(
         kept_ours.x >= column_left(local_band) && kept_ours.x <= local_band.right(),
         "the kept ours hunk must sit in the left column (band {local_band:?}), got {kept_ours:?}"
+    );
+}
+
+/// PARITY: the two surfaces interpret the same choices to the same bytes.
+///
+/// The two surfaces used to carry their own character-identical copy of the
+/// composer, which is exactly why nothing compared them — the agreement was
+/// guaranteed by hand and invisible to every suite. One seeded repository,
+/// the same two choices, taken through the resolver and then through the
+/// inline editor: both buffers must land the bytes this suite spells out.
+///
+/// The second side-take on each surface lands on a file that already carries
+/// merged changes, so the overwrite confirm's dangerous affirmative is what
+/// applies it there.
+#[test]
+fn both_surfaces_compose_the_same_bytes_for_the_same_choices() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "parity-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+
+    // Resolver: Take ours 1, Take theirs 2.
+    open_resolver(&mut h);
+    h.get_by_label("Take ours 1").click();
+    h.run();
+    h.get_by_label("Next >").click();
+    h.run();
+    h.get_by_label("Take theirs 2").click();
+    h.run();
+    h.get_by_label("Discard and Accept").click();
+    h.run();
+    let resolver_text = h.state().ui.conflict_text.clone();
+
+    // Inline editor, same repository, same two choices. The resolver is
+    // dismissed first: the two tool windows are not meant to be open at once,
+    // and its window area would otherwise swallow the click on the changelist
+    // entry behind it. Opening the inline editor reseeds the shared state from
+    // the file on disk, so this is a claim about the composer rather than
+    // about whichever choices survived.
+    h.state_mut().ui.conflict_resolver_open = false;
+    h.run();
+    h.get_by_label("Merge…").click();
+    h.run();
+    h.get_by_label("Accept Yours 1").click();
+    h.run();
+    h.get_by_label("Accept Theirs 2").click();
+    h.run();
+    let inline_text = h.state().ui.conflict_text.clone();
+
+    assert_eq!(
+        resolver_text, PARITY_COMPOSED,
+        "the resolver must compose ours-then-theirs"
+    );
+    assert_eq!(
+        inline_text, PARITY_COMPOSED,
+        "the inline editor must compose ours-then-theirs"
+    );
+    assert_eq!(
+        resolver_text, inline_text,
+        "the two surfaces must compose the same choices to the same bytes"
+    );
+}
+
+/// The re-duplication ratchet. The fold that concentrated the editor core into
+/// `ui::conflicts` deleted `conflict_resolver`'s private `CHOICE_*` ordinals,
+/// its `merge_editor_segments` and its `compose`; nothing else in the tree
+/// compares the two modules, and the copy this refuses was character-identical
+/// to its neighbour, so no render assertion can tell them apart. Read the
+/// source at compile time and refuse the declaration, not the mention — the
+/// resolver still *names* all of these, as imports and call sites.
+///
+/// The scan reads top-level items by their rustfmt column-0 head, which is
+/// sound here only because `cargo fmt -- --check` is a repository gate: a
+/// hand-rolled layout panics rather than passing quietly.
+#[test]
+fn resolver_declares_no_editor_core_of_its_own() {
+    let declared: Vec<String> = srcscan::top_level_items(RESOLVER_SRC)
+        .into_iter()
+        .map(|item| item.name)
+        .collect();
+
+    assert!(
+        !declared.iter().any(|name| name == "compose"),
+        "`conflict_resolver` declares its own `compose` again — the fold that moved the \
+         composer into `ui::conflicts` deleted this copy, and a second copy is the \
+         duplication coming back"
+    );
+    assert!(
+        !declared.iter().any(|name| name == "merge_editor_segments"),
+        "`conflict_resolver` declares its own `merge_editor_segments` again — the fold \
+         that moved the segment reader into `ui::conflicts` deleted this copy, and a \
+         second copy is the duplication coming back"
+    );
+    let choice_consts: Vec<&String> = declared
+        .iter()
+        .filter(|name| name.starts_with("CHOICE_"))
+        .collect();
+    assert!(
+        choice_consts.is_empty(),
+        "`conflict_resolver` declares its own choice ordinals {choice_consts:?} — the \
+         fold that moved the `CHOICE_*` constants into `ui::conflicts` deleted these \
+         copies, and a second set is the duplication coming back"
     );
 }

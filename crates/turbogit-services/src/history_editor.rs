@@ -7,7 +7,7 @@
 use std::path::Path;
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::*;
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, OwnedOperation};
 
 /// Build an interactive-rebase plan for `base..HEAD`.
 ///
@@ -180,7 +180,7 @@ pub fn reword_commit(
 /// [`execute_with_backup`] replay is the last rewrite.
 pub fn abort_to_backup(vcs: &dyn GitExecutor, root: &Path) -> TgResult<()> {
     if crate::integrate_service::operation_in_progress(vcs.holding_operation(root)) {
-        vcs.abort(root, "rebase")?;
+        vcs.abort(root, OwnedOperation::Rebase)?;
     }
     vcs.restore_rewrite_backup(root)?;
     vcs.discard_rewrite_backup(root)?;

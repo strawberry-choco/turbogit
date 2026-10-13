@@ -97,7 +97,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
                 if ui.selectable_label(selected, &shelf.name).clicked() {
                     chosen = Some(shelf.name.clone());
                 }
-                let files = counted(shelf.changes.len(), "file");
+                let files = counted(shelf.changes.len(), "file", "files");
                 let shelved = shelf.created_at.format("%Y-%m-%d %H:%M").to_string();
                 ui.label(egui::RichText::new(format!("{files} · {shelved}")).color(Palette::INK_2));
             });

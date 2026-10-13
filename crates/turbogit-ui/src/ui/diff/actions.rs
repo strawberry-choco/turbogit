@@ -40,25 +40,6 @@ pub(super) fn granularity_toggle(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// Resolve the previewed file's [`ChangeStatus`] from the selected root's
-/// cached changelists (read-only per frame). The commit window previews
-/// root-relative paths; absolute paths match too so other callers stay safe.
-/// Unlisted paths fall back to [`ChangeStatus::Modified`] — controls stay
-/// enabled and the engine seam remains the final authority. Also serves the
-/// palette's Stage/Unstage Hunk verbs.
-pub(crate) fn preview_status(state: &AppState, path: Option<&std::path::Path>) -> ChangeStatus {
-    let Some(path) = path else {
-        return ChangeStatus::Modified;
-    };
-    if let Some(id) = &state.selected_root
-        && let Some(root) = state.multi.by_id(id)
-        && let Some(c) = root.resolve_change(path)
-    {
-        return c.status;
-    }
-    ChangeStatus::Modified
-}
-
 /// Hunk count of the diff the Commit window's preview would render right
 /// now — 0 while nothing is selected, still loading, errored, or the text
 /// parses to no hunks (binary). Peeks the diff read, which answers a value
@@ -550,11 +531,7 @@ pub(super) fn hunk_header_extras(
     let count_text = if collapsed {
         format!("{hidden_rows} hidden")
     } else {
-        let lines = if changed_lines == 1 {
-            "1 line".to_owned()
-        } else {
-            format!("{changed_lines} lines")
-        };
+        let lines = components::counted(changed_lines, "line", "lines");
         match staged_state {
             Some(turbogit_services::hunk_stats::StagedState::Staged) => {
                 format!("{lines} · staged")

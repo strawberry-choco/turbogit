@@ -38,6 +38,7 @@ use test_support::harness::{
     KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, filled_rects, painted_galleys,
     painted_text, shell_harness_over_unstyled,
 };
+use test_support::wait_until;
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::error::TgError;
 use turbogit_domain::model::{RootId, VcsSettings};
@@ -191,21 +192,6 @@ fn app_state_with(
 /// `Harness::run()`, which panics once a run exceeds the budget.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
-}
-
-/// Poll `f` until it returns true or the deadline elapses (worker threads run
-/// asynchronously, so completion is observed by polling).
-fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 /// Open the Push dialog directly (the Ctrl+Shift+K shortcut is covered by

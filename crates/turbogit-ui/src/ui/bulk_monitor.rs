@@ -8,14 +8,15 @@
 //! advanced by the event pump — rendered here; it never derives run state
 //! from git itself.
 
-use egui::{Align, Align2, Color32, Layout, Pos2, ProgressBar, Rect, Sense, Ui, Vec2};
+use crate::theme::Palette;
+use crate::ui::components;
+use crate::ui::conflicts;
+use crate::ui::widgets::PaneColumn;
+use egui::{Align, Align2, Color32, Layout, ProgressBar, Sense, Ui, Vec2};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, subject_of_message};
 use turbogit_services::bulk_ops::BulkOp;
 use turbogit_services::bulk_run::RowState;
-
-use crate::theme::Palette;
-use crate::ui::conflicts;
 
 /// One row of the running-operation table, where both copies of this literal
 /// said 26.0 (conformance issue 13). Local rather than
@@ -130,81 +131,64 @@ fn elapsed_eta(elapsed_secs: f32, eta_secs: Option<f32>) -> String {
     )
 }
 
+/// The run table's four columns, the same for the bulk run and the cherry run.
+const RUN_COLUMNS: [PaneColumn; 4] = [
+    PaneColumn::start("REPO", 0.0),
+    PaneColumn::start("STATE", 130.0),
+    PaneColumn::start("DETAIL", 400.0),
+    PaneColumn::start("DURATION", 700.0),
+];
+
+/// The header band the run table paints.
+const HEADER_H: f32 = 22.0;
+
 /// The run table: the `REPO / STATE / DETAIL / DURATION` header row, then one
 /// row per repository, `Resolve <name>` on the failed ones.
+///
+/// The row band's width is the row's own business: a row carrying a Resolve
+/// button claims `width - 120.0` of cells so the button flows after them inside
+/// the row's horizontal, whose child rect is `interact_size.y` tall rather than
+/// [`ROW_H`] — which is why the button sits at the band's top rather than
+/// centred in it.
 fn run_table(
     ui: &mut Ui,
-    rows: Vec<RunRow>,
+    rows: &[RunRow],
     state: &mut AppState,
     on_resolve: &mut dyn FnMut(&mut AppState, RootId),
 ) {
     let width = ui.available_width();
-    let header_h = 22.0;
-    let header_rect = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, header_h));
-    ui.allocate_exact_size(Vec2::new(width, header_h), Sense::hover());
-    let hp = ui.painter().clone();
-    for (label, x) in [
-        ("REPO", 0.0),
-        ("STATE", 130.0),
-        ("DETAIL", 400.0),
-        ("DURATION", 700.0),
-    ] {
-        let galley = hp.layout_no_wrap(
-            label.to_string(),
-            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
-            Palette::INK_3,
-        );
-        hp.galley_with_override_text_color(
-            Pos2::new(
-                header_rect.left() + x,
-                header_rect.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            Palette::INK_3,
-        );
-    }
-
-    for row in rows {
-        let RunRow {
-            name,
-            state_text,
-            color,
-            detail,
-            duration,
-            resolve,
-        } = row;
-        ui.horizontal(|ui| {
-            let left = ui.cursor().left();
-            let cy = ui.cursor().top() + ROW_H / 2.0;
-            let cells_w = if resolve.is_some() {
-                width - 120.0
-            } else {
-                width
-            };
-            ui.allocate_exact_size(Vec2::new(cells_w, ROW_H), Sense::hover());
-            let cell = |x: f32, text: String, color: Color32| {
-                let galley = ui.painter().layout_no_wrap(
-                    text,
-                    crate::theme::chrome_font(crate::theme::TYPE_BODY),
-                    color,
-                );
-                ui.painter().galley_with_override_text_color(
-                    Pos2::new(left + x, cy - galley.size().y / 2.0),
-                    galley,
-                    color,
-                );
-            };
-            cell(0.0, name.clone(), Palette::INK);
-            cell(130.0, state_text, color);
-            cell(400.0, detail, Palette::INK_2);
-            cell(700.0, duration, Palette::INK_2);
-            if let Some(root) = resolve
-                && ui.button(format!("Resolve {name}")).clicked()
-            {
-                on_resolve(state, root);
-            }
-        });
-    }
+    super::column_table::matrix_table(
+        ui,
+        width,
+        &RUN_COLUMNS,
+        HEADER_H,
+        ROW_H,
+        rows,
+        &mut |ui, _rect, row| {
+            ui.horizontal(|ui| {
+                let left = ui.cursor().left();
+                let cy = ui.cursor().top() + ROW_H / 2.0;
+                let cells_w = if row.resolve.is_some() {
+                    width - 120.0
+                } else {
+                    width
+                };
+                ui.allocate_exact_size(Vec2::new(cells_w, ROW_H), Sense::hover());
+                let cell = |x: f32, text: String, color: Color32| {
+                    super::column_table::paint_cell(ui.painter(), left, x, cy, text, color)
+                };
+                cell(0.0, row.name.clone(), Palette::INK);
+                cell(RUN_COLUMNS[1].x, row.state_text.clone(), row.color);
+                cell(RUN_COLUMNS[2].x, row.detail.clone(), Palette::INK_2);
+                cell(RUN_COLUMNS[3].x, row.duration.clone(), Palette::INK_2);
+                if let Some(root) = &row.resolve
+                    && ui.button(format!("Resolve {}", row.name)).clicked()
+                {
+                    on_resolve(state, root.clone());
+                }
+            });
+        },
+    );
 }
 
 /// The live tally sentence both monitors' footers print.
@@ -268,7 +252,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     ui.separator();
 
     // Table: REPO / STATE / DETAIL / DURATION (+ Resolve on failed rows).
-    run_table(ui, rows, state, &mut resolve_root);
+    run_table(ui, &rows, state, &mut resolve_root);
 
     ui.add_space(8.0);
     ui.separator();
@@ -386,8 +370,8 @@ fn cherry_body(ui: &mut Ui, state: &mut AppState) {
     // Header: the `{commits} · {policy}` line is the cherry run's own identity.
     ui.horizontal(|ui| {
         ui.strong(format!(
-            "{commits} commit{} · {policy}",
-            if commits == 1 { "" } else { "s" }
+            "{} · {policy}",
+            components::counted(commits, "commit", "commits")
         ));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.strong(elapsed_eta(elapsed_secs, eta_secs));
@@ -399,7 +383,7 @@ fn cherry_body(ui: &mut Ui, state: &mut AppState) {
     ui.separator();
 
     // Table: REPO / STATE / DETAIL / DURATION (+ Resolve on failed rows).
-    run_table(ui, rows, state, &mut resolve_cherry_root);
+    run_table(ui, &rows, state, &mut resolve_cherry_root);
 
     ui.add_space(8.0);
     ui.separator();
