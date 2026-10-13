@@ -22,10 +22,8 @@
 //! the operation — the race window between paint and click closes there).
 
 use egui::{RichText, Ui};
-use turbogit_app::operation::Operation;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, RewriteUndo, RewriteUndoVerb};
-use turbogit_services::history_editor;
 
 use crate::theme::{Palette, TYPE_CONTROL, chrome_font};
 use crate::ui::components::{KitButton, kit_button};
@@ -63,12 +61,11 @@ pub fn cannot_undo(verb: RewriteUndoVerb) -> &'static str {
 /// The undo operation's label. The success toast and the activity feed show it
 /// as-is (`Undo drop`); a failure shows `{label}: {error}` — the undo-failed
 /// outcome's wording, distinct from the other two by construction.
-pub fn undo_label(verb: RewriteUndoVerb) -> &'static str {
-    match verb {
-        RewriteUndoVerb::Drop => "Undo drop",
-        RewriteUndoVerb::Reword => "Undo commit message edit",
-    }
-}
+///
+/// Lives beside the dispatch that spends it, in the app crate, and is
+/// re-exported here because the banner module is where its two companion
+/// strings live.
+pub use turbogit_app::shell_writes::rewrite::undo_label;
 
 /// Paint the banner over the log's graph pane while an offer stands: the
 /// success title and the `Undo` control while the guard holds it valid, the
@@ -108,12 +105,10 @@ pub fn banner(ui: &mut Ui, state: &mut AppState) {
 /// discards the spent ref. A failure surfaces through the ordinary
 /// completion path as `{label}: {error}` — the undo-failed outcome.
 fn dispatch_undo(state: &mut AppState, offer: &RewriteUndo) {
-    let root = offer.root.clone();
-    let tip = offer.tip_sha.clone();
     state.ui.rewrite_undo = None;
-    state.dispatch(Operation::custom(
-        undo_label(offer.verb),
-        Affected::Root(root.clone()),
-        move |v| history_editor::undo_last_rewrite(v, root.as_path(), &tip),
+    state.dispatch(shell_writes::rewrite::undo(
+        &offer.root,
+        offer.verb,
+        &offer.tip_sha,
     ));
 }

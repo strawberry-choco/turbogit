@@ -12,6 +12,7 @@
 
 use egui::{Align, Layout, Sense, Ui};
 use turbogit_app::operation::Operation;
+use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, RebaseEditorTab};
 use turbogit_domain::model::RebaseAction;
 use turbogit_services::history_editor;
@@ -265,11 +266,7 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
         && ui.button("Abort & restore").clicked()
     {
         if let Some(root) = state.selected_root.clone() {
-            state.dispatch(Operation::custom(
-                "Abort interactive rebase",
-                turbogit_app::root_caches::Affected::Root(root.clone()),
-                move |v| history_editor::abort_to_backup(v, root.as_path()),
-            ));
+            state.dispatch(shell_writes::rewrite::abort_interactive_rebase(&root));
         }
         close(state);
     }

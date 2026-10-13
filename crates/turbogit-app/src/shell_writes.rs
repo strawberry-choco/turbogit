@@ -39,5 +39,9 @@
 //!   index `0` and one over a commit window's index — they stay two entries.
 
 pub mod branch;
+pub mod commit;
 pub mod conflict;
 pub mod remote;
+pub mod rewrite;
+pub mod stash;
+pub mod tag;
