@@ -43,7 +43,7 @@ use turbogit_ui::theme::{self, Palette};
 use turbogit_ui::ui::popups::Action;
 use turbogit_ui::ui::shell::STATUS_BAR_HEIGHT;
 use turbogit_ui::ui::sidebar::SIDEBAR_WIDTH;
-use turbogit_ui::ui::status_inflight::{InFlight, items, target_for};
+use turbogit_ui::ui::status_inflight::{InFlight, items_via, target_for};
 
 /// The fill painted for one control: the filled rect the frame drew AT the
 /// control's own allocated rect, matched by centre and size rather than by
@@ -460,7 +460,12 @@ fn no_verb_is_resolved_when_no_root_holds_an_operation() {
     let state = AppState::for_roots(&p.project, &[p.alpha.clone(), p.beta.clone()])
         .with_settings(VcsSettings::default());
     assert_eq!(target_for(&state, LifecycleVerb::Abort), None);
-    assert!(items(&state.multi.roots).is_empty());
+    assert!(
+        items_via(&state.multi.roots, &|root| {
+            state.holding_operation(root.id.as_path())
+        })
+        .is_empty()
+    );
 }
 
 /// The per-root facts are one item per holding root, in registration order — the
@@ -471,7 +476,11 @@ fn two_roots_mid_operation_announce_side_by_side_in_registration_order() {
     let p = project();
     rebase_in_flight(&p.alpha);
     cherry_pick_in_flight(&p.beta);
-    let found: Vec<InFlight> = items(&p_roots(&p));
+    let state = AppState::for_roots(&p.project, &[p.alpha.clone(), p.beta.clone()])
+        .with_settings(VcsSettings::default());
+    let found: Vec<InFlight> = items_via(&state.multi.roots, &|root| {
+        state.holding_operation(root.id.as_path())
+    });
     assert_eq!(
         found
             .iter()
@@ -483,12 +492,6 @@ fn two_roots_mid_operation_announce_side_by_side_in_registration_order() {
         ],
         "both roots are announced, each with its own operation"
     );
-}
-
-fn p_roots(p: &Project) -> Vec<turbogit_domain::model::Root> {
-    let state = AppState::for_roots(&p.project, &[p.alpha.clone(), p.beta.clone()])
-        .with_settings(VcsSettings::default());
-    state.multi.roots.clone()
 }
 
 // ------------------------------------------------------- the verb actually runs --

@@ -22,7 +22,7 @@ use turbogit_app::root_caches::Affected;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, RootId};
-use turbogit_services::{branch_service, sync_service};
+use turbogit_services::sync_service;
 
 /// Favorite-star ink: the central warning token (spec §8.5 row anatomy).
 pub const STAR_COLOR: Color32 = Palette::STATE_WARNING;
@@ -665,7 +665,7 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                         }
 
                         if let Some(name) = toggled_star {
-                            branch_service::toggle_favorite(&mut state.multi, &id, &name);
+                            shell_writes::branch::toggle_favorite(state, &id, &name);
                         }
                         if enter && !entries.is_empty() {
                             clicked = Some(entries[state.ui.branches_cursor].clone());
