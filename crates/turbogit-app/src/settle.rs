@@ -366,51 +366,13 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
     refresh_affected(state, affected);
     arm_landed_rewrite_undo(state, rules);
     granular::settle(state);
-    // A take rewrote one working-tree file, so
-    // the changes window that offered it re-reads its rung
-    // list — a path whose contents now match is no longer a
-    // row, and a window still listing it would offer the
-    // same overwrite again. The re-read is the app's,
-    // through the service, never the pane's, and it follows
-    // the refresh above so both see the taken file.
-    if rules.reload_get_from_branch_rows {
-        state.reload_get_from_branch_rows();
-    }
-    // Activity log (issue #04): the durable record the
-    // toast only summarizes. An op that leaves conflicts
-    // behind is a warning, not a success — the counts are
-    // read from the refreshed snapshots.
-    let conflicts = conflicted_count(state, affected);
-    let (entry, message) = if conflicts > 0 {
-        (
-            ActivityKind::Warning,
-            format!("{label} · {conflicts} unresolved conflicts"),
-        )
-    } else {
-        (
-            ActivityKind::Success,
-            report_for(state, kind, affected, label),
-        )
-    };
-    state.ui.activity.push(ActivityEntry {
-        at: chrono::Local::now(),
-        repo: activity_repo_label(affected),
-        message: message.clone(),
-        kind: entry,
-    });
-    // Issue 13: a fetch reports plainly what changed —
-    // never a bare success, never a silent no-op.
-    if rules.fetch_report {
-        state.show_toast(Toast::success(message));
-    }
-    // Issue 09: a merge/rebase that landed mid-conflict
-    // hands off cleanly to the conflict experience with
-    // an explicit mid-operation state that survives
-    // switching tabs.
-    if conflicts > 0 && hands_off_conflicts(kind) {
-        state.ui.merge_in_progress = true;
-        state.ui.conflict_resolver_open = true;
-    }
+    reload_get_from_branch_rows(state, rules);
+    // Rules seven to nine all read what rules three to six left behind, which
+    // is why they take this arm's results as arguments rather than re-reading
+    // the state each one happens to want.
+    let (conflicts, message) = record_completion_in_activity(state, kind, label, affected);
+    report_what_the_fetch_changed(state, rules, &message);
+    open_conflict_handoff(state, kind, conflicts);
     // Issue 12: a confirmed local-branch deletion arms
     // the short-window undo with the captured tip. The
     // disclosure the notification carries — what was
@@ -441,6 +403,76 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
         && let Some((root, name)) = state.ui.shelf_removal_pending.take()
     {
         state.remove_shelf(&root, &name);
+    }
+}
+
+/// Rule six: a take rewrote one working-tree file, so the changes window that
+/// offered it re-reads its rung list — a path whose contents now match is no
+/// longer a row, and a window still listing it would offer the same overwrite
+/// again. The re-read is the app's, through the service, never the pane's, and
+/// it follows the refresh above so both see the taken file.
+fn reload_get_from_branch_rows(state: &mut AppState, rules: RuleSet) {
+    if rules.reload_get_from_branch_rows {
+        state.reload_get_from_branch_rows();
+    }
+}
+
+/// Rule seven: the activity log (issue #04) — the durable record the toast only
+/// summarizes. An op that leaves conflicts behind is a warning, not a success.
+///
+/// **The count is read here, after `refresh_affected` ran, and that is the whole
+/// point of this rule.** The snapshots are the only reliable statement of what
+/// conflicts the operation left; git's stderr text is not stable and the
+/// pre-refresh cache says nothing about this operation at all. Moving the read
+/// above the refresh compiles and passes most of the suite, and makes the
+/// Warning case wrong.
+///
+/// Returns the count it read and the sentence it wrote, because the two rules
+/// below consume both rather than recomputing them.
+fn record_completion_in_activity(
+    state: &mut AppState,
+    kind: OpKind,
+    label: &str,
+    affected: &Affected,
+) -> (usize, String) {
+    let conflicts = conflicted_count(state, affected);
+    let (entry, message) = if conflicts > 0 {
+        (
+            ActivityKind::Warning,
+            format!("{label} · {conflicts} unresolved conflicts"),
+        )
+    } else {
+        (
+            ActivityKind::Success,
+            report_for(state, kind, affected, label),
+        )
+    };
+    state.ui.activity.push(ActivityEntry {
+        at: chrono::Local::now(),
+        repo: activity_repo_label(affected),
+        message: message.clone(),
+        kind: entry,
+    });
+    (conflicts, message)
+}
+
+/// Rule eight (issue 13): a fetch reports plainly what changed — never a bare
+/// success, never a silent no-op. It quotes the sentence rule seven wrote, so
+/// the toast and the feed can never name two different outcomes for one fetch.
+fn report_what_the_fetch_changed(state: &mut AppState, rules: RuleSet, message: &str) {
+    if rules.fetch_report {
+        state.show_toast(Toast::success(message.to_string()));
+    }
+}
+
+/// Rule nine (issue 09): a merge/rebase that landed mid-conflict hands off
+/// cleanly to the conflict experience with an explicit mid-operation state that
+/// survives switching tabs. The count is rule seven's, for the same reason the
+/// activity entry's Warning case is.
+fn open_conflict_handoff(state: &mut AppState, kind: OpKind, conflicts: usize) {
+    if conflicts > 0 && hands_off_conflicts(kind) {
+        state.ui.merge_in_progress = true;
+        state.ui.conflict_resolver_open = true;
     }
 }
 
