@@ -28,7 +28,7 @@ use super::tree_selection::{self};
 use super::widgets;
 use crate::theme::{Palette, two_space_indent};
 use turbogit_app::operation::Operation;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::shell_writes;
 use turbogit_app::smart_rules::SmartGroupRule;
 use turbogit_app::state::{AppState, Dialog, Toast};
 use turbogit_domain::model::forward_slash_path;
@@ -325,11 +325,8 @@ fn fetch_selection(state: &mut AppState) {
 
 /// `git pull` on every selected root, one operation (issue #08).
 ///
-/// Merge-only by construction: the rebase flag is the literal `false` below, so
-/// this fleet verb rewrites nothing and owes neither the protected-branch
-/// refusal nor the rewrite backup. Wiring it to the configured update method
-/// would move it onto the guarded `AppState::dispatch_pull` path — per root, and
-/// so not by widening this loop.
+/// The fleet verb: merge-only by construction and scoped to every root, because
+/// the caller is choosing the selection. Both facts live at the entry.
 fn pull_selection(state: &mut AppState) {
     let paths: Vec<PathBuf> = state
         .ui
@@ -337,20 +334,10 @@ fn pull_selection(state: &mut AppState) {
         .iter()
         .map(|id| id.0.to_path_buf())
         .collect();
-    let n = paths.len();
-    if n == 0 {
+    if paths.is_empty() {
         return;
     }
-    state.dispatch(Operation::custom(
-        format!("Pull · {n} repos"),
-        Affected::All,
-        move |v| {
-            for p in &paths {
-                v.pull(p, false)?;
-            }
-            Ok(())
-        },
-    ));
+    state.dispatch(shell_writes::pull::selection(paths));
 }
 
 /// The STATE-family token a row's dot paints with. Conflict shares the
