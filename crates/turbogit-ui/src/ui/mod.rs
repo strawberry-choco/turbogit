@@ -80,8 +80,8 @@ pub mod worktrees;
 use crate::theme::Palette;
 use crate::ui::components::{KitButton, kit_button};
 use egui::{Color32, Context, Ui};
-use turbogit_app::operation::Operation;
-use turbogit_app::state::{AppState, Dialog, PendingConfirm, ToastKind};
+use turbogit_app::confirm;
+use turbogit_app::state::{AppState, Dialog, ToastKind};
 pub fn render(ui: &mut Ui, state: &mut AppState) {
     // Banner strip (issue #02): when set, paints a severity-tinted
     // strip with deep-link actions above the shell. This is the app-wide
@@ -242,6 +242,11 @@ fn render_toast(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// Confirmation dialog for destructive actions (Epic C8).
+///
+/// Chrome and painting only: the question, its disclosures and what each of its
+/// controls does belong to [`confirm`], so this paints the description it is
+/// handed and hands the clicked control back to `apply`. A verb cannot be
+/// half-painted, because the renderer no longer decides what a verb shows.
 fn render_confirm(ui: &mut Ui, state: &mut AppState) {
     let confirm = match &state.ui.confirm {
         Some(c) => c.clone(),
@@ -260,324 +265,40 @@ fn render_confirm(ui: &mut Ui, state: &mut AppState) {
         // `Order::Foreground` is egui's documented order for a window that stays on
         // top, and a confirmation is the one floating surface that always is.
         .order(egui::Order::Foreground)
-        .show(&ctx, |ui| match &confirm {
-            PendingConfirm::Discard { changes } => {
-                // Issue #02: rich confirmation — every affected file is
-                // listed so the user can see the blast radius, and
-                // "Shelve first" offers a non-destructive alternative
-                // alongside Discard / Cancel.
-                ui.label(format!(
-                    "Discard changes to {} file(s)? This cannot be undone.",
-                    changes.len()
-                ));
+        .show(&ctx, |ui| {
+            let prompt = confirm::prompt(state, &confirm);
+            for row in &prompt.rows {
                 ui.horizontal(|ui| {
-                    // Truncated file list — show up to 8 names; the
-                    // count is already in the header so anything past
-                    // 8 is summarized.
-                    for c in changes.iter().take(8) {
-                        ui.label(c.path.display().to_string());
-                    }
-                    if changes.len() > 8 {
-                        ui.label(format!("(+{} more)", changes.len() - 8));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    // Shelve first: stash the changes and close the
-                    // confirm. The worktree stays clean; the stash
-                    // entry preserves the changes for later recovery.
-                    if ui.button("Shelve first").clicked() {
-                        let changes_owned = changes.clone();
-                        let n = changes.len();
-                        state.ui.confirm = None;
-                        if let Some(root) = state.selected_root.clone() {
-                            state.dispatch(Operation::shelve(
-                                root,
-                                changes_owned,
-                                format!("Shelved {n} file(s) before discard"),
-                            ));
-                        }
-                    }
-                    // Suffix the label with the file count so it is
-                    // unique against any other UI control named
-                    // "Discard" (eg. toolbar actions that may carry
-                    // the bare word).
-                    if ui
-                        .button(format!("Discard {}-file changes", changes.len()))
-                        .clicked()
-                    {
-                        // Re-clone from the state's confirm field (it
-                        // was already cleared if the user clicked
-                        // Shelve first; this branch is the canonical
-                        // destructive path).
-                        if let Some(c) = state.ui.confirm.clone() {
-                            state.run_confirmed(c);
-                            state.ui.confirm = None;
-                        }
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::DeleteLocalBranch { name } => {
-                ui.label(format!(
-                    "Delete local branch '{name}'? This cannot be undone."
-                ));
-                // Issue #02: ahead-of-upstream warning. Query the
-                // engine for the branch's tracking upstream; if it
-                // exists and is NOT an ancestor of `name`, the branch
-                // carries unmerged commits. The query is synchronous
-                if let Some(warning) = state.branch_ahead_warning(name) {
-                    ui.colored_label(crate::theme::Palette::STATE_WARNING, warning);
-                }
-                // Issue 12: what is lost, in human terms.
-                if let Some(c) = &state.ui.branches_delete_consequence {
-                    ui.label(c.clone());
-                }
-                // The count is a **link**, and it is here rather than only in
-                // the notification after the ref is gone: TurboGit asks first,
-                // so the evidence belongs at the moment of decision. Quiet, so
-                // the confirm keeps one filled control and OK stays the thing
-                // that looks pressable.
-                if let Some(unmerged) = state.ui.branches_delete_unmerged.clone()
-                    && kit_button(ui, KitButton::Quiet, &unmerged.link_label()).clicked()
-                {
-                    state.open_unmerged_commits(&unmerged);
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        // Capture the tip for the undo window before the
-                        // branch is gone (issue 12).
-                        if let Some(root) = state.selected_root.clone()
-                            && let Some(tip_sha) = state.branch_tip(&root, name)
-                        {
-                            // Read here rather than at settlement: the delete
-                            // removes the local ref, and with it the upstream
-                            // entry and the commits the branch alone reached.
-                            let upstream = state.branch_upstream(&root, name);
-                            let unmerged = state.ui.branches_delete_unmerged.clone();
-                            state.ui.branches_delete_pending =
-                                Some(turbogit_app::state::BranchDeletePending {
-                                    root,
-                                    name: name.clone(),
-                                    tip_sha,
-                                    upstream,
-                                    unmerged,
-                                });
-                        }
-                        state.run_confirmed(confirm.clone());
-                        state.ui.confirm = None;
-                        state.ui.branches_delete_consequence = None;
-                        state.ui.branches_delete_unmerged = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                        state.ui.branches_delete_consequence = None;
-                        state.ui.branches_delete_unmerged = None;
-                    }
-                });
-            }
-            PendingConfirm::DeleteRemoteBranch { remote, name } => {
-                ui.label(format!(
-                    "Delete remote branch '{remote}/{name}'? This cannot be undone."
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::CheckoutDirty {
-                root,
-                target,
-                kind,
-                detach,
-            } => {
-                // Issue 07: plain-language care, never a bare "cannot
-                // checkout". The conflict implication is stated before acting.
-                ui.label(format!("You have uncommitted changes. Switch to '{target}'?"));
-                ui.label(
-                    "Bring along — changes come with you; if any conflict with the other branch, checkout is refused and nothing changes.",
-                );
-                ui.label(
-                    "Set aside — changes are stashed now and can be brought back afterwards.",
-                );
-                let mut chosen = None;
-                ui.horizontal(|ui| {
-                    if ui.button("Bring along").clicked() {
-                        chosen = Some(0);
-                    }
-                    if ui.button("Set aside").clicked() {
-                        chosen = Some(1);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-                match chosen {
-                    Some(0) => {
-                        state.ui.confirm = None;
-                        if *detach {
-                            state.checkout_detached_op(root, target);
+                    for line in &row.lines {
+                        if line.warning {
+                            ui.colored_label(Palette::STATE_WARNING, line.text.as_str());
                         } else {
-                            state.checkout_branch_op(root, *kind, target);
+                            ui.label(line.text.as_str());
                         }
                     }
-                    Some(1) => {
-                        state.ui.confirm = None;
-                        if *detach {
-                            state.checkout_detached_set_aside(root, target);
-                        } else {
-                            state.checkout_branch_set_aside(root, *kind, target);
-                        }
+                });
+            }
+            // Quiet, so the confirm keeps one filled control and OK stays the thing
+            // that looks pressable.
+            if let Some(disclosure) = &prompt.disclosure
+                && kit_button(ui, KitButton::Quiet, &disclosure.label).clicked()
+            {
+                confirm::apply(state, &confirm, disclosure.action);
+            }
+            let mut clicked = Vec::new();
+            ui.horizontal(|ui| {
+                for button in &prompt.buttons {
+                    if ui.button(button.label.as_str()).clicked() {
+                        clicked.push(button.action);
                     }
-                    _ => {}
                 }
-            }
-            PendingConfirm::CheckoutInWorktree { branch, worktree } => {
-                // Issue 07: refused up front, naming the worktree — no
-                // confusing checkout failure.
-                ui.label(format!("'{branch}' is already checked out in another worktree:"));
-                ui.label(worktree.display().to_string());
-                ui.label("Switch there, or close that worktree first.");
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::RemoveWorktree { path } => {
-                let name = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("<worktree>");
-                ui.label(format!("Remove worktree '{name}'? This cannot be undone."));
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::DeinitSubmodule { path } => {
-                let name = path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("<submodule>");
-                ui.label(format!(
-                    "De-init submodule '{name}'? Its working copy is removed."
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::InitHere => {
-                ui.label("Initialize a git repository in this directory?");
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::CloneRepo => {
-                ui.label("Clone the repository at the given URL?");
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::RevertCommit { commit } => {
-                let short = widgets::short_commit_ref(commit);
-                ui.label(format!(
-                    "Revert commit {short}? A new inverse commit will be created on the current branch."
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::GetFileFromBranch { root, source, path } => {
-                // The whole blast radius, stated because the reference documents no
-                // confirm step at all for this verb, an absence this app departs from
-                // on purpose: one file, in one named root, losing its
-                // entire current contents — and nothing committed, since the take is a
-                // working-tree write the developer then commits by hand.
-                ui.label(format!(
-                    "Replace {} in {} with the entire contents it has on '{source}'? The file's current contents are lost, and nothing is committed.",
-                    path.display(),
-                    root.name()
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("Replace file").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            // Surface 07's two destructive verbs. **Whether the reference
-            // confirms either of them was never observed at runtime**, so these
-            // carry TurboGit's own confirming stance — the documented fallback,
-            // recorded as a divergence rather than a silent invention.
-            PendingConfirm::DeleteShelf { name, .. } => {
-                ui.label(format!(
-                    "Delete shelf '{name}'? Its row leaves the shelf, and the changes it parked \
-                     are dropped from this repository's stash list."
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
-            }
-            PendingConfirm::DeleteStash { index, .. } => {
-                ui.label(format!(
-                    "Delete stash {}? The entry is removed, and with it the only copy of what it \
-                     holds.",
-                    turbogit_app::shelve_stash::stash_ref(*index)
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        state.run_confirmed(confirm);
-                        state.ui.confirm = None;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        state.ui.confirm = None;
-                    }
-                });
+            });
+            // Applied in the row's declared order, not in the order the clicks
+            // arrived: the discard's destructive control decides whether the
+            // question is still there by reading the slot its own left neighbour
+            // clears, so which of the two ran first is part of the behaviour.
+            for action in clicked {
+                confirm::apply(state, &confirm, action);
             }
         });
     if !open {
