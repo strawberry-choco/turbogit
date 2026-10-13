@@ -155,6 +155,7 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
                 ],
                 disclosure: None,
                 buttons: vec![
+                    Button::new("Shelve first", ConfirmAction::ShelveFirst),
                     Button::new(
                         format!("Discard {n}-file changes"),
                         ConfirmAction::Confirm,
@@ -305,7 +306,23 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
 /// a verb with its controls, so there is no such pair to arrive.
 pub fn apply(state: &mut AppState, c: &PendingConfirm, action: ConfirmAction) {
     match c {
-        PendingConfirm::Discard { .. } => match action {
+        PendingConfirm::Discard { changes } => match action {
+            ConfirmAction::ShelveFirst => {
+                // Stash the changes and answer the question: the worktree goes
+                // clean and the stash entry keeps the work for later recovery,
+                // so this is the row's answer to a question the destructive
+                // button beside it would end.
+                let changes_owned = changes.clone();
+                let n = changes.len();
+                state.ui.confirm = None;
+                if let Some(root) = state.selected_root.clone() {
+                    state.dispatch(Operation::shelve(
+                        root,
+                        changes_owned,
+                        format!("Shelved {n} file(s) before discard"),
+                    ));
+                }
+            }
             ConfirmAction::Confirm => {
                 // Re-read the live slot, not the snapshot `c`: "Shelve first"
                 // is declared first in this row and clears `ui.confirm`, so a
