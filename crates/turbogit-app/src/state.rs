@@ -21,7 +21,6 @@ use turbogit_engine_api::{GitExecutor, OwnedOperation};
 use turbogit_services::branch_service;
 use turbogit_services::bulk_ops::{self, BulkOp, BulkPlan, Preflight};
 use turbogit_services::bulk_run;
-use turbogit_services::changes;
 use turbogit_services::commit_across;
 use turbogit_services::patch_create;
 
@@ -3110,128 +3109,12 @@ impl AppState {
 
     /// Execute a confirmed destructive action (Epic C8). The UI gates these
     /// behind a confirmation dialog and only calls this on explicit OK.
+    ///
+    /// The verb's effect is [`confirm`](crate::confirm)'s: this stays the entry
+    /// because two headless suites call it directly, and it is the same match a
+    /// confirm button runs under [`confirm::apply`](crate::confirm::apply).
     pub fn run_confirmed(&mut self, c: PendingConfirm) {
-        match c {
-            PendingConfirm::Discard { changes } => {
-                let Some(root) = self.selected_root.clone() else {
-                    return;
-                };
-                self.dispatch(Operation::custom(
-                    "Discard changes",
-                    Affected::Root(root.clone()),
-                    move |v| changes::discard_changes(v, root.as_path(), &changes),
-                ));
-            }
-            PendingConfirm::DeleteLocalBranch { name } => {
-                let Some(root) = self.selected_root.clone() else {
-                    return;
-                };
-                // Force delete: the confirmation already discloses what is
-                // lost in human terms (issue 12) before this runs, so an
-                // unmerged branch deletes with the user's informed consent
-                // instead of a bare refusal.
-                self.dispatch(Operation::DeleteBranch { root, name });
-            }
-            PendingConfirm::DeleteRemoteBranch { remote, name } => {
-                let Some(root) = self.selected_root.clone() else {
-                    return;
-                };
-                self.dispatch(Operation::custom(
-                    "Delete remote branch",
-                    Affected::Root(root.clone()),
-                    move |v| v.branch_delete_remote(root.as_path(), &remote, &name),
-                ));
-            }
-            // Issue 07: the dirty-checkout dialog dispatches its own choices;
-            // this arm covers the generic confirm path (bring the changes
-            // along) for completeness.
-            PendingConfirm::CheckoutDirty {
-                root,
-                target,
-                kind,
-                detach,
-            } => {
-                if detach {
-                    self.checkout_detached_op(&root, &target);
-                } else {
-                    self.checkout_branch_op(&root, kind, &target);
-                }
-            }
-            PendingConfirm::CheckoutInWorktree { .. } => {}
-            PendingConfirm::InitHere => self.init_repo(),
-            PendingConfirm::CloneRepo => self.clone_repo(),
-            PendingConfirm::RemoveWorktree { path } => {
-                if let Some(root) = self.selected_root.clone() {
-                    self.dispatch(Operation::WorktreeRemove { root, path });
-                }
-            }
-            PendingConfirm::DeinitSubmodule { path } => {
-                let Some(root) = self.selected_root.clone() else {
-                    return;
-                };
-                self.dispatch(Operation::custom(
-                    "Deinit submodule",
-                    Affected::Root(root.clone()),
-                    move |v| v.submodule_deinit(root.as_path(), &path, false),
-                ));
-            }
-            PendingConfirm::RevertCommit { commit } => {
-                let Some(root) = self.selected_root.clone() else {
-                    return;
-                };
-                let settings = self.settings.clone();
-                self.dispatch(Operation::custom(
-                    format!("Revert {}", short_sha(&commit)),
-                    Affected::Root(root.clone()),
-                    move |v| {
-                        turbogit_services::integrate_service::revert_commit(
-                            v,
-                            root.as_path(),
-                            &commit,
-                            &settings,
-                        )
-                    },
-                ));
-            }
-            // `Get from Branch`: the root, the branch and the path all
-            // rode in the confirmation, so what runs is exactly what was
-            // disclosed — never a re-read of whichever root is focused now, which
-            // is how a per-root verb turns into a write in the wrong repository.
-            PendingConfirm::GetFileFromBranch { root, source, path } => {
-                self.dispatch(Operation::GetFileFromBranch { root, source, path });
-            }
-            // Surface 07: a shelf's record is app state, so it goes the frame the
-            // verb is confirmed; its *content* is a stash entry, so that half is
-            // git work and is dispatched. A git-side failure leaves the content
-            // listed under Stash, where it is still recoverable — which is the
-            // outcome the immediate record removal depends on, not an oversight.
-            PendingConfirm::DeleteShelf { root, name } => {
-                let git_root = root.clone();
-                let git_name = name.clone();
-                self.dispatch(Operation::custom(
-                    format!("Delete shelf '{name}'"),
-                    Affected::Root(root.clone()),
-                    move |v| {
-                        turbogit_services::shelve_stash::discard_shelf_content(
-                            v,
-                            git_root.as_path(),
-                            &git_name,
-                        )
-                    },
-                ));
-                self.remove_shelf(&root, &name);
-            }
-            PendingConfirm::DeleteStash { root, index } => {
-                self.dispatch(Operation::custom(
-                    format!(
-                        "Delete stash {}",
-                        turbogit_services::shelve_stash::stash_ref(index)
-                    ),
-                    Affected::Root(root.clone()),
-                    move |v| v.stash_drop(root.as_path(), index),
-                ));
-            }
-        }
+        crate::confirm::run(self, c);
     }
 
     // -------------------------------------------------- shelf verbs (07) ----

@@ -34,6 +34,7 @@ pub mod banner;
 pub mod bulk_history;
 pub mod bulk_run_view;
 pub mod cherry_run_view;
+pub mod confirm;
 pub mod diff_data;
 pub mod diff_load;
 pub mod diff_model;
