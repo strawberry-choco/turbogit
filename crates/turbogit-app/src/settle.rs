@@ -208,25 +208,28 @@ pub fn op_completed(
 pub fn bulk_completed(state: &mut AppState, label: String, results: Vec<(RootId, TgResult<()>)>) {
     state.refresh(Affected::All);
     let ok = results.iter().filter(|(_, r)| r.is_ok()).count();
+    // **One read of the run's rows.** The skip reasons, the guard refusals and
+    // the history record are three accounts of the same monitor's final truth,
+    // and they used to be taken from three separate walks of it — so a row that
+    // changed between two walks could be counted in one account and missing
+    // from another. Everything derived from the view is derived here, before
+    // the first mutation, and the steps that consume it keep today's order.
+    let (mut reasons, refusals, record) = match state.ui.bulk_run.as_ref() {
+        Some(view) => (
+            skip_reasons(view),
+            guard_refusals(view),
+            Some(crate::bulk_history::from_run_view(
+                view,
+                chrono::Utc::now().timestamp_millis(),
+            )),
+        ),
+        None => (Vec::new(), Vec::new(), None),
+    };
     // An empty result set would satisfy `ok == results.len()`
     // and settle as a success — but a run that planned no
     // roots ran nothing, so the zero case is decided here,
     // loudly, from the monitor's own skip rows.
     let (kind, message) = if results.is_empty() {
-        let mut reasons: Vec<String> = state
-            .ui
-            .bulk_run
-            .as_ref()
-            .map(|view| {
-                view.rows
-                    .iter()
-                    .filter_map(|r| match &r.state {
-                        bulk_run::RowState::Skipped { reason } => Some(reason.clone()),
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
         let skipped = reasons.len();
         if skipped == 0 {
             (ToastKind::Error, format!("{label} · nothing ran"))
@@ -287,23 +290,6 @@ pub fn bulk_completed(state: &mut AppState, label: String, results: Vec<(RootId,
     // protected root lands in `run_step`, which refuses) is
     // durable per root too, naming the branch the guard
     // named — the aggregate above only names the repos.
-    let refusals: Vec<(String, String)> = state
-        .ui
-        .bulk_run
-        .as_ref()
-        .map(|view| {
-            view.rows
-                .iter()
-                .filter_map(|r| match &r.state {
-                    bulk_run::RowState::Failed {
-                        error,
-                        protected_branch: true,
-                    } => Some((r.name.clone(), error.clone())),
-                    _ => None,
-                })
-                .collect()
-        })
-        .unwrap_or_default();
     for (name, error) in refusals {
         state.ui.activity.push(ActivityEntry {
             at: chrono::Local::now(),
@@ -317,15 +303,12 @@ pub fn bulk_completed(state: &mut AppState, label: String, results: Vec<(RootId,
     // the same record on a retry pass. The monitor's rows
     // are the run's final truth (done/failed/skipped).
     //
-    // The record is built out here, and only then handed to the
+    // The record is built out above, and only now handed to the
     // list, because the divergence offer is read from those
     // same per-root rows: the run's monitor is the one place
     // that knows which repositories moved and which did not, so
     // a second account of the outcome could disagree with the
     // surface the developer just watched.
-    let record = state.ui.bulk_run.as_ref().map(|view| {
-        crate::bulk_history::from_run_view(view, chrono::Utc::now().timestamp_millis())
-    });
     if let Some(record) = record {
         let diverged = branch_divergence_for(&record);
         if let Some(diverged) = &diverged {
@@ -353,6 +336,36 @@ pub fn bulk_completed(state: &mut AppState, label: String, results: Vec<(RootId,
         crate::bulk_history::record_into(&mut state.ui.bulk_history, record);
         state.persist_ui();
     }
+}
+
+/// The display-ready reason each row the monitor skipped carries, in row order.
+/// The caller sorts and de-duplicates them: the *count* is roots, the list is
+/// distinct reasons, and collapsing the two would misreport the fleet.
+fn skip_reasons(view: &crate::bulk_run_view::BulkRunView) -> Vec<String> {
+    view.rows
+        .iter()
+        .filter_map(|r| match &r.state {
+            bulk_run::RowState::Skipped { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The guard refusals the monitor recorded, as `(root name, git's own reason)`.
+/// The `protected_branch` flag is decided while the step's error is still a
+/// type; this is the only place it is read, and a refusal settlement owes it a
+/// durable per-root entry rather than re-reading the row's prose.
+fn guard_refusals(view: &crate::bulk_run_view::BulkRunView) -> Vec<(String, String)> {
+    view.rows
+        .iter()
+        .filter_map(|r| match &r.state {
+            bulk_run::RowState::Failed {
+                error,
+                protected_branch: true,
+            } => Some((r.name.clone(), error.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The success-side post-completion rules, in the order they run.
