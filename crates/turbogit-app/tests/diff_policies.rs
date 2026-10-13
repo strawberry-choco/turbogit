@@ -378,7 +378,7 @@ fn both_policies_come_back_from_the_project_on_the_next_launch() {
 
     let mut state = AppState::for_roots(project.path(), &[]);
     state.ui.diff_policies = set;
-    state.persist_ui();
+    state.save_durable_ui();
 
     // Written down rather than merely held: a value serde dropped on the floor
     // would still leave the session correct and the next launch wrong.

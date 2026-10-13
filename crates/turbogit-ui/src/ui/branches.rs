@@ -254,7 +254,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             // A toggle is a preference the person chose, not a scratch value for
             // this session: it is written down the frame it changes, the same
             // way every other durable UI preference on this surface is.
-            state.persist_ui();
+            state.save_durable_ui();
         }
     }
 }

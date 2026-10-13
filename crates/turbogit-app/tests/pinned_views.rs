@@ -58,7 +58,7 @@ fn views_survive_a_restart_through_the_launch_path() {
 
     let mut state = AppState::for_roots(project.path(), &[]);
     state.ui.pinned_views = vec![view("View 1", &["/w/oss/lib"])];
-    state.persist_ui();
+    state.save_durable_ui();
 
     let reloaded = AppState::launch_in(
         Some(project.path().to_path_buf()),

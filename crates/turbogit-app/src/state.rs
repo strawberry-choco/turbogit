@@ -1845,7 +1845,7 @@ pub struct UiState {
     pub sidebar_smart_group: Option<String>,
     /// User-defined smart group rules (issue #07), evaluated alongside the
     /// built-ins every frame and persisted with the workspace through
-    /// [`Self::persist_ui`] / the launch path.
+    /// [`Self::save_durable_ui`] / the launch path.
     pub smart_group_rules: Vec<crate::smart_rules::SmartGroupRule>,
     // Multi-repo selection (issue #08): the checked repos of the workspace
     // tree — plain data here so the app crate never names a UI type; the
@@ -1880,11 +1880,11 @@ pub struct UiState {
     /// picked commits in order.
     pub cherry_run: Option<crate::cherry_run_view::CherryRunView>,
     /// Pinned selections ("Pin as view", issue #08), persisted with the
-    /// workspace through [`Self::persist_ui`] / the launch path.
+    /// workspace through [`Self::save_durable_ui`] / the launch path.
     pub pinned_views: Vec<crate::pinned_views::PinnedView>,
     /// Recent bulk operations (issue 12, screen 04): one record per
     /// completed bulk/cascade run, persisted with the workspace through
-    /// [`Self::persist_ui`] / the launch path.
+    /// [`Self::save_durable_ui`] / the launch path.
     pub bulk_history: Vec<crate::bulk_history::BulkRunRecord>,
     /// The history record whose Details drill-down is expanded (issue 12),
     /// keyed by record id.
@@ -2236,8 +2236,22 @@ impl AppState {
             .or_else(crate::recents::default_config_dir)
     }
 
-    /// Persist lightweight UI state (active tab, draft message, recent repos).
-    pub fn persist_ui(&self) {
+    /// Write the **durable** set of UI state to `.turbogit/ui.ron`.
+    ///
+    /// Durable means the ten rows declared by
+    /// [`crate::persistence::UiPersist`] — the active tab, the repositories,
+    /// and the seven preferences behind their own surfaces — and nothing else:
+    /// the other 128 [`UiState`] fields are this session's and are not
+    /// written here.
+    ///
+    /// **When to call it: a change to a durable field is written by the same
+    /// call that changes it.** A rule, not an enforcement — nothing stops a
+    /// mutation from forgetting this call, and three routes in the tree
+    /// (the palette's tab actions, the draft's Clear and Template, the
+    /// Branches gear's `&mut` hand-off) do forget it today. That is the rule
+    /// the fourteen existing call sites already follow, which is why the
+    /// timing of each of them is load-bearing and not incidental.
+    pub fn save_durable_ui(&self) {
         let ui = crate::persistence::UiPersist::capture(&self.ui);
         let _ = crate::persistence::save_ui_state(&self.project_dir, &ui);
     }
@@ -5378,7 +5392,7 @@ impl AppState {
             name: crate::pinned_views::next_name(&self.ui.pinned_views),
             repos,
         });
-        self.persist_ui();
+        self.save_durable_ui();
     }
 
     // -- Bulk operations grid (issue 09) ------------------------------------
@@ -5996,7 +6010,7 @@ impl AppState {
         self.ui
             .recent_custom_commands
             .truncate(MAX_RECENT_CUSTOM_COMMANDS);
-        self.persist_ui();
+        self.save_durable_ui();
     }
 
     /// Spawn one cascade pool pass on a worker thread.
@@ -6381,7 +6395,7 @@ impl AppState {
             kind: crate::activity::ActivityKind::Success,
         });
         self.refresh(Affected::All);
-        self.persist_ui();
+        self.save_durable_ui();
         RollbackOutcome::Applied {
             branch: rec.branch.clone(),
             roots: restored,

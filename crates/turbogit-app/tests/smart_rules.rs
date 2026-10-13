@@ -58,7 +58,7 @@ fn rules_survive_a_restart_through_the_launch_path() {
 
     let mut state = AppState::for_roots(project.path(), &[]);
     state.ui.smart_group_rules = vec![release_rule()];
-    state.persist_ui();
+    state.save_durable_ui();
 
     // Relaunching the same project restores the rules into live UI state.
     let reloaded = AppState::launch_in(

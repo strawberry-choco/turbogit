@@ -241,7 +241,7 @@ fn recent_commands_persist_with_the_workspace_and_carry_over_a_restart() {
     };
     state.run_bulk_confirmed(plan);
     wait_for_run_end(&mut state);
-    state.persist_ui();
+    state.save_durable_ui();
 
     let reloaded = turbogit_app::persistence::load_ui_state(&project);
     assert_eq!(

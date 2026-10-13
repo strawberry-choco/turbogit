@@ -2566,7 +2566,7 @@ fn commit_split_menu(chevron: &egui::Response, state: &mut AppState) {
                 state.run_commit_across(&message, amend);
                 state.ui.commit_message.clear();
                 state.ui.selected.clear();
-                state.persist_ui();
+                state.save_durable_ui();
                 menu.close();
             }
         }
@@ -2597,7 +2597,7 @@ fn do_commit(state: &mut AppState, and_push: bool) {
     // Reset fields (the recent message was recorded above).
     state.ui.commit_message.clear();
     state.ui.selected.clear();
-    state.persist_ui();
+    state.save_durable_ui();
     if and_push {
         state.ui.dialog = Some(Dialog::Push);
     }

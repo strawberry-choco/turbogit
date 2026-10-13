@@ -851,7 +851,7 @@ fn delete_rule(state: &mut AppState, ix: usize) {
         state.ui.sidebar_smart_group = None;
     }
     state.ui.smart_group_rules.remove(ix);
-    state.persist_ui();
+    state.save_durable_ui();
     state.ui.toast = Some(Toast::info("Smart group rule deleted"));
 }
 
@@ -937,7 +937,7 @@ fn render_folder_row(
         } else {
             state.ui.sidebar_collapsed.remove(&key);
         }
-        state.persist_ui();
+        state.save_durable_ui();
     }
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, folder.name.as_str()));
     // The checkbox interacts after the header so it sits above it and
@@ -1114,7 +1114,7 @@ fn render_repo_node(
             } else {
                 state.ui.sidebar_collapsed.remove(&rel);
             }
-            state.persist_ui();
+            state.save_durable_ui();
         }
     }
 
