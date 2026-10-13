@@ -6,8 +6,7 @@
 //! with per-repo outcomes (routed through the bulk-completed pipeline).
 
 use egui::Ui;
-use turbogit_app::operation::Operation;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::shell_writes::remote as writes;
 use turbogit_app::state::{AppState, RemoteRowAction};
 use turbogit_domain::model::{BranchKind, RootId};
 use turbogit_services::remote_service::RemoteChange;
@@ -74,14 +73,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                     if widgets::compact_button(ui, "Rename").clicked() {
                         let new = state.ui.dlg.remotes_rename_new.trim().to_string();
                         if !new.is_empty() && new != name {
-                            let p = root_path.clone();
-                            state.dispatch(Operation::custom(
-                                format!("Rename remote {name}"),
-                                Affected::Root(id.clone()),
-                                move |v| {
-                                    turbogit_services::remote_service::rename(v, &p, &name, &new)
-                                },
-                            ));
+                            state.dispatch(writes::rename(&id, root_path.as_path(), &name, &new));
                         }
                         state.ui.dlg.remotes_row_action = None;
                     }
@@ -113,21 +105,12 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                     if widgets::compact_button(ui, "Save").clicked() {
                         let fetch = state.ui.dlg.remotes_edit_fetch.clone();
                         let push = state.ui.dlg.remotes_edit_push.clone();
-                        let p = root_path.clone();
-                        state.dispatch(Operation::custom(
-                            format!("Update remote {name}"),
-                            Affected::Root(id.clone()),
-                            move |v| {
-                                let fetch = if fetch.is_empty() { None } else { Some(fetch) };
-                                let push = if push.is_empty() { None } else { Some(push) };
-                                turbogit_services::remote_service::set_url(
-                                    v,
-                                    &p,
-                                    &name,
-                                    fetch.as_deref(),
-                                    push.as_deref(),
-                                )
-                            },
+                        state.dispatch(writes::update(
+                            &id,
+                            root_path.as_path(),
+                            &name,
+                            &fetch,
+                            &push,
                         ));
                         state.ui.dlg.remotes_row_action = None;
                     }
@@ -149,16 +132,11 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                             .selectable_label(false, format!("{branch} → {upstream}"))
                             .clicked()
                         {
-                            let b = branch.clone();
-                            let p = root_path.clone();
-                            state.dispatch(Operation::custom(
-                                format!("Set upstream {b} → {upstream}"),
-                                Affected::Root(id.clone()),
-                                move |v| {
-                                    turbogit_services::remote_service::set_upstream(
-                                        v, &p, &b, &upstream,
-                                    )
-                                },
+                            state.dispatch(writes::set_upstream(
+                                &id,
+                                root_path.as_path(),
+                                &branch,
+                                &upstream,
                             ));
                             state.ui.dlg.remotes_row_action = None;
                         }
@@ -186,12 +164,7 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
                             Some((name.clone(), RemoteRowAction::EditUrl));
                     }
                     if widgets::compact_button(ui, "Remove").clicked() {
-                        let p = root_path.clone();
-                        state.dispatch(Operation::custom(
-                            format!("Remove remote {name}"),
-                            Affected::Root(id.clone()),
-                            move |v| turbogit_services::remote_service::remove(v, &p, &name),
-                        ));
+                        state.dispatch(writes::remove(&id, root_path.as_path(), &name));
                     }
                 }
             }
@@ -256,20 +229,12 @@ fn manage_remotes(ui: &mut Ui, state: &mut AppState) {
         .inner;
     if add.clicked() {
         let add_push = state.ui.dlg.remotes_add_push.trim().to_string();
-        let p = root_path.clone();
-        let fetch = add_fetch.clone();
-        let name = add_name.clone();
-        state.dispatch(Operation::custom(
-            format!("Add remote {add_name}"),
-            Affected::Root(id.clone()),
-            move |v| {
-                let url = if add_push.is_empty() {
-                    fetch.clone()
-                } else {
-                    add_push.clone()
-                };
-                turbogit_services::remote_service::add(v, &p, &name, &url)
-            },
+        state.dispatch(writes::add(
+            &id,
+            root_path.as_path(),
+            &add_name,
+            &add_fetch,
+            &add_push,
         ));
     }
     ui.add_space(6.0);
