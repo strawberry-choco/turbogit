@@ -16,7 +16,7 @@ use turbogit_domain::model::{
     Commit, DiffOpts, LogOpts, Patch, PatchFile, PatchHeaderLine, RootId, short_commit_ref,
     subject_of_message,
 };
-use turbogit_engine_api::GitExecutor;
+use turbogit_engine_api::{GitExecutor, OwnedOperation};
 
 use crate::integrate_service;
 
@@ -294,7 +294,7 @@ pub fn apply_to_root(
                 let held = integrate_service::operation_in_progress(exec.holding_operation(root));
                 if held && !stop_on_conflict {
                     // Policy off: release the held pick and move on.
-                    let _ = exec.abort(root, "cherry-pick");
+                    let _ = exec.abort(root, OwnedOperation::CherryPick);
                 }
                 if stop_on_conflict {
                     // Hold the conflict for manual resolution; this repo's

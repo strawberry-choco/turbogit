@@ -24,13 +24,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use test_support::harness::{
     KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, filled_rects, galley_origin,
-    shell_harness_over_unstyled,
+    painted_galleys, shell_harness_over_unstyled,
 };
 
 use egui::{Color32, Key, Modifiers, Pos2, Rect, Shape, accesskit::Role};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use test_support::git_seed::git;
+use test_support::wait_until;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 use turbogit_ui::theme::Palette;
@@ -133,21 +134,6 @@ fn app_state(roots: &[PathBuf]) -> AppState {
 /// panicking past it.
 fn harness(state: AppState) -> Harness<'static, AppState> {
     shell_harness_over_unstyled(state, KITTEST_DEFAULT_BOX, 1024)
-}
-
-/// Poll `f` until it returns true or the deadline elapses (worker threads run
-/// asynchronously, so completion is observed by polling).
-fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 /// Open the redesigned merge editor for the seeded conflicted file.
@@ -452,6 +438,46 @@ fn apply_writes_composed_result_and_clears_conflict_state() {
         );
         std::thread::sleep(Duration::from_millis(25));
     }
+}
+
+/// The ordinal-3 branch — "Take both · theirs first", the resolver's word for
+/// it — through the INLINE editor. This surface has no button that produces
+/// the ordinal, so before this assertion the branch lived in one module's
+/// match and was pinned by nothing on the surface that shares it: the two
+/// copies of the match could have disagreed about what a `3` means with no
+/// suite noticing. The choice is therefore seeded the way the app holds it and
+/// the read-only Result is read off the frame.
+#[test]
+fn ordinal_three_places_theirs_before_ours_in_the_read_only_result() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "both-theirs-repo");
+    let branch = repo.branch();
+    seed_two_conflicts(&repo.path, &branch);
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    open_merge_editor(&mut h);
+
+    h.state_mut().ui.conflict_res[0] = Some(3);
+    h.run();
+
+    // The cell that carries BOTH sides of conflict 1 is its Result cell — the
+    // panes behind it each carry one side alone — and the ordinal decides the
+    // order inside it.
+    let cell = painted_galleys(&h)
+        .into_iter()
+        .find(|g| g.text.contains("SIDE-one") && g.text.contains("MAIN-one"))
+        .unwrap_or_else(|| panic!("no Result cell carries both sides of conflict 1"));
+    let theirs = cell.text.find("SIDE-one").expect("theirs in the cell");
+    let ours = cell.text.find("MAIN-one").expect("ours in the cell");
+    assert!(
+        theirs < ours,
+        "ordinal 3 must read theirs before ours in the read-only Result, got:\n{}",
+        cell.text
+    );
+
+    // The choice resolves the block exactly the way a button-produced one
+    // does, so the counter drops and Apply's gate moves with it.
+    assert_painted(&h, "1 conflict remaining");
 }
 
 #[test]

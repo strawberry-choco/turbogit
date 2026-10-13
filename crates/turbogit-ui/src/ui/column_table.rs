@@ -1,20 +1,23 @@
-//! The one column-table tool pane, shared by Worktrees and Submodules.
+//! The one column-table grammar, shared by the tool panes and the fleet
+//! matrices.
 //!
-//! Both panes are the same surface over different rows: read the focused
-//! root's cached list, paint the shared pane header with a count chip that is
-//! that list's own length, then the shared column-header row over the pane's
-//! column table, then a scroller whose empty branch is a word and whose body is
-//! one row function. This module owns that sequence so neither pane restates it;
-//! the two panes keep their columns, their strings, their header actions and
-//! their rows, which are the four things that actually differ between them.
+//! Two shapes live here, and both exist so the offset arithmetic is stated
+//! once. [`column_table_pane`] runs the tool-pane sequence — the R7 header, the
+//! column-header row, a scroller of one row function — for the Worktrees and
+//! Submodules panes and for the Commit window's Shelf and Stash panes;
+//! [`matrix_table`] paints one band-and-offset matrix for the five fleet
+//! matrices (the preflight modal's three variants, the run monitor's table, and
+//! the selection summary's per-repo table), and [`paint_cell`] paints what goes
+//! inside a matrix row's band. Callers keep their columns, their strings and
+//! their rows, which are the things that actually differ between them.
 //!
-//! **Crate-private on purpose.** It is a grammar shared by two sibling feature
+//! **Crate-private on purpose.** It is a grammar shared by sibling feature
 //! surfaces, not a general widget and not a feature API — the same position
 //! `ui::components` holds for the branch screens and `ui::kit::conflict_pane` for
 //! the conflict ones. Nothing outside `turbogit_ui::ui` names it, so no caller can
 //! read "column-oriented pane" as a general container role.
 
-use egui::{ScrollArea, Ui};
+use egui::{Color32, Painter, Pos2, Rect, ScrollArea, Sense, Ui, Vec2};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 
@@ -120,6 +123,115 @@ pub(crate) fn column_table_pane<T: Clone>(
             (spec.row)(ui, state, row);
         }
     });
+}
+
+/// Paint one fleet matrix: a band of column labels over one row band per row,
+/// at the offsets the caller's own [`PaneColumn`] table states.
+///
+/// Takes geometry only — a width, one column table, two band heights and the
+/// rows — and names no feature, no state and no operation. The caller keeps its
+/// column list, its strings and its cell contents; what stops being five
+/// hand-written painters is the arithmetic every one of them was restating
+/// twice: once in its `[("LABEL", x), …]` literal and once in every
+/// `cell(x, …)` call, with nothing comparing the two numbers.
+///
+/// **The row closure allocates the band its row claims.** The painter computes
+/// the rect and hands it over; it does not allocate it, because the band's
+/// *width* is the row's business and one row of one of the five does not fill
+/// it. A painter that allocated the full pane width itself would force that
+/// row's trailing control into either a taller child or a reserved trailing
+/// slot, and both are visible.
+///
+/// Returns the header band it allocated, so a caller that owns a mark under it
+/// measures the same rect instead of deriving a second one.
+///
+/// **Not [`widgets::column_header`], and not a caller of it.** That band is
+/// [`widgets::COLUMN_HEADER_HEIGHT`] (16pt) over a `RULE_STRUCTURAL` underline,
+/// in the one tracked micro type; these matrices are 22/24pt with no rule, in
+/// the chrome control face, and rewiring them onto the shared header is a
+/// visible change that has not been decided.
+pub(crate) fn matrix_table<T>(
+    ui: &mut Ui,
+    width: f32,
+    columns: &[PaneColumn],
+    header_h: f32,
+    row_h: f32,
+    rows: &[T],
+    row: &mut dyn FnMut(&mut Ui, Rect, &T),
+) -> Rect {
+    let header = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, header_h));
+    ui.allocate_exact_size(Vec2::new(width, header_h), Sense::hover());
+    for column in columns {
+        let galley = ui.painter().layout_no_wrap(
+            column.label.to_owned(),
+            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
+            crate::theme::Palette::INK_3,
+        );
+        ui.painter().galley_with_override_text_color(
+            egui::Pos2::new(
+                column.origin(header),
+                header.center().y - galley.size().y / 2.0,
+            ),
+            galley,
+            crate::theme::Palette::INK_3,
+        );
+    }
+    for r in rows {
+        let rect = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, row_h));
+        row(ui, rect, r);
+    }
+    header
+}
+
+/// Paint one fleet-matrix body cell: `text` in the chrome data face, ink
+/// `color`, starting at `base_x + x` and centred on `cy`.
+///
+/// The second half of the grammar [`matrix_table`] owns — the header band and
+/// the row band are there, and this is what a row paints inside its band. A
+/// **layout mechanic, not a widget**: it allocates nothing, answers nothing, and
+/// takes no `Id`. Crate-private with the module it belongs to, because nothing
+/// outside `turbogit_ui::ui` has a matrix row to paint.
+///
+/// The caller keeps its columns, strings and offsets; only the face, the
+/// centring and the paint are decided here. Each site keeps its own one-line
+/// `let cell = |x, text, color| …` forwarder so its `cell(x, …)` calls read
+/// unchanged.
+///
+/// **`galley_with_override_text_color`, not `Painter::galley`.** `Painter::galley`
+/// takes its colour as a *fallback* for `PLACEHOLDER` spans only — a galley laid
+/// out in `color` would keep painting `color` today, so the two coincide here and
+/// the coincidence is **not** the contract: collapsing the override would make the
+/// helper silently assume nothing else ever lays a galley out in a different ink
+/// from the one it paints. `ui::components`' own centred label keeps the override
+/// for the same stated reason.
+///
+/// **`base_x` and `cy`, not a `Rect`.** The run monitor's row callback is
+/// `|ui, _rect, row|`: it deliberately ignores the rect [`matrix_table`] hands it
+/// and derives `left`/`cy` from `ui.cursor()` inside a `ui.horizontal` child,
+/// which is not `r.left()` / `r.center().y` by any guarantee. A `Rect`-shaped
+/// signature would move that table's cells. The base is therefore a parameter
+/// *expression*, because that one site's base is cursor-derived.
+///
+/// `text: String` mirrors the closure parameter this replaced, so the migration
+/// is a substitution and `layout_no_wrap` receives what it received before.
+pub(crate) fn paint_cell(
+    painter: &Painter,
+    base_x: f32,
+    x: f32,
+    cy: f32,
+    text: String,
+    color: Color32,
+) {
+    let galley = painter.layout_no_wrap(
+        text,
+        crate::theme::chrome_font(crate::theme::TYPE_BODY),
+        color,
+    );
+    painter.galley_with_override_text_color(
+        Pos2::new(base_x + x, cy - galley.size().y / 2.0),
+        galley,
+        color,
+    );
 }
 
 /// The PATH cell a column table's first column holds: the row's **primary

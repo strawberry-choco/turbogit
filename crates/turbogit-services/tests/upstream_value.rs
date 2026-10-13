@@ -63,6 +63,24 @@ fn root_tracking(branch: &str, upstream: Option<Upstream>, remotes: &[&str]) -> 
     r
 }
 
+/// A branch row of `kind` named `name`, tracking `upstream`.
+fn branch_row(name: &str, kind: BranchKind, tracking: Option<Upstream>) -> Branch {
+    Branch {
+        name: name.to_string(),
+        kind,
+        tracking,
+        favorite: false,
+        protected: false,
+        exists: true,
+        ahead: 0,
+        behind: 0,
+        gone: false,
+        last_touched: None,
+        tip: None,
+        remote: None,
+    }
+}
+
 fn mgr_with(roots: Vec<Root>) -> MultiRootManager {
     MultiRootManager {
         roots,
@@ -170,4 +188,120 @@ fn no_persisted_state_stores_the_old_spelling() {
         "a branch listing reached the serialized project state; the retired \
          `tracking: Option<String>` spelling now needs an on-disk migration: {text}"
     );
+}
+
+/// The rule the five inline derivations each restated, owned by one function:
+/// the first row in `root.branches` named like the current branch answers, and
+/// it answers with that row's tracking. Every value-producing adapter emits a
+/// local row ahead of a remote row of the same short name — `git branch -a`
+/// lists locals then remotes, `git2_exec` pushes its local loop first, and the
+/// `remotes/origin/main` row carries the short name `main` — so the first match
+/// is the local row, and the remote row of the same name never shadows it.
+#[test]
+fn tracked_upstream_answers_from_the_local_row_a_remote_row_of_the_same_name_follows() {
+    let mut root = root_tracking("main", Some(up("corp", "main")), &["corp"]);
+    root.branches = vec![
+        branch_row("main", BranchKind::Local, Some(up("corp", "main"))),
+        branch_row("main", BranchKind::Remote, None),
+    ];
+
+    assert_eq!(
+        sync_service::tracked_upstream(&root).map(|u| u.git_ref()),
+        Some("corp/main".to_string()),
+        "the first row named like the current branch answers; the remote row \
+         of the same short name follows it and shadows nothing",
+    );
+}
+
+/// The same fixture with the order the adapters could never produce is *not*
+/// the contract: this pins which of the two rows a remote-shadows-local
+/// ordering would answer from, so the day an adapter emits remote rows first
+/// the assertion above changes for a reason rather than silently.
+#[test]
+fn a_remote_row_named_like_the_current_branch_is_answered_from_when_it_leads() {
+    let mut root = root_tracking("main", Some(up("corp", "main")), &["corp"]);
+    root.branches = vec![
+        branch_row("main", BranchKind::Remote, None),
+        branch_row("main", BranchKind::Local, Some(up("corp", "main"))),
+    ];
+
+    assert_eq!(
+        sync_service::tracked_upstream(&root),
+        None,
+        "first match wins: a leading remote row answers with its own (absent) \
+         tracking, which is why the adapters' local-first order is the contract",
+    );
+}
+
+/// The upstream half of the push rule, now read by the same one function the
+/// remote half is. The remote half's three-way agreement is pinned above; this
+/// is its upstream counterpart, and it goes through `bulk_ops::preflight`
+/// because that path is engine-free — the one observable surface that reads the
+/// upstream half without a git binary and states a `NoUpstream` skip for it.
+#[test]
+fn the_upstream_half_is_the_one_rule_for_the_preflight_and_the_remote() {
+    let settings = VcsSettings::default();
+
+    // The tracking remote and the first configured remote disagree on purpose:
+    // a per-site fallback would answer "alt" here.
+    let tracked = root_tracking("main", Some(up("corp", "main")), &["alt", "origin"]);
+    let untracked = root_tracking("feature", None, &["alt", "origin"]);
+
+    let preflight = bulk_ops::preflight(
+        bulk_ops::BulkOp::PushAll,
+        &[tracked.clone(), untracked.clone()],
+        &settings,
+        false,
+        &|_| (0, 0),
+    );
+    let outcomes: Vec<&_> = preflight.rows.iter().map(|r| &r.outcome).collect();
+    assert!(
+        outcomes[0].is_ok(),
+        "a tracked root is not skipped for a missing upstream; got {:?}",
+        outcomes[0],
+    );
+    assert_eq!(
+        outcomes[1],
+        &Err(bulk_ops::SkipReason::NoUpstream),
+        "an untracked root is the one NoUpstream names; got {:?}",
+        outcomes[1],
+    );
+
+    // And both halves answer from the tracked upstream, never from a per-site
+    // fallback: the remote half names the tracking remote, and the tracked
+    // value itself is the branch's own entry.
+    assert_eq!(sync_service::push_remote(&tracked), "corp");
+    assert_eq!(
+        sync_service::tracked_upstream(&tracked).map(|u| u.git_ref()),
+        Some("corp/main".to_string()),
+    );
+    // The untracked root is where the remote half's fallback does apply — and
+    // it applies once, through the same rule the tracked case reads.
+    assert_eq!(sync_service::push_remote(&untracked), "alt");
+    assert_eq!(sync_service::tracked_upstream(&untracked), None);
+}
+
+/// The five-fold swap at the service's own surface: `outgoing_per_root` returns
+/// one row per root and answers `Ok` for both a tracked and an untracked root
+/// (the untracked one's "nothing known to be ahead" arm), which is the shape
+/// the fold preserved.
+#[test]
+fn outgoing_per_root_keeps_its_two_arms_for_tracked_and_untracked_roots() {
+    let tracked = root_tracking("main", Some(up("corp", "main")), &["corp"]);
+    let untracked = root_tracking("feature", None, &["corp"]);
+    let mgr = mgr_with(vec![tracked.clone(), untracked.clone()]);
+    let v = FakeExecutor::new();
+
+    let rows = sync_service::outgoing_per_root(&v, &mgr);
+    assert_eq!(rows.len(), 2, "one row per root");
+    for (id, result) in &rows {
+        assert!(
+            result.is_ok(),
+            "no root errors on its outgoing read; {id:?} gave {result:?}"
+        );
+        assert!(
+            result.as_ref().is_ok_and(|commits| commits.is_empty()),
+            "the fake serves no outgoing commits, so every row is empty",
+        );
+    }
 }

@@ -9,10 +9,10 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use test_support::git_seed::{git, repo_with_one_commit};
 use test_support::harness::{painted_text, shell_harness_over_unstyled};
-use test_support::{RecordedCall, RecordingExecutor};
+use test_support::{RecordedCall, RecordingExecutor, wait_until};
 
 use egui::FontFamily::Monospace;
 use egui::FontId;
@@ -87,21 +87,6 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
     h
-}
-
-/// Poll `f` until it returns true or the deadline elapses (worker threads run
-/// asynchronously, so completion is observed by polling).
-fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 /// Open the Commit tool window's preview of `code.rs` and wait for the diff.

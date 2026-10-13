@@ -72,7 +72,9 @@ use crate::ui::commit_menu::{CommitFacts, CommitMenuAction, commit_menu};
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::rewrite_gating;
-use crate::ui::widgets::{self, BadgeKind, MenuItemKind, MenuItemProps, RefKind, menu_item};
+use crate::ui::widgets::{
+    self, BadgeKind, MenuItemKind, MenuItemProps, MenuItemState, RefKind, menu_item,
+};
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Frame, Galley, Grid, Layout, Panel, Popup,
@@ -2255,8 +2257,7 @@ fn file_row_context_menu(ui: &mut Ui, state: &mut AppState) {
                     label: "Show blame",
                     data: None,
                     shortcut: None,
-                    enabled: true,
-                    disabled_reason: None,
+                    state: MenuItemState::enabled(),
                     kind: MenuItemKind::Default,
                 },
             )
@@ -2271,9 +2272,11 @@ fn file_row_context_menu(ui: &mut Ui, state: &mut AppState) {
                     label: "Show history for file…",
                     data: None,
                     shortcut: None,
-                    enabled: !already_scoped,
-                    disabled_reason: already_scoped
-                        .then_some("already showing this file's history"),
+                    state: if already_scoped {
+                        MenuItemState::disabled("already showing this file's history")
+                    } else {
+                        MenuItemState::enabled()
+                    },
                     kind: MenuItemKind::Default,
                 },
             );
@@ -2287,8 +2290,7 @@ fn file_row_context_menu(ui: &mut Ui, state: &mut AppState) {
                     label: crate::ui::create_patch::VERB,
                     data: None,
                     shortcut: None,
-                    enabled: true,
-                    disabled_reason: None,
+                    state: MenuItemState::enabled(),
                     kind: MenuItemKind::Default,
                 },
             )
@@ -2701,9 +2703,8 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     widgets::churn_bar(ui, added, removed);
     ui.horizontal(|ui| {
         ui.label(micro_text(format!(
-            "{} {} changed",
-            files.len(),
-            if files.len() == 1 { "file" } else { "files" }
+            "{} changed",
+            components::counted(files.len(), "file", "files")
         )));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if removed > 0 {

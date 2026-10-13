@@ -19,12 +19,12 @@ use egui_kittest::{
     kittest::{NodeT, Queryable},
 };
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use test_support::git_seed::git;
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_ink,
     painted_paths, painted_text, shell_harness_over_unstyled, stroked_rects,
 };
+use test_support::wait_until;
 use turbogit_app::state::{AppState, CommitSubTab, Dialog};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::widgets::{CHIP_HEIGHT, PANE_HEADER_HEIGHT};
@@ -153,22 +153,6 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     // (test-support `settle`'s rationale).
     test_support::harness::settle(&mut harness);
     harness
-}
-
-/// Poll `f` until it returns true or the deadline elapses (worker threads run
-/// asynchronously, so completion is observed by polling). `FnMut` so pollers
-/// can repaint the harness while waiting (issue 06 stats load).
-fn wait_until<F: FnMut() -> bool>(ms: u64, mut f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 /// The primary Commit action's main part (issue 07: the `Commit ▾` split

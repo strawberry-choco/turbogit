@@ -41,8 +41,7 @@ fn show_menu(ui: &Ui, row: &'static str, dismiss: &mut bool) -> Option<&'static 
                 label: HOSTED_ITEM,
                 data: Some(row),
                 shortcut: None,
-                enabled: true,
-                disabled_reason: None,
+                state: widgets::MenuItemState::enabled(),
                 kind: widgets::MenuItemKind::Default,
             },
         )

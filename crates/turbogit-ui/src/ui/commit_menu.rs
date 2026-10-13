@@ -250,8 +250,7 @@ pub fn commit_menu(
                     label: $label,
                     data: $data,
                     shortcut: None,
-                    enabled: state.enabled,
-                    disabled_reason: state.reason,
+                    state: *state,
                     kind: $kind,
                 },
             )

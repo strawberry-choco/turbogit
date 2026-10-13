@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use test_support::git_seed::{git, repo_with_one_commit};
 use test_support::harness::{
-    assert_not_painted, assert_painted, settle, shell_harness_over_unstyled,
+    assert_matrix_geometry, assert_not_painted, assert_painted, settle, shell_harness_over_unstyled,
 };
 use turbogit_app::state::AppState;
 use turbogit_domain::model::VcsSettings;
@@ -105,6 +105,23 @@ fn the_custom_command_tile_opens_a_modal_that_runs_the_typed_command() {
     settle(&mut h);
     assert!(h.state().ui.bulk_run.is_none(), "no run without a command");
     assert_eq!(h.state().ui.bulk_op, Some(BulkOp::Custom));
+
+    // The matrix's column geometry: every header label over its cell, and both
+    // band heights the painter was handed. The empty command still paints its
+    // own dash in the OUTCOME column, so every column has a cell to sit over.
+    assert_matrix_geometry(
+        &h,
+        "OUTCOME",
+        &[
+            ("REPO", 0.0),
+            ("CURRENT BRANCH", 170.0),
+            ("STATUS", 300.0),
+            ("OUTCOME", 390.0),
+        ],
+        &["alpha", "ui"],
+        22.0,
+        30.0,
+    );
 
     // Typing the command fills the matrix — custom commands never skip.
     h.get_by_label("Command input").focus();

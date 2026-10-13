@@ -662,11 +662,6 @@ pub struct MultiRootManager {
 }
 
 impl MultiRootManager {
-    pub fn register_root(&mut self, root: Root) {
-        if !self.roots.iter().any(|r| r.id == root.id) {
-            self.roots.push(root);
-        }
-    }
     pub fn by_id(&self, id: &RootId) -> Option<&Root> {
         self.roots.iter().find(|r| &r.id == id)
     }

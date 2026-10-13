@@ -15,13 +15,36 @@
 //! drift from the repos' actual state.
 
 use egui::{
-    Align, Align2, Color32, Key, Layout, Pos2, Rect, Sense, TextEdit, Ui, Vec2, WidgetInfo,
-    WidgetType,
+    Align, Align2, Color32, Key, Layout, Sense, TextEdit, Ui, Vec2, WidgetInfo, WidgetType,
 };
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::{BranchAction, BulkOp, BulkPlan, PreflightRow, SkipReason};
 
 use crate::theme::Palette;
+use crate::ui::widgets::PaneColumn;
+
+/// The header band every matrix in this file paints, in the same one size.
+const HEADER_H: f32 = 22.0;
+
+/// The four columns `body` and `command_body` show. The custom-command variant
+/// has no column of its own — the command is its OUTCOME cell — so the two
+/// share one table rather than restating it.
+const MATRIX_COLUMNS: [PaneColumn; 4] = [
+    PaneColumn::start("REPO", 0.0),
+    PaneColumn::start("CURRENT BRANCH", 170.0),
+    PaneColumn::start("STATUS", 300.0),
+    PaneColumn::start("OUTCOME", 390.0),
+];
+
+/// The cascade variant's columns: the four above, at its own wider offsets,
+/// plus TARGET.
+const BRANCH_COLUMNS: [PaneColumn; 5] = [
+    MATRIX_COLUMNS[0],
+    PaneColumn::start("CURRENT BRANCH", 150.0),
+    PaneColumn::start("TARGET", 290.0),
+    PaneColumn::start("STATUS", 410.0),
+    PaneColumn::start("OUTCOME", 520.0),
+];
 
 /// One row of a preflight / affected-repo list, at the height every such list in
 /// this family uses. Three call sites in this file each re-declared the same
@@ -98,70 +121,44 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
 
     // Matrix table: REPO / CURRENT BRANCH / STATUS / OUTCOME.
     let width = ui.available_width();
-    let col_branch = 170.0;
-    let col_status = 300.0;
-    let header_h = 22.0;
-    let header_rect = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, header_h));
-    ui.allocate_exact_size(Vec2::new(width, header_h), Sense::hover());
-    let hp = ui.painter().clone();
-    for (label, x) in [
-        ("REPO", 0.0),
-        ("CURRENT BRANCH", col_branch),
-        ("STATUS", col_status),
-        ("OUTCOME", 390.0),
-    ] {
-        let galley = hp.layout_no_wrap(
-            label.to_string(),
-            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
-            Palette::INK_3,
-        );
-        hp.galley_with_override_text_color(
-            Pos2::new(
-                header_rect.left() + x,
-                header_rect.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            Palette::INK_3,
-        );
-    }
-
-    for row in &pf.rows {
-        let r = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, ROW_H));
-        ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-        let cy = r.center().y;
-        let cell = |x: f32, text: String, color: Color32| {
-            let galley = ui.painter().layout_no_wrap(
-                text,
-                crate::theme::chrome_font(crate::theme::TYPE_BODY),
-                color,
-            );
-            ui.painter().galley_with_override_text_color(
-                Pos2::new(r.left() + x, cy - galley.size().y / 2.0),
-                galley,
-                color,
-            );
-        };
-        cell(0.0, row.name.clone(), Palette::INK);
-        cell(
-            col_branch,
-            row.branch.clone().unwrap_or_else(|| "<detached>".into()),
-            Palette::INK_2,
-        );
-        let (status, status_color) = row_status(row);
-        cell(col_status, status, status_color);
-        match &row.outcome {
-            Ok(()) => cell(
-                390.0,
-                outcome_text(op, state.ui.bulk_rebase, &state.ui.dlg.merge_target),
+    let col_branch = MATRIX_COLUMNS[1].x;
+    let col_status = MATRIX_COLUMNS[2].x;
+    let col_outcome = MATRIX_COLUMNS[3].x;
+    super::column_table::matrix_table(
+        ui,
+        width,
+        &MATRIX_COLUMNS,
+        HEADER_H,
+        ROW_H,
+        &pf.rows,
+        &mut |ui, r, row| {
+            ui.allocate_exact_size(Vec2::new(r.width(), ROW_H), Sense::hover());
+            let cy = r.center().y;
+            let cell = |x: f32, text: String, color: Color32| {
+                super::column_table::paint_cell(ui.painter(), r.left(), x, cy, text, color)
+            };
+            cell(0.0, row.name.clone(), Palette::INK);
+            cell(
+                col_branch,
+                row.branch.clone().unwrap_or_else(|| "<detached>".into()),
                 Palette::INK_2,
-            ),
-            Err(reason) => cell(
-                390.0,
-                format!("Skipped ({}) — {}", reason.label(), skip_detail(*reason)),
-                Palette::INK_3,
-            ),
-        }
-    }
+            );
+            let (status, status_color) = row_status(row);
+            cell(col_status, status, status_color);
+            match &row.outcome {
+                Ok(()) => cell(
+                    col_outcome,
+                    outcome_text(op, state.ui.bulk_rebase, &state.ui.dlg.merge_target),
+                    Palette::INK_2,
+                ),
+                Err(reason) => cell(
+                    col_outcome,
+                    format!("Skipped ({}) — {}", reason.label(), skip_detail(*reason)),
+                    Palette::INK_3,
+                ),
+            }
+        },
+    );
 
     ui.add_space(8.0);
 
@@ -344,63 +341,37 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
 
     // Matrix table: REPO / CURRENT BRANCH / STATUS / OUTCOME.
     let width = ui.available_width();
-    let col_branch = 170.0;
-    let col_status = 300.0;
-    let header_h = 22.0;
-    let header_rect = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, header_h));
-    ui.allocate_exact_size(Vec2::new(width, header_h), Sense::hover());
-    let hp = ui.painter().clone();
-    for (label, x) in [
-        ("REPO", 0.0),
-        ("CURRENT BRANCH", col_branch),
-        ("STATUS", col_status),
-        ("OUTCOME", 390.0),
-    ] {
-        let galley = hp.layout_no_wrap(
-            label.to_string(),
-            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
-            Palette::INK_3,
-        );
-        hp.galley_with_override_text_color(
-            Pos2::new(
-                header_rect.left() + x,
-                header_rect.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            Palette::INK_3,
-        );
-    }
-
-    for row in &pf.rows {
-        let r = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, ROW_H));
-        ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-        let cy = r.center().y;
-        let cell = |x: f32, text: String, color: Color32| {
-            let galley = ui.painter().layout_no_wrap(
-                text,
-                crate::theme::chrome_font(crate::theme::TYPE_BODY),
-                color,
+    let col_branch = MATRIX_COLUMNS[1].x;
+    let col_status = MATRIX_COLUMNS[2].x;
+    let col_outcome = MATRIX_COLUMNS[3].x;
+    super::column_table::matrix_table(
+        ui,
+        width,
+        &MATRIX_COLUMNS,
+        HEADER_H,
+        ROW_H,
+        &pf.rows,
+        &mut |ui, r, row| {
+            ui.allocate_exact_size(Vec2::new(r.width(), ROW_H), Sense::hover());
+            let cy = r.center().y;
+            let cell = |x: f32, text: String, color: Color32| {
+                super::column_table::paint_cell(ui.painter(), r.left(), x, cy, text, color)
+            };
+            cell(0.0, row.name.clone(), Palette::INK);
+            cell(
+                col_branch,
+                row.branch.clone().unwrap_or_else(|| "<detached>".into()),
+                Palette::INK_2,
             );
-            ui.painter().galley_with_override_text_color(
-                Pos2::new(r.left() + x, cy - galley.size().y / 2.0),
-                galley,
-                color,
-            );
-        };
-        cell(0.0, row.name.clone(), Palette::INK);
-        cell(
-            col_branch,
-            row.branch.clone().unwrap_or_else(|| "<detached>".into()),
-            Palette::INK_2,
-        );
-        let (status, status_color) = row_status(row);
-        cell(col_status, status, status_color);
-        if command.is_empty() {
-            cell(390.0, "—".to_string(), Palette::INK_3);
-        } else {
-            cell(390.0, format!("> {command}"), Palette::INK_2);
-        }
-    }
+            let (status, status_color) = row_status(row);
+            cell(col_status, status, status_color);
+            if command.is_empty() {
+                cell(col_outcome, "—".to_string(), Palette::INK_3);
+            } else {
+                cell(col_outcome, format!("> {command}"), Palette::INK_2);
+            }
+        },
+    );
 
     ui.add_space(8.0);
 
@@ -516,62 +487,39 @@ fn branch_body(ui: &mut Ui, state: &mut AppState) {
 
     // Matrix table: REPO / CURRENT BRANCH / TARGET / STATUS / OUTCOME.
     let width = ui.available_width();
-    let col_branch = 150.0;
-    let col_target = 290.0;
-    let col_status = 410.0;
-    let header_h = 22.0;
-    let header_rect = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, header_h));
-    ui.allocate_exact_size(Vec2::new(width, header_h), Sense::hover());
-    let hp = ui.painter().clone();
-    for (label, x) in [
-        ("REPO", 0.0),
-        ("CURRENT BRANCH", col_branch),
-        ("TARGET", col_target),
-        ("STATUS", col_status),
-        ("OUTCOME", 520.0),
-    ] {
-        let galley = hp.layout_no_wrap(
-            label.to_string(),
-            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
-            Palette::INK_3,
-        );
-        hp.galley_with_override_text_color(
-            Pos2::new(
-                header_rect.left() + x,
-                header_rect.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            Palette::INK_3,
-        );
-    }
-
-    for row in &bpf.rows {
-        let r = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, ROW_H));
-        ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-        let cy = r.center().y;
-        let cell = |x: f32, text: String, color: Color32| {
-            let galley = ui.painter().layout_no_wrap(
-                text,
-                crate::theme::chrome_font(crate::theme::TYPE_BODY),
-                color,
+    let col_branch = BRANCH_COLUMNS[1].x;
+    let col_target = BRANCH_COLUMNS[2].x;
+    let col_status = BRANCH_COLUMNS[3].x;
+    let col_outcome = BRANCH_COLUMNS[4].x;
+    super::column_table::matrix_table(
+        ui,
+        width,
+        &BRANCH_COLUMNS,
+        HEADER_H,
+        ROW_H,
+        &bpf.rows,
+        &mut |ui, r, row| {
+            ui.allocate_exact_size(Vec2::new(r.width(), ROW_H), Sense::hover());
+            let cy = r.center().y;
+            let cell = |x: f32, text: String, color: Color32| {
+                super::column_table::paint_cell(ui.painter(), r.left(), x, cy, text, color)
+            };
+            cell(0.0, row.name.clone(), Palette::INK);
+            cell(
+                col_branch,
+                row.branch.clone().unwrap_or_else(|| "<detached>".into()),
+                Palette::INK_2,
             );
-            ui.painter().galley_with_override_text_color(
-                Pos2::new(r.left() + x, cy - galley.size().y / 2.0),
-                galley,
-                color,
+            cell(col_target, format!("> {}", row.target), Palette::INK_2);
+            let (status, status_color) = branch_row_status(&row.action);
+            cell(col_status, status, status_color);
+            cell(
+                col_outcome,
+                branch_outcome_text(&row.action),
+                Palette::INK_2,
             );
-        };
-        cell(0.0, row.name.clone(), Palette::INK);
-        cell(
-            col_branch,
-            row.branch.clone().unwrap_or_else(|| "<detached>".into()),
-            Palette::INK_2,
-        );
-        cell(col_target, format!("> {}", row.target), Palette::INK_2);
-        let (status, status_color) = branch_row_status(&row.action);
-        cell(col_status, status, status_color);
-        cell(520.0, branch_outcome_text(&row.action), Palette::INK_2);
-    }
+        },
+    );
 
     ui.add_space(8.0);
 

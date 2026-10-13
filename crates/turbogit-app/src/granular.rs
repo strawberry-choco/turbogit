@@ -147,9 +147,7 @@ fn file_selection(patch: &turbogit_domain::model::Patch) -> Selection {
 
 /// The previewed path's [`ChangeStatus`] via the canonical resolver; an
 /// unlisted or absent path falls back to [`ChangeStatus::Modified`] — controls
-/// stay enabled and the engine seam remains the final authority. One owner for
-/// the question the diff panes, the palette's stage verbs and the off-frame
-/// diff load all ask.
+/// stay enabled and the engine seam remains the final authority.
 pub fn preview_status(state: &AppState, path: Option<&Path>) -> ChangeStatus {
     let Some(path) = path else {
         return ChangeStatus::Modified;

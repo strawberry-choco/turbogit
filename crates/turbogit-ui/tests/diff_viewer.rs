@@ -1333,3 +1333,23 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
         h.state().ui.line_selections
     );
 }
+
+/// The diff actions module's own source, read at compile time — the ratchet
+/// below is a claim about a function that must not exist in it.
+const DIFF_ACTIONS_SRC: &str = include_str!("../src/ui/diff/actions.rs");
+
+/// Contract: the previewed file's [`ChangeStatus`] is resolved at exactly one
+/// address. `turbogit_app::granular::preview_status` owns the rule — the app's
+/// off-frame diff read already routes through it — and the UI's frames call it
+/// rather than carrying a second copy of the same walk. A copy that quietly
+/// comes back would leave the question answered from two addresses in two
+/// crates, each free to drift, and nothing but this scan would say so.
+#[test]
+fn the_diff_surface_declares_no_change_status_resolver_of_its_own() {
+    assert!(
+        !DIFF_ACTIONS_SRC.contains("fn preview_status"),
+        "ui::diff::actions must not spell the change-status resolver: \
+         turbogit_app::granular::preview_status owns it (lane 5, ticket 12), \
+         and both diff frames call it"
+    );
+}

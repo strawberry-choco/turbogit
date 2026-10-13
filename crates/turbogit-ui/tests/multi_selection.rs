@@ -13,9 +13,11 @@ use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use test_support::git_seed::repo_with_origin;
 use test_support::harness::{
-    assert_not_painted, assert_painted, painted_text, settle, shell_harness_over_unstyled,
+    assert_matrix_geometry, assert_not_painted, assert_painted, painted_text, settle,
+    shell_harness_over_unstyled,
 };
 use turbogit_app::state::AppState;
+use turbogit_domain::model::RootId;
 
 /// Create an initialized temp repository with one base commit on `main`
 /// plus an `origin` remote so upstream reads can be exercised.
@@ -81,6 +83,26 @@ fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
         texts.iter().any(|t| t == text),
         "`{text}` was not painted as an exact galley; painted text:\n{texts:#?}"
     );
+}
+
+/// A project whose `foo/bar` chain collapses to one promoted repo: `bar` is the
+/// only repo under `foo`, so the sidebar's checkbox reads the repo's own name
+/// while every path-labelled surface reads the chain that collapsed.
+/// `side` keeps the project folder displaying, which is what leaves `foo` as
+/// the topmost collapsing folder (ADR-0018 D3).
+fn promoted_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap()
+        .join(format!(".scratch/msp-{tag}"));
+    let _ = std::fs::remove_dir_all(&base);
+    let project = base.join("ws");
+    let foo_dir = project.join("foo");
+    std::fs::create_dir_all(&foo_dir).unwrap();
+    let side = temp_repo(&project, "side");
+    let bar = temp_repo(&foo_dir, "bar");
+    (project, side, bar)
 }
 
 /// Headless harness driving the full app UI (mirrors `workspace_sidebar`).
@@ -158,6 +180,23 @@ fn checking_a_group_selects_every_descendant_without_collapsing() {
     assert_galley(&h, "2 selected / 4");
     assert_painted(&h, "alpha"); // the select click must not collapse the group
 
+    // The summary matrix's column geometry: every header label over its cell,
+    // and both band heights the painter was handed.
+    assert_matrix_geometry(
+        &h,
+        "LAST COMMIT",
+        &[
+            ("REPO", 0.0),
+            ("BRANCH", 220.0),
+            ("SYNC", 380.0),
+            ("DIRTY", 470.0),
+            ("LAST COMMIT", 545.0),
+        ],
+        &["alpha", "ui"],
+        24.0,
+        34.0,
+    );
+
     h.get_by_label("Select group frontend").click();
     settle(&mut h);
     assert_not_painted(&h, "Multi-repo selection");
@@ -179,6 +218,59 @@ fn the_selection_bar_clear_button_empties_the_selection() {
     settle(&mut h);
     assert_not_painted(&h, "Multi-repo selection");
     assert_not_painted(&h, "1 selected / 2");
+}
+
+#[test]
+fn clicking_a_summary_row_focuses_the_root_that_row_is_about() {
+    // Four repos, two per folder, so every folder displays and every summary
+    // row keeps its bare name.
+    let (project, repos) = four_repo_project("row-click");
+    let state = AppState::for_roots(&project, &repos);
+    let lib = repos[3].clone();
+    let mut h = harness(state);
+    settle(&mut h);
+
+    // Registration focuses the first root, so selecting and clicking the
+    // *other* repo's row is a move the frame can show.
+    h.get_by_label("Select repo lib").click();
+    settle(&mut h);
+    assert!(
+        h.query_by_label("Focus lib").is_some(),
+        "the summary row is reachable by its accessible label"
+    );
+
+    h.get_by_label("Focus lib").click();
+    settle(&mut h);
+    assert_eq!(
+        h.state().selected_root,
+        Some(RootId(lib.into())),
+        "the click focuses the row's own root"
+    );
+}
+
+#[test]
+fn clicking_a_promoted_summary_row_focuses_the_repo_behind_its_path_label() {
+    let (project, side, bar) = promoted_project("promoted-row");
+    let state = AppState::for_roots(&project, &[side, bar.clone()]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    // The sidebar's checkbox reads the repo's bare name; the summary row it
+    // opens is labelled by the path the collapsed chain left behind.
+    h.get_by_label("Select repo bar").click();
+    settle(&mut h);
+    assert!(
+        h.query_by_label("Focus f/bar").is_some(),
+        "the promoted summary row is reachable by its path label"
+    );
+
+    h.get_by_label("Focus f/bar").click();
+    settle(&mut h);
+    assert_eq!(
+        h.state().selected_root,
+        Some(RootId(bar.into())),
+        "a path label resolves to the same root as the bare name"
+    );
 }
 
 // -- Quick actions ------------------------------------------------------------

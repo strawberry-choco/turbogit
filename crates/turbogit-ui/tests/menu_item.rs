@@ -12,9 +12,17 @@ use egui_kittest::kittest::{NodeT, Queryable};
 use test_support::harness::{
     filled_rects, painted_galleys, painted_paths, stroked_rects, widget_harness,
 };
+use test_support::srcscan;
 use turbogit_ui::theme::{GROUP_ROW_HEIGHT, MENU_RADIUS, Palette};
 use turbogit_ui::ui::icons::Icon;
-use turbogit_ui::ui::widgets::{MenuItemKind, MenuItemProps, menu_item, menu_rule, menu_surface};
+use turbogit_ui::ui::widgets::{
+    MenuItemKind, MenuItemProps, MenuItemState, menu_item, menu_rule, menu_surface,
+};
+// Both of `MenuItemState`'s established import paths, pinned so neither can be
+// dropped without this file failing to compile: the widget façade's, and the
+// compat re-export `ui::branch_menu` has carried since the menus moved.
+use turbogit_ui::ui::branch_menu::MenuItemState as BranchMenuItemState;
+use turbogit_ui::ui::widgets::MenuItemState as WidgetMenuItemState;
 
 // --- harness -----------------------------------------------------------------
 
@@ -51,8 +59,7 @@ fn props(label: &'static str) -> MenuItemProps<'static> {
         label,
         data: None,
         shortcut: None,
-        enabled: true,
-        disabled_reason: None,
+        state: MenuItemState::enabled(),
         kind: MenuItemKind::Default,
     }
 }
@@ -272,8 +279,7 @@ fn a_disabled_item_stays_rendered_at_45_percent_ink_and_swallows_its_click() {
     let clicked = std::rc::Rc::new(std::cell::Cell::new(false));
     let mut harness = item_harness(
         || MenuItemProps {
-            enabled: false,
-            disabled_reason: Some("no upstream to pull from"),
+            state: MenuItemState::disabled("no upstream to pull from"),
             ..props("Pull")
         },
         clicked.clone(),
@@ -557,4 +563,72 @@ fn a_focused_item_paints_the_brand_focus_ring() {
         "the ring sits one pixel outside the row: {:?}",
         ring.0
     );
+}
+
+// --- the gate is one field, and the tree says so ---------------------------------
+
+/// The row's gate used to be two fields every caller kept coherent by hand —
+/// `enabled` and `disabled_reason` — which admitted two states no menu wants: a
+/// live item carrying a reason, and a blocked item with nothing to say. They
+/// are now one `MenuItemState`, so the mismatched pair is unconstructible.
+///
+/// The scan is the tree's, not a transcribed list: the failing fix is a
+/// re-opening anywhere under `src/ui/`, not only in the one file that used to
+/// spell it.
+#[test]
+fn no_file_under_ui_spells_the_gate_as_two_fields() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui");
+    let offenders: Vec<String> = srcscan::rust_files(&root)
+        .into_iter()
+        .filter(|path| {
+            // Comment-masked: a doc naming the retired spelling is prose, not a
+            // second opinion about the gate.
+            srcscan::code_only(&srcscan::read_source(path)).contains("disabled_reason")
+        })
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "the gate is still spelled as two fields in {offenders:?}"
+    );
+}
+
+/// `MenuItemProps` declares exactly one gate field, and it is the state type.
+///
+/// `srcscan` has no struct-field reader — `top_level_items` reads only column-0
+/// `fn`/`const` heads and `fn_code` panics on a struct — so the declaration is
+/// sliced out by hand and scanned in the comment-masked projection, where a doc
+/// paragraph cannot satisfy or defeat the claim.
+#[test]
+fn menu_item_props_declares_one_gate_field_of_the_state_type() {
+    let menu = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui/widgets/menu.rs");
+    let code = srcscan::code_only(&srcscan::read_source(&menu));
+    let start = code
+        .find("pub struct MenuItemProps")
+        .unwrap_or_else(|| panic!("no MenuItemProps in {menu:?}"));
+    let body = &code[start..];
+    let end = body
+        .find("\n}")
+        .expect("the struct is closed by a column-0 brace");
+    let decl = &body[..end];
+
+    assert!(
+        decl.contains("state: MenuItemState"),
+        "the gate is not one MenuItemState field: {decl}"
+    );
+    for retired in ["enabled", "disabled_reason"] {
+        assert!(
+            !decl.contains(retired),
+            "MenuItemProps still declares `{retired}`: {decl}"
+        );
+    }
+}
+
+/// The two `MenuItemState` import paths, pinned. See the aliases at the top of
+/// this file: the widget façade's own, and the compat re-export
+/// `ui::branch_menu` has carried since the menus moved into the widget layer.
+#[test]
+fn menu_item_state_resolves_from_both_the_widget_facade_and_the_branch_menu() {
+    let _: Option<WidgetMenuItemState> = None;
+    let _: Option<BranchMenuItemState> = None;
 }

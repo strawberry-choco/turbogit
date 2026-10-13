@@ -14,6 +14,7 @@ use turbogit_domain::model::{Commit, Patch, PatchFile, PatchHeaderLine, PatchLin
 use turbogit_services::cherry_across::{PickForecast, TargetForecast, TargetRisk};
 
 use crate::theme::Palette;
+use crate::ui::components;
 use crate::ui::widgets;
 
 /// Render the dialog while `ui.dialog` is `Dialog::CherryPickAcross`.
@@ -94,11 +95,10 @@ fn body(ui: &mut Ui, state: &mut AppState) {
                 state.ui.dialog = None;
             }
             let enabled = !selected.is_empty() && !target_rows.is_empty();
-            let label = if target_rows.len() == 1 {
-                "Cherry-pick to 1 repo".to_string()
-            } else {
-                format!("Cherry-pick to {} repos", target_rows.len())
-            };
+            let label = format!(
+                "Cherry-pick to {}",
+                components::counted(target_rows.len(), "repo", "repos")
+            );
             if ui.add_enabled(enabled, egui::Button::new(label)).clicked() {
                 state.run_cherry_across();
             }
@@ -244,12 +244,11 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
         let file = &files[idx];
         ui.label(
             egui::RichText::new(format!(
-                "file {} of {} · {} · {} hunk{}",
+                "file {} of {} · {} · {}",
                 idx + 1,
                 files.len(),
                 file.path,
-                file.hunks,
-                if file.hunks == 1 { "" } else { "s" }
+                components::counted(file.hunks, "hunk", "hunks")
             ))
             .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL)),
         );
@@ -404,13 +403,10 @@ fn outcome_text(t: &TargetForecast) -> String {
         parts.push(format!("{drifted} apply with drift"));
     }
     if let Some(&hunks) = conflicted.first() {
-        if hunks == 1 {
-            parts.push("1 hunk overlaps — will stop for manual resolve".to_string());
-        } else {
-            parts.push(format!(
-                "{hunks} hunks overlap — will stop for manual resolve"
-            ));
-        }
+        parts.push(format!(
+            "{} — will stop for manual resolve",
+            components::counted(hunks, "hunk overlaps", "hunks overlap")
+        ));
     }
     if present > 0 {
         parts.push(format!("{present} skipped — already present in history"));

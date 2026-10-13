@@ -24,7 +24,7 @@
 //! clears is on screen forever, and the decline is the case that regresses.
 
 use crate::theme::Palette;
-use crate::ui::components::{KitButton, kit_button};
+use crate::ui::components::{KitButton, counted, kit_button};
 use crate::ui::widgets;
 use egui::{RichText, Ui};
 use turbogit_app::state::{AppState, BranchDivergence, DivergentRoot};
@@ -121,10 +121,6 @@ fn repositories(n: usize) -> &'static str {
     if n == 1 { "repository" } else { "repositories" }
 }
 
-fn counted(n: usize) -> String {
-    format!("{n} {}", repositories(n))
-}
-
 /// The headline: what was attempted, and that it did not land everywhere.
 fn summary(offer: &BranchDivergence) -> String {
     format!(
@@ -141,7 +137,7 @@ fn succeeded_sentence(offer: &BranchDivergence) -> String {
     format!(
         "However, {} has succeeded for the following {}:",
         offer.operation,
-        counted(offer.changed.len())
+        counted(offer.changed.len(), "repository", "repositories")
     )
 }
 
@@ -150,7 +146,7 @@ fn succeeded_sentence(offer: &BranchDivergence) -> String {
 fn failed_sentence(offer: &BranchDivergence) -> String {
     format!(
         "It failed in the following {}:",
-        counted(offer.failed.len())
+        counted(offer.failed.len(), "repository", "repositories")
     )
 }
 
@@ -167,7 +163,10 @@ fn rollback_reason(offer: &BranchDivergence) -> String {
 /// The affirmative control's label, naming how many roots it is about to move —
 /// the number the sentence above just made concrete.
 fn rollback_label(offer: &BranchDivergence) -> String {
-    format!("Roll back {}", counted(offer.changed.len()))
+    format!(
+        "Roll back {}",
+        counted(offer.changed.len(), "repository", "repositories")
+    )
 }
 
 /// Every root the offer names is still a registered root.

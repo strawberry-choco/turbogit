@@ -24,7 +24,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use egui::{Color32, Rect};
 use egui_kittest::kittest::Queryable as _;
@@ -35,6 +34,7 @@ use test_support::harness::{
     KITTEST_DEFAULT_BOX, assert_not_painted, assert_painted, filled_rects, galley_origin,
     painted_galleys, shell_harness_over_unstyled,
 };
+use test_support::wait_until;
 use turbogit_app::state::{AppState, Dialog};
 use turbogit_domain::model::{RebaseMode, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
@@ -157,20 +157,6 @@ fn filled_rect_at(h: &Harness<'_, AppState>, rect: Rect) -> Option<Color32> {
 /// A control the user can act on wears an opaque fill; a withheld one does not.
 fn armed(fill: Option<Color32>) -> bool {
     fill.is_some_and(|fill| fill.a() == 255)
-}
-
-/// Poll until `f` is true or the deadline elapses.
-fn wait_until<F: Fn() -> bool>(ms: u64, f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 /// The rebase calls recorded at the executor boundary as

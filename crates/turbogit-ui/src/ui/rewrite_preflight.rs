@@ -27,6 +27,7 @@ use turbogit_services::history_editor::{self, PlanPreview, plan_preview};
 use turbogit_services::reselection::{RewrittenAnchor, subject_of_message};
 
 use crate::theme::Palette;
+use crate::ui::components;
 use crate::ui::widgets;
 
 /// How many replayed commits the list shows before it elides.
@@ -76,8 +77,8 @@ fn counts_badge(verb: &HistoryVerb, preview: &PlanPreview) -> String {
         HistoryVerb::Reword { .. } => {
             let kept = preview.kept.len();
             format!(
-                "{kept} {} REWRITTEN",
-                if kept == 1 { "COMMIT" } else { "COMMITS" }
+                "{} REWRITTEN",
+                components::counted(kept, "COMMIT", "COMMITS")
             )
         }
     }

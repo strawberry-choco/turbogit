@@ -23,6 +23,7 @@
 //! push can proceed for the rest.
 
 use crate::theme::Palette;
+use crate::ui::components;
 use crate::ui::widgets;
 use egui::{RichText, Ui};
 use turbogit_app::operation::PushRequest;
@@ -322,8 +323,10 @@ fn action_label(scope: &[Root], total_commits: usize) -> String {
     if n == 0 {
         return "Push".to_string();
     }
-    let noun = if n == 1 { "repo" } else { "repos" };
-    format!("Push {total_commits} commits to {n} {noun}")
+    format!(
+        "Push {total_commits} commits to {}",
+        components::counted(n, "repo", "repos")
+    )
 }
 fn outgoing_total(scope_commits: &[(&Root, Vec<Commit>)]) -> usize {
     scope_commits.iter().map(|(_, cs)| cs.len()).sum()
@@ -423,11 +426,10 @@ fn remediation_banner(ui: &mut Ui, state: &mut AppState, scope: &[Root]) -> usiz
             "Protected branch in scope — {names_str} track {branch_label}, which matches {patterns}"
         ),
     );
-    let label: String = if protected.len() == 1 {
-        "Remove 1 protected repo from scope".to_string()
-    } else {
-        format!("Remove {} protected repos from scope", protected.len())
-    };
+    let label: String = format!(
+        "Remove {} from scope",
+        components::counted(protected.len(), "protected repo", "protected repos")
+    );
     if widgets::compact_button(ui, &label).clicked() {
         for p in &protected {
             state.ui.dlg.push_scope_excluded.insert(p.id.clone());

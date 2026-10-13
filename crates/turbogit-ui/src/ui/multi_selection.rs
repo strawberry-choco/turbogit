@@ -37,6 +37,9 @@ pub struct LastCommit {
 /// One row of the selection summary's per-repo table.
 #[derive(Debug, Clone)]
 pub struct SelectionRow {
+    /// The repository root this row belongs to, carried by the row so a click
+    /// aimed at it needs no second walk of the project tree to recover.
+    pub id: RootId,
     pub name: String,
     pub branch: Option<String>,
     /// Outgoing commits vs upstream (the ↑ column).
@@ -95,14 +98,33 @@ use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::bulk_history::RepoOutcome;
 use turbogit_app::state::AppState;
+use turbogit_domain::model::RootId;
 use turbogit_services::bulk_ops::BulkOp;
 
-/// Table column offsets of the per-repo table (from the surface's left
-/// content edge), matching screen 04's column rhythm.
+/// The selection summary's table columns: the per-repo table's offsets, from
+/// the surface's left content edge, matching screen 04's column rhythm.
 const COL_BRANCH: f32 = 220.0;
 const COL_SYNC: f32 = 380.0;
 const COL_DIRTY: f32 = 470.0;
 const COL_COMMIT: f32 = 545.0;
+
+/// The per-repo table as one column table read by both its header and its rows.
+const SUMMARY_COLUMNS: [widgets::PaneColumn; 5] = [
+    widgets::PaneColumn::start("REPO", 0.0),
+    widgets::PaneColumn::start("BRANCH", COL_BRANCH),
+    widgets::PaneColumn::start("SYNC", COL_SYNC),
+    widgets::PaneColumn::start("DIRTY", COL_DIRTY),
+    widgets::PaneColumn::start("LAST COMMIT", COL_COMMIT),
+];
+
+/// The summary table's header band, in the same one size.
+const HEADER_H: f32 = 24.0;
+
+/// One repo row of the selection summary. Taller than the 24/26 px ramp
+/// because the row is single-line but carries a state dot and two count
+/// cells that need breathing room; it is this surface's own row, so it stays
+/// here (conformance issue 09).
+const ROW_H: f32 = 34.0;
 
 /// The central "Multi-repo selection" surface (screen 04): a header with
 /// the Pin-as-view affordance, the aggregate stats row, and the per-repo
@@ -260,99 +282,69 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
 
     body.add_space(12.0);
 
-    // Per-repo table: header row, then one row per selected repo.
+    // Per-repo table: header row, then one row per selected repo. The header's
+    // structural underline is painted from the band the matrix painter returns,
+    // after the rows — it sits inside the header band, and the first row starts
+    // a spacing below it.
     let width = body.available_width();
-    let header_rect = Rect::from_min_size(body.cursor().left_top(), Vec2::new(width, 24.0));
-    body.allocate_exact_size(Vec2::new(width, 24.0), Sense::hover());
-    let thp = body.painter().clone();
-    for (label, x) in [
-        ("REPO", 0.0),
-        ("BRANCH", COL_BRANCH),
-        ("SYNC", COL_SYNC),
-        ("DIRTY", COL_DIRTY),
-        ("LAST COMMIT", COL_COMMIT),
-    ] {
-        let galley = thp.layout_no_wrap(
-            label.to_string(),
-            crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
-            Palette::INK_3,
-        );
-        thp.galley_with_override_text_color(
-            Pos2::new(
-                header_rect.left() + x,
-                header_rect.center().y - galley.size().y / 2.0,
-            ),
-            galley,
-            Palette::INK_3,
-        );
-    }
+    let header_rect = super::column_table::matrix_table(
+        &mut body,
+        width,
+        &SUMMARY_COLUMNS,
+        HEADER_H,
+        ROW_H,
+        &summary.rows,
+        &mut |ui, r, row| {
+            ui.allocate_exact_size(Vec2::new(r.width(), ROW_H), Sense::hover());
+            let response = ui.interact(r, ui.auto_id_with(("sel_row", &row.name)), Sense::click());
+            if response.clicked() {
+                // The row carries the root it is about, so a click needs no
+                // walk of the tree matching on the label it painted.
+                state.selected_root = Some(row.id.clone());
+            }
+            response.widget_info(|| {
+                WidgetInfo::labeled(WidgetType::Button, true, format!("Focus {}", row.name))
+            });
+            let hovered = response.hovered();
+            widgets::paint_row(ui, r, components::RowState::from_flags(false, hovered));
+            let cy = r.center().y;
+            let cell = |x: f32, text: String, color: Color32| {
+                super::column_table::paint_cell(ui.painter(), r.left(), x, cy, text, color)
+            };
+            cell(0.0, row.name.clone(), Palette::INK);
+            let branch = row.branch.clone().unwrap_or_else(|| "<detached>".into());
+            cell(COL_BRANCH, branch, Palette::INK_2);
+            cell(
+                COL_SYNC,
+                format!("↑{} ↓{}", row.ahead, row.behind),
+                Palette::INK_2,
+            );
+            let dirty_color = if row.dirty > 0 {
+                Palette::STATE_WARNING
+            } else {
+                Palette::INK_3
+            };
+            cell(COL_DIRTY, row.dirty.to_string(), dirty_color);
+            match &row.last_commit {
+                Some(lc) => cell(
+                    COL_COMMIT,
+                    format!("{} · {}", lc.subject, lc.age),
+                    Palette::INK_2,
+                ),
+                None => cell(COL_COMMIT, "—".to_string(), Palette::INK_3),
+            }
+        },
+    );
     // The column-header's underline, through the shared edge rule. **This is a
     // half-pixel change from the copy it replaces:** a 1px stroke centred on an
     // integer coordinate straddles two device pixel rows and each gets half
     // coverage, so the rule read measurably dimmer than every other hairline.
     widgets::edge_rule(
-        &thp,
+        body.painter(),
         header_rect,
         widgets::Edge::Bottom,
         Palette::RULE_STRUCTURAL,
     );
-
-    /// One repo row of the selection summary. Taller than the 24/26 px ramp
-    /// because the row is single-line but carries a state dot and two count
-    /// cells that need breathing room; it is this surface's own row, so it stays
-    /// here (conformance issue 09).
-    const ROW_H: f32 = 34.0;
-    let row_h = ROW_H;
-    for row in &summary.rows {
-        let r = Rect::from_min_size(body.cursor().left_top(), Vec2::new(width, row_h));
-        body.allocate_exact_size(Vec2::new(width, row_h), Sense::hover());
-        let response = body.interact(r, body.auto_id_with(("sel_row", &row.name)), Sense::click());
-        if response.clicked()
-            && let Some(id) = find_repo_by_label(&tree, &row.name).map(|r| r.id.clone())
-        {
-            state.selected_root = Some(id);
-        }
-        response.widget_info(|| {
-            WidgetInfo::labeled(WidgetType::Button, true, format!("Focus {}", row.name))
-        });
-        let hovered = response.hovered();
-        widgets::paint_row(&body, r, components::RowState::from_flags(false, hovered));
-        let cy = r.center().y;
-        let cell = |x: f32, text: String, color: Color32| {
-            let galley = body.painter().layout_no_wrap(
-                text,
-                FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional),
-                color,
-            );
-            body.painter().galley_with_override_text_color(
-                Pos2::new(r.left() + x, cy - galley.size().y / 2.0),
-                galley,
-                color,
-            );
-        };
-        cell(0.0, row.name.clone(), Palette::INK);
-        let branch = row.branch.clone().unwrap_or_else(|| "<detached>".into());
-        cell(COL_BRANCH, branch, Palette::INK_2);
-        cell(
-            COL_SYNC,
-            format!("↑{} ↓{}", row.ahead, row.behind),
-            Palette::INK_2,
-        );
-        let dirty_color = if row.dirty > 0 {
-            Palette::STATE_WARNING
-        } else {
-            Palette::INK_3
-        };
-        cell(COL_DIRTY, row.dirty.to_string(), dirty_color);
-        match &row.last_commit {
-            Some(lc) => cell(
-                COL_COMMIT,
-                format!("{} · {}", lc.subject, lc.age),
-                Palette::INK_2,
-            ),
-            None => cell(COL_COMMIT, "—".to_string(), Palette::INK_3),
-        }
-    }
 
     // Operations grid (issue 09, screen 04): the fleet sync operations.
     // Choosing any of them opens the preflight matrix modal first —
@@ -597,38 +589,6 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
             }
         }
     }
-}
-
-/// The repo whose display label equals `label`, walking the recursive tree
-/// in pre-order (the selection summary's row names are those labels).
-fn find_repo_by_label<'a>(
-    tree: &'a project_tree::ProjectTree,
-    label: &str,
-) -> Option<&'a project_tree::RepoNode> {
-    fn walk<'a>(
-        nodes: &'a [project_tree::ProjectNode],
-        label: &str,
-    ) -> Option<&'a project_tree::RepoNode> {
-        for node in nodes {
-            match node {
-                project_tree::ProjectNode::Repo(r) => {
-                    if r.label == label {
-                        return Some(r);
-                    }
-                    if let Some(found) = walk(&r.children, label) {
-                        return Some(found);
-                    }
-                }
-                project_tree::ProjectNode::Folder(f) => {
-                    if let Some(found) = walk(&f.children, label) {
-                        return Some(found);
-                    }
-                }
-            }
-        }
-        None
-    }
-    walk(&tree.nodes, label)
 }
 
 #[cfg(test)]

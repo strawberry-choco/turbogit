@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use test_support::git_seed::git as git_ok;
 use test_support::harness::{
-    assert_not_painted, assert_painted, settle, shell_harness_over_unstyled,
+    assert_matrix_geometry, assert_not_painted, assert_painted, settle, shell_harness_over_unstyled,
 };
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_run::RowState;
@@ -166,6 +166,19 @@ fn a_failed_row_exposes_resolve_that_jumps_to_the_repo() {
     settle(&mut h);
 
     assert_painted(&h, "Failed");
+    assert_matrix_geometry(
+        &h,
+        "DURATION",
+        &[
+            ("REPO", 0.0),
+            ("STATE", 130.0),
+            ("DETAIL", 400.0),
+            ("DURATION", 700.0),
+        ],
+        &["alpha"],
+        22.0,
+        26.0,
+    );
     h.get_by_label("Resolve alpha").click();
     settle(&mut h);
 

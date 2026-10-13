@@ -9,13 +9,13 @@
 //! staged state in the hunk header, and the staged-hunk chip rail.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use egui_kittest::{Harness, kittest::Queryable};
 use test_support::git_seed::git;
 use test_support::harness::{
     assert_painted, galley_origin, painted_text, shell_harness_over_unstyled,
 };
+use test_support::wait_until;
 use turbogit_app::state::AppState;
 
 // ---------------------------------------------------------------- helpers --
@@ -60,21 +60,6 @@ fn harness(roots: &[PathBuf]) -> Harness<'static, AppState> {
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
     h
-}
-
-/// Poll `f` until it returns true or the deadline elapses (worker threads run
-/// asynchronously, so completion is observed by polling).
-fn wait_until<F: FnMut() -> bool>(ms: u64, mut f: F) -> bool {
-    let start = Instant::now();
-    loop {
-        if f() {
-            return true;
-        }
-        if start.elapsed() >= Duration::from_millis(ms) {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
 }
 
 /// Whether `needle` is among the repo's staged paths.

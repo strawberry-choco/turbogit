@@ -2447,7 +2447,7 @@ impl AppState {
         let revision = self.caches.revision();
         let inputs = crate::log_display::LogInputs::of(self);
         if crate::log_display::needs_rebuild(self.log_display.as_deref(), revision, &inputs) {
-            let (loaded, hits) = crate::log_display::sources(self, &inputs);
+            let (loaded, hits) = crate::log_display::sources(&self.caches, &inputs);
             self.log_display = Some(Arc::new(crate::log_display::derive(
                 revision, &inputs, loaded, hits,
             )));

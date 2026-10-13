@@ -45,6 +45,7 @@ use egui::{
     Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::{Path, PathBuf};
+use turbogit_app::granular;
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::{Affected, StatsView};
 use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
@@ -459,7 +460,7 @@ fn stash_pane(ui: &mut Ui, state: &mut AppState) {
 fn shelf_row(ui: &mut Ui, state: &mut AppState, shelf: &turbogit_domain::model::Shelf) {
     let root = shelf.root.clone();
     let name = shelf.name.clone();
-    let files = components::counted(shelf.changes.len(), "file");
+    let files = components::counted(shelf.changes.len(), "file", "files");
     let shelved = shelf.created_at.format("%Y-%m-%d %H:%M").to_string();
     ui.horizontal(|ui| {
         widgets::column_cell(ui, &SHELF_COLUMNS, 0, |ui| {
@@ -1720,8 +1721,7 @@ fn changes_header_overflow(trigger: &egui::Response) {
                     label,
                     data: None,
                     shortcut: None,
-                    enabled: false,
-                    disabled_reason: Some(reason),
+                    state: widgets::MenuItemState::disabled(reason),
                     kind: widgets::MenuItemKind::Default,
                 },
             );
@@ -1777,10 +1777,7 @@ fn staged_hunks_rail(ui: &mut Ui, state: &mut AppState) {
     }
     ui.colored_label(
         Palette::BRAND,
-        format!(
-            "{total} {} staged",
-            if total == 1 { "hunk" } else { "hunks" }
-        ),
+        format!("{} staged", components::counted(total, "hunk", "hunks")),
     );
     ui.horizontal_wrapped(|ui| {
         for (label, path) in chips {
@@ -1856,7 +1853,7 @@ fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {
                 path_resp.widget_info(|| {
                     WidgetInfo::labeled(WidgetType::Label, true, format!("Previewing {path_text}"))
                 });
-                let status = crate::ui::diff::preview_status(state, Some(path));
+                let status = granular::preview_status(state, Some(path));
                 pill(ui, status_chip_label(status), status_color(status));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2342,13 +2339,7 @@ fn meta_button_at(ui: &mut Ui, rect: Rect, label: &str) -> egui::Response {
         ui.auto_id_with(("meta_button", label)),
         Sense::click(),
     );
-    let state = if response.is_pointer_button_down_on() {
-        widgets::WidgetState::Active
-    } else if response.hovered() {
-        widgets::WidgetState::Hovered
-    } else {
-        widgets::WidgetState::Idle
-    };
+    let state = widgets::WidgetState::from_response(true, &response);
     let painter = ui.painter().clone();
     let fill = match state {
         widgets::WidgetState::Idle => Palette::RAISED_ON_CARD,
@@ -2496,15 +2487,7 @@ fn commit_control_paint(ui: &mut Ui) -> CommitHalves {
     let radius = crate::theme::CONTROL_RADIUS;
     let painter = ui.painter().clone();
     let fill_of = |half: &egui::Response| {
-        let state = if !enabled {
-            widgets::WidgetState::Disabled
-        } else if half.is_pointer_button_down_on() {
-            widgets::WidgetState::Active
-        } else if half.hovered() {
-            widgets::WidgetState::Hovered
-        } else {
-            widgets::WidgetState::Idle
-        };
+        let state = widgets::WidgetState::from_response(enabled, half);
         widgets::ButtonVariant::Primary.fill(state)
     };
     // Complementary rounding: the outer corners round and the seam does not,

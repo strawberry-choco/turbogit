@@ -1041,11 +1041,11 @@ impl GitExecutor for Git2Executor {
         self.cli.cherry_pick(root, commit)
     }
 
-    fn abort(&self, root: &Path, op: &str) -> TgResult<()> {
+    fn abort(&self, root: &Path, op: OwnedOperation) -> TgResult<()> {
         self.cli.abort(root, op)
     }
 
-    fn continue_op(&self, root: &Path, op: &str) -> TgResult<()> {
+    fn continue_op(&self, root: &Path, op: OwnedOperation) -> TgResult<()> {
         self.cli.continue_op(root, op)
     }
 

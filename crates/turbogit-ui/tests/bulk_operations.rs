@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use test_support::git_seed::git;
 use test_support::harness::{
-    assert_not_painted, assert_painted, painted_galleys, painted_text, settle,
-    shell_harness_over_unstyled,
+    assert_matrix_geometry, assert_not_painted, assert_painted, painted_galleys, painted_text,
+    settle, shell_harness_over_unstyled,
 };
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::BulkOp;
@@ -224,6 +224,22 @@ fn the_preflight_matrix_shows_per_repo_status_and_skip_reasons() {
     // The pull policy control, seeded from settings (merge default).
     assert!(!h.state().ui.bulk_rebase);
     assert_painted(&h, "Rebase onto upstream instead of merging");
+
+    // The matrix's column geometry: every header label over its cell, and both
+    // band heights the painter was handed.
+    assert_matrix_geometry(
+        &h,
+        "OUTCOME",
+        &[
+            ("REPO", 0.0),
+            ("CURRENT BRANCH", 170.0),
+            ("STATUS", 300.0),
+            ("OUTCOME", 390.0),
+        ],
+        &["alpha", "ui"],
+        22.0,
+        30.0,
+    );
 }
 
 // -- Protected-branch policy (screen 02) --------------------------------------

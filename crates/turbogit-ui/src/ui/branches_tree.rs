@@ -23,6 +23,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::ui::components;
 use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_domain::model::{Branch, BranchKind, RecentCheckout, RefState, Root, RootId};
 
@@ -216,15 +217,9 @@ impl RepoSection {
             None
         } else {
             Some(format!(
-                "{} remote{} · {} {}",
-                self.remote_count,
-                if self.remote_count == 1 { "" } else { "s" },
-                self.remote_branch_count,
-                if self.remote_branch_count == 1 {
-                    "branch"
-                } else {
-                    "branches"
-                }
+                "{} · {}",
+                components::counted(self.remote_count, "remote", "remotes"),
+                components::counted(self.remote_branch_count, "branch", "branches")
             ))
         }
     }

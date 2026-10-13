@@ -80,6 +80,9 @@ pub fn selection_summary(
         s.behind += repo.behind;
         s.dirty_files += repo.dirty_count;
         s.rows.push(SelectionRow {
+            // The root's own identity, in hand while the row is built, so a
+            // click aimed at the row never re-derives it from the label.
+            id: repo.id.clone(),
             // The summary matches the sidebar, so a promoted repo carries
             // its path label.
             name: repo.label.clone(),
@@ -299,6 +302,16 @@ mod tests {
         assert_eq!(s.dirty_files, 5, "a's 5 dirty files plus e's 0");
         let rows: Vec<&str> = s.rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(rows, ["a", "e"], "one row per selected repo in tree order");
+        assert_eq!(
+            s.rows[0].id,
+            id_of("/w/a"),
+            "the row carries the root it is about"
+        );
+        assert_eq!(
+            s.rows[1].id,
+            id_of("/w/a/c/e"),
+            "the row carries the root it is about"
+        );
         assert_eq!(s.rows[0].branch.as_deref(), Some("main"));
         assert_eq!((s.rows[0].ahead, s.rows[0].behind), (2, 1));
         assert_eq!(s.rows[0].dirty, 5);

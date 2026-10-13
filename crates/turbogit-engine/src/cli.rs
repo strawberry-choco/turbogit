@@ -1451,14 +1451,14 @@ impl GitExecutor for CliExecutor {
         Ok(head.trim().to_string())
     }
 
-    fn abort(&self, root: &Path, op: &str) -> TgResult<()> {
-        let args = [op, "--abort"];
+    fn abort(&self, root: &Path, op: OwnedOperation) -> TgResult<()> {
+        let args = [op.git_subcommand(), "--abort"];
         self.run(root, &args)?;
         Ok(())
     }
 
-    fn continue_op(&self, root: &Path, op: &str) -> TgResult<()> {
-        let args = [op, "--continue"];
+    fn continue_op(&self, root: &Path, op: OwnedOperation) -> TgResult<()> {
+        let args = [op.git_subcommand(), "--continue"];
         self.run(root, &args)?;
         Ok(())
     }

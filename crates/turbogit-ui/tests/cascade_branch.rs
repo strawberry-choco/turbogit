@@ -12,7 +12,9 @@ use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use test_support::git_seed::git;
-use test_support::harness::{assert_painted, settle, shell_harness_over_unstyled};
+use test_support::harness::{
+    assert_matrix_geometry, assert_painted, settle, shell_harness_over_unstyled,
+};
 use turbogit_app::state::AppState;
 use turbogit_services::bulk_ops::BulkOp;
 use turbogit_services::bulk_run::RowState;
@@ -121,6 +123,23 @@ fn the_cascade_modal_predicts_outcomes_and_runs_only_on_confirmation() {
     assert_painted(&h, "TARGET");
     assert_painted(&h, "Create from HEAD, checkout");
     assert_painted(&h, "Skipped (dirty worktree)");
+
+    // The matrix's column geometry: every header label over its cell, and both
+    // band heights the painter was handed.
+    assert_matrix_geometry(
+        &h,
+        "TARGET",
+        &[
+            ("REPO", 0.0),
+            ("CURRENT BRANCH", 150.0),
+            ("TARGET", 290.0),
+            ("STATUS", 410.0),
+            ("OUTCOME", 520.0),
+        ],
+        &["alpha", "ui"],
+        22.0,
+        30.0,
+    );
 
     // Confirming closes the modal and opens the run monitor.
     h.get_by_label("Run on 1 of 2").click();

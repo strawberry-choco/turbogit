@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 use turbogit_domain::model::{Commit, CommitId, RootId};
 
+use crate::root_caches::RootCaches;
 use crate::state::AppState;
 
 // --- the UI-side inputs a window is derived from --------------------------------
@@ -273,31 +274,28 @@ fn assign_colors(commits: &[LogRow]) -> HashMap<CommitId, usize> {
 /// ref's listing and hides every other root, a path scope shows the selected
 /// root's scoped listing and nothing else, and an unscoped view unions every
 /// visible root's window.
-pub fn sources(state: &AppState, inputs: &LogInputs) -> (Vec<LogRow>, Vec<LogRow>) {
-    let loaded: Vec<LogRow> = if let Some((root, ref_name)) = &state.ui.log_ref_scope {
-        owned(state.caches.ref_log(root, ref_name).unwrap_or_default())
-    } else if state.ui.log_path_scope.is_some() {
-        match &state.selected_root {
-            Some(root) => scoped_window(state, root),
+pub fn sources(caches: &RootCaches, inputs: &LogInputs) -> (Vec<LogRow>, Vec<LogRow>) {
+    let loaded: Vec<LogRow> = if let Some((root, ref_name)) = &inputs.ref_scope {
+        owned(caches.ref_log(root, ref_name).unwrap_or_default())
+    } else if inputs.path_scope.is_some() {
+        match &inputs.scope_root {
+            Some(root) => scoped_window(caches, inputs, root),
             None => Vec::new(),
         }
     } else {
         // The unscoped union: every visible root's window, in the visible roots'
         // order, each root's rows in its own (newest-first) order. The sort that
         // makes the union newest-first across roots happens in [`derive`].
-        union(&inputs.roots, |id| state.caches.log(id))
+        union(&inputs.roots, |id| caches.log(id))
     };
     // The pickaxe union is skipped inside a path scope: the scoped view may only
     // ever list commits touching the scoped path, and the pickaxe cache is not
     // path-scoped. The pane's data-ensure step never fills it there either. The
     // cache is keyed by the trimmed RAW query (what the engine was given) — not
     // the lowercased text the filter matches with.
-    let hits: Vec<LogRow> = match (
-        state.ui.log_path_scope.is_none(),
-        state.ui.log_filter.trim(),
-    ) {
+    let hits: Vec<LogRow> = match (inputs.path_scope.is_none(), inputs.filter.trim()) {
         (true, query) if !query.is_empty() => {
-            union(&inputs.roots, |id| state.caches.search_log(id, query))
+            union(&inputs.roots, |id| caches.search_log(id, query))
         }
         _ => Vec::new(),
     };
@@ -317,13 +315,13 @@ fn union<'a>(roots: &[RootId], read: impl Fn(&RootId) -> Option<&'a [Commit]>) -
 
 /// One scope's window for `root` as owned rows: the path scope's listing when one
 /// is active and cached, else the root's unscoped window.
-fn scoped_window(state: &AppState, root: &RootId) -> Vec<LogRow> {
-    if let Some(path) = &state.ui.log_path_scope
-        && let Some(commits) = state.caches.path_log(root, path)
+fn scoped_window(caches: &RootCaches, inputs: &LogInputs, root: &RootId) -> Vec<LogRow> {
+    if let Some(path) = &inputs.path_scope
+        && let Some(commits) = caches.path_log(root, path)
     {
         return owned(commits);
     }
-    owned(state.caches.log(root).unwrap_or_default())
+    owned(caches.log(root).unwrap_or_default())
 }
 
 /// A cached window as owned rows. One deep copy per commit, once per rebuild —

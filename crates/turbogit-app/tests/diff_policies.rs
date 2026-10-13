@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use test_support::git_seed::repo_with_one_commit;
-use turbogit_app::diff_model::{DiffValue, DisplayRow, Highlight, RowKind};
+use test_support::srcscan;
+use turbogit_app::diff_model::{DiffValue, DisplayRow, Highlight, RowKind, line_counts};
 use turbogit_app::keyed_read::{DiffTarget, Keyed, Read};
 use turbogit_app::state::{AppState, DiffComparison};
 use turbogit_domain::model::{DiffHighlighting, DiffPolicies, DiffWhitespace};
@@ -67,28 +68,6 @@ fn rendered(work: &Path, text: &str, policies: DiffPolicies) -> Arc<DiffValue> {
     diff
 }
 
-/// `(added, removed)` display rows of a model: the two policies are read here,
-/// because a difference the viewer considers equal stops being a changed row,
-/// and a difference it still counts stays one.
-fn changed(model: &turbogit_app::diff_model::DiffModel) -> (usize, usize) {
-    let mut adds = 0;
-    let mut dels = 0;
-    for row in &model.display {
-        match row {
-            DisplayRow::Full(r) => match r.kind {
-                RowKind::Add => adds += 1,
-                RowKind::Del => dels += 1,
-                _ => {}
-            },
-            DisplayRow::Pair(d, a) => {
-                dels += d.is_some() as usize;
-                adds += a.is_some() as usize;
-            }
-        }
-    }
-    (adds, dels)
-}
-
 /// The five whitespace values, on five patches chosen so each one is hidden by
 /// exactly one value and shown by the value below it — a policy where two values
 /// behave alike has one value and five names.
@@ -102,13 +81,17 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
     };
 
     // Trailing whitespace only: shown by `None`, hidden by `Trim whitespaces`.
+    // The two policies are read here, because a difference the viewer considers
+    // equal stops being a changed row, and a difference it still counts stays
+    // one — so every count below is the owner's own answer,
+    // `diff_model::line_counts`, the function the diff header reads.
     let trailing = patch(&["gamma"], &["gamma  "]);
     assert_eq!(
-        changed(&rendered(&work, &trailing, at(DiffWhitespace::None)).model),
+        line_counts(&rendered(&work, &trailing, at(DiffWhitespace::None)).model),
         (1, 1)
     );
     assert_eq!(
-        changed(&rendered(&work, &trailing, at(DiffWhitespace::TrimWhitespace)).model),
+        line_counts(&rendered(&work, &trailing, at(DiffWhitespace::TrimWhitespace)).model),
         (0, 0),
         "a line that differs only at its end is not a difference"
     );
@@ -116,11 +99,11 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
     // Internal whitespace only: still shown by `Trim`, hidden by `Ignore whitespaces`.
     let internal = patch(&["g amma"], &["gamma"]);
     assert_eq!(
-        changed(&rendered(&work, &internal, at(DiffWhitespace::TrimWhitespace)).model),
+        line_counts(&rendered(&work, &internal, at(DiffWhitespace::TrimWhitespace)).model),
         (1, 1)
     );
     assert_eq!(
-        changed(&rendered(&work, &internal, at(DiffWhitespace::IgnoreWhitespace)).model),
+        line_counts(&rendered(&work, &internal, at(DiffWhitespace::IgnoreWhitespace)).model),
         (0, 0)
     );
 
@@ -128,11 +111,11 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
     // count differs), hidden one rung up.
     let blank_line = patch(&[], &["  "]);
     assert_eq!(
-        changed(&rendered(&work, &blank_line, at(DiffWhitespace::IgnoreWhitespace)).model),
+        line_counts(&rendered(&work, &blank_line, at(DiffWhitespace::IgnoreWhitespace)).model),
         (1, 0)
     );
     assert_eq!(
-        changed(
+        line_counts(
             &rendered(
                 &work,
                 &blank_line,
@@ -147,11 +130,11 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
     // shown by `Ignore whitespaces`, hidden one rung up.
     let joined = patch(&["a b c"], &["a", "b c"]);
     assert_eq!(
-        changed(&rendered(&work, &joined, at(DiffWhitespace::IgnoreWhitespace)).model),
+        line_counts(&rendered(&work, &joined, at(DiffWhitespace::IgnoreWhitespace)).model),
         (2, 1)
     );
     assert_eq!(
-        changed(
+        line_counts(
             &rendered(
                 &work,
                 &joined,
@@ -166,7 +149,7 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
     // fifth.
     let imports = patch(&["use std::fs;", "use std::io;"], &["use std::io;"]);
     assert_eq!(
-        changed(
+        line_counts(
             &rendered(
                 &work,
                 &imports,
@@ -177,7 +160,7 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
         (1, 2)
     );
     assert_eq!(
-        changed(
+        line_counts(
             &rendered(
                 &work,
                 &imports,
@@ -192,7 +175,7 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
     // stays a difference, which the fourth value throws away with the rest.
     let literal = patch(&["let s = \"a b\";"], &["let s = \"a  b\";"]);
     assert_eq!(
-        changed(
+        line_counts(
             &rendered(
                 &work,
                 &literal,
@@ -203,7 +186,7 @@ fn the_whitespace_ladder_hides_one_more_kind_of_change_at_each_rung() {
         (0, 0)
     );
     assert_eq!(
-        changed(
+        line_counts(
             &rendered(
                 &work,
                 &literal,
@@ -276,7 +259,7 @@ fn each_highlighting_value_cuts_the_change_at_its_own_granularity() {
 
     // None: the row is still a difference, and nothing about it is highlighted.
     let none = rendered(&work, &two_words, at(DiffHighlighting::None));
-    let (adds, _) = changed(&none.model);
+    let (adds, _) = line_counts(&none.model);
     assert_eq!(adds, 1);
     assert_eq!(
         highlight_of(&none.model),
@@ -307,9 +290,13 @@ fn each_highlighting_value_cuts_the_change_at_its_own_granularity() {
     let carried = patch(&["alpha", "beta"], &["alpha", "BETA"]);
     let lines = rendered(&work, &carried, at(DiffHighlighting::Lines));
     let split = rendered(&work, &carried, at(DiffHighlighting::SplitChanges));
-    assert_eq!(changed(&lines.model), (2, 2), "one change over both lines");
     assert_eq!(
-        changed(&split.model),
+        line_counts(&lines.model),
+        (2, 2),
+        "one change over both lines"
+    );
+    assert_eq!(
+        line_counts(&split.model),
         (1, 1),
         "two changes, and the carried line is neither of them"
     );
@@ -353,7 +340,7 @@ fn a_policy_change_reparses_once_and_never_serves_the_other_policys_model() {
     let Read::Fresh(first) = first else {
         panic!("the first policy's answer settles");
     };
-    assert_eq!(changed(&first.model), (1, 1));
+    assert_eq!(line_counts(&first.model), (1, 1));
 
     // The other policy is a different key, so it is a different answer — and it
     // is admitted once, not every frame.
@@ -368,7 +355,7 @@ fn a_policy_change_reparses_once_and_never_serves_the_other_policys_model() {
     let Read::Fresh(third) = third else {
         panic!("the second policy's answer settles");
     };
-    assert_eq!(changed(&third.model), (0, 0));
+    assert_eq!(line_counts(&third.model), (0, 0));
     assert!(
         !state.read_pending(),
         "and the second ask spent no further git work"
@@ -467,4 +454,26 @@ fn run_count(h: &Highlight) -> usize {
         Highlight::Row => 1,
         Highlight::Off => 0,
     }
+}
+
+/// This suite's own source, read at compile time — the ratchet below is a claim
+/// about a function that must not exist in it.
+const DIFF_POLICIES_SRC: &str = include_str!("diff_policies.rs");
+
+/// Contract: the changed-row count is answered by one function,
+/// `turbogit_app::diff_model::line_counts` — the one the production diff header
+/// and the commit-window file row read. This suite used to keep a private copy
+/// of the same walk, so a change to the owner that broke the header would still
+/// have passed every count assertion below. A copy that comes back would restore
+/// exactly that blind spot, and only this scan would say so.
+#[test]
+fn the_policy_suite_reads_the_owners_changed_row_count() {
+    assert!(
+        !DIFF_POLICIES_SRC
+            .lines()
+            .any(|line| srcscan::declares(line, "changed")),
+        "diff_policies must not keep a local copy of the changed-row count: \
+         turbogit_app::diff_model::line_counts owns it (lane 5, ticket 13), \
+         and every count below reads it"
+    );
 }
