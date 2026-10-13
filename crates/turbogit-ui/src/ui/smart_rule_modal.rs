@@ -194,7 +194,7 @@ fn save_rule(state: &mut AppState) {
         }
         _ => state.ui.smart_group_rules.push(rule),
     }
-    state.persist_ui();
+    state.save_durable_ui();
     state.ui.toast = Some(Toast::success("Smart group rule saved"));
     state.ui.smart_rule_editor_open = false;
 }

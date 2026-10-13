@@ -334,7 +334,7 @@ pub fn bulk_completed(state: &mut AppState, label: String, results: Vec<(RootId,
         // divergence rather than stacking a second modal on it.
         state.ui.branch_divergence = if record.reversible() { diverged } else { None };
         crate::bulk_history::record_into(&mut state.ui.bulk_history, record);
-        state.persist_ui();
+        state.save_durable_ui();
     }
 }
 

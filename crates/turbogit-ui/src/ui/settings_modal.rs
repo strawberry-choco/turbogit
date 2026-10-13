@@ -713,6 +713,6 @@ fn apply_settings(state: &mut AppState) {
     state.settings = draft;
     let _ = turbogit_app::persistence::save_settings(&state.project_dir, &state.settings);
     state.rebuild_executor();
-    state.persist_ui();
+    state.save_durable_ui();
     state.ui.toast = Some(Toast::success("Settings saved"));
 }

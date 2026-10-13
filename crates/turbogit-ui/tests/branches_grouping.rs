@@ -358,7 +358,7 @@ fn a_toggled_grouping_comes_back_from_the_project_on_the_next_launch() {
         toggle(&mut harness, "Group by Directory");
         assert!(has_painted(&harness, "feature/a"));
         // The harness's own state is the only writer; the file is what outlives it.
-        harness.state().persist_ui();
+        harness.state().save_durable_ui();
     }
     let persisted = std::fs::read_to_string(project.join(".turbogit").join("ui.ron"))
         .expect("ui.ron holds the toggles");

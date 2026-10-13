@@ -479,7 +479,7 @@ fn switch_tab(state: &mut AppState, tab: Tab) {
         // Focus lands in the Branches search box when the tab opens (issue 06).
         state.ui.branches_focus_search = true;
     }
-    state.persist_ui();
+    state.save_durable_ui();
 }
 
 // --- Shared painting helpers ---------------------------------------------------

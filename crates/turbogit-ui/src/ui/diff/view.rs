@@ -1026,7 +1026,7 @@ fn file_row(
     if policies_changed {
         // A policy is presentation the reader agrees on, and the agreement has to
         // survive the session it was picked in.
-        state.persist_ui();
+        state.save_durable_ui();
     }
     // The same `+N −M` stats treatment the commit window's preview header uses,
     // in the same accents: the counts are statistics, not diff row content.
