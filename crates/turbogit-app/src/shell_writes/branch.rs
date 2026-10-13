@@ -7,9 +7,22 @@
 //! record captured.
 
 use turbogit_domain::model::RootId;
+use turbogit_services::branch_service;
 
 use crate::operation::Operation;
 use crate::root_caches::Affected;
+
+/// Create the branch `name` in `root` from `start`, optionally checking it out.
+pub fn create(root: &RootId, name: &str, start: Option<&str>, checkout: bool) -> Operation {
+    let n = name.to_string();
+    let start = start.map(str::to_owned);
+    let root = root.clone();
+    Operation::custom(
+        format!("Create branch {name}"),
+        Affected::Root(root.clone()),
+        move |v| branch_service::create(v, root.as_path(), &n, start.as_deref(), checkout),
+    )
+}
 
 /// Check `name` out in `root`. `affected` is the caller's scope because the
 /// popup computes one for the whole row loop.

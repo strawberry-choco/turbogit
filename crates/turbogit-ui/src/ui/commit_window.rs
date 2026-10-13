@@ -46,11 +46,10 @@ use egui::{
 };
 use std::path::{Path, PathBuf};
 use turbogit_app::granular;
-use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::{Affected, StatsView};
+use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use turbogit_domain::model::{Change, ChangeStatus, Root};
-use turbogit_services::changes;
 
 /// Fixed width of the Commit panel (redesign 03, screen 01): the Commit
 /// window is exactly two zones — this fixed-width panel on the left and
@@ -521,24 +520,12 @@ fn stash_row(ui: &mut Ui, state: &mut AppState, stash: &turbogit_domain::model::
             if components::kit_button(ui, components::KitButton::Danger, "Pop Stash (removes)")
                 .clicked()
             {
-                let label = format!("Pop stash {stash_ref}");
-                let work_root = root.clone();
-                state.dispatch(Operation::custom(
-                    label,
-                    Affected::Root(root.clone()),
-                    move |v| v.stash_pop(work_root.as_path(), index),
-                ));
+                state.dispatch(shell_writes::stash::pop_at(&root, &stash_ref, index));
             }
             if components::kit_button(ui, components::KitButton::Secondary, "Apply Stash (keeps)")
                 .clicked()
             {
-                let label = format!("Apply stash {stash_ref}");
-                let work_root = root.clone();
-                state.dispatch(Operation::custom(
-                    label,
-                    Affected::Root(root.clone()),
-                    move |v| v.stash_apply(work_root.as_path(), index),
-                ));
+                state.dispatch(shell_writes::stash::apply_at(&root, &stash_ref, index));
             }
         });
     });
@@ -2603,14 +2590,8 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         state.ui.recent_messages.truncate(12);
     }
     if let Some(root) = root {
-        state.dispatch(Operation::custom(
-            "Commit",
-            Affected::Root(root.clone()),
-            move |v| {
-                let _ =
-                    changes::commit_selected(v, root.as_path(), &msg, &untouched, &partial, amend)?;
-                Ok(())
-            },
+        state.dispatch(shell_writes::commit::commit(
+            &root, &msg, &untouched, &partial, amend,
         ));
     }
     // Reset fields (the recent message was recorded above).

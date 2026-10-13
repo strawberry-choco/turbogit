@@ -4,12 +4,10 @@
 
 use egui::{Align, FontFamily, FontId, Layout, RichText, Ui};
 use turbogit_app::operation::Operation;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType, UnmergedCommits};
 use turbogit_domain::model::{BranchKind, MergeStrategy};
-use turbogit_services::{
-    branch_service, integrate_service, shelve_stash, sync_service, tag_service,
-};
+use turbogit_services::{integrate_service, shelve_stash, sync_service, tag_service};
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, data_font};
 use crate::ui::components::{KitButton, counted, kit_button};
@@ -242,10 +240,11 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
             // creating something and then hunting for it feels broken.
             state.ui.branches_tree.scroll_to = Some(name.clone());
             if let Some(root) = root {
-                state.dispatch(Operation::custom(
-                    format!("Create branch {name}"),
-                    Affected::Root(root.clone()),
-                    move |v| branch_service::create(v, root.as_path(), &name, start.as_deref(), co),
+                state.dispatch(shell_writes::branch::create(
+                    &root,
+                    &name,
+                    start.as_deref(),
+                    co,
                 ));
             }
             close(state);
@@ -1212,22 +1211,8 @@ fn tag(ui: &mut Ui, state: &mut AppState) {
                 sign: annotated && state.ui.dlg.tag_sign,
             };
             let push = state.ui.dlg.tag_push;
-            let name = spec.name.clone();
             if let Some(root) = root {
-                state.dispatch(Operation::custom(
-                    format!("Create tag {name}"),
-                    Affected::Root(root.clone()),
-                    move |v| {
-                        let r = root.as_path();
-                        tag_service::create(v, r, &spec)?;
-                        if push {
-                            // Reports the outcome: the error carries the
-                            // created-tag context when the push fails.
-                            tag_service::push_new(v, r, &name)?;
-                        }
-                        Ok(())
-                    },
-                ));
+                state.dispatch(shell_writes::tag::create(&root, &spec, push));
             }
             close(state);
         }
@@ -1368,24 +1353,15 @@ fn stash(ui: &mut Ui, state: &mut AppState) {
         }
         if ui.button("Pop latest").clicked() {
             if let Some(root) = state.selected_root.clone() {
-                state.dispatch(Operation::custom(
-                    "Stash pop",
-                    Affected::Root(root.clone()),
-                    move |v| v.stash_pop(root.as_path(), 0),
-                ));
+                state.dispatch(shell_writes::stash::pop_latest(&root));
             }
             close(state);
         }
         if ui.button("Stash").clicked() {
-            let root = state.selected_root.clone();
             let msg = state.ui.dlg.stash_msg.clone();
             let keep = state.ui.dlg.stash_keep;
-            if let Some(root) = root {
-                state.dispatch(Operation::custom(
-                    "Stash",
-                    Affected::Root(root.clone()),
-                    move |v| v.stash_push(root.as_path(), &msg, keep),
-                ));
+            if let Some(root) = state.selected_root.clone() {
+                state.dispatch(shell_writes::stash::push(&root, &msg, keep));
             }
             close(state);
         }
