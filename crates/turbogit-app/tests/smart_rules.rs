@@ -5,7 +5,7 @@
 use tempfile::TempDir;
 use turbogit_app::persistence::{UiPersist, load_ui_state, save_ui_state};
 use turbogit_app::smart_rules::SmartGroupRule;
-use turbogit_app::state::AppState;
+use turbogit_app::state::{AppState, Tab};
 
 fn release_rule() -> SmartGroupRule {
     SmartGroupRule {
@@ -28,8 +28,10 @@ fn rules_round_trip_through_the_workspace_ui_state() {
     let loaded = load_ui_state(project.path());
 
     assert_eq!(loaded.smart_group_rules, vec![release_rule()]);
-    // The pre-existing fields ride along unchanged.
-    assert_eq!(loaded.tab, "");
+    // The pre-existing fields ride along unchanged: the tab is a `Tab` now, so
+    // a file written with none of it reads back as the default tab rather than
+    // as a string that means nothing.
+    assert_eq!(loaded.tab, Tab::default());
 }
 
 #[test]
@@ -46,7 +48,7 @@ fn a_ui_ron_written_before_rules_existed_loads_with_no_rules() {
 
     assert!(loaded.smart_group_rules.is_empty());
     assert_eq!(loaded.draft_message, "hi");
-    assert_eq!(loaded.tab, "Commit");
+    assert_eq!(loaded.tab, Tab::Commit);
 }
 
 #[test]

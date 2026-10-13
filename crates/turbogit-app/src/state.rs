@@ -2146,25 +2146,10 @@ impl AppState {
                 state.project_dir = dir;
                 state.rescan();
 
-                // Restore persisted UI state (Epic J4): active tab, draft message, recent repos.
+                // Restore the durable UI set (Epic J4): the declaration's
+                // restore direction, reading the same file.
                 let ui = crate::persistence::load_ui_state(&state.project_dir);
-                state.ui.tab = match ui.tab.as_str() {
-                    "Log" => Tab::Log,
-                    "Branches" => Tab::Branches,
-                    "Worktrees" => Tab::Worktrees,
-                    "Submodules" => Tab::Submodules,
-                    // Legacy persisted "History" (removed in issue #19)
-                    // gracefully falls back to the Commit tab.
-                    _ => Tab::Commit,
-                };
-                state.ui.recent_repos = ui.recent_repos;
-                state.ui.smart_group_rules = ui.smart_group_rules;
-                state.ui.pinned_views = ui.pinned_views;
-                state.ui.bulk_history = ui.bulk_history;
-                state.ui.recent_custom_commands = ui.recent_custom_commands;
-                state.ui.sidebar_collapsed = ui.sidebar_collapsed;
-                state.ui.branches_view = ui.branches_view;
-                state.ui.diff_policies = ui.diff_policies;
+                ui.restore_into(&mut state.ui);
             }
             None => {
                 // No project directory supplied: land on Welcome (ADR-0004).
@@ -2253,25 +2238,7 @@ impl AppState {
 
     /// Persist lightweight UI state (active tab, draft message, recent repos).
     pub fn persist_ui(&self) {
-        let ui = crate::persistence::UiPersist {
-            tab: match self.ui.tab {
-                Tab::Log => "Log",
-                Tab::Branches => "Branches",
-                Tab::Worktrees => "Worktrees",
-                Tab::Submodules => "Submodules",
-                _ => "Commit",
-            }
-            .to_string(),
-            recent_repos: self.ui.recent_repos.clone(),
-            draft_message: self.ui.commit_message.clone(),
-            smart_group_rules: self.ui.smart_group_rules.clone(),
-            pinned_views: self.ui.pinned_views.clone(),
-            bulk_history: self.ui.bulk_history.clone(),
-            recent_custom_commands: self.ui.recent_custom_commands.clone(),
-            sidebar_collapsed: self.ui.sidebar_collapsed.clone(),
-            branches_view: self.ui.branches_view,
-            diff_policies: self.ui.diff_policies,
-        };
+        let ui = crate::persistence::UiPersist::capture(&self.ui);
         let _ = crate::persistence::save_ui_state(&self.project_dir, &ui);
     }
     /// dispatch a fresh asynchronous status scan for every registered root.
