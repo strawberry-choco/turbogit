@@ -11,6 +11,7 @@ use turbogit_services::branch_service;
 
 use crate::operation::Operation;
 use crate::root_caches::Affected;
+use crate::state::AppState;
 
 /// Create the branch `name` in `root` from `start`, optionally checking it out.
 pub fn create(root: &RootId, name: &str, start: Option<&str>, checkout: bool) -> Operation {
@@ -66,4 +67,13 @@ pub fn restore(root: &RootId, name: &str, sha: &str) -> Operation {
         Affected::Root(root.clone()),
         move |v| v.branch_create(root.as_path(), &n, false, Some(&sha)),
     )
+}
+
+/// Flip `name`'s favourite flag in `root`.
+///
+/// The one entry here that touches no git: the star is app state, so it lives
+/// beside the branch writes rather than in a renderer, and a renderer that
+/// reached `state.multi` would be a writer for the app's own domain state.
+pub fn toggle_favorite(state: &mut AppState, root: &RootId, name: &str) {
+    branch_service::toggle_favorite(&mut state.multi, root, name);
 }

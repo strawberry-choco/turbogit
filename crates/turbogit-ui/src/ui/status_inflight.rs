@@ -32,11 +32,12 @@
 //! most likely to get wrong — one global "busy with a rebase" boolean would paint
 //! the right words in the wrong root's announcement.
 //!
-//! The bar asks the engine, and the engine asks the filesystem: a bounded `stat`
-//! read of the repository's own git directory, never a git process, which is what
-//! makes asking it per root per frame honest. The same answer is what the rewrite
-//! gate refuses on, so the bar and the menu cannot name different operations for
-//! one repository.
+//! The bar asks the app, and the app asks the engine: a bounded `stat`
+//! read of the repository's own git directory, never a git process, which is
+//! what makes asking it per root per frame honest. The same answer is what the
+//! rewrite gate refuses on, so the bar and the menu cannot name different
+//! operations for one repository — and because both go through
+//! [`AppState::holding_operation`], neither holds its own on-disk read.
 
 use egui::{Color32, CornerRadius, Response, RichText};
 
@@ -56,21 +57,14 @@ pub struct InFlight {
     pub owner: OwnedOperation,
 }
 
-/// The roots-only form of [`items_via`]: it reads git's markers through the
-/// boundary's own probe, for a caller that has root paths and no engine to ask.
+/// The roots-only form of the announcement, over an injected owner read — the
+/// same seam `AggregatedStatus::compute` uses for ahead/behind, so the per-root
+/// rule is unit-testable without a working tree.
 ///
-/// The bar itself does not use it — [`render`] and [`target_for`] ask the engine,
-/// so the announcement is the same answer the rewrite gate refuses on and a suite
-/// can drive both from a seeded executor without a working tree.
-pub fn items(roots: &[Root]) -> Vec<InFlight> {
-    items_via(roots, &|root| {
-        turbogit_engine_api::repo_state::holding_operation_at(root.id.as_path())
-    })
-}
-
-/// [`items`] over an injected owner read — the same seam
-/// `AggregatedStatus::compute` uses for ahead/behind, so the per-root rule is
-/// unit-testable without a working tree.
+/// **Injected, not read here.** The bar passes
+/// [`AppState::holding_operation`], and so does every test that wants the
+/// announcement: one read, one answer, and no on-disk probe anywhere in this
+/// crate's production path.
 pub fn items_via(
     roots: &[Root],
     owner_of: &dyn Fn(&Root) -> Option<OwnedOperation>,
@@ -108,7 +102,7 @@ impl InFlight {
 
 /// The roots the engine says are held, in registration order.
 ///
-/// Asked of the engine rather than of git's marker files so that the bar's
+/// Asked of the app rather than of git's marker files so that the bar's
 /// announcement, the rewrite gate's refusal and a suite's seeded executor are all
 /// one answer. The read is a `stat` per root, never a git process, which is what
 /// lets the bar ask it every frame.
