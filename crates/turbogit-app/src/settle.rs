@@ -511,9 +511,7 @@ fn arm_landed_rewrite_undo(state: &mut AppState, rules: RuleSet) {
     }
 }
 
-/// The failure-side post-completion rules, in the order they run. `Continue`
-/// is the conflict hand-off: a merge/rebase that stopped on a conflict is not a
-/// failure, so nothing after it runs.
+/// The failure-side post-completion rules, in the order they run.
 fn settle_err(
     state: &mut AppState,
     rules: RuleSet,
@@ -522,126 +520,192 @@ fn settle_err(
     affected: &Affected,
     e: turbogit_domain::error::TgError,
 ) -> Control {
-    let msg = e.to_string();
+    clear_delete_pending(state);
+    clear_rewrite_undo_pending(state);
+    clear_reselect(state, affected);
+    // Rule four is the only one that can end the arm early: a merge/rebase that
+    // stopped on a conflict is not a failure, so nothing after it runs. The
+    // control value is what lets the drain loop's own `continue` stay where it
+    // is instead of becoming a labelled `break` on a loop nineteen arms share.
+    if hand_off_failed_conflicts(state, kind, label, affected) {
+        return Control::Continue;
+    }
+    classify_push_rejection(state, rules, kind, affected, &e);
+    report_failure(state, label, &e);
+    drop_shelf_removal(state, rules);
+    record_failure_in_activity(state, label, affected, &e);
+    record_apply_outcome(state, rules);
+    granular::on_op_failed(state);
+    Control::Done
+}
+
+/// Rule one: a failed delete armed nothing worth keeping. The pending record and
+/// the unmerged-commit disclosure go together, because the disclosure only
+/// means anything while the confirmation is still on screen.
+fn clear_delete_pending(state: &mut AppState) {
     state.ui.branches_delete_pending = None;
     state.ui.branches_delete_unmerged = None;
-    // A rewrite that failed arms no undo:
-    // the offer exists for a landed rewrite only.
+}
+
+/// Rule two: a rewrite that failed arms no undo — the offer exists for a landed
+/// rewrite only.
+fn clear_rewrite_undo_pending(state: &mut AppState) {
     state.ui.rewrite_undo_pending = None;
-    // A rewrite that failed moved nothing: the commit the
-    // developer was looking at is still in the history and
-    // still selected, so nothing follows it.
+}
+
+/// Rule three: a rewrite that failed moved nothing, so the commit the developer
+/// was looking at is still in the history and still selected, and nothing
+/// follows it.
+fn clear_reselect(state: &mut AppState, affected: &Affected) {
     state.clear_pending_reselect(affected);
-    // Issue 09: a merge/rebase that hits conflicts is
-    // not a failure — it is a handoff to the conflict
-    // experience, with an explicit mid-operation state
-    // that survives switching tabs. The reliable
-    // signal is the worktree's fresh conflict list
-    // (git's own stderr text is not stable here).
+}
+
+/// Rule four (issue 09): a merge/rebase that hits conflicts is not a failure —
+/// it is a hand-off to the conflict experience, with an explicit
+/// mid-operation state that survives switching tabs. Returns whether it handed
+/// off, which is the caller its only way to stop.
+///
+/// **The probe refreshes before it counts**, for the same reason the success
+/// arm's rule seven does: the worktree's fresh conflict list is the reliable
+/// signal and git's own stderr text is not stable here. It compiles and passes
+/// either way, which is why it is written down.
+fn hand_off_failed_conflicts(
+    state: &mut AppState,
+    kind: OpKind,
+    label: &str,
+    affected: &Affected,
+) -> bool {
     let conflict = if hands_off_conflicts(kind) {
         state.refresh(affected.clone());
         conflicted_count(state, affected) > 0
     } else {
         false
     };
-    if conflict {
-        granular::settle(state);
-        state.ui.merge_in_progress = true;
-        state.ui.conflict_resolver_open = true;
-        let conflicts = conflicted_count(state, affected);
-        let report = format!("{label} · {conflicts} unresolved conflicts");
-        state.show_toast(Toast::warning(report.clone()));
-        state.ui.activity.push(ActivityEntry {
-            at: chrono::Local::now(),
-            repo: activity_repo_label(affected),
-            message: report,
-            kind: ActivityKind::Warning,
-        });
-        return Control::Continue;
+    if !conflict {
+        return false;
     }
-    // A rejected push is not one failure, it
-    // is six, and they need six different replies. The
-    // toast still says what git said — this is the
-    // surface that says what to DO about it.
-    if rules.push_rejection
-        && let Some(request) = state.ui.push_in_flight.take()
-    {
-        // Same rule the merge/rebase arm uses: the
-        // refreshed worktree, not git's stderr text,
-        // is what says conflicts are really there.
-        state.refresh(affected.clone());
-        let conflicts = conflicted_count(state, affected) > 0;
-        let phase = if kind == OpKind::PushRecovery {
-            turbogit_services::sync_service::PushPhase::Recovery
-        } else {
-            turbogit_services::sync_service::PushPhase::Push
-        };
-        let (remote, branch) = push_target_names(state, &request);
-        let outcome = turbogit_services::sync_service::classify_push_failure(
-            &e, conflicts, phase, &remote, &branch,
+    granular::settle(state);
+    state.ui.merge_in_progress = true;
+    state.ui.conflict_resolver_open = true;
+    let conflicts = conflicted_count(state, affected);
+    let report = format!("{label} · {conflicts} unresolved conflicts");
+    state.show_toast(Toast::warning(report.clone()));
+    state.ui.activity.push(ActivityEntry {
+        at: chrono::Local::now(),
+        repo: activity_repo_label(affected),
+        message: report,
+        kind: ActivityKind::Warning,
+    });
+    true
+}
+
+/// Rule five: a rejected push is not one failure, it is six, and they need six
+/// different replies. The toast still says what git said — this is the surface
+/// that says what to DO about it.
+fn classify_push_rejection(
+    state: &mut AppState,
+    rules: RuleSet,
+    kind: OpKind,
+    affected: &Affected,
+    e: &turbogit_domain::error::TgError,
+) {
+    if !rules.push_rejection {
+        return;
+    }
+    let Some(request) = state.ui.push_in_flight.take() else {
+        return;
+    };
+    // Same rule the merge/rebase arm uses: the
+    // refreshed worktree, not git's stderr text,
+    // is what says conflicts are really there.
+    state.refresh(affected.clone());
+    let conflicts = conflicted_count(state, affected) > 0;
+    let phase = if kind == OpKind::PushRecovery {
+        turbogit_services::sync_service::PushPhase::Recovery
+    } else {
+        turbogit_services::sync_service::PushPhase::Push
+    };
+    let (remote, branch) = push_target_names(state, &request);
+    let outcome = turbogit_services::sync_service::classify_push_failure(
+        e, conflicts, phase, &remote, &branch,
+    );
+    let affected_roots = request.roots();
+    // The opt-in the rejection notification's
+    // checkbox writes: an ordinary rejection then
+    // updates silently instead of asking a second
+    // time. Gated on `OpKind::Push` — a failed
+    // RECOVERY always shows its reply, or the two
+    // would re-dispatch each other forever. The
+    // fetch classes are out too: the user opted
+    // into an update, not into an integration they
+    // did not ask for.
+    let silent_update = state.settings.auto_update_on_push_rejected
+        && kind == OpKind::Push
+        && matches!(
+            outcome,
+            turbogit_services::sync_service::PushOutcome::Rejected { .. }
         );
-        let affected_roots = request.roots();
-        // The opt-in the rejection notification's
-        // checkbox writes: an ordinary rejection then
-        // updates silently instead of asking a second
-        // time. Gated on `OpKind::Push` — a failed
-        // RECOVERY always shows its reply, or the two
-        // would re-dispatch each other forever. The
-        // fetch classes are out too: the user opted
-        // into an update, not into an integration they
-        // did not ask for.
-        let silent_update = state.settings.auto_update_on_push_rejected
-            && kind == OpKind::Push
-            && matches!(
-                outcome,
-                turbogit_services::sync_service::PushOutcome::Rejected { .. }
-            );
-        if silent_update {
-            let plan = crate::operation::RecoveryPlan {
-                mode: crate::operation::RecoveryMode::Update {
-                    method: state.settings.update_method,
-                },
-                roots: affected_roots,
-            };
-            state.dispatch_push(request, Some(plan));
-        } else {
-            state.ui.push_rejection = Some(PushRejection {
-                outcome,
-                request,
-                affected_roots,
-                // The documented fallback for an
-                // undocumented reference default: touch
-                // only what the failed push touched.
-                update_all: false,
-                remember: state.settings.auto_update_on_push_rejected,
-            });
-        }
+    if silent_update {
+        let plan = crate::operation::RecoveryPlan {
+            mode: crate::operation::RecoveryMode::Update {
+                method: state.settings.update_method,
+            },
+            roots: affected_roots,
+        };
+        state.dispatch_push(request, Some(plan));
+    } else {
+        state.ui.push_rejection = Some(PushRejection {
+            outcome,
+            request,
+            affected_roots,
+            // The documented fallback for an
+            // undocumented reference default: touch
+            // only what the failed push touched.
+            update_all: false,
+            remember: state.settings.auto_update_on_push_rejected,
+        });
     }
+}
+
+/// Rule six: the error toast, and the same sentence kept for whatever reads
+/// `last_error` after the toast has gone.
+fn report_failure(state: &mut AppState, label: &str, e: &turbogit_domain::error::TgError) {
     state.show_toast(Toast::error(format!("{label}: {e}")));
-    state.last_error = Some(msg);
-    // An unshelve that never landed keeps its shelf row,
-    // so the record it armed for removal is dropped here
-    // rather than left to a later, unrelated success.
+    state.last_error = Some(e.to_string());
+}
+
+/// Rule seven: an unshelve that never landed keeps its shelf row, so the record
+/// it armed for removal is dropped here rather than left to a later, unrelated
+/// success.
+fn drop_shelf_removal(state: &mut AppState, rules: RuleSet) {
     if rules.shelf_removal {
         state.ui.shelf_removal_pending = None;
     }
-    // Activity log (issue #04): failures are entries too
-    // — the toast vanishes, the feed remembers.
+}
+
+/// Rule eight (issue #04): failures are entries too — the toast vanishes, the
+/// feed remembers.
+fn record_failure_in_activity(
+    state: &mut AppState,
+    label: &str,
+    affected: &Affected,
+    e: &turbogit_domain::error::TgError,
+) {
     state.ui.activity.push(ActivityEntry {
         at: chrono::Local::now(),
         repo: activity_repo_label(affected),
         message: format!("{label}: {e}"),
         kind: ActivityKind::Error,
     });
-    // An apply that ended in one of its two titled states is
-    // recorded a second time, by that state's own name: the
-    // line above carries git's apply error, and git never
-    // learned what the rollback then did.
+}
+
+/// Rule nine: an apply that ended in one of its two titled states is recorded a
+/// second time, by that state's own name: the line above carries git's apply
+/// error, and git never learned what the rollback then did.
+fn record_apply_outcome(state: &mut AppState, rules: RuleSet) {
     if rules.apply_outcome {
         state.record_apply_outcome();
     }
-    granular::on_op_failed(state);
-    Control::Done
 }
 
 /// Repo label for one activity entry (issue #04): the affected root's
