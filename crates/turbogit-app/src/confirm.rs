@@ -52,10 +52,11 @@ const DISCARD_PATHS_NAMED: usize = 8;
 
 /// What the window's controls ask the app to do.
 ///
-/// Fourteen verbs, six buttons: ten of the questions are the same `OK` /
-/// `Cancel` pair, and the four that are not are the behaviour that used to live
-/// in the renderer. The renderer's interface therefore stops growing when a
-/// verb is added — it paints a row of these and hands the clicked one back.
+/// Thirteen verbs, six buttons: ten of the questions are the same `OK` /
+/// `Cancel` pair, and the three that are not are what the remaining variants
+/// here exist for — the behaviour that used to live in the renderer. The
+/// renderer's interface therefore stops growing when a verb is added: it paints
+/// a row of these and hands the clicked one back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfirmAction {
     /// The verb's own effect, which is everything a plain `OK` did.
@@ -76,8 +77,8 @@ pub enum ConfirmAction {
 /// its controls asks for.
 ///
 /// It carries no egui types, which is what lets the whole question be read
-/// without a [`Context`](egui::Context) — the app-side suites assert these
-/// strings directly, and the renderer only paints them.
+/// without an egui `Context` — the app-side suites assert these strings
+/// directly, and the renderer only paints them.
 pub struct Prompt {
     /// The question's text, as the strips of labels the window paints it in,
     /// top to bottom.
