@@ -17,7 +17,7 @@ use egui::{Align, Layout, Pos2, Rect, RichText, Ui, UiBuilder};
 
 use turbogit_app::operation::Operation;
 use turbogit_app::persistence::BranchesViewOptions;
-use turbogit_app::root_caches::Affected;
+use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm, Toast};
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
 use turbogit_services::sync_service::PushScope;
@@ -843,15 +843,9 @@ fn undo_banner(ui: &mut Ui, state: &mut AppState) {
             }
         }
         if kit_button(ui, KitButton::Secondary, "Undo delete").clicked() {
-            let root = undo.root.clone();
-            let n = undo.name.clone();
-            let sha = undo.tip_sha.clone();
             state.ui.branches_undo = None;
-            state.dispatch(Operation::custom(
-                format!("Restore branch {n}"),
-                Affected::Root(root.clone()),
-                move |v| v.branch_create(root.as_path(), &n, false, Some(&sha)),
-            ));
+            let op = shell_writes::branch::restore(&undo.root, &undo.name, &undo.tip_sha);
+            state.dispatch(op);
         }
     });
     ui.add_space(4.0);

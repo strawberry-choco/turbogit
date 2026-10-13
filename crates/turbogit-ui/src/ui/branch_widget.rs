@@ -18,8 +18,8 @@ use crate::theme::Palette;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{Align, Color32, Key, Layout, RichText, ScrollArea, Ui, vec2};
-use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
+use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm};
 use turbogit_domain::model::{Branch, BranchKind, RootId};
 use turbogit_services::{branch_service, sync_service};
@@ -733,33 +733,17 @@ fn checkout_entry(state: &mut AppState, id: &RootId, e: &PopupEntry) {
     match e {
         PopupEntry::Recent { name, .. } | PopupEntry::Local { name, .. } => {
             push_recent(&mut state.ui.recent_branches, name);
-            let root = id.clone();
-            let nm = name.clone();
-            state.dispatch(Operation::custom(
-                format!("Checkout {nm}"),
-                affected.clone(),
-                move |v| v.branch_checkout(root.as_path(), &nm),
-            ));
+            let op = shell_writes::branch::checkout(id, name, affected.clone());
+            state.dispatch(op);
         }
         PopupEntry::Remote { name, .. } => {
             push_recent(&mut state.ui.recent_branches, name);
-            let root = id.clone();
-            let nm = name.clone();
-            let start = format!("origin/{name}");
-            state.dispatch(Operation::custom(
-                format!("Checkout {nm} (new local)"),
-                affected.clone(),
-                move |v| v.branch_create(root.as_path(), &nm, true, Some(&start)),
-            ));
+            let op = shell_writes::branch::checkout_new_local(id, name, affected.clone());
+            state.dispatch(op);
         }
         PopupEntry::Tag { name } => {
-            let root = id.clone();
-            let nm = name.clone();
-            state.dispatch(Operation::custom(
-                format!("Checkout {nm}"),
-                affected,
-                move |v| v.checkout_detached(root.as_path(), &nm),
-            ));
+            let op = shell_writes::branch::checkout_detached(id, name, affected);
+            state.dispatch(op);
         }
     }
     state.ui.branches_popup = false;
