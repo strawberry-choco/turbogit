@@ -12,8 +12,6 @@ log = { workspace = true }
 nucleo-matcher = { workspace = true }
 turbogit-app = { workspace = true }
 turbogit-domain = { workspace = true }
-turbogit-engine-api = { workspace = true }
-turbogit-services = { workspace = true }
 
 [dev-dependencies]
 dify = { workspace = true }

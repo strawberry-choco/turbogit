@@ -13,10 +13,10 @@ use crate::ui::components;
 use crate::ui::conflicts;
 use crate::ui::widgets::PaneColumn;
 use egui::{Align, Align2, Color32, Layout, ProgressBar, Sense, Ui, Vec2};
+use turbogit_app::bulk_ops::BulkOp;
+use turbogit_app::bulk_run::RowState;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, subject_of_message};
-use turbogit_services::bulk_ops::BulkOp;
-use turbogit_services::bulk_run::RowState;
 
 /// One row of the running-operation table, where both copies of this literal
 /// said 26.0 (conformance issue 13). Local rather than
@@ -64,7 +64,7 @@ struct RunRow {
 /// The run view's rows as a snapshot, so the frame can hand `&mut AppState` to
 /// the footer's verbs.
 fn run_rows(
-    rows: &[turbogit_services::bulk_run::RunRow],
+    rows: &[turbogit_app::bulk_run::RunRow],
     workers: usize,
     running_command: &str,
 ) -> Vec<RunRow> {

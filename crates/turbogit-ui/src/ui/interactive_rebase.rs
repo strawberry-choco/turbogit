@@ -11,11 +11,11 @@
 //! [`history_editor::execute_with_backup`].
 
 use egui::{Align, Layout, Sense, Ui};
+use turbogit_app::history_editor;
 use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, RebaseEditorTab};
 use turbogit_domain::model::RebaseAction;
-use turbogit_services::history_editor;
 
 use crate::theme::Palette;
 use crate::ui::components;
@@ -262,7 +262,7 @@ fn rail(ui: &mut Ui, state: &mut AppState) {
     let held = state
         .selected_path()
         .and_then(|root| state.holding_operation(&root));
-    if turbogit_services::integrate_service::operation_in_progress(held)
+    if turbogit_app::integrate_service::operation_in_progress(held)
         && ui.button("Abort & restore").clicked()
     {
         if let Some(root) = state.selected_root.clone() {

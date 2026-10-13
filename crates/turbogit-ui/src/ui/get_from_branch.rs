@@ -23,8 +23,8 @@
 
 use egui::{Align, Color32, Layout, ScrollArea, Ui};
 
+use turbogit_app::integrate_service::BranchFileStatus;
 use turbogit_app::state::{AppState, PendingConfirm};
-use turbogit_services::integrate_service::BranchFileStatus;
 
 use crate::theme::{Palette, TYPE_BODY, data_font};
 use crate::ui::components::{KitButton, kit_button};
@@ -116,7 +116,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
 /// wearing a take's label. The reference's own grammar is what prevents it, which is
 /// why the rung is decided by the service's read rather than by a second opinion
 /// here.
-fn file_row(ui: &mut Ui, row: &turbogit_services::integrate_service::BranchFileRow) -> bool {
+fn file_row(ui: &mut Ui, row: &turbogit_app::integrate_service::BranchFileRow) -> bool {
     let mut take = false;
     // One `horizontal` per row: the fill, the word and the control share the row's
     // rect, so a suite can aim at THIS row's control by position rather than at the

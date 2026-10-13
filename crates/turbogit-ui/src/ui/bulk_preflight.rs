@@ -10,15 +10,15 @@
 //! running repo will land. Existing matching branches are checked out
 //! rather than recreated; Esc cancels before anything runs.
 //!
-//! The matrix is plain data — `turbogit_services::bulk_ops::Preflight`
+//! The matrix is plain data — `turbogit_app::bulk_ops::Preflight`
 //! over the live selection — computed here at render time so it can never
 //! drift from the repos' actual state.
 
 use egui::{
     Align, Align2, Color32, Key, Layout, Sense, TextEdit, Ui, Vec2, WidgetInfo, WidgetType,
 };
+use turbogit_app::bulk_ops::{BranchAction, BulkOp, BulkPlan, PreflightRow, SkipReason};
 use turbogit_app::state::AppState;
-use turbogit_services::bulk_ops::{BranchAction, BulkOp, BulkPlan, PreflightRow, SkipReason};
 
 use crate::theme::Palette;
 use crate::ui::widgets::PaneColumn;
@@ -330,8 +330,8 @@ fn command_body(ui: &mut Ui, state: &mut AppState) {
     // Destructive warning: painted as soon as the command looks destructive;
     // the run itself still needs the second, explicit confirmation.
     if destructive {
-        let reason = turbogit_services::bulk_ops::parse_command(&state.ui.bulk_command)
-            .and_then(|args| turbogit_services::bulk_ops::destructive_reason(&args))
+        let reason = turbogit_app::bulk_ops::parse_command(&state.ui.bulk_command)
+            .and_then(|args| turbogit_app::bulk_ops::destructive_reason(&args))
             .unwrap_or("this command can discard work");
         ui.colored_label(
             Palette::STATE_ERROR,

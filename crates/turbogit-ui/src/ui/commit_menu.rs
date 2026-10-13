@@ -22,8 +22,8 @@
 //! here that can lose work outright, and severity in this kit is per-item
 //! rather than positional.
 
+use turbogit_app::integrate_service::OwnedOperation;
 use turbogit_domain::model::Commit;
-use turbogit_services::integrate_service::OwnedOperation;
 
 use crate::ui::icons::Icon;
 use crate::ui::rewrite_gating::{self, RewriteVerb, Scope};

@@ -19,8 +19,8 @@ use turbogit_app::operation::Operation;
 use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm, Toast};
+use turbogit_app::sync_service::PushScope;
 use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
-use turbogit_services::sync_service::PushScope;
 
 use crate::theme::{Palette, TYPE_CONTROL, chrome_font, data_font};
 use crate::ui::branch_menu::{BranchMenuAction, BranchMenuProps, branch_menu};

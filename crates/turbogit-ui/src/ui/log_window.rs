@@ -88,11 +88,11 @@ use turbogit_app::root_caches::{LogScope, file_stat};
 use turbogit_app::state::{
     AppState, BlameTarget, Dialog, DiffTarget, NewBranchBase, PendingConfirm, Tab, Toast,
 };
+use turbogit_app::sync_service;
 use turbogit_domain::model::{
     BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, PatchOrigin, RefState,
     Root, RootId, SignatureState, forward_slash_path,
 };
-use turbogit_services::sync_service;
 
 // --- Pane metrics (spec §8.3) -------------------------------------------------
 

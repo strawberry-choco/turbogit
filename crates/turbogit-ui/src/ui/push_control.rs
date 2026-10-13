@@ -16,7 +16,7 @@
 use egui::Ui;
 use turbogit_app::operation::PushRequest;
 use turbogit_app::state::{AppState, Dialog};
-use turbogit_services::sync_service::{self, DirectPushTarget};
+use turbogit_app::sync_service::{self, DirectPushTarget};
 
 use crate::ui::popups::Action;
 use crate::ui::widgets;
