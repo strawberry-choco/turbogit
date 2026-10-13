@@ -48,6 +48,7 @@ pub mod pinned_views;
 pub mod polling;
 pub mod recents;
 pub mod root_caches;
+pub mod settle;
 pub mod shell_reads;
 pub mod shell_writes;
 pub mod smart_rules;
