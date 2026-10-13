@@ -40,3 +40,4 @@
 
 pub mod branch;
 pub mod conflict;
+pub mod remote;
