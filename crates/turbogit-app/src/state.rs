@@ -5,7 +5,7 @@
 //! [`Operation`] via [`AppState::dispatch`].
 use crate::events::{AppEvent, LogBatchMode};
 use crate::granular;
-use crate::operation::{OpKind, Operation};
+use crate::operation::Operation;
 use crate::root_caches::{
     Affected, LogBatchSettle, LogRead, LogScope, RootCaches, log_batch_plan as window_batch_plan,
     scoped_batch_plan,
@@ -3012,7 +3012,7 @@ impl AppState {
     /// replaces another is a new notice, and inheriting the old one's elapsed
     /// time can dismiss it on the very frame it appeared — so a fast follower
     /// to a completed operation is never seen at all.
-    fn show_toast(&mut self, toast: Toast) {
+    pub(crate) fn show_toast(&mut self, toast: Toast) {
         self.ui.toast = Some(toast);
         self.ui.toast_shown_at = None;
     }
@@ -3435,7 +3435,7 @@ impl AppState {
         }
         self.ui.activity.push(crate::activity::ActivityEntry {
             at: chrono::Local::now(),
-            repo: activity_repo_label(&Affected::Root(root.clone())),
+            repo: crate::settle::activity_repo_label(&Affected::Root(root.clone())),
             message: format!(
                 "Patch imported to the shelf · {name} · {} file(s), nothing applied",
                 changes.len()
@@ -3764,7 +3764,7 @@ impl AppState {
 
     /// Forget a pending reselect for the roots an operation touched. A rewrite
     /// that failed moved nothing, so nothing should follow it.
-    fn clear_pending_reselect(&mut self, affected: &Affected) {
+    pub(crate) fn clear_pending_reselect(&mut self, affected: &Affected) {
         if self
             .ui
             .pending_reselect
@@ -4253,7 +4253,7 @@ impl AppState {
         let affected = root.clone().map(Affected::Root).unwrap_or(Affected::All);
         self.ui.activity.push(crate::activity::ActivityEntry {
             at: chrono::Local::now(),
-            repo: activity_repo_label(&affected),
+            repo: crate::settle::activity_repo_label(&affected),
             message: format!("Patch created · {name}"),
             kind: crate::activity::ActivityKind::Success,
         });
@@ -5346,231 +5346,11 @@ impl AppState {
                     // re-runs it, so a second operation in the same root
                     // withholds the offer before the control is ever painted.
                     self.guard_rewrite_undo(&affected);
-                    // The apply's outcome is three-way and the event it travels on
-                    // is two-way, so the record comes off the slot its dispatch
-                    // armed — read before either arm below, because `report_for`
-                    // asks the window what actually happened and the failure arm
-                    // has to name the paths the rollback failed on.
-                    if kind == OpKind::ApplyPatch {
-                        self.settle_apply_patch();
-                    }
-                    match result {
-                        Ok(()) => {
-                            self.show_toast(Toast::success(label.clone()));
-                            // A push that landed needs no replay request kept
-                            // around: what it recorded is only ever read by the
-                            // rejection arm.
-                            self.ui.push_in_flight = None;
-                            self.refresh(affected.clone());
-                            // Arm the post-hoc undo while the
-                            // rewrite's own tip is still the fact to compare
-                            // against. A pending that does not match this
-                            // completion's kind is dropped with it.
-                            if let Some(pending) = self.ui.rewrite_undo_pending.take()
-                                && matches!(kind, OpKind::DropCommit | OpKind::RewordCommit)
-                            {
-                                self.arm_rewrite_undo(pending);
-                            }
-                            granular::settle(self);
-                            // A take rewrote one working-tree file, so
-                            // the changes window that offered it re-reads its rung
-                            // list — a path whose contents now match is no longer a
-                            // row, and a window still listing it would offer the
-                            // same overwrite again. The re-read is the app's,
-                            // through the service, never the pane's, and it follows
-                            // the refresh above so both see the taken file.
-                            if kind == OpKind::GetFileFromBranch {
-                                self.reload_get_from_branch_rows();
-                            }
-                            // Activity log (issue #04): the durable record the
-                            // toast only summarizes. An op that leaves conflicts
-                            // behind is a warning, not a success — the counts are
-                            // read from the refreshed snapshots.
-                            let conflicts = conflicted_count(self, &affected);
-                            let (entry, message) = if conflicts > 0 {
-                                (
-                                    crate::activity::ActivityKind::Warning,
-                                    format!("{label} · {conflicts} unresolved conflicts"),
-                                )
-                            } else {
-                                (
-                                    crate::activity::ActivityKind::Success,
-                                    report_for(self, kind, &affected, &label),
-                                )
-                            };
-                            self.ui.activity.push(crate::activity::ActivityEntry {
-                                at: chrono::Local::now(),
-                                repo: activity_repo_label(&affected),
-                                message: message.clone(),
-                                kind: entry,
-                            });
-                            // Issue 13: a fetch reports plainly what changed —
-                            // never a bare success, never a silent no-op.
-                            if kind == OpKind::Fetch {
-                                self.show_toast(Toast::success(message));
-                            }
-                            // Issue 09: a merge/rebase that landed mid-conflict
-                            // hands off cleanly to the conflict experience with
-                            // an explicit mid-operation state that survives
-                            // switching tabs.
-                            if conflicts > 0 && hands_off_conflicts(kind) {
-                                self.ui.merge_in_progress = true;
-                                self.ui.conflict_resolver_open = true;
-                            }
-                            // Issue 12: a confirmed local-branch deletion arms
-                            // the short-window undo with the captured tip. The
-                            // disclosure the notification carries — what was
-                            // unmerged, and what remote was left tracking
-                            // nothing — is the pending record's, because the
-                            // branch it describes no longer exists to be read.
-                            if let Some(pending) = self.ui.branches_delete_pending.take()
-                                && kind == OpKind::DeleteBranch
-                            {
-                                self.ui.branches_undo = Some(crate::state::BranchDeleteUndo {
-                                    root: pending.root,
-                                    name: pending.name,
-                                    tip_sha: pending.tip_sha,
-                                    created_at: std::time::Instant::now(),
-                                    upstream: pending.upstream,
-                                    unmerged: pending.unmerged,
-                                });
-                                self.ui.branches_delete_unmerged = None;
-                            }
-                            // Surface 07: `Unshelve and Remove` is the only verb
-                            // on this surface whose removal spans both sides of
-                            // the boundary — the stash entry goes in git, the
-                            // shelf record goes here. The record drops only on
-                            // this arm: a pop that failed left the shelved
-                            // content in the stash list, and the row that points
-                            // at it has to stay painted.
-                            if kind == OpKind::Unshelve
-                                && let Some((root, name)) = self.ui.shelf_removal_pending.take()
-                            {
-                                self.remove_shelf(&root, &name);
-                            }
-                        }
-                        Err(e) => {
-                            let msg = e.to_string();
-                            self.ui.branches_delete_pending = None;
-                            self.ui.branches_delete_unmerged = None;
-                            // A rewrite that failed arms no undo:
-                            // the offer exists for a landed rewrite only.
-                            self.ui.rewrite_undo_pending = None;
-                            // A rewrite that failed moved nothing: the commit the
-                            // developer was looking at is still in the history and
-                            // still selected, so nothing follows it.
-                            self.clear_pending_reselect(&affected);
-                            // Issue 09: a merge/rebase that hits conflicts is
-                            // not a failure — it is a handoff to the conflict
-                            // experience, with an explicit mid-operation state
-                            // that survives switching tabs. The reliable
-                            // signal is the worktree's fresh conflict list
-                            // (git's own stderr text is not stable here).
-                            let conflict = if hands_off_conflicts(kind) {
-                                self.refresh(affected.clone());
-                                conflicted_count(self, &affected) > 0
-                            } else {
-                                false
-                            };
-                            if conflict {
-                                granular::settle(self);
-                                self.ui.merge_in_progress = true;
-                                self.ui.conflict_resolver_open = true;
-                                let conflicts = conflicted_count(self, &affected);
-                                let report = format!("{label} · {conflicts} unresolved conflicts");
-                                self.show_toast(Toast::warning(report.clone()));
-                                self.ui.activity.push(crate::activity::ActivityEntry {
-                                    at: chrono::Local::now(),
-                                    repo: activity_repo_label(&affected),
-                                    message: report,
-                                    kind: crate::activity::ActivityKind::Warning,
-                                });
-                                continue;
-                            }
-                            // A rejected push is not one failure, it
-                            // is six, and they need six different replies. The
-                            // toast still says what git said — this is the
-                            // surface that says what to DO about it.
-                            if matches!(kind, OpKind::Push | OpKind::PushRecovery)
-                                && let Some(request) = self.ui.push_in_flight.take()
-                            {
-                                // Same rule the merge/rebase arm uses: the
-                                // refreshed worktree, not git's stderr text,
-                                // is what says conflicts are really there.
-                                self.refresh(affected.clone());
-                                let conflicts = conflicted_count(self, &affected) > 0;
-                                let phase = if kind == OpKind::PushRecovery {
-                                    turbogit_services::sync_service::PushPhase::Recovery
-                                } else {
-                                    turbogit_services::sync_service::PushPhase::Push
-                                };
-                                let (remote, branch) = push_target_names(self, &request);
-                                let outcome =
-                                    turbogit_services::sync_service::classify_push_failure(
-                                        &e, conflicts, phase, &remote, &branch,
-                                    );
-                                let affected_roots = request.roots();
-                                // The opt-in the rejection notification's
-                                // checkbox writes: an ordinary rejection then
-                                // updates silently instead of asking a second
-                                // time. Gated on `OpKind::Push` — a failed
-                                // RECOVERY always shows its reply, or the two
-                                // would re-dispatch each other forever. The
-                                // fetch classes are out too: the user opted
-                                // into an update, not into an integration they
-                                // did not ask for.
-                                let silent_update = self.settings.auto_update_on_push_rejected
-                                    && kind == OpKind::Push
-                                    && matches!(
-                                        outcome,
-                                        turbogit_services::sync_service::PushOutcome::Rejected { .. }
-                                    );
-                                if silent_update {
-                                    let plan = crate::operation::RecoveryPlan {
-                                        mode: crate::operation::RecoveryMode::Update {
-                                            method: self.settings.update_method,
-                                        },
-                                        roots: affected_roots,
-                                    };
-                                    self.dispatch_push(request, Some(plan));
-                                } else {
-                                    self.ui.push_rejection = Some(PushRejection {
-                                        outcome,
-                                        request,
-                                        affected_roots,
-                                        // The documented fallback for an
-                                        // undocumented reference default: touch
-                                        // only what the failed push touched.
-                                        update_all: false,
-                                        remember: self.settings.auto_update_on_push_rejected,
-                                    });
-                                }
-                            }
-                            self.show_toast(Toast::error(format!("{label}: {e}")));
-                            self.last_error = Some(msg);
-                            // An unshelve that never landed keeps its shelf row,
-                            // so the record it armed for removal is dropped here
-                            // rather than left to a later, unrelated success.
-                            if kind == OpKind::Unshelve {
-                                self.ui.shelf_removal_pending = None;
-                            }
-                            // Activity log (issue #04): failures are entries too
-                            // — the toast vanishes, the feed remembers.
-                            self.ui.activity.push(crate::activity::ActivityEntry {
-                                at: chrono::Local::now(),
-                                repo: activity_repo_label(&affected),
-                                message: format!("{label}: {e}"),
-                                kind: crate::activity::ActivityKind::Error,
-                            });
-                            // An apply that ended in one of its two titled states is
-                            // recorded a second time, by that state's own name: the
-                            // line above carries git's apply error, and git never
-                            // learned what the rollback then did.
-                            if kind == OpKind::ApplyPatch {
-                                self.record_apply_outcome();
-                            }
-                            granular::on_op_failed(self);
-                        }
+                    // Everything from the apply's pre-result read onwards is
+                    // settlement's: one completion, one owner.
+                    match crate::settle::op_completed(self, kind, label, affected, result) {
+                        crate::settle::Control::Continue => continue,
+                        crate::settle::Control::Done => {}
                     }
                 }
                 AppEvent::Error(msg) => {
@@ -5642,159 +5422,7 @@ impl AppState {
                 }
                 AppEvent::BulkCompleted { label, results } => {
                     self.ui.busy = false;
-                    self.refresh(Affected::All);
-                    let ok = results.iter().filter(|(_, r)| r.is_ok()).count();
-                    // An empty result set would satisfy `ok == results.len()`
-                    // and settle as a success — but a run that planned no
-                    // roots ran nothing, so the zero case is decided here,
-                    // loudly, from the monitor's own skip rows.
-                    let (kind, message) = if results.is_empty() {
-                        let mut reasons: Vec<String> = self
-                            .ui
-                            .bulk_run
-                            .as_ref()
-                            .map(|view| {
-                                view.rows
-                                    .iter()
-                                    .filter_map(|r| match &r.state {
-                                        bulk_run::RowState::Skipped { reason } => {
-                                            Some(reason.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let skipped = reasons.len();
-                        if skipped == 0 {
-                            (ToastKind::Error, format!("{label} · nothing ran"))
-                        } else {
-                            reasons.sort();
-                            reasons.dedup();
-                            (
-                                ToastKind::Warning,
-                                format!(
-                                    "{label} · nothing ran — {skipped} root(s) skipped ({})",
-                                    reasons.join(", ")
-                                ),
-                            )
-                        }
-                    } else {
-                        let kind = if ok == results.len() {
-                            ToastKind::Success
-                        } else if ok > 0 {
-                            ToastKind::Warning
-                        } else {
-                            ToastKind::Error
-                        };
-                        (kind, bulk_report_message(&label, &results))
-                    };
-                    self.ui.toast = Some(Toast {
-                        kind,
-                        message: message.clone(),
-                    });
-                    // The remotes manager renders the per-repo outcomes of
-                    // its apply (issue 33): display-ready rows in selection
-                    // order. Harmless for the bulk grid's own runs.
-                    self.ui.dlg.remotes_apply_results = Some(
-                        results
-                            .iter()
-                            .map(|(id, r)| {
-                                let name =
-                                    id.0.file_name()
-                                        .and_then(|s| s.to_str())
-                                        .unwrap_or("?")
-                                        .to_string();
-                                (name, r.clone().map_err(|e| e.to_string()))
-                            })
-                            .collect(),
-                    );
-                    // The durable record of the fleet run (issue #04
-                    // semantics): one entry with the aggregate outcome.
-                    self.ui.activity.push(crate::activity::ActivityEntry {
-                        at: chrono::Local::now(),
-                        repo: Some("project".to_string()),
-                        message,
-                        kind: match kind {
-                            ToastKind::Success => crate::activity::ActivityKind::Success,
-                            ToastKind::Warning => crate::activity::ActivityKind::Warning,
-                            _ => crate::activity::ActivityKind::Error,
-                        },
-                    });
-                    // An execution-time guard refusal (a Retry forcing a
-                    // protected root lands in `run_step`, which refuses) is
-                    // durable per root too, naming the branch the guard
-                    // named — the aggregate above only names the repos.
-                    let refusals: Vec<(String, String)> = self
-                        .ui
-                        .bulk_run
-                        .as_ref()
-                        .map(|view| {
-                            view.rows
-                                .iter()
-                                .filter_map(|r| match &r.state {
-                                    bulk_run::RowState::Failed {
-                                        error,
-                                        protected_branch: true,
-                                    } => Some((r.name.clone(), error.clone())),
-                                    _ => None,
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    for (name, error) in refusals {
-                        self.ui.activity.push(crate::activity::ActivityEntry {
-                            at: chrono::Local::now(),
-                            repo: Some(name),
-                            message: format!("{label}: {error}"),
-                            kind: crate::activity::ActivityKind::Error,
-                        });
-                    }
-                    // Recent bulk operations (issue 12, screen 04): the
-                    // completed run lands in the history list — merged into
-                    // the same record on a retry pass. The monitor's rows
-                    // are the run's final truth (done/failed/skipped).
-                    //
-                    // The record is built out here, and only then handed to the
-                    // list, because the divergence offer is read from those
-                    // same per-root rows: the run's monitor is the one place
-                    // that knows which repositories moved and which did not, so
-                    // a second account of the outcome could disagree with the
-                    // surface the developer just watched.
-                    let record = self.ui.bulk_run.as_ref().map(|view| {
-                        crate::bulk_history::from_run_view(
-                            view,
-                            chrono::Utc::now().timestamp_millis(),
-                        )
-                    });
-                    if let Some(record) = record {
-                        let diverged = branch_divergence_for(&record);
-                        if let Some(diverged) = &diverged {
-                            // The divergence is a durable feed entry for ANY
-                            // run that moved some roots and failed others —
-                            // reversible or not. The offer below can be declined
-                            // or dismissed, but the feed is what makes a
-                            // multi-root operation auditable later, so it arms
-                            // even when no rollback can be offered (Custom).
-                            self.ui.activity.push(crate::activity::ActivityEntry {
-                                at: chrono::Local::now(),
-                                repo: Some("project".to_string()),
-                                message: divergence_report(diverged, "diverged"),
-                                kind: crate::activity::ActivityKind::Warning,
-                            });
-                        }
-                        // The offer alone stays gated on `reversible()`: the
-                        // record names what diverged for every run, but a
-                        // `Rollback` the app cannot honour (arbitrary git under
-                        // Custom) is a false promise, so the control must not
-                        // appear. One offer at a time, always the newest run's —
-                        // a later run that lands everywhere replaces a stale
-                        // divergence rather than stacking a second modal on it.
-                        self.ui.branch_divergence =
-                            if record.reversible() { diverged } else { None };
-                        crate::bulk_history::record_into(&mut self.ui.bulk_history, record);
-                        self.persist_ui();
-                    }
+                    crate::settle::bulk_completed(self, label, results);
                 }
                 AppEvent::RemoteDefined { root, name, result } => {
                     self.ui.busy = false;
@@ -5835,7 +5463,7 @@ impl AppState {
                     });
                     self.ui.activity.push(crate::activity::ActivityEntry {
                         at: chrono::Local::now(),
-                        repo: activity_repo_label(&Affected::Root(root)),
+                        repo: crate::settle::activity_repo_label(&Affected::Root(root)),
                         message,
                         kind: activity,
                     });
@@ -6451,7 +6079,7 @@ impl AppState {
     /// Issue 13: report what a completed fetch changed, in plain terms —
     /// "N new remote branches" or "nothing changed". Never silence, never a
     /// bare success. Also records when the fetch happened for disclosure.
-    fn fetch_report(&mut self, affected: &Affected) -> String {
+    pub(crate) fn fetch_report(&mut self, affected: &Affected) -> String {
         // Every baseline this fetch owns. A single-root fetch consumes its own
         // snapshot; an all-roots fetch consumes one per root it covered, so a
         // multi-root fetch counts its new branches the same way a single-root
@@ -6951,7 +6579,7 @@ impl AppState {
         self.ui.activity.push(crate::activity::ActivityEntry {
             at: chrono::Local::now(),
             repo: Some("project".to_string()),
-            message: divergence_report(&offer, "kept divergent"),
+            message: crate::settle::divergence_report(&offer, "kept divergent"),
             kind: crate::activity::ActivityKind::Warning,
         });
     }
@@ -6969,7 +6597,7 @@ impl AppState {
     /// compares against. The read is a single synchronous `rev-parse`, on the
     /// same footing as [`Self::bulk_rollback`]'s engine calls — settlement is
     /// the one moment the rewrite's own tip is guaranteed to be HEAD.
-    fn arm_rewrite_undo(&mut self, pending: RewriteUndoPending) {
+    pub(crate) fn arm_rewrite_undo(&mut self, pending: RewriteUndoPending) {
         let tip = self
             .executor
             .resolve_revision(pending.root.as_path(), "HEAD");
@@ -7011,244 +6639,6 @@ impl AppState {
         if let Some(offer) = self.ui.rewrite_undo.as_mut() {
             offer.withheld = moved;
         }
-    }
-}
-
-/// Repo label for one activity entry (issue #04): the affected root's
-/// display name, or `None` when the op spanned every root of the project.
-fn activity_repo_label(affected: &Affected) -> Option<String> {
-    match affected {
-        Affected::All => None,
-        Affected::Root(id) => Some(crate::activity::root_label(&id.0)),
-    }
-}
-
-/// The roots a completed run left in disagreement, or `None` when nothing
-/// diverged.
-///
-/// Two facts must hold together, and each one is the reason a near-miss must
-/// not fire:
-/// 1. the run CHANGED at least one root — a run that failed everywhere moved
-///    nothing, so there is nothing to report;
-/// 2. it FAILED in at least one other root — a run that landed everywhere left
-///    the roots agreeing, which is the outcome everybody wanted.
-///
-/// This is the *record* of a divergence and deliberately says nothing about
-/// whether a rollback can be *honoured* — that is `reversible()`'s call, made
-/// at the offer's arm site, never here. A `Custom` run moves arbitrary git and
-/// is not reversible, so it must still produce this record (the roots disagree
-/// and nothing repairs them) while producing no offer (the app cannot undo what
-/// it did not arrange). Fusing the two decisions is the bug: it would either
-/// promise a rollback that fails on the spot or leave a divergence unrecorded.
-///
-/// A `Skipped` row is in none of the lists deliberately. The preflight matrix
-/// refused it before anything ran and the monitor says why, which is the
-/// multi-root *skip* policy the sync family runs on; this record is the other,
-/// opposite theory of failure and the two are not to be unified.
-fn branch_divergence_for(record: &crate::bulk_history::BulkRunRecord) -> Option<BranchDivergence> {
-    use crate::bulk_history::RepoOutcome;
-
-    let mut changed: Vec<DivergentRoot> = Vec::new();
-    let mut failed: Vec<DivergentRoot> = Vec::new();
-    for row in &record.repos {
-        let root = RootId(row.root.clone().into());
-        match &row.outcome {
-            RepoOutcome::Done => {
-                // A root the run found already on the target branch was not
-                // changed by it, so it is not one side of the divergence — and
-                // a rollback that acted on it would move a repository the run
-                // never moved.
-                if row.prior_branch.as_deref() == Some(record.branch.as_str()) {
-                    continue;
-                }
-                changed.push(DivergentRoot {
-                    root,
-                    name: row.name.clone(),
-                    branch: record.branch.clone(),
-                    reason: None,
-                });
-            }
-            RepoOutcome::Failed { error } => {
-                failed.push(DivergentRoot {
-                    root,
-                    name: row.name.clone(),
-                    // The run never landed here, so this is still the branch the
-                    // root was on when the run started — the other half of the
-                    // disagreement the sentence has to state.
-                    branch: row
-                        .prior_branch
-                        .clone()
-                        .unwrap_or_else(|| "detached HEAD".to_string()),
-                    reason: Some(error.clone()),
-                });
-            }
-            RepoOutcome::Skipped { .. } => {}
-        }
-    }
-    if changed.is_empty() || failed.is_empty() {
-        return None;
-    }
-    Some(BranchDivergence {
-        record_id: record.id,
-        operation: record.op.label().to_string(),
-        branch: record.branch.clone(),
-        changed,
-        failed,
-    })
-}
-
-/// The feed's line for one side of a divergence: `alpha (feature/x)`.
-fn divergence_sides(roots: &[DivergentRoot]) -> String {
-    roots
-        .iter()
-        .map(|r| format!("{} ({})", r.name, r.branch))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// The durable sentence for a divergence and for the answer to the offer.
-///
-/// One builder for both records because both must name the same two halves —
-/// the roots the run changed and the roots it failed in, each with the branch it
-/// is on — and a feed entry that said only "partially failed" would leave a
-/// later reader unable to tell which repository disagrees.
-fn divergence_report(offer: &BranchDivergence, verb: &str) -> String {
-    format!(
-        "{} {verb} · {} · changed: {} · failed: {}",
-        offer.operation,
-        offer.branch,
-        divergence_sides(&offer.changed),
-        divergence_sides(&offer.failed)
-    )
-}
-
-/// Unresolved conflict files across `affected`'s registered roots, read
-/// from the (refreshed) snapshots.
-fn conflicted_count(state: &AppState, affected: &Affected) -> usize {
-    state
-        .multi
-        .roots
-        .iter()
-        .filter(|r| match affected {
-            Affected::All => true,
-            Affected::Root(id) => &r.id == id,
-        })
-        .map(|r| r.status.conflicted.len())
-        .sum()
-}
-
-/// The `(remote, branch)` a rejection notification names.
-///
-/// The `ThisRepo` path states both in its own fields. A scoped push resolves
-/// the remote per root inside the service, so this reads the same answer back
-/// through `push_remote` for the first pushed root — a multi-root rejection
-/// then names one target in the notification while the toast and the activity
-/// feed name every failing root.
-fn push_target_names(
-    state: &AppState,
-    request: &crate::operation::PushRequest,
-) -> (String, String) {
-    use crate::operation::PushTargets;
-    match &request.targets {
-        PushTargets::Single { remote, branch, .. } => (remote.clone(), branch.clone()),
-        PushTargets::Scope(roots) => {
-            let named = state
-                .multi
-                .roots
-                .iter()
-                .find(|r| roots.iter().any(|s| s.id == r.id) && r.current_branch.is_some());
-            match named {
-                Some(root) => (
-                    turbogit_services::sync_service::push_remote(root),
-                    root.current_branch.clone().unwrap_or_default(),
-                ),
-                None => (String::new(), String::new()),
-            }
-        }
-    }
-}
-
-/// Which operations hand the developer over to the conflict experience rather
-/// than reporting a clean finish.
-///
-/// The original merge/rebase and an in-flight resolution
-/// share one rule: git stops on the NEXT conflict with a non-zero exit and a
-/// worktree full of unmerged paths, and the answer to that is the resolver, not
-/// a failure toast. Stated once because the two settlement arms must not be able
-/// to disagree about which verbs hand off.
-fn hands_off_conflicts(kind: OpKind) -> bool {
-    matches!(kind, OpKind::Merge | OpKind::Rebase | OpKind::Resolve)
-}
-
-/// The success message a completed operation reports, chosen by the
-/// operation's identity (ADR-0020). The match is exhaustive on purpose: a new
-/// [`OpKind`] has to say here how it reports before it can be dispatched.
-fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &str) -> String {
-    match kind {
-        OpKind::Fetch => state.fetch_report(affected),
-        OpKind::Merge | OpKind::Rebase => push_report(state, affected, label),
-        // A resolution reports the verb it ran and nothing more: an `Abort` that
-        // landed has no ahead/behind story, and appending "nothing to push" to
-        // "Abort merge" would describe the repository rather than the act.
-        OpKind::Resolve => label.to_string(),
-        // A rewrite reports the work it did and nothing more: there is no
-        // ahead/behind story to tell, and a reword's new message never reaches
-        // the feed.
-        OpKind::DeleteBranch
-        | OpKind::Shelve
-        // The unshelve's label already names which half of the keep/remove pair
-        // ran, which is the whole of what this verb has to report.
-        | OpKind::Unshelve
-        | OpKind::WorktreeAdd
-        | OpKind::WorktreeRemove
-        | OpKind::DropCommit
-        | OpKind::RewordCommit
-        // A take reports the verb it ran, and the verb's own label carries the
-        // two facts that make it more than a word: the path and the branch it came
-        // from. There is no ahead/behind story to append — nothing was
-        // integrated, one file was overwritten — and the durable record, not the
-        // toast, is where that has to be readable later.
-        | OpKind::GetFileFromBranch
-        // A push reports the verb it ran. Its SUBSTANCE is the failure path —
-        // the classified rejection — and a push that succeeded has
-        // nothing to explain, so the label is the whole message.
-        | OpKind::Push
-        | OpKind::PushRecovery
-        | OpKind::Other => label.to_string(),
-        // An apply reports the working tree it just wrote, in the outcome's own
-        // words: the file count and the fact that nothing was staged are the two
-        // things a developer needs from a patch verb, and the window's titled
-        // state reads the same record rather than a second copy of it.
-        OpKind::ApplyPatch => state
-            .ui
-            .dlg
-            .apply_patch_outcome
-            .as_ref()
-            .map(|outcome| format!("{} — {}", outcome.title(), outcome.message()))
-            .unwrap_or_else(|| label.to_string()),
-    }
-}
-
-/// Success message for a completed merge/rebase (issue 09): the label already
-/// carries how many commits came in when the dialog knew; the push state is
-/// read from the freshly refreshed ahead/behind cache — "3 commits to push"
-/// or "nothing to push".
-fn push_report(state: &AppState, affected: &Affected, label: &str) -> String {
-    let ahead = state
-        .multi
-        .roots
-        .iter()
-        .filter(|r| match affected {
-            Affected::All => true,
-            Affected::Root(id) => &r.id == id,
-        })
-        .filter_map(|r| state.caches.ahead_behind(&r.id))
-        .map(|(a, _)| a)
-        .sum::<usize>();
-    if ahead > 0 {
-        format!("{label} · {ahead} commit(s) to push")
-    } else {
-        format!("{label} · nothing to push")
     }
 }
 
