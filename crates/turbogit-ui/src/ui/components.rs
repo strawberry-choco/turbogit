@@ -550,6 +550,13 @@ pub fn section_header<R>(
 
 /// The sync relationship of one branch row — icon+count pairs, quiet in-sync
 /// confirmation, or a deleted-upstream marker.
+///
+/// `Diverged` and `InSync` are **unreachable from `sync_badge`**, which emits
+/// ahead, behind and gone only; they are consumed by `sync_ink` and pinned by
+/// the token suite. That is noted and untouched — wiring them is a product
+/// question (should a sync badge ever say "diverged"?) and deleting one is a
+/// change to a pinned assertion, neither of which this vocabulary's owner
+/// decided.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SyncKind {
     Ahead,

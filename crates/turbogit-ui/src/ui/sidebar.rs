@@ -706,7 +706,9 @@ fn render_smart_group_row(
 /// tokens (`STATUS_DIVERGED`, `STATE_ERROR`, `COUNTER`) and only route two
 /// through the map, which meant the map and this table could drift apart
 /// silently — a fourth state added to one and not the other, and the rail
-/// answering in two colours for the same fact.
+/// answering in two colours for the same fact. It then carried a five-arm table
+/// naming each group's state *again*, beside the declarations that already name
+/// it; the group states which state it stands for and this asks it.
 ///
 /// The **reserved counter orange is the reason two of them are orange at all**,
 /// and it is worth naming: `Unpulled` and `Dirty` are exactly the two states the
@@ -717,14 +719,7 @@ fn render_smart_group_row(
 /// by design (the domain `STATUS_*` aliases) and the row's own label is what
 /// tells them apart.
 fn smart_group_color(group: smart_groups::SmartGroup) -> Color32 {
-    let state = match group {
-        smart_groups::SmartGroup::Diverged => DotState::Diverged,
-        smart_groups::SmartGroup::Conflicted => DotState::Conflict,
-        smart_groups::SmartGroup::Unpushed => DotState::Unpushed,
-        smart_groups::SmartGroup::Unpulled => DotState::Unpulled,
-        smart_groups::SmartGroup::Dirty => DotState::Dirty,
-    };
-    dot_color(state)
+    dot_color(group.state())
 }
 
 /// One user-defined rule's row (issue #07): the same dot + label + count

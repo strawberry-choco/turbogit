@@ -906,18 +906,28 @@ impl AggregatedStatus {
         for root in roots {
             if !root.status.conflicted.is_empty() {
                 agg.conflicts += 1;
+                // A conflicted root counts as dirty as well as conflicted, so it
+                // paints two chips where the owner's precedence ranks conflict
+                // above dirty and could only ever produce one state. Preserved
+                // on purpose (contradiction 2): dropping this increment is a
+                // chip the user sees disappear, which is a human ruling, not a
+                // refactor.
                 agg.dirty += 1;
             }
-            if root.status.modified() > 0 || root.status.unversioned() > 0 {
+            if crate::theme::RepoState::is_dirty(&root.status) {
                 agg.dirty += 1;
             }
             // Archived roots: spec definition is "frozen / excluded from
             // cascades" — v1 has no archived concept yet, so the count
             // stays at zero (the chip appears once a real signal lands).
             if let Some((ahead, behind)) = ahead_behind(&root.id) {
-                // Loose "diverged" in v1: any root whose branch has moved
-                // relative to its upstream counts.
-                if ahead > 0 || behind > 0 {
+                // The loose reading: any root whose branch has moved relative
+                // to its upstream counts. It contradicts the repository dot one
+                // screen away, which means *both* sides moved — and it is kept
+                // that way deliberately, so the loose polarity is named
+                // (`DivergenceMeaning::AnyDrift`) rather than an inline `||`
+                // that reads as an accident.
+                if crate::theme::DivergenceMeaning::AnyDrift.is_diverged(ahead, behind) {
                     agg.diverged += 1;
                 }
                 if behind > 0 {

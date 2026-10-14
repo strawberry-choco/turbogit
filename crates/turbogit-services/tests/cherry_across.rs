@@ -417,3 +417,62 @@ fn apply_to_root_refuses_a_dirty_target_before_touching_git() {
         "nothing was applied to the dirty target"
     );
 }
+
+/// A conflicted **change entry** — with no conflicted path beside it — blocks
+/// the pick, and that is this rule disagreeing with the repository-state ladder
+/// on purpose.
+///
+/// The two dirty rules differ in **both directions**, on three inputs, and
+/// neither is reconciled without a ruling:
+///
+/// * **unversioned-only** — `Dirty` to the owner's ladder
+///   (`modified() + unversioned() > 0`), **clean** to this rule;
+/// * **conflicted-change-entry-only** — **blocking** to this rule, and not
+///   `Conflict` to the ladder, which reads the separate `conflicted` path list
+///   (the ladder's first rung) and not the change entry;
+/// * **ignored-only** — **blocking** to this rule, which counts anything that
+///   is not unversioned or ignored, and **clean** to the ladder.
+///
+/// The fixture is a seeded status rather than a real conflicted repository
+/// because a real one fills the conflicted *path* list at the same time, which
+/// is the ladder's `Conflict` rung — the disagreement only exists on the entry
+/// alone. Reconciling it is a product question (should an untracked file block
+/// a cherry-pick?), so the answer ships as it stands and this is the pin that
+/// fails the moment somebody "fixes" it without ruling.
+#[test]
+fn apply_to_root_refuses_a_target_whose_only_change_is_a_conflicted_entry() {
+    use turbogit_domain::model::{Change, ChangeStatus, RootStatus};
+    use turbogit_engine::fake::FakeExecutor;
+
+    let target = PathBuf::from("/w/target");
+    let source = PathBuf::from("/w/source");
+    let mut exec = FakeExecutor::new();
+    exec.status.insert(
+        target.clone(),
+        RootStatus {
+            changes: vec![Change {
+                path: PathBuf::from("c.txt"),
+                status: ChangeStatus::Conflicted,
+                chunks: vec![],
+                staged: false,
+                unstaged: false,
+                orig_path: None,
+            }],
+            // No conflicted *path*: the ladder reads this list, not the entry.
+            conflicted: vec![],
+            conflict_kinds: vec![],
+        },
+    );
+
+    let err = cherry_across::apply_to_root(&exec, &source, &target, &["abc123".to_string()], true)
+        .expect_err("a conflicted change entry blocks the pick");
+    assert!(
+        err.to_string().contains("dirty"),
+        "the refusal is the local-changes one: {err}"
+    );
+    assert!(
+        exec.calls.lock().unwrap().is_empty(),
+        "the refusal happens before any git call — the target is never fetched, \
+         never picked into, and the owner's rule is never consulted"
+    );
+}

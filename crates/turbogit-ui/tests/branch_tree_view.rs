@@ -47,11 +47,13 @@ fn now() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::from_timestamp(1_780_315_200, 0).expect("valid now")
 }
 
+/// The same shape as the pure-builder suite's fixture: "has a tracking
+/// relationship at all" is the loose reading, `DivergenceMeaning::AnyDrift`.
 fn local(name: &str, favorite: bool, ahead: usize, behind: usize) -> Branch {
     Branch {
         name: name.to_string(),
         kind: BranchKind::Local,
-        tracking: if ahead + behind > 0 {
+        tracking: if turbogit_ui::theme::RepoState::has_drift(ahead, behind) {
             Upstream::from_git_ref("origin/main")
         } else {
             None
