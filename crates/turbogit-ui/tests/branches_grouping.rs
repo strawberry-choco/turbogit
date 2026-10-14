@@ -14,33 +14,19 @@
 //! `galley_origin` pair (grouping changes the interior, not the header or the
 //! first row), and the tags-off pair scoped by the list's own rectangles.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{assert_not_painted, galley_origin, painted_galleys, settle_quiet};
 use turbogit_app::state::{AppState, Tab};
 
 // --- git fixture -------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// No repository `user.*` here, so every call is pinned per call through the
+// fixture crate's runner: a headless machine has no global identity to borrow.
 
 /// A repo on `main` with `feature/a`, `feature/b`, `plain` and two tags, and
 /// **no checkout history**: every branch is made with `git branch`, so HEAD's
@@ -50,18 +36,19 @@ fn grouped_project() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let alpha = project.join("alpha");
-    git(
+    git_with_env(
         &project,
         &["init", "-q", "-b", "main", alpha.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
     std::fs::write(alpha.join("README.md"), "x\n").unwrap();
-    git(&alpha, &["add", "."]);
-    git(&alpha, &["commit", "-q", "-m", "init"]);
+    git_with_env(&alpha, &["add", "."], &GitEnv::fixture());
+    git_with_env(&alpha, &["commit", "-q", "-m", "init"], &GitEnv::fixture());
     for b in ["feature/a", "feature/b", "plain"] {
-        git(&alpha, &["branch", b]);
+        git_with_env(&alpha, &["branch", b], &GitEnv::fixture());
     }
-    git(&alpha, &["tag", "v1.0"]);
-    git(&alpha, &["tag", "v2.0"]);
+    git_with_env(&alpha, &["tag", "v1.0"], &GitEnv::fixture());
+    git_with_env(&alpha, &["tag", "v2.0"], &GitEnv::fixture());
     (tmp, project)
 }
 
@@ -73,17 +60,22 @@ fn two_repo_project() -> (TempDir, PathBuf) {
     let project = tmp.path().to_path_buf();
     for name in ["alpha", "beta"] {
         let dir = project.join(name);
-        git(
+        git_with_env(
             &project,
             &["init", "-q", "-b", "main", dir.to_str().unwrap()],
+            &GitEnv::fixture(),
         );
         std::fs::write(dir.join("README.md"), "x\n").unwrap();
-        git(&dir, &["add", "."]);
-        git(&dir, &["commit", "-q", "-m", "init"]);
+        git_with_env(&dir, &["add", "."], &GitEnv::fixture());
+        git_with_env(&dir, &["commit", "-q", "-m", "init"], &GitEnv::fixture());
         // `main` already exists — `git init -b main` made it and the commit above
         // landed on it. It is the name both repositories share, which is what
         // this fixture is for; `only-*` is the name neither shares.
-        git(&dir, &["branch", &format!("only-{name}")] as &[_]);
+        git_with_env(
+            &dir,
+            &["branch", &format!("only-{name}")] as &[_],
+            &GitEnv::fixture(),
+        );
     }
     (tmp, project)
 }
@@ -290,15 +282,16 @@ fn show_recent_off_hides_the_group_the_other_ticket_built() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let alpha = project.join("alpha");
-    git(
+    git_with_env(
         &project,
         &["init", "-q", "-b", "main", alpha.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
     std::fs::write(alpha.join("README.md"), "x\n").unwrap();
-    git(&alpha, &["add", "."]);
-    git(&alpha, &["commit", "-q", "-m", "init"]);
-    git(&alpha, &["branch", "work"]);
-    git(&alpha, &["checkout", "-q", "work"]);
+    git_with_env(&alpha, &["add", "."], &GitEnv::fixture());
+    git_with_env(&alpha, &["commit", "-q", "-m", "init"], &GitEnv::fixture());
+    git_with_env(&alpha, &["branch", "work"], &GitEnv::fixture());
+    git_with_env(&alpha, &["checkout", "-q", "work"], &GitEnv::fixture());
 
     let mut harness = branches_harness(project);
     open_branches_tab(&mut harness);
