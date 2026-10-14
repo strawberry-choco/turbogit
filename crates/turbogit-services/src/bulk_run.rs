@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use turbogit_domain::error::TgResult;
 use turbogit_domain::model::RootId;
@@ -96,6 +96,61 @@ pub struct RunRow {
     pub duration: Option<std::time::Duration>,
 }
 
+/// The 1-based worker slot the `index`-th queued row lands on, cycling over
+/// `workers` slots ("waiting for worker slot 2/4"). The seeder
+/// [`monitor_rows`] and a retry requeue both number their rows from zero
+/// through here, so the two cannot assign different slots.
+pub fn worker_slot(index: usize, workers: usize) -> usize {
+    index % workers.max(1) + 1
+}
+
+/// Footer tallies `(done, running, queued, skipped, failed)`, live.
+pub fn tally(rows: &[RunRow]) -> (usize, usize, usize, usize, usize) {
+    let mut t = (0, 0, 0, 0, 0);
+    for row in rows {
+        match row.state {
+            RowState::Done => t.0 += 1,
+            RowState::Running => t.1 += 1,
+            RowState::Queued { .. } => t.2 += 1,
+            RowState::Skipped { .. } => t.3 += 1,
+            RowState::Failed { .. } => t.4 += 1,
+        }
+    }
+    t
+}
+
+/// The header's "N of M done" numerator.
+pub fn done_count(rows: &[RunRow]) -> usize {
+    tally(rows).0
+}
+
+/// The header's "M": one row per selected repo.
+pub fn total(rows: &[RunRow]) -> usize {
+    rows.len()
+}
+
+/// Recompute the elapsed/ETA snapshot from the finished rows: elapsed runs
+/// from `started_at`, ETA is the average finished duration × remaining work /
+/// `workers`. `None` while nothing has finished or nothing remains. The
+/// average divides by `workers.max(1)` as a `u32`, so a zero worker count
+/// still yields a finite ETA.
+pub fn update_progress(
+    rows: &[RunRow],
+    workers: usize,
+    started_at: Instant,
+) -> (Duration, Option<Duration>) {
+    let elapsed = started_at.elapsed();
+    let finished: Vec<Duration> = rows.iter().filter_map(|r| r.duration).collect();
+    let remaining = total(rows) - done_count(rows) - tally(rows).3 - tally(rows).4;
+    let eta = if finished.is_empty() || remaining == 0 {
+        None
+    } else {
+        let avg = finished.iter().sum::<Duration>() / finished.len() as u32;
+        Some(avg * remaining as u32 / workers.max(1) as u32)
+    };
+    (elapsed, eta)
+}
+
 /// Seed the monitor rows for a run: one row per fleet entry (will-run roots
 /// and pre-skipped roots interleaved in the caller's order). Queued rows
 /// cycle over `workers` slots; skipped rows carry their reason.
@@ -112,7 +167,7 @@ pub fn monitor_rows(fleet: &[(RootId, String, Option<String>)], workers: usize) 
                 None => {
                     slot += 1;
                     RowState::Queued {
-                        slot: (slot - 1) % workers + 1,
+                        slot: worker_slot(slot - 1, workers),
                     }
                 }
             };
