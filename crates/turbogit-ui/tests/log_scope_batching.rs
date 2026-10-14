@@ -36,6 +36,7 @@ use egui::{Color32, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{
     assert_not_painted, assert_painted, click_menu_item, filled_rects, painted_text,
     right_click_row, shell_harness_over,
@@ -104,27 +105,10 @@ fn settle_where(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) ->
 
 // --- Fixture --------------------------------------------------------------------
 
-/// A `git` runner that pins the commit identity on every invocation, and
-/// deliberately NOT `test_support::git_seed::git`, which takes no per-call env:
-/// the scope's batches are ordered by commit time, so a wall-clock date on one
-/// repo and an imported date on the other is an ordering measured by accident.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// No repository `user.*` here: every call is pinned per call through the fixture
+// crate's runner, because a headless machine has no global identity to borrow.
+// The scope's batches are ordered by commit time, so a wall-clock date on one
+// repo and an imported date on the other is an ordering measured by accident.
 
 fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
@@ -134,7 +118,7 @@ fn short(id: &str) -> String {
 /// HEAD: `<short hash> <subject>`. A row the list did not build has no such node,
 /// which is how "that row is on screen" is asserted.
 fn row_label(repo: &Path, n_from_head: usize) -> String {
-    let line = git(
+    let line = git_with_env(
         repo,
         &[
             "log",
@@ -142,6 +126,7 @@ fn row_label(repo: &Path, n_from_head: usize) -> String {
             "--format=%h %s",
             &format!("HEAD~{n_from_head}"),
         ],
+        &GitEnv::fixture(),
     );
     line.trim().to_owned()
 }
@@ -233,9 +218,9 @@ fn subject(repo: &Path, what: &str) -> String {
 ///   what the pane shows under it is exactly the union of the hits.
 fn seed_repo(dir: &Path, commits: usize) {
     std::fs::create_dir_all(dir).unwrap();
-    git(dir, &["init", "-q", "-b", "main"]);
-    git(dir, &["config", "user.email", "t@t"]);
-    git(dir, &["config", "user.name", "t"]);
+    git_with_env(dir, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(dir, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(dir, &["config", "user.name", "t"], &GitEnv::fixture());
     // The salt is what makes two roots tellable apart: same fixture, different
     // repository, and the subjects and hashes have to differ with it.
     let salt = dir
@@ -346,7 +331,7 @@ fn seed_repo(dir: &Path, commits: usize) {
         out.status,
         String::from_utf8_lossy(&out.stderr),
     );
-    git(dir, &["reset", "-q", "--hard", "main"]);
+    git_with_env(dir, &["reset", "-q", "--hard", "main"], &GitEnv::fixture());
 }
 
 /// One seeded project with two independent roots, each with `commits` commits
@@ -406,7 +391,7 @@ fn seeded_harness_sized(
     for id in roots {
         state.fetch_log(id);
     }
-    let head = short(git(&repos[0], &["rev-parse", "HEAD"]).trim());
+    let head = short(git_with_env(&repos[0], &["rev-parse", "HEAD"], &GitEnv::fixture()).trim());
     let (mut harness, recorder) = log_harness_sized(state, size);
     settle_until(&mut harness, &head);
     (harness, recorder)
@@ -910,7 +895,11 @@ fn a_search_scope_batches_and_pages_like_a_path_or_ref_scope() {
     });
 
     // git's own match stream, uncapped — the oracle the window is checked against.
-    let matches = git(&repo, &["log", "--format=%s", &format!("-S{TOKEN}")]);
+    let matches = git_with_env(
+        &repo,
+        &["log", "--format=%s", &format!("-S{TOKEN}")],
+        &GitEnv::fixture(),
+    );
     let matches: Vec<&str> = matches.lines().collect();
     assert_eq!(
         matches.len(),

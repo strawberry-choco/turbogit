@@ -13,12 +13,13 @@
 //! decorated history is kept untouched, and its 28 tests are the unchanged
 //! evidence that a row's appearance survived virtualization.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use egui::{Color32, Pos2, Rect, Shape};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{filled_rects, painted_text, settle, shell_harness_over};
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::Palette;
@@ -200,29 +201,11 @@ fn main_time(i: usize) -> i64 {
     1000 + 2 * i as i64
 }
 
-/// A `git` runner that pins the commit identity on every invocation.
-///
-/// Not `test_support::git_seed::git`, which takes no per-call env: the row order here
-/// is decided by explicit `1000 + 2n` epoch seconds in the `fast-import` stream, and
-/// pinning `GIT_AUTHOR_*`/`GIT_COMMITTER_*` fixes the repository's own identity too
-/// rather than borrowing the machine's global config.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// No repository `user.*` here: every call is pinned per call through the fixture
+// crate's runner, because a headless machine has no global identity to borrow.
+// The row order here is decided by explicit `1000 + 2n` epoch seconds in the
+// `fast-import` stream, and the pin is what stops the repository's own commits
+// from borrowing the machine's identity alongside them.
 
 /// The seeded repository, kept alive for the whole test binary.
 ///
@@ -254,9 +237,13 @@ fn long_history() -> &'static Long {
         let project = tmp.path().join("project");
         let repo = project.join("alpha");
         std::fs::create_dir_all(&repo).expect("alpha dir");
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "t@example.com"]);
-        git(&repo, &["config", "user.name", "t"]);
+        git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(
+            &repo,
+            &["config", "user.email", "t@example.com"],
+            &GitEnv::fixture(),
+        );
+        git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
 
         // One `data <len>` block per payload, so a multi-digit subject or body
         // does not desync the stream.
@@ -355,7 +342,11 @@ fn long_history() -> &'static Long {
             out.status,
             String::from_utf8_lossy(&out.stderr)
         );
-        git(&repo, &["reset", "-q", "--hard", "main"]);
+        git_with_env(
+            &repo,
+            &["reset", "-q", "--hard", "main"],
+            &GitEnv::fixture(),
+        );
         Long { _tmp: tmp, project }
     })
 }

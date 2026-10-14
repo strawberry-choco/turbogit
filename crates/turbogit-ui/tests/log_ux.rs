@@ -17,6 +17,7 @@ use egui_kittest::{
 };
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{
     assert_not_painted, assert_painted, click_menu_item, painted_text, right_click_row,
     shell_harness_over,
@@ -83,29 +84,11 @@ fn settle_where(harness: &mut Harness<'_, AppState>, pred: impl Fn(&AppState) ->
 
 // --- Fixture -------------------------------------------------------------------
 
-/// A `git` runner that pins the commit identity on every invocation.
-///
-/// Not `test_support::git_seed::git`, which cannot express per-call env: the
-/// `fast-import` stream gives every commit an explicit `1_000_000_000 + n` epoch
-/// second, and pinning `GIT_AUTHOR_*`/`GIT_COMMITTER_*` keeps the `git commit`
-/// subprocesses (`small_project`, `ref_project`) on the same clock.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// No repository `user.*` here: every call is pinned per call through the fixture
+// crate's runner, because a headless machine has no global identity to borrow.
+// The `fast-import` stream gives every commit an explicit `1_000_000_000 + n`
+// epoch second, and the pin is what keeps the `git commit` subprocesses
+// (`small_project`, `ref_project`) on that same clock.
 
 /// Write `name` with `body`, stage everything, commit as `msg`, and return the
 /// new HEAD's SHA.
@@ -114,9 +97,11 @@ fn git(dir: &Path, args: &[&str]) -> String {
 /// call sites look for are `"<short hash> <subject>"`, so the hash is the output.
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     std::fs::write(dir.join(name), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
-    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git_with_env(dir, &["add", "."], &GitEnv::fixture());
+    git_with_env(dir, &["commit", "-q", "-m", msg], &GitEnv::fixture());
+    git_with_env(dir, &["rev-parse", "HEAD"], &GitEnv::fixture())
+        .trim()
+        .to_string()
 }
 
 struct Seed {
@@ -140,9 +125,9 @@ fn seeded_project_with(n: usize) -> Seed {
     let project = tmp.path().join("project");
     let repo = project.join("alpha");
     std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["config", "user.email", "t@t"]);
-    git(&repo, &["config", "user.name", "t"]);
+    git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
     // Seed the history in ONE `git fast-import` batch instead of one
     // per-commit subprocess (each ~150ms under
     // Git-for-Windows; a 201-commit loop costs ~30s and starves the async
@@ -195,13 +180,21 @@ fn seeded_project_with(n: usize) -> Seed {
         String::from_utf8_lossy(&out.stderr),
     );
     // Point HEAD at the new main and re-read the boundary commits.
-    git(&repo, &["reset", "-q", "--hard", "main"]);
+    git_with_env(
+        &repo,
+        &["reset", "-q", "--hard", "main"],
+        &GitEnv::fixture(),
+    );
     let mut oldest = String::new();
     let mut newest = String::new();
     for i in 0..n {
-        let id = git(&repo, &["rev-parse", &format!("HEAD~{}", n - 1 - i)])
-            .trim()
-            .to_string();
+        let id = git_with_env(
+            &repo,
+            &["rev-parse", &format!("HEAD~{}", n - 1 - i)],
+            &GitEnv::fixture(),
+        )
+        .trim()
+        .to_string();
         if i == 0 {
             oldest = id.clone();
         }
@@ -259,8 +252,12 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
 /// label to find at all — which is why the paging tests below ask the window what
 /// it holds rather than looking for a deep row on screen.
 fn row_label(repo: &Path, rev: &str) -> String {
-    let hash = git(repo, &["rev-parse", rev]);
-    let subject = git(repo, &["log", "-1", "--format=%s", hash.trim()]);
+    let hash = git_with_env(repo, &["rev-parse", rev], &GitEnv::fixture());
+    let subject = git_with_env(
+        repo,
+        &["log", "-1", "--format=%s", hash.trim()],
+        &GitEnv::fixture(),
+    );
     format!("{} {}", short(hash.trim()), subject.trim())
 }
 
@@ -675,9 +672,9 @@ fn small_project() -> SmallSeed {
     let project = tmp.path().join("project");
     let repo = project.join("alpha");
     std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["config", "user.email", "t@t"]);
-    git(&repo, &["config", "user.name", "t"]);
+    git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
     let c1 = commit_file(&repo, "f.txt", "one\n", "alpha: first");
     let c2 = commit_file(&repo, "g.txt", "two\n", "alpha: second");
     SmallSeed {
@@ -802,14 +799,14 @@ fn ref_project() -> (TempDir, PathBuf, PathBuf) {
     let repo = project.join("alpha");
     let origin = tmp.path().join("origin.git");
     std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["config", "user.email", "t@t"]);
-    git(&repo, &["config", "user.name", "t"]);
+    git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
     std::fs::write(repo.join("f.txt"), "one\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "c1"]);
-    git(&repo, &["tag", "v1.0"]);
-    git(
+    git_with_env(&repo, &["add", "."], &GitEnv::fixture());
+    git_with_env(&repo, &["commit", "-q", "-m", "c1"], &GitEnv::fixture());
+    git_with_env(&repo, &["tag", "v1.0"], &GitEnv::fixture());
+    git_with_env(
         &repo,
         &[
             "init",
@@ -819,17 +816,27 @@ fn ref_project() -> (TempDir, PathBuf, PathBuf) {
             "main",
             origin.to_str().unwrap(),
         ],
+        &GitEnv::fixture(),
     );
-    git(
+    git_with_env(
         &repo,
         &["remote", "add", "origin", origin.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
-    git(&repo, &["push", "-q", "-u", "origin", "main"]);
-    git(&repo, &["push", "-q", "origin", "v1.0"]);
-    git(&repo, &["tag", "v2.0"]);
+    git_with_env(
+        &repo,
+        &["push", "-q", "-u", "origin", "main"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(&repo, &["push", "-q", "origin", "v1.0"], &GitEnv::fixture());
+    git_with_env(&repo, &["tag", "v2.0"], &GitEnv::fixture());
     // Delete the branch inside the bare remote: a `git push :main` would
     // prune the local remote-tracking ref, leaving nothing to mark gone.
-    git(&origin, &["update-ref", "-d", "refs/heads/main"]);
+    git_with_env(
+        &origin,
+        &["update-ref", "-d", "refs/heads/main"],
+        &GitEnv::fixture(),
+    );
     (tmp, project, repo)
 }
 
@@ -879,9 +886,13 @@ fn click_button(harness: &mut Harness<'_, AppState>, label: &str) {
 /// `main` does not, so scoping the graph to `main` must hide it.
 fn ref_project_with_topic() -> (TempDir, PathBuf, PathBuf, String) {
     let (tmp, project, repo) = ref_project();
-    git(&repo, &["checkout", "-q", "-b", "topic"]);
+    git_with_env(
+        &repo,
+        &["checkout", "-q", "-b", "topic"],
+        &GitEnv::fixture(),
+    );
     let c2 = commit_file(&repo, "g.txt", "two\n", "topic: side commit");
-    git(&repo, &["checkout", "-q", "main"]);
+    git_with_env(&repo, &["checkout", "-q", "main"], &GitEnv::fixture());
     (tmp, project, repo, c2)
 }
 
@@ -933,15 +944,21 @@ fn switching_repository_drops_the_ref_scope() {
     std::fs::create_dir_all(&alpha).unwrap();
     std::fs::create_dir_all(&beta).unwrap();
     for dir in [&alpha, &beta] {
-        git(dir, &["init", "-q", "-b", "main"]);
-        git(dir, &["config", "user.email", "t@t"]);
-        git(dir, &["config", "user.name", "t"]);
+        git_with_env(dir, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(dir, &["config", "user.email", "t@t"], &GitEnv::fixture());
+        git_with_env(dir, &["config", "user.name", "t"], &GitEnv::fixture());
     }
     commit_file(&alpha, "a.txt", "a\n", "alpha commit");
     commit_file(&beta, "b0.txt", "x\n", "beta root commit");
-    git(&beta, &["checkout", "-q", "-b", "topic"]);
+    git_with_env(
+        &beta,
+        &["checkout", "-q", "-b", "topic"],
+        &GitEnv::fixture(),
+    );
     commit_file(&beta, "b.txt", "b\n", "topic commit");
-    let _beta_id = git(&beta, &["rev-parse", "HEAD"]).trim().to_string();
+    let _beta_id = git_with_env(&beta, &["rev-parse", "HEAD"], &GitEnv::fixture())
+        .trim()
+        .to_string();
 
     let mut state = AppState::for_roots(&project, &[alpha, beta]);
     let alpha_root = state.multi.roots[0].id.clone();
