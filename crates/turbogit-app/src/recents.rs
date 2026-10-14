@@ -145,16 +145,6 @@ pub fn record_workspace_into(recents: &mut Recents, path: &Path, repo_count: usi
     }
 }
 
-/// Display name for a project directory: its final component, or the whole
-/// path when it has none.
-///
-/// A forwarding shim over [`DisplayName`], kept only for the workspace picker's
-/// synthesized current row: recents rows ask the owner themselves, and the
-/// picker is the last caller left.
-pub fn project_name(path: &Path) -> String {
-    path.display_name_lossy_or(&path.to_string_lossy())
-}
-
 /// Human-readable last-opened meta line ("Last opened 2026-08-22 14:03").
 pub fn format_last_opened(unix_millis: i64) -> String {
     let secs = unix_millis.div_euclid(1000);

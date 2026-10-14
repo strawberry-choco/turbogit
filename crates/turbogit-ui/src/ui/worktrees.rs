@@ -12,7 +12,7 @@
 
 use egui::{Align, Color32, Layout, Ui, WidgetInfo, WidgetType};
 use turbogit_app::state::{AppState, Dialog, PendingConfirm};
-use turbogit_domain::model::Worktree;
+use turbogit_domain::model::{DisplayName, Worktree};
 
 use crate::theme::Palette;
 use crate::ui::column_table::{self, PaneTable};
@@ -98,12 +98,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 /// placed by the row's own right-aligned layout, which lands on the same
 /// trailing edge the header's label for it is measured back from.
 fn worktree_row(ui: &mut Ui, state: &mut AppState, wt: &Worktree) {
-    let name = wt
-        .path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("<worktree>")
-        .to_string();
+    let name = wt.path.display_name_or("<worktree>");
     ui.horizontal(|ui| {
         widgets::column_cell(ui, &WORKTREE_COLUMNS, 0, |ui| {
             column_table::path_cell(ui, &WORKTREE_COLUMNS, &wt.path)

@@ -14,7 +14,7 @@
 
 use egui::{Align, Layout, RichText, Ui};
 use turbogit_app::state::{AppState, PendingConfirm};
-use turbogit_domain::model::{Submodule, SubmoduleState};
+use turbogit_domain::model::{DisplayName, Submodule, SubmoduleState};
 
 use crate::theme::{Palette, RepoState, TYPE_CONTROL, data_font};
 use crate::ui::column_table::{self, PaneTable};
@@ -73,12 +73,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 /// placed by the row's own right-aligned layout, which lands on the same
 /// trailing edge the header's label for it is measured back from.
 fn submodule_row(ui: &mut Ui, state: &mut AppState, sub: &Submodule) {
-    let name = sub
-        .path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("<submodule>")
-        .to_string();
+    let name = sub.path.display_name_or("<submodule>");
     // Whether the checkout has moved off the record. `git submodule status`
     // spells this `+`, and it is always the *checked-out* side that moved, so
     // that is the column that gets coloured — see [`commit_cell`].

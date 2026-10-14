@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use turbogit_domain::model::{Root, RootId};
+use turbogit_domain::model::{DisplayName, Root, RootId};
 
 use crate::ui::widgets;
 
@@ -202,7 +202,13 @@ fn repo_data(root: &Root, ahead_behind: &dyn Fn(&RootId) -> Option<(usize, usize
     let (ahead, behind) = ahead_behind(&root.id).unwrap_or((0, 0));
     RepoData {
         id: root.id.clone(),
-        name: basename(&root.path),
+        // File-name label of a path (the `<repo>` fallback matches the shell's).
+        // The "matches the shell's" claim is **false and left exactly so**: the
+        // shell's workspace header spells its own fallback `"<workspace>"`.
+        // Whether the two should match is a product ruling, not a refactor's,
+        // and either answer changes a rendered string — recorded here so the
+        // next rescan does not re-derive it as a fresh defect.
+        name: root.path.display_name_or("<repo>"),
         path: root.path.clone(),
         branch: root.current_branch.clone(),
         dot: dot_state(root, ahead, behind),
@@ -218,7 +224,7 @@ fn repo_data(root: &Root, ahead_behind: &dyn Fn(&RootId) -> Option<(usize, usize
 /// has a `.git`, a folder node otherwise.
 fn assemble(project_dir: &Path, repos: impl Iterator<Item = RepoData>) -> ProjectTree {
     let mut root = RawNode::Folder {
-        name: basename(project_dir),
+        name: project_dir.display_name_or("<repo>"),
         children: Vec::new(),
     };
     let mut root_row: Option<RepoData> = None;
@@ -236,7 +242,7 @@ fn assemble(project_dir: &Path, repos: impl Iterator<Item = RepoData>) -> Projec
             // A root outside the project directory cannot come from
             // discovery; keep it visible at the top level rather than
             // dropping it.
-            Err(_) => insert_components(&mut root, &[basename(&r.path)], r),
+            Err(_) => insert_components(&mut root, &[r.path.display_name_or("<repo>")], r),
         }
     }
     sort_rec(&mut root);
@@ -426,14 +432,6 @@ fn ancestor_folder_matches(project_dir: &Path, repo: &RepoNode, q: &str) -> bool
     rel.components()
         .take(rel.components().count().saturating_sub(1))
         .any(|c| widgets::filter_matches(&c.as_os_str().to_string_lossy(), q))
-}
-
-/// File-name label of a path (the `<repo>` fallback matches the shell's).
-fn basename(path: &Path) -> String {
-    path.file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("<repo>")
-        .to_string()
 }
 
 /// Use the same precedence as the branch section header.

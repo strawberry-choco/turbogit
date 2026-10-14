@@ -18,6 +18,7 @@ use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::activity::{ActivityKind, TimeWindow};
 use turbogit_app::state::AppState;
+use turbogit_domain::model::DisplayName;
 
 /// Expanded panel height (header strip + feed).
 pub const ACTIVITY_HEIGHT: f32 = 200.0;
@@ -210,7 +211,7 @@ fn cycle_repo_filter(state: &mut AppState) {
         .multi
         .roots
         .iter()
-        .map(|r| turbogit_app::activity::root_label(&r.path))
+        .map(|r| r.path.display_name_or(&r.path.display().to_string()))
         .collect();
     let current = state.ui.activity.repo_filter.clone();
     state.ui.activity.repo_filter = match current {

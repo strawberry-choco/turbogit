@@ -99,7 +99,7 @@ use crate::theme::Palette;
 use turbogit_app::bulk_history::RepoOutcome;
 use turbogit_app::bulk_ops::BulkOp;
 use turbogit_app::state::AppState;
-use turbogit_domain::model::RootId;
+use turbogit_domain::model::{DisplayName, RootId};
 
 /// The selection summary's table columns: the per-repo table's offsets, from
 /// the surface's left content edge, matching screen 04's column rhythm.
@@ -150,12 +150,9 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
     );
 
     // Header: title + breadcrumb on the left, "Pin as view" on the right.
-    let project = state
-        .project_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("<workspace>")
-        .to_string();
+    // The same placeholder the shell's workspace header passes, to the same
+    // owner: two call sites that read alike because they say alike.
+    let project = state.project_dir.display_name_or("<workspace>");
     let header_h = 32.0;
     let header = Rect::from_min_size(
         body.cursor().left_top(),

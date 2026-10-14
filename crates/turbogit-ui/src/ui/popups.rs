@@ -12,6 +12,7 @@ use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::recents::{RecentKind, RecentProject};
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, Dialog, PatchSource, Tab, Toast};
+use turbogit_domain::model::DisplayName;
 
 use crate::ui::widgets;
 
@@ -433,7 +434,9 @@ struct WorkspaceRow {
 fn workspace_rows(state: &AppState) -> Vec<WorkspaceRow> {
     let current = RecentProject {
         path: state.project_dir.clone(),
-        name: turbogit_app::recents::project_name(&state.project_dir),
+        name: state
+            .project_dir
+            .display_name_lossy_or(&state.project_dir.to_string_lossy()),
         last_opened: i64::MAX,
         kind: if state.multi.roots.len() > 1 {
             RecentKind::Workspace

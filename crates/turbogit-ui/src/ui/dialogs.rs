@@ -7,7 +7,7 @@ use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, TagType, UnmergedCommits};
 use turbogit_app::{integrate_service, shelve_stash, sync_service, tag_service};
-use turbogit_domain::model::{BranchKind, MergeStrategy};
+use turbogit_domain::model::{BranchKind, DisplayName, MergeStrategy};
 
 use crate::theme::{Palette, TYPE_BODY, TYPE_CONTROL, data_font};
 use crate::ui::components::{KitButton, counted, kit_button};
@@ -815,7 +815,16 @@ fn rebase(ui: &mut Ui, state: &mut AppState) {
                     format!(
                         "A {} is already in progress in {}",
                         operation.label(),
-                        root_display_name(state)
+                        // The focused root's own name, which is what makes an
+                        // in-progress refusal point at ONE repository instead
+                        // of the whole workspace — and the empty fallback is the
+                        // second level of that: no root selected reads as
+                        // "this repository" instead.
+                        state
+                            .selected_root
+                            .as_ref()
+                            .map(|root| root.as_path().display_name_or(""))
+                            .unwrap_or_else(|| "this repository".to_string())
                     )
                 } else if !ready {
                     if state.ui.dlg.rebase_onto_enabled {
@@ -973,22 +982,6 @@ fn onto_base_field(
             widgets::inline_error(ui, missing_error);
         }
     }
-}
-
-/// The focused root's own name, which is what makes an in-progress refusal
-/// point at ONE repository instead of the whole workspace.
-fn root_display_name(state: &AppState) -> String {
-    state
-        .selected_root
-        .as_ref()
-        .map(|root| {
-            let path = root.as_path();
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or_default()
-                .to_string()
-        })
-        .unwrap_or_else(|| "this repository".to_string())
 }
 
 /// The cross-repo banner (screen 15): a warning-toned strip naming how many
