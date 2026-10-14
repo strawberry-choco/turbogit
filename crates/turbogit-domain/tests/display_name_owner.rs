@@ -39,8 +39,11 @@ fn non_utf8_named() -> PathBuf {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt as _;
 
-    // `\w\` then 0xD800: a high surrogate with no low surrogate after it.
-    PathBuf::from(OsString::from_wide(&[0x5C, 0x77, 0x5C, 0xD800]))
+    // `\w\bad` then 0xD800: a high surrogate with no low surrogate after it —
+    // the same shape as the Unix fixture, whose final component is `bad\xffname`.
+    PathBuf::from(OsString::from_wide(&[
+        0x5C, 0x77, 0x5C, 0x62, 0x61, 0x64, 0xD800,
+    ]))
 }
 
 #[test]
@@ -102,7 +105,7 @@ fn root_id_name_keeps_the_whole_path_as_its_fallback() {
         nameless_root.name(),
         nameless_root.as_path().to_string_lossy()
     );
-    assert_eq!(nameless_root.name(), "/".to_string());
+    assert_eq!(nameless_root.name(), MAIN_SEPARATOR_STR.to_string());
 }
 
 #[test]
