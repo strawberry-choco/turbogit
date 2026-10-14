@@ -126,9 +126,7 @@ pub fn protected_roots(settings: &VcsSettings, roots: &[Root]) -> Vec<ProtectedR
                     id: root.id.clone(),
                     name: root
                         .path
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| root.path.display().to_string()),
+                        .display_name_lossy_or(&root.path.display().to_string()),
                     branch: branch.clone(),
                     patterns,
                 })
