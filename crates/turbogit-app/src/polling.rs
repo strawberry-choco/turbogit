@@ -16,7 +16,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::{BranchKind, RootId};
+use turbogit_domain::model::{BranchKind, DisplayName, RootId};
 use turbogit_engine_api::GitExecutor;
 
 use crate::events::AppEvent;
@@ -83,7 +83,11 @@ impl AppState {
                 self.caches
                     .store_ahead_behind(root.clone(), (ahead, behind));
                 if behind > 0 {
-                    let repo = root.0.file_name().and_then(|s| s.to_str());
+                    // `None` here means "this root's directory name is not
+                    // readable", and the feed reads `None` as "every project" —
+                    // a preserved mislabel with a ruling still owed, pinned by
+                    // this module's own tests.
+                    let repo = root.utf8_name();
                     let plural = if behind == 1 { "" } else { "s" };
                     self.ui.activity.push(crate::activity::ActivityEntry {
                         at: chrono::Local::now(),

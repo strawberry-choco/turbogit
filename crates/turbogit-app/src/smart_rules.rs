@@ -11,6 +11,8 @@
 //! case-insensitive substring; blank means "any" (the editor normalizes
 //! blank input to `None`).
 
+use turbogit_domain::model::DisplayName;
+
 /// One pattern against one text, per the module-doc convention: `*`
 /// suffix → prefix match, `*` prefix → suffix match, otherwise
 /// case-insensitive substring. Blank matches anything.
@@ -72,13 +74,10 @@ impl SmartGroupRule {
     /// The rule's predicate: every present constraint must hold.
     pub fn matches(&self, repo: &RepoFacts) -> bool {
         if let Some(p) = constrained(&self.path_pattern) {
-            let basename = std::path::Path::new(&repo.path)
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
+            let basename = std::path::Path::new(&repo.path).display_name_or("");
             if !(pattern_matches(p, &repo.name)
                 || pattern_matches(p, &repo.path)
-                || pattern_matches(p, basename))
+                || pattern_matches(p, &basename))
             {
                 return false;
             }

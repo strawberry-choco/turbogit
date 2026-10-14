@@ -4110,10 +4110,7 @@ impl AppState {
     /// are told apart by what they leave armed, never by whether the file was mentioned.
     fn report_created_patch(&mut self, written: &std::path::Path) {
         let root = self.ui.dlg.create_patch_root.clone();
-        let name = written
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| written.to_string_lossy().into_owned());
+        let name = written.display_name_lossy_or(&written.to_string_lossy());
         let affected = root.clone().map(Affected::Root).unwrap_or(Affected::All);
         self.ui.activity.push(crate::activity::ActivityEntry {
             at: chrono::Local::now(),
@@ -4612,12 +4609,10 @@ impl AppState {
         let Some((kind, message)) = entry else {
             return;
         };
-        let repo = self
-            .ui
-            .dlg
-            .apply_patch_root
-            .as_ref()
-            .map(|r| crate::activity::root_label(r.as_path()));
+        let repo = self.ui.dlg.apply_patch_root.as_ref().map(|r| {
+            let path = r.as_path();
+            path.display_name_or(&path.display().to_string())
+        });
         self.ui.activity.push(crate::activity::ActivityEntry {
             at: chrono::Local::now(),
             repo,
@@ -6696,6 +6691,12 @@ fn current_branch_ahead_behind(exec: &dyn GitExecutor, root: &Path) -> TgResult<
 
 /// Aggregate per-repo bulk outcomes into the summary message (issue 09):
 /// `"{label} · {ok} of {n} ok"`, plus the failed roots by name when any.
+///
+/// The name filter stays a `filter_map` over a **presence**, not over a label: a
+/// root whose directory name is not UTF-8 has no name to print, so it is absent
+/// from the `failed:` list rather than shown under a placeholder. That is a
+/// preserved data loss with a ruling still owed — see the pin in
+/// `tests/bulk_ops.rs`, which fails on purpose when the ruling lands.
 pub fn bulk_report_message(label: &str, results: &[(RootId, TgResult<()>)]) -> String {
     let ok = results.iter().filter(|(_, r)| r.is_ok()).count();
     let mut msg = format!("{label} · {ok} of {} ok", results.len());
@@ -6703,7 +6704,7 @@ pub fn bulk_report_message(label: &str, results: &[(RootId, TgResult<()>)]) -> S
         let failed: Vec<String> = results
             .iter()
             .filter(|(_, r)| r.is_err())
-            .filter_map(|(id, _)| id.0.file_name().and_then(|s| s.to_str()))
+            .filter_map(|(id, _)| id.utf8_name())
             .map(str::to_string)
             .collect();
         msg.push_str(&format!(" · failed: {}", failed.join(", ")));
