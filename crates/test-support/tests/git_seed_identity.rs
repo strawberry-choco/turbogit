@@ -56,10 +56,11 @@ fn the_pinned_door_commits_a_repository_that_has_no_identity_of_its_own() {
     // configuration level, so the machine's global identity cannot reach this
     // commit — and if it somehow did, the assertion below is what would say so.
     // The sequence is exactly what two suites in this tree build: `app`'s
-    // activity log pinned `GIT_AUTHOR_COMMITTER_NAME`, which is not a variable
-    // git has, and `ui`'s discard confirmation pinned an author alone. On a
-    // machine with no global identity both died on this commit in fixture
-    // construction, before a test could run.
+    // activity log pinned a committer under a name git does not read (the
+    // misspelling the ratchet at the bottom of this file names), and `ui`'s
+    // discard confirmation pinned an author alone. On a machine with no global
+    // identity both died on this commit in fixture construction, before a test
+    // could run.
     git_with_env(&repo, &["commit", "-q", "-m", "init"], &GitEnv::fixture());
 
     assert_eq!(
@@ -75,15 +76,14 @@ fn the_repo_config_door_has_no_identity_to_borrow_and_reports_the_rule_it_broke(
     let (_tmp, repo) = headless_repo("unpinned");
 
     // Half the row: git's own answer on a machine that has no identity of its
-    // own. The command starts from the owner's builder because that is where a
-    // call's environment is assembled, then drops the four variables it just
-    // set — so what is left is the unpinned door's environment, plus git's own
-    // configuration suppression.
-    let mut cmd = GitEnv::fixture().command(&repo, &["commit", "-q", "-m", "init"]);
-    cmd.env_remove("GIT_AUTHOR_NAME")
-        .env_remove("GIT_AUTHOR_EMAIL")
-        .env_remove("GIT_COMMITTER_NAME")
-        .env_remove("GIT_COMMITTER_EMAIL");
+    // own. A raw spawn rather than the owner's builder, because a pinned value
+    // cannot be un-pinned and this row's whole subject is the command that
+    // carries no identity at all. What it does take is git's own configuration
+    // suppression, added on the command — the owner's runners inherit the process
+    // environment, and mutating that from a test would be process-global and racy
+    // across the binary's parallel threads.
+    let mut cmd = Command::new("git");
+    cmd.args(["commit", "-q", "-m", "init"]).current_dir(&repo);
     suppress_git_config(&mut cmd);
     let out = cmd.output().expect("git must be on PATH");
 
@@ -170,3 +170,59 @@ fn a_pinned_date_reaches_the_commit_git_records() {
         "git must record both pinned timestamps, not the wall clock"
     );
 }
+
+/// The misspelling is unspellable in the call grammar already — a caller fills
+/// in a name and an email, never a variable name — so this only pins that it is
+/// gone from the tree as *text* too.
+///
+/// It is a text read, and that weakness is accepted on purpose: it breaks if the
+/// string moves, which is the same weakness the repo's port-discipline ratchet
+/// already carries. One assertion is what it is worth.
+#[test]
+fn no_file_in_the_test_tree_spells_the_misspelled_variable() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = manifest.join("../..");
+    let this = std::fs::canonicalize(manifest.join("tests/git_seed_identity.rs"))
+        .expect("this file's own path");
+    // Every `crates/*/tests` directory plus the root's own `tests/`, read at run
+    // time rather than through a hand-kept file list: the claim is "nowhere", and
+    // a list of the files checked when the ratchet was written stops covering new
+    // ones silently.
+    let mut bases: Vec<std::path::PathBuf> = vec![workspace.join("tests")];
+    bases.extend(
+        std::fs::read_dir(workspace.join("crates"))
+            .expect("crates/")
+            .flatten()
+            .map(|e| e.path().join("tests"))
+            .filter(|p| p.is_dir()),
+    );
+
+    let mut found: Vec<String> = Vec::new();
+    for base in bases {
+        // Canonical, so this file's own path and the walked one are the same
+        // string: `crates/test-support/../../crates/…` is the same file.
+        let base = std::fs::canonicalize(&base).expect("tests dir canonical");
+        for (rel, source) in test_support::srcscan::sources_under(&base) {
+            let path = base.join(&rel);
+            if path == this {
+                continue;
+            }
+            for (no, line) in source.lines().enumerate() {
+                if line.contains(TYPO) {
+                    found.push(format!("{}:{}", path.display(), no + 1));
+                }
+            }
+        }
+    }
+
+    assert!(
+        found.is_empty(),
+        "`{TYPO}` is not a git variable — git reads `GIT_COMMITTER_*` — and a \
+         fixture that spells it commits under whatever the machine has configured. \
+         Found it in: {found:?}"
+    );
+}
+
+/// Read as text by the ratchet above, so it cannot be spelled inside a
+/// `format!` without the needle itself appearing.
+const TYPO: &str = concat!("GIT_AUTHOR_", "COMMITTER_");
