@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use turbogit_domain::model::{MergeOpts, RootId};
 use turbogit_services::bulk_ops::BulkOp;
-use turbogit_services::bulk_run::{RowState, RunControl, RunRow};
+use turbogit_services::bulk_run::{self, RowState, RunControl, RunRow};
 
 /// The live monitor for one fleet run (or one retry pass of it).
 pub struct BulkRunView {
@@ -48,27 +48,17 @@ pub struct BulkRunView {
 impl BulkRunView {
     /// Footer tallies `(done, running, queued, skipped, failed)`, live.
     pub fn tally(&self) -> (usize, usize, usize, usize, usize) {
-        let mut t = (0, 0, 0, 0, 0);
-        for row in &self.rows {
-            match row.state {
-                RowState::Done => t.0 += 1,
-                RowState::Running => t.1 += 1,
-                RowState::Queued { .. } => t.2 += 1,
-                RowState::Skipped { .. } => t.3 += 1,
-                RowState::Failed { .. } => t.4 += 1,
-            }
-        }
-        t
+        bulk_run::tally(&self.rows)
     }
 
     /// The header's "N of M done" numerator.
     pub fn done_count(&self) -> usize {
-        self.tally().0
+        bulk_run::done_count(&self.rows)
     }
 
     /// The header's "M": one row per selected repo.
     pub fn total(&self) -> usize {
-        self.rows.len()
+        bulk_run::total(&self.rows)
     }
 
     /// The git command the running rows are executing right now — the live
@@ -108,15 +98,9 @@ impl BulkRunView {
     /// Recompute the elapsed/ETA snapshots from the finished rows. Called by
     /// the drain loop on every progress event.
     pub fn update_progress(&mut self) {
-        self.elapsed = self.started_at.elapsed();
-        let finished: Vec<Duration> = self.rows.iter().filter_map(|r| r.duration).collect();
-        let remaining = self.total() - self.done_count() - self.tally().3 - self.tally().4;
-        self.eta = if finished.is_empty() || remaining == 0 {
-            None
-        } else {
-            let avg = finished.iter().sum::<Duration>() / finished.len() as u32;
-            Some(avg * remaining as u32 / self.workers.max(1) as u32)
-        };
+        let (elapsed, eta) = bulk_run::update_progress(&self.rows, self.workers, self.started_at);
+        self.elapsed = elapsed;
+        self.eta = eta;
     }
 
     /// Reset rows to queued for a retry pass of `roots` (issue 10: Retry
@@ -128,7 +112,7 @@ impl BulkRunView {
             if roots.iter().any(|r| r == &row.root) {
                 slot += 1;
                 row.state = RowState::Queued {
-                    slot: (slot - 1) % workers + 1,
+                    slot: bulk_run::worker_slot(slot - 1, workers),
                 };
                 row.duration = None;
             }

@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use turbogit_services::bulk_run::{RowState, RunControl, RunRow};
+use turbogit_services::bulk_run::{self, RunControl, RunRow};
 
 /// The live monitor for one cherry-pick-across run. There is no retry
 /// pass and no undo: a conflicted repo is held for manual resolution and
@@ -37,27 +37,17 @@ pub struct CherryRunView {
 impl CherryRunView {
     /// Footer tallies `(done, running, queued, skipped, failed)`, live.
     pub fn tally(&self) -> (usize, usize, usize, usize, usize) {
-        let mut t = (0, 0, 0, 0, 0);
-        for row in &self.rows {
-            match row.state {
-                RowState::Done => t.0 += 1,
-                RowState::Running => t.1 += 1,
-                RowState::Queued { .. } => t.2 += 1,
-                RowState::Skipped { .. } => t.3 += 1,
-                RowState::Failed { .. } => t.4 += 1,
-            }
-        }
-        t
+        bulk_run::tally(&self.rows)
     }
 
     /// The header's "N of M done" numerator.
     pub fn done_count(&self) -> usize {
-        self.tally().0
+        bulk_run::done_count(&self.rows)
     }
 
     /// The header's "M": one row per target repo.
     pub fn total(&self) -> usize {
-        self.rows.len()
+        bulk_run::total(&self.rows)
     }
 
     /// The git work the running rows are executing right now.
@@ -75,14 +65,8 @@ impl CherryRunView {
 
     /// Recompute the elapsed/ETA snapshots from the finished rows.
     pub fn update_progress(&mut self) {
-        self.elapsed = self.started_at.elapsed();
-        let finished: Vec<Duration> = self.rows.iter().filter_map(|r| r.duration).collect();
-        let remaining = self.total() - self.done_count() - self.tally().3 - self.tally().4;
-        self.eta = if finished.is_empty() || remaining == 0 {
-            None
-        } else {
-            let avg = finished.iter().sum::<Duration>() / finished.len() as u32;
-            Some(avg * remaining as u32 / self.workers.max(1) as u32)
-        };
+        let (elapsed, eta) = bulk_run::update_progress(&self.rows, self.workers, self.started_at);
+        self.elapsed = elapsed;
+        self.eta = eta;
     }
 }
