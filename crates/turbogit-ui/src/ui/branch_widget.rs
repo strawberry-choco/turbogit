@@ -286,10 +286,14 @@ pub fn stale_badge(age: std::time::Duration) -> String {
 /// Sync marker for a remote row (issue 32): `gone` when the tracked
 /// upstream was deleted, `↑a ↓b` when the local counterpart diverged, and
 /// nothing when in sync.
+///
+/// Either side moving is enough for the marker (`DivergenceMeaning::AnyDrift`,
+/// the same reading the status bar's counter uses) — a row one side ahead of
+/// its upstream has something to say to the user either way.
 pub fn remote_marker(ahead: usize, behind: usize, gone: bool) -> Option<String> {
     if gone {
         Some("gone".into())
-    } else if ahead > 0 || behind > 0 {
+    } else if crate::theme::DivergenceMeaning::AnyDrift.is_diverged(ahead, behind) {
         Some(format!("↑{ahead} ↓{behind}"))
     } else {
         None

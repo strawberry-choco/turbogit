@@ -177,6 +177,17 @@ fn show(exec: &dyn GitExecutor, root: &Path, rev: &str, path: &Path) -> Option<S
 
 /// Anything tracked that is modified, staged, or conflicted counts as a
 /// dirty tree; unversioned and ignored files do not block a pick.
+///
+/// **This is not the repository-state ladder's dirty rule, on purpose.** It
+/// counts anything that is not unversioned or ignored, so the two disagree in
+/// both directions: an unversioned-only tree is clean here and dirty to
+/// `theme::RepoState::is_dirty`, while a conflicted change *entry* — which the
+/// ladder does not read, it reads the separate conflicted-path list — blocks a
+/// pick here and is not `Conflict` there. Reconciling them is a product
+/// question, and it crosses a layer boundary, so it is not a refactor: the
+/// disagreement is pinned on both sides
+/// (`tests/cherry_across.rs::apply_to_root_refuses_a_target_whose_only_change_is_a_conflicted_entry`
+/// and `theme.rs`'s `is_dirty` truth table) until a human rules.
 fn is_dirty(status: &turbogit_domain::model::RootStatus) -> bool {
     use turbogit_domain::model::ChangeStatus::*;
     status

@@ -654,11 +654,17 @@ mod tests {
         DateTime::from_timestamp(epoch, 0).expect("post-epoch")
     }
 
+    /// A local branch whose tracking relationship is seeded from its counts.
+    /// "Has a tracking relationship at all" is the loose reading — either side
+    /// moved — which is `DivergenceMeaning::AnyDrift`, the same rule the remote
+    /// row's marker asks. It reaches the predicate through the one
+    /// styling-adjacent reference this module is permitted, so the builder
+    /// still answers a question the renderer's vocabulary owns.
     fn local(name: &str, favorite: bool, ahead: usize, behind: usize) -> Branch {
         Branch {
             name: name.to_string(),
             kind: BranchKind::Local,
-            tracking: if ahead + behind > 0 {
+            tracking: if RepoStatus::has_drift(ahead, behind) {
                 Upstream::from_git_ref("origin/main")
             } else {
                 None

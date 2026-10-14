@@ -11,6 +11,12 @@
 //! types and the rendering half ([`super::sidebar`] paints the checkboxes
 //! and the bottom selection bar, [`super::shell`] the central summary
 //! surface).
+//!
+//! One repository-verdict re-derivation lives here and is deliberately left
+//! un-migrated: the table's DIRTY column asks whether a count is non-zero
+//! rather than asking for a repository's state, so it keeps its own `> 0` and
+//! carries the reason at the line. That is a measured consequence of what the
+//! column holds, not an oversight.
 
 /// The three visual states of a group's checkbox, computed from its
 /// descendant repos.
@@ -316,6 +322,12 @@ pub fn show_summary(ui: &mut Ui, state: &mut AppState) {
                 format!("↑{} ↓{}", row.ahead, row.behind),
                 Palette::INK_2,
             );
+            // Deliberately **not** the owner's `RepoState::is_dirty`: a column
+            // of numbers asks whether the number is non-zero; it is not asking
+            // for a repository's state. The owner's rule reads a whole status,
+            // and routing a count through it would mean either a count-shaped
+            // second entry on the owner — a rule with no single shape — or
+            // widening its signature to accept either.
             let dirty_color = if row.dirty > 0 {
                 Palette::STATE_WARNING
             } else {

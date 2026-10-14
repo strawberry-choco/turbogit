@@ -790,6 +790,11 @@ mod pure {
         assert_eq!(remote_marker(2, 1, false), Some("↑2 ↓1".into()));
         // Deleted upstream wins over any count.
         assert_eq!(remote_marker(3, 0, true), Some("gone".into()));
+        // One-sided pairs still mark: the marker means *either* side moved, the
+        // same loose reading the status bar's counter uses, so an ahead-only or
+        // a behind-only counterpart is not in sync and must say so.
+        assert_eq!(remote_marker(3, 0, false), Some("↑3 ↓0".into()));
+        assert_eq!(remote_marker(0, 2, false), Some("↑0 ↓2".into()));
         // In sync: no marker.
         assert_eq!(remote_marker(0, 0, false), None);
     }

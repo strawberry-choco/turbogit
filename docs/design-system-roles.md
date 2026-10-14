@@ -80,6 +80,7 @@ silently and two ratchets stopped covering it.
 | Family | Current owner and path | Boundary | Public or internal |
 | --- | --- | --- | --- |
 | Design tokens and style | `turbogit_ui::theme` | The only authority for shared presentation tokens, semantic mappings, typography, spacing, radii, and egui style/font setup. It does not own component behavior. | Public token and style API. |
+| Repository-state verdict | `turbogit_ui::theme` (`RepoState::from_root`, its predicates `is_diverged` / `has_drift` / `is_dirty`, and the `DivergenceMeaning` a caller names) | **Which** state a repository is in — the precedence ladder conflict > dirty > diverged > unpulled > unpushed > clean, and the two live meanings of "diverged". Reached through that module's own predicates rather than re-derived, because a surface that answers the question a second way can disagree with a dot one screen away. Same module as the colour row above: the colour is the verdict's paint, and both are read from `theme`. | Public token API. |
 | General widget vocabulary | `turbogit_ui::ui::widgets` (public façade) over private `widgets::{controls, chips, rows, inputs, feedback, containers, text}` modules | Reusable, policy-free controls and presentation primitives. The focused modules own implementation details; the façade explicitly re-exports the established names and signatures. | Public façade; implementation modules are private. |
 | Branch component kit | `turbogit_ui::ui::components` (`KitButton`, `RowState`, branch fills, `section_header`, `pill`, sync helpers, and branch geometry) | Branch-screen grammar: fixed branch geometry, branch rows, sync relationships, current/count pills, collapsible branch sections, and branch actions. It is not a general button or title library. | Public branch-kit path, with a specialized role. |
 | General icon primitive | `turbogit_ui::ui::icons` | Centered icon painting and icon lookup/painting primitives. It does not decide what an icon means. | Public shared primitive. |
@@ -226,6 +227,41 @@ written — *no chip fills or inks any colour `RepoState::color()` can produce* 
 and that form covers `INK_3` without calling it a severity, with both contract
 suites asserting it over the whole map rather than over a transcribed list of
 colours.
+
+#### The verdict beside the colour, and the three disagreements it keeps
+
+The rows above record what a state *looks like*. The module that owns that map
+also owns the answer to **which state a repository is in** — `RepoState::from_root`
+is the precedence ladder, and it is stated through the module's own predicates
+(`is_diverged`, `has_drift`, `is_dirty`) rather than re-derived at call sites,
+because five surfaces used to re-derive it, and the status bar's answer
+contradicted the rail's own dot for the same repository inside a single frame.
+The map's contract is unchanged by that,
+and so is the wording: `RepoState::words()` is the same strings the sidebar's
+smart groups show, because the groups read them from here.
+
+Two meanings of "diverged" ship on purpose and are named
+(`DivergenceMeaning::Both`, `DivergenceMeaning::AnyDrift`) rather than spelled as
+inline booleans: *has this repository forked?* and *does this branch differ from
+its upstream at all?* Which one a surface wants is now stated where a reader will
+see it; which one the status bar chose is the first disagreement below.
+
+Three disagreements survive the consolidation deliberately. Each is a
+rendered-byte change to fix, each is pinned by a test, and none is an oversight:
+
+| # | The disagreement | What fixing it would render or unblock | The pin that holds it today | What a human ruling must update |
+| --- | --- | --- | --- | --- |
+| 1 | The status bar's `diverged` counter means *any* upstream drift; the repository dot means *both* sides moved. A merely-ahead or merely-behind repository paints the error red in the bar and the ahead green / counter orange in the rail. | The red chip disappears for the two commonest states of a multi-root project. | `shell::tests::computes_diverged_unpulled_and_dirty_counts_from_root_state`, whole, including the message "any ahead/behind drift is loosely diverged"; plus `theme`'s `divergence_meaning_any_drift_accepts_both_one_sided_pairs` | The meaning arm at the call site; that test's diverged assertion, its message and the behind-only fixture comment; the shell-frame snapshots |
+| 2 | A conflicted repository counts as **dirty as well as** conflicted, so it paints a red conflict chip *and* an orange dirty chip, while the ladder ranks conflict above dirty and could only ever produce one. | One chip disappears from the status bar for every conflicted repository. | The same test, on its dirty assertion (2) and its message "modified and conflicted roots both count as dirty" | The compute's two `dirty` increments; that test's dirty assertion |
+| 3 | The services layer's dirty rule and the owner's disagree **in both directions**: an unversioned-only tree is dirty to the owner and clean to the service; an ignored-only or conflicted-change-entry-only tree is clean to the owner and blocking to the service. | Nothing is rendered — a cherry-pick that is refused today would start succeeding, or the reverse. | `tests/cherry_across.rs::apply_to_root_refuses_a_target_whose_only_change_is_a_conflicted_entry`, plus `theme`'s `is_dirty_is_false_on_a_conflicted_change_entry` | That pin; the service's rule; the owner's rule; and a layer-boundary decision |
+
+Also recorded here rather than left to be re-discovered: the sync-badge
+vocabulary (`components::SyncKind`) carries two states — `Diverged` and `InSync`
+— that its builder never emits, because `sync_badge` emits ahead, behind and gone
+only. They are consumed by `sync_ink` alone and pinned by `design_tokens.rs`.
+**Noted and untouched**: wiring them is a product question (should a sync badge
+ever say "diverged"?) and deleting one is a change to a pinned token-suite
+assertion. Neither is this module's call.
 
 #### The `RefKind` asymmetry (intentional)
 

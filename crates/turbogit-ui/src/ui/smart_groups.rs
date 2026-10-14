@@ -12,6 +12,7 @@
 
 use std::path::Path;
 
+use crate::theme::RepoState;
 use crate::ui::project_tree::{ProjectTree, RepoNode, filter_repos, iter_repos};
 use turbogit_app::smart_rules::{RepoFacts, SmartGroupRule};
 
@@ -79,14 +80,29 @@ impl SmartGroup {
         SmartGroup::Dirty,
     ];
 
-    /// The row label (screen 01's lowercase style).
+    /// The row label (screen 01's lowercase style) — the words of the state
+    /// this group stands for, so the label the user reads and the dot beside it
+    /// cannot be two vocabularies.
     pub fn label(&self) -> &'static str {
+        self.state().words()
+    }
+
+    /// The repository state each group stands for, declared beside the
+    /// variants. This is the module's whole correspondence claim: the row's
+    /// label is this state's words and the row's dot is this state's colour,
+    /// so a new state has one place to be added and a wording change is one
+    /// edit rather than three.
+    ///
+    /// A **membership** question is not asked here and cannot be — the group
+    /// answers "does this repo match", which overlaps by design, while one
+    /// state is the single worst thing about the repo. See [`Self::matches`].
+    pub fn state(self) -> RepoState {
         match self {
-            SmartGroup::Diverged => "diverged",
-            SmartGroup::Conflicted => "has conflicts",
-            SmartGroup::Unpushed => "unpushed commits",
-            SmartGroup::Unpulled => "unpulled commits",
-            SmartGroup::Dirty => "dirty worktree",
+            SmartGroup::Diverged => RepoState::Diverged,
+            SmartGroup::Conflicted => RepoState::Conflict,
+            SmartGroup::Unpushed => RepoState::Unpushed,
+            SmartGroup::Unpulled => RepoState::Unpulled,
+            SmartGroup::Dirty => RepoState::Dirty,
         }
     }
 
@@ -95,8 +111,12 @@ impl SmartGroup {
     /// "unpulled commits".
     pub fn matches(&self, repo: &RepoNode) -> bool {
         match self {
-            SmartGroup::Diverged => repo.ahead > 0 && repo.behind > 0,
+            SmartGroup::Diverged => RepoState::is_diverged(repo.ahead, repo.behind),
             SmartGroup::Conflicted => repo.conflicts > 0,
+            // The three arms below read **counts**, not a `RootStatus`, and the
+            // owner's dirty rule is defined over a status because that is what
+            // the ladder has. A column of numbers asks whether the number is
+            // non-zero; it is not asking for a repository's state.
             SmartGroup::Unpushed => repo.ahead > 0,
             SmartGroup::Unpulled => repo.behind > 0,
             SmartGroup::Dirty => repo.dirty_count > 0,
@@ -219,6 +239,23 @@ mod tests {
             ],
             "the five built-ins with their member counts, in display order"
         );
+    }
+
+    #[test]
+    fn every_group_label_is_the_owner_words_for_the_state_it_stands_for() {
+        // The five labels used to be five literals written out here, byte-identical
+        // to five strings the owner's words map already returns — which is what
+        // the words map's own doc claims to own. This asserts the *string*, not
+        // the presence of the call: re-typing the literal fails, re-pointing the
+        // label passes.
+        for group in SmartGroup::BUILTINS {
+            assert_eq!(
+                group.label(),
+                group.state().words(),
+                "the `{}` row is labelled the way the owner words its state",
+                group.label()
+            );
+        }
     }
 
     #[test]

@@ -498,13 +498,15 @@ impl RepoState {
         }
     }
 
-    /// Conflicts and local edits take precedence over upstream drift.
+    /// Conflicts and local edits take precedence over upstream drift. The rung
+    /// order is unchanged; the ladder now reads as the arithmetic it is, because
+    /// each rung asks one of the predicates below rather than re-deriving it.
     pub fn from_root(root: &turbogit_domain::model::Root, ahead: usize, behind: usize) -> Self {
         if !root.status.conflicted.is_empty() {
             Self::Conflict
-        } else if root.status.modified() + root.status.unversioned() > 0 {
+        } else if Self::is_dirty(&root.status) {
             Self::Dirty
-        } else if ahead > 0 && behind > 0 {
+        } else if Self::is_diverged(ahead, behind) {
             Self::Diverged
         } else if behind > 0 {
             Self::Unpulled
@@ -512,6 +514,85 @@ impl RepoState {
             Self::Unpushed
         } else {
             Self::Clean
+        }
+    }
+
+    /// The ladder's meaning of diverged: **both** histories moved, so the
+    /// repository has genuinely forked. The repository dot, the `diverged` smart
+    /// group and the bulk preflight's gate all mean this — the third rung's
+    /// question, stated once. The loose reading is [`Self::has_drift`].
+    pub fn is_diverged(ahead: usize, behind: usize) -> bool {
+        ahead > 0 && behind > 0
+    }
+
+    /// The loose meaning: **either** side moved, so a repository that is merely
+    /// ahead or merely behind counts too.
+    ///
+    /// Two surfaces ask this question and mean that: the status bar's `diverged`
+    /// counter and a remote branch row's `↑a ↓b` marker. Both therefore count —
+    /// and, the first of them, paint the error red — a repository the dot beside
+    /// it in the rail paints in the ahead green or the counter orange. That is
+    /// preserved on purpose as [`DivergenceMeaning::AnyDrift`] until a human
+    /// ruling moves the call site, not converged here.
+    pub fn has_drift(ahead: usize, behind: usize) -> bool {
+        ahead > 0 || behind > 0
+    }
+
+    /// The ladder's dirty definition, over a root's whole status: modified or
+    /// unversioned work, either count non-zero. The second rung's question,
+    /// stated once.
+    ///
+    /// Defined over a `RootStatus` because that is what the ladder has. A site
+    /// holding only a dirty *number* is not asking for a repository's state and
+    /// keeps its own `> 0` — the multi-selection DIRTY column and the smart
+    /// group's dirty arm are the two — so the owner never grows a count-shaped
+    /// second entry for them.
+    ///
+    /// **A conflicted change entry does not make a tree dirty here**, which is a
+    /// recorded disagreement rather than an oversight: the cherry-across service
+    /// reads `ChangeStatus` and counts anything that is not unversioned or
+    /// ignored, so it calls such a tree dirty and this rule calls it clean. The
+    /// two rules differ in both directions, on three inputs (unversioned-only,
+    /// conflicted-entry-only, ignored-only), and neither is reconciled without a
+    /// ruling. What the ladder does read is `conflicted`, the separate
+    /// conflicted-path list, in its first rung.
+    pub fn is_dirty(status: &turbogit_domain::model::RootStatus) -> bool {
+        status.modified() + status.unversioned() > 0
+    }
+}
+
+/// Which of the tree's two live meanings of "diverged" a caller is asking for.
+///
+/// Both readings ship, and they disagree on exactly the two commonest states of
+/// a multi-root project: a repository with local commits to push, and one with
+/// incoming commits to pull. Each meaning therefore has a name here, so a caller
+/// states which one it wants instead of writing a boolean that silently
+/// contradicts a dot one screen away — and so "which meaning does the status bar
+/// use?" is answerable from a test name.
+///
+/// A Rust identifier inside the module that owns the rule, not a product term:
+/// [`RepoState`], `DotState` and `SmartGroup` are the vocabulary, and nothing is
+/// added to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DivergenceMeaning {
+    /// `ahead > 0 && behind > 0` — both histories moved. The repository dot's
+    /// `Diverged`, the `diverged` smart group, and the bulk preflight's STATUS
+    /// gate.
+    Both,
+    /// `ahead > 0 || behind > 0` — either side moved, a merely-ahead or
+    /// merely-behind repository included. The status bar's `diverged` counter
+    /// and a remote branch row's `↑a ↓b` marker.
+    AnyDrift,
+}
+
+impl DivergenceMeaning {
+    /// Whether one ahead/behind pair counts as diverged under this meaning —
+    /// the two arms' entry into the owner's arithmetic, so a call site reaches
+    /// a rule by naming the reading rather than by spelling the boolean.
+    pub fn is_diverged(self, ahead: usize, behind: usize) -> bool {
+        match self {
+            Self::Both => RepoState::is_diverged(ahead, behind),
+            Self::AnyDrift => RepoState::has_drift(ahead, behind),
         }
     }
 }
@@ -930,4 +1011,249 @@ pub fn font_definitions() -> FontDefinitions {
 /// next pass begin.
 pub fn install_fonts(ctx: &Context) {
     ctx.set_fonts(font_definitions());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DivergenceMeaning, RepoState};
+    use std::path::PathBuf;
+    use turbogit_domain::model::{Change, ChangeStatus, Root, RootId, RootStatus};
+
+    fn change(name: &str, status: ChangeStatus) -> Change {
+        Change {
+            path: PathBuf::from(name),
+            status,
+            chunks: vec![],
+            staged: false,
+            unstaged: false,
+            orig_path: None,
+        }
+    }
+
+    fn status_of(changes: Vec<Change>) -> RootStatus {
+        RootStatus {
+            changes,
+            ..Default::default()
+        }
+    }
+
+    fn root(status: RootStatus) -> Root {
+        Root {
+            id: RootId(PathBuf::from("/w/r").into()),
+            path: PathBuf::from("/w/r"),
+            remotes: vec![],
+            branches: vec![],
+            current_branch: Some("main".to_string()),
+            head: None,
+            status,
+        }
+    }
+
+    // --- The three predicates ---
+
+    #[test]
+    fn both_histories_moved_is_what_the_ladder_calls_diverged() {
+        for (ahead, behind) in [(3, 0), (0, 2), (0, 0)] {
+            assert!(
+                !RepoState::is_diverged(ahead, behind),
+                "one side moved at ({ahead}, {behind}): the repository is unpushed or \
+                 unpulled, not forked"
+            );
+        }
+        assert!(
+            RepoState::is_diverged(2, 1),
+            "both sides moved: this is the state the dot, the smart group and the bulk \
+             gate all mean by diverged"
+        );
+    }
+
+    #[test]
+    fn either_side_moved_is_what_the_loose_meaning_of_diverged_is() {
+        for (ahead, behind) in [(3, 0), (0, 2)] {
+            assert!(
+                RepoState::has_drift(ahead, behind),
+                "one side moved at ({ahead}, {behind}): the status bar counts this and \
+                 the remote row marks it"
+            );
+        }
+        assert!(
+            !RepoState::has_drift(0, 0),
+            "nothing moved: there is no drift to report"
+        );
+    }
+
+    #[test]
+    fn drift_is_never_false_where_both_histories_moved() {
+        for ahead in 0..4usize {
+            for behind in 0..4usize {
+                if RepoState::is_diverged(ahead, behind) {
+                    assert!(
+                        RepoState::has_drift(ahead, behind),
+                        "({ahead}, {behind}) is diverged under the ladder's meaning and \
+                         must also read as drift — the two arms differ exactly on the \
+                         one-sided pairs, nowhere else"
+                    );
+                }
+            }
+        }
+    }
+
+    // --- The two named meanings ---
+
+    #[test]
+    fn divergence_meaning_both_rejects_the_one_sided_pairs_and_accepts_the_two_sided_one() {
+        assert!(!DivergenceMeaning::Both.is_diverged(3, 0));
+        assert!(!DivergenceMeaning::Both.is_diverged(0, 2));
+        assert!(DivergenceMeaning::Both.is_diverged(2, 1));
+    }
+
+    #[test]
+    fn divergence_meaning_any_drift_accepts_both_one_sided_pairs() {
+        assert!(DivergenceMeaning::AnyDrift.is_diverged(3, 0));
+        assert!(DivergenceMeaning::AnyDrift.is_diverged(0, 2));
+        assert!(DivergenceMeaning::AnyDrift.is_diverged(2, 1));
+    }
+
+    #[test]
+    fn is_dirty_is_modified_or_unversioned_work() {
+        assert!(
+            !RepoState::is_dirty(&status_of(vec![])),
+            "an empty worktree is clean"
+        );
+        assert!(
+            RepoState::is_dirty(&status_of(vec![change("a.txt", ChangeStatus::Modified)])),
+            "a modified entry is local work"
+        );
+        assert!(
+            RepoState::is_dirty(&status_of(vec![change("a.txt", ChangeStatus::Unversioned)])),
+            "an unversioned entry alone is dirty here, and clean to the cherry-across \
+             service — the opposite answer, and a recorded one"
+        );
+    }
+
+    #[test]
+    fn is_dirty_is_false_on_a_conflicted_change_entry() {
+        // The disagreement with the services layer is deliberate and pinned at
+        // both ends: `cherry_across::is_dirty` counts a `Conflicted` change entry
+        // and blocks a pick on it, this rule reads the separate `conflicted` path
+        // list and calls the same tree clean. Reconciling the two is a product
+        // question (should an untracked file block a cherry-pick), not a refactor,
+        // so the row stands until a ruling says otherwise.
+        let conflicted_entry = status_of(vec![change("c.txt", ChangeStatus::Conflicted)]);
+        assert!(
+            !RepoState::is_dirty(&conflicted_entry),
+            "a conflicted change *entry* is not local work to the ladder, and it is \
+             blocking to the cherry-across dirty rule — the two rules disagree here \
+             on purpose, and both ends are pinned"
+        );
+    }
+
+    // --- The precedence ladder ---
+
+    /// One row per rung, with a fixture per row. The order here is the
+    /// conflict > dirty > diverged > unpulled > unpushed > clean order
+    /// `from_root` has always had; a row that moves is a rendered change.
+    fn ladder_cases() -> Vec<(&'static str, RootStatus, usize, usize, RepoState)> {
+        let mut conflicted_and_dirty = status_of(vec![change("a.txt", ChangeStatus::Modified)]);
+        conflicted_and_dirty.conflicted = vec![PathBuf::from("c.txt")];
+        let mut conflicted_alone = status_of(vec![]);
+        conflicted_alone.conflicted = vec![PathBuf::from("c.txt")];
+        vec![
+            (
+                "a conflict beats local work, drift and both one-sided states",
+                conflicted_and_dirty,
+                2,
+                1,
+                RepoState::Conflict,
+            ),
+            (
+                "a conflict with no other fault is still a conflict",
+                conflicted_alone,
+                0,
+                0,
+                RepoState::Conflict,
+            ),
+            (
+                "local work beats drift",
+                status_of(vec![change("a.txt", ChangeStatus::Modified)]),
+                2,
+                1,
+                RepoState::Dirty,
+            ),
+            (
+                "an unversioned file alone is dirty work",
+                status_of(vec![change("a.txt", ChangeStatus::Unversioned)]),
+                0,
+                0,
+                RepoState::Dirty,
+            ),
+            (
+                "drift beats the two one-sided states",
+                status_of(vec![]),
+                2,
+                1,
+                RepoState::Diverged,
+            ),
+            (
+                "ahead alone is unpushed",
+                status_of(vec![]),
+                2,
+                0,
+                RepoState::Unpushed,
+            ),
+            (
+                "behind alone is unpulled",
+                status_of(vec![]),
+                0,
+                2,
+                RepoState::Unpulled,
+            ),
+            (
+                "nothing at all is clean",
+                status_of(vec![]),
+                0,
+                0,
+                RepoState::Clean,
+            ),
+        ]
+    }
+
+    #[test]
+    fn from_root_resolves_one_state_per_precedence_rung() {
+        for (case, status, ahead, behind, expected) in ladder_cases() {
+            assert_eq!(
+                RepoState::from_root(&root(status), ahead, behind),
+                expected,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_root_agrees_with_the_predicates_it_is_composed_from() {
+        // The same table, read through the predicates the ladder is built from.
+        // If `from_root` ever stops asking them — and starts re-deriving the
+        // arithmetic inline — the two columns part company here rather than at a
+        // painter.
+        for (case, status, ahead, behind, _) in ladder_cases() {
+            let composed = if !status.conflicted.is_empty() {
+                RepoState::Conflict
+            } else if RepoState::is_dirty(&status) {
+                RepoState::Dirty
+            } else if DivergenceMeaning::Both.is_diverged(ahead, behind) {
+                RepoState::Diverged
+            } else if behind > 0 {
+                RepoState::Unpulled
+            } else if ahead > 0 {
+                RepoState::Unpushed
+            } else {
+                RepoState::Clean
+            };
+            assert_eq!(
+                RepoState::from_root(&root(status.clone()), ahead, behind),
+                composed,
+                "{case}"
+            );
+        }
+    }
 }
