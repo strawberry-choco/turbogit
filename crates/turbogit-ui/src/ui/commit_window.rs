@@ -49,7 +49,7 @@ use turbogit_app::granular;
 use turbogit_app::root_caches::{Affected, StatsView};
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
-use turbogit_domain::model::{Change, ChangeStatus, Root};
+use turbogit_domain::model::{Change, ChangeStatus, DisplayName, Root};
 
 /// Fixed width of the Commit panel (redesign 03, screen 01): the Commit
 /// window is exactly two zones — this fixed-width panel on the left and
@@ -1083,10 +1083,7 @@ fn status_color(status: ChangeStatus) -> Color32 {
 /// it is the furniture around the answer, so it takes the muted step
 /// (conformance issue 10) and never the name's own ink.
 fn row_display(path: &Path) -> (String, Option<String>) {
-    let name = path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
+    let name = path.display_name_lossy_or(&path.display().to_string());
     let location = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -1742,10 +1739,7 @@ fn staged_hunks_rail(ui: &mut Ui, state: &mut AppState) {
             .file(StatsView::Local, Path::new(&f.path))
             .map(|lf| lf.hunks.as_slice())
             .unwrap_or(&[]);
-        let name = Path::new(&f.path)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| f.path.clone());
+        let name = Path::new(&f.path).display_name_lossy_or(&f.path);
         for s in &f.hunks {
             total += 1;
             let part = if hunk_stats::staged_hunk_partial(s, local) {

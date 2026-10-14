@@ -20,7 +20,7 @@ use std::ops::Range;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
 use turbogit_app::state::{AppState, DiffComparison, DiffPane, Granularity};
-use turbogit_domain::model::ChangeStatus;
+use turbogit_domain::model::{ChangeStatus, DisplayName};
 
 // --- entry point -------------------------------------------------------------
 
@@ -1054,10 +1054,7 @@ fn file_header(ui: &mut Ui, state: &mut AppState, path: Option<&std::path::Path>
     };
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-    let label = path.file_name().map_or_else(
-        || path.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    );
+    let label = path.display_name_lossy_or(&path.display().to_string());
     file_row(ui, state, &rect, &label, (0, 0), &mono_font(), false);
 }
 

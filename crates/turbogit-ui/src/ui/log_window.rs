@@ -2404,9 +2404,7 @@ fn file_row(
     let ink = row_name_ink();
     let name = change
         .path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| change.path.to_string_lossy().into_owned());
+        .display_name_lossy_or(&change.path.to_string_lossy());
     let name_galley = elide(&painter, &name, body_font(), ink, text_right - mx);
     painter.galley(Pos2::new(mx, rect.top() + 7.0), name_galley, ink);
 

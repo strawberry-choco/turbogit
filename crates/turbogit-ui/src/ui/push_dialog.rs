@@ -30,7 +30,8 @@ use turbogit_app::operation::PushRequest;
 use turbogit_app::state::{AppState, OutgoingRoot, PushPreview};
 use turbogit_app::sync_service::{self, PushScope, SubsetPushState};
 use turbogit_domain::model::{
-    BranchKind, ChangeStatus, Commit, CommitId, Root, RootId, Signature, SignatureState,
+    BranchKind, ChangeStatus, Commit, CommitId, DisplayName, Root, RootId, Signature,
+    SignatureState,
 };
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
@@ -504,12 +505,7 @@ fn run_preview(state: &mut AppState) {
                         .iter()
                         .any(|b| b.tracking.as_ref().is_some_and(|t| t.remote == remote))
                 })
-                .map(|r| {
-                    r.path
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| r.path.display().to_string())
-                })
+                .map(|r| r.path.display_name_lossy_or(&r.path.display().to_string()))
                 .unwrap_or_else(|| remote.clone());
             (name, res)
         })
@@ -534,10 +530,8 @@ fn ensure_outgoing(state: &mut AppState) {
     let mut out = Vec::with_capacity(results.len());
     let mut selected = Vec::new();
     for (id, res) in results {
-        let name =
-            id.0.file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| id.0.display().to_string());
+        let path = id.as_path();
+        let name = path.display_name_lossy_or(&path.display().to_string());
         let commits = match res {
             Ok(ids) => {
                 let log = state.full_log(&id);
@@ -638,11 +632,7 @@ fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
                 widgets::empty_state(ui, "No repositories to push.");
                 return;
             }
-            let project = state
-                .project_dir
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Project".to_string());
+            let project = state.project_dir.display_name_lossy_or("Project");
             let project_node = format!("{project} (all roots)");
             if ui
                 .selectable_label(state.ui.dlg.push_preview_root.is_none(), &project_node)
