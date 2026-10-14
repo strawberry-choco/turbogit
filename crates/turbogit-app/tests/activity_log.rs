@@ -20,7 +20,12 @@ use turbogit_app::state::AppState;
 
 // No repository `user.*` here, so every commit this fixture makes is pinned per
 // call through the fixture crate's runner: a headless machine has no global
-// identity to borrow.
+// identity to borrow. That includes the whole `plant_merge_conflict` sequence —
+// the first commit here used to pin the author and two variable names git does
+// not have, so on a machine with no global identity it died in fixture
+// construction with `Committer identity unknown` and a diagnostic naming
+// `git must be on PATH`. The merge that plants the conflict needs one too, and
+// takes it the same way rather than borrowing the machine's.
 
 fn commit_readme(repo: &Path) {
     std::fs::write(repo.join("README.md"), "x\n").unwrap();
@@ -129,13 +134,16 @@ fn failed_op_appends_error_entry() {
     );
 }
 
-/// `git` that tolerates failure — used to plant a merge conflict, where the
-/// non-zero exit is the point.
 /// `git` that tolerates failure — used to plant a merge conflict. Deliberately
-/// NOT `test_support::git_seed::git`, which asserts: `plant_merge_conflict`'s
+/// NOT the fixture crate's runner, which asserts: `plant_merge_conflict`'s
 /// `git merge` is *supposed* to be refused.
+///
+/// It takes its identity from the owner's builder, because a merge that *would*
+/// have written a commit needs a committer before git runs its merge machinery:
+/// with none, git refused the merge for the wrong reason and planted no
+/// conflict at all.
 fn git_ok_or_fail(dir: &Path, args: &[&str]) {
-    let _ = Command::new("git").args(args).current_dir(dir).output();
+    let _ = GitEnv::fixture().command(dir, args).output();
 }
 
 /// Put `alpha` into an in-progress merge with one conflicted file, as if a
