@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use test_support::git_seed::git;
+use test_support::git_seed::{git, pin_eol_lf};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_services::integrate_service;
@@ -32,7 +32,7 @@ fn repo_with_feature_branch() -> (PathBuf, String, String) {
     git(&root, &["init", "-q", "-b", "main"]);
     git(&root, &["config", "user.email", "t@t"]);
     git(&root, &["config", "user.name", "t"]);
-    git(&root, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&root);
     let c1 = commit_file(&root, "a.txt", "one\n", "c1");
     let c2 = commit_file(&root, "b.txt", "two\n", "c2 on main");
     git(&root, &["checkout", "-q", "-b", "feature", &c1]);

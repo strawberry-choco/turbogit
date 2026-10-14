@@ -23,7 +23,7 @@ use egui::Vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::NodeT as _;
 use egui_kittest::kittest::Queryable;
-use test_support::git_seed::{commit as git_commit, git};
+use test_support::git_seed::{commit as git_commit, git, pin_eol_lf};
 use test_support::harness::{
     assert_not_painted, assert_painted, painted_text, settle, shell_harness_over,
 };
@@ -46,7 +46,7 @@ fn repo(parent: &Path) -> PathBuf {
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["config", "user.email", "ada@example.com"]);
     git(&dir, &["config", "user.name", "Ada Lovelace"]);
-    git(&dir, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&dir);
     git_commit(&dir, "first.txt", "one\ntwo\nthree\n", "first.txt");
     git_commit(&dir, "second.txt", "alpha\nbeta\n", "second.txt");
     dir

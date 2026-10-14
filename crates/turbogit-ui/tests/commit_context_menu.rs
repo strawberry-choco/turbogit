@@ -658,7 +658,7 @@ mod surface {
     use egui_kittest::Harness;
     use egui_kittest::kittest::{NodeT, Queryable};
     use tempfile::TempDir;
-    use test_support::git_seed::{GitEnv, git_with_env};
+    use test_support::git_seed::{GitEnv, git_with_env, pin_eol_lf};
     use test_support::harness::{
         assert_menu_item_gated, assert_not_painted, assert_painted, filled_rects, painted_galleys,
     };
@@ -741,11 +741,7 @@ mod surface {
         git_with_env(&alpha, &["init", "-q", "-b", "main"], &GitEnv::fixture());
         git_with_env(&alpha, &["config", "user.email", "t@t"], &GitEnv::fixture());
         git_with_env(&alpha, &["config", "user.name", "t"], &GitEnv::fixture());
-        git_with_env(
-            &alpha,
-            &["config", "core.autocrlf", "false"],
-            &GitEnv::fixture(),
-        );
+        pin_eol_lf(&alpha);
         let base = commit_file(&alpha, "base.txt", "base\n", "the base commit", 100);
         let c1 = commit_file(&alpha, "a.txt", "one\n", "alpha: first commit", 200);
         let c2 = commit_file(

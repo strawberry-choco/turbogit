@@ -24,7 +24,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use test_support::git_seed::git;
+use test_support::git_seed::{git, pin_eol_lf};
 use turbogit_domain::model::{
     ChangeStatus, Commit, DiffOpts, LogOpts, Patch, PatchHeaderLine, PatchLineKind, RootId,
     VcsSettings,
@@ -105,7 +105,7 @@ fn run_git_failing(dir: &Path, args: &[&str]) -> String {
 fn configure_identity(repo: &Path) {
     git(repo, &["config", "user.email", "golden@example.com"]);
     git(repo, &["config", "user.name", "Golden Author"]);
-    git(repo, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(repo);
     git(repo, &["config", "diff.noprefix", "false"]);
 }
 

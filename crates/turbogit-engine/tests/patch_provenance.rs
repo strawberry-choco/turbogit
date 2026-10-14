@@ -13,7 +13,7 @@
 //! asserting that this file and the service agree, not that a real patch parses.
 
 use std::path::{Path, PathBuf};
-use test_support::git_seed::{commit as git_commit, git};
+use test_support::git_seed::{commit as git_commit, git, pin_eol_lf};
 use turbogit_engine_api::patch::read_provenance;
 
 fn repo(parent: &Path) -> PathBuf {
@@ -22,7 +22,7 @@ fn repo(parent: &Path) -> PathBuf {
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["config", "user.email", "ada@example.com"]);
     git(&dir, &["config", "user.name", "Ada Lovelace"]);
-    git(&dir, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&dir);
     git_commit(
         &dir,
         "note.txt",

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_support::RecordingExecutor;
-use test_support::git_seed::git;
+use test_support::git_seed::{git, pin_eol_lf};
 use turbogit_app::root_caches::{Affected, file_stat};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, VcsSettings};
@@ -30,7 +30,7 @@ fn seeded_root() -> (TempDir, RootId, PathBuf, String) {
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "cache@example.com"]);
     git(&repo, &["config", "user.name", "Cache Author"]);
-    git(&repo, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&repo);
     std::fs::write(repo.join("a.txt"), "1\n2\n3\n").expect("write a");
     std::fs::write(repo.join("b.txt"), "gone\n").expect("write b");
     git(&repo, &["add", "--", "."]);

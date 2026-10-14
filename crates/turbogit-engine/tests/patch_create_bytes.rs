@@ -13,7 +13,7 @@
 //! them.
 
 use std::path::{Path, PathBuf};
-use test_support::git_seed::{commit as git_commit, git};
+use test_support::git_seed::{commit as git_commit, git, pin_eol_lf};
 use turbogit_domain::model::{PatchOrigin, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -32,7 +32,7 @@ fn repo(parent: &Path) -> PathBuf {
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["config", "user.email", "t@t"]);
     git(&dir, &["config", "user.name", "t"]);
-    git(&dir, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&dir);
     git_commit(&dir, "base.txt", "shared\n", "base");
     git_commit(&dir, "a.txt", "one\ntwo\nthree\n", "first");
     git_commit(&dir, "a.txt", "one\nTWO\nthree\n", "second");

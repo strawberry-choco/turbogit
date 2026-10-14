@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 use tempfile::TempDir;
-use test_support::git_seed::git;
+use test_support::git_seed::{git, pin_eol_lf};
 use turbogit_domain::model::{ChangeQuestion, ChangeStats, VcsSettings};
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
@@ -33,7 +33,7 @@ fn seeded_repo() -> (TempDir, CliExecutor, PathBuf, String, String) {
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["config", "user.email", "stats@example.com"]);
     git(&repo, &["config", "user.name", "Stats Author"]);
-    git(&repo, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&repo);
     git(&repo, &["config", "diff.noprefix", "false"]);
 
     std::fs::write(repo.join("notes.txt"), "a\nb\nc\n").expect("write notes");

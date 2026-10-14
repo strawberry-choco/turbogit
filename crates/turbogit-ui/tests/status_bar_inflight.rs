@@ -33,7 +33,7 @@ use egui::{Color32, Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use tempfile::TempDir;
-use test_support::git_seed::{GitEnv, git_with_env};
+use test_support::git_seed::{GitEnv, git_with_env, pin_eol_lf};
 use test_support::harness::{filled_rects, painted_galleys, settle, shell_harness_over_animated};
 use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::state::{AppState, Tab};
@@ -112,11 +112,7 @@ fn repo(parent: &Path, name: &str) -> PathBuf {
     git_with_env(&dir, &["init", "-q", "-b", "main"], &GitEnv::fixture());
     git_with_env(&dir, &["config", "user.email", "t@t"], &GitEnv::fixture());
     git_with_env(&dir, &["config", "user.name", "t"], &GitEnv::fixture());
-    git_with_env(
-        &dir,
-        &["config", "core.autocrlf", "false"],
-        &GitEnv::fixture(),
-    );
+    pin_eol_lf(&dir);
     write_commit(&dir, "base.txt", "base\n", "the base commit");
     write_commit(&dir, "a.txt", "one\n", &format!("{name} 1"));
     dir
