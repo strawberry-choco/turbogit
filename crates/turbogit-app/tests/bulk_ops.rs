@@ -220,3 +220,67 @@ fn run_bulk_confirmed_reports_partial_failure_in_the_summary() {
     );
     assert_eq!(msg, "Push all · 1 of 2 ok · failed: ui");
 }
+
+/// A root whose directory name is not valid UTF-8 has no name to print, so the
+/// summary's `filter_map` drops it from the `failed:` list — and the toast goes
+/// on to say "1 of 3 ok · failed: ui" while **two** repositories failed. The
+/// third is not in the string at all.
+///
+/// This is a characterization pin, not an approval: showing the unnamed root
+/// under a placeholder — or giving a missing name a wording of its own — is a
+/// human ruling still owed, and this assertion is written to **fail** the
+/// moment somebody makes the summary name it, because that failure is where the
+/// ruling lands. In the same edit, update the `filter_map` over failed roots'
+/// names in `state::bulk_report_message` (which today asks the display-name
+/// owner for a *presence* and drops the `None`) and the doc comment on it,
+/// which names this loss. Both lines change together or this suite goes red
+/// with no other signal.
+#[test]
+fn a_failed_root_with_no_utf8_name_is_missing_from_the_summary() {
+    let ok_root = turbogit_domain::model::RootId(PathBuf::from("/w/api").into());
+    let named_failure = turbogit_domain::model::RootId(PathBuf::from("/w/ui").into());
+    let unnamed_failure = turbogit_domain::model::RootId(non_utf8_root().into());
+
+    let msg = turbogit_app::state::bulk_report_message(
+        "Push all",
+        &[
+            (ok_root, Ok(())),
+            (
+                named_failure,
+                Err(turbogit_domain::error::TgError::Other("rejected".into())),
+            ),
+            (
+                unnamed_failure,
+                Err(turbogit_domain::error::TgError::Other("rejected".into())),
+            ),
+        ],
+    );
+
+    assert_eq!(
+        msg, "Push all · 1 of 3 ok · failed: ui",
+        "two roots failed and only one of them is named: the root with a \
+         non-UTF-8 directory name has no name to print, so it is absent \
+         rather than shown under a placeholder"
+    );
+}
+
+/// A root path whose final component is not valid UTF-8, built from raw bytes on
+/// the platform's `OsStr` extension — a string literal cannot spell the input
+/// this pin is about, because the loss *is* the byte sequence.
+#[cfg(unix)]
+fn non_utf8_root() -> PathBuf {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    PathBuf::from(OsStr::from_bytes(b"/w/bad\xffname"))
+}
+
+/// The same shape on Windows, where an unpaired surrogate is well-formed UTF-16
+/// and not UTF-8.
+#[cfg(windows)]
+fn non_utf8_root() -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt as _;
+
+    PathBuf::from(OsString::from_wide(&[0x5C, 0x77, 0x5C, 0xD800]))
+}
