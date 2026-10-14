@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use test_support::git_seed::{commit, git};
+use test_support::git_seed::{commit, git, pin_eol_lf};
 use turbogit_app::state::AppState;
 use turbogit_app::state::PatchSource;
 use turbogit_domain::model::{PatchCreatedPolicy, ShelfSource, VcsSettings};
@@ -34,6 +34,7 @@ fn repo_at(dir: &Path) -> PathBuf {
     git(dir, &["init", "-q", "-b", "main", dir.to_str().unwrap()]);
     git(dir, &["config", "user.email", "test@example.com"]);
     git(dir, &["config", "user.name", "Test"]);
+    pin_eol_lf(dir);
     commit(dir, "note.txt", "one\n", "Seed the note");
     dir.to_path_buf()
 }

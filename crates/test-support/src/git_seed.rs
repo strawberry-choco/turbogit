@@ -153,6 +153,16 @@ pub fn commit(repo: &Path, path: &str, body: &str, message: &str) {
     git(repo, &["commit", "-q", "-m", message]);
 }
 
+/// Pin the eol policy in `repo`'s own config, so its text checks out as LF on any
+/// machine.
+///
+/// Persisted in the repository rather than passed as a per-invocation
+/// `-c core.autocrlf=false` flag: the engine adapter spawns its own git in the
+/// same repository, and only repository config reaches that second spawn.
+pub fn pin_eol_lf(repo: &Path) {
+    git(repo, &["config", "core.autocrlf", "false"]);
+}
+
 /// A repository `name` on `main` carrying exactly one commit and **no remote**.
 ///
 /// The floor fixture: a suite measuring one git operation wants a repository whose
@@ -167,6 +177,7 @@ pub fn repo_with_one_commit(project: &Path, name: &str) -> PathBuf {
     );
     git(&work, &["config", "user.email", "test@example.com"]);
     git(&work, &["config", "user.name", "Test"]);
+    pin_eol_lf(&work);
     commit(&work, "README.md", "x\n", "init");
     work
 }
