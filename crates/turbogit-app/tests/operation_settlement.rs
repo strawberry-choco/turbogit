@@ -11,10 +11,9 @@
 //! already settled, so a fixture problem cannot masquerade as the bug.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use tempfile::TempDir;
-use test_support::git_seed::{self, commit};
+use test_support::git_seed::{self, GitEnv, commit, git_with_env};
 use turbogit_app::activity::ActivityKind;
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
@@ -25,28 +24,12 @@ use turbogit_domain::model::{
 
 // --- git fixture ---------------------------------------------------------------
 
-/// Run `git <args>` in `dir`, asserting success and discarding stdout.
-///
-/// Kept local because `GIT_EDITOR=true` is load-bearing — every rebase flavour
-/// here is a rewrite, and a rewrite opens an editor unless one is suppressed —
-/// and the per-call identity env is this suite's only identity source.
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .env("GIT_EDITOR", "true")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// The repository recipes configure `user.*`, and the rest of the fixture pins
+// every call on top of it through the fixture crate's runner: a headless machine
+// has no global identity to borrow. The runner this replaced also set
+// `GIT_EDITOR=true`, which no call here needed — every rebase flavour below is
+// dispatched through the app, and the engine's CLI adapter suppresses its own
+// editor; the fixture's own commits go through `commit`, which never opened one.
 
 /// `git rev-parse <rev>` — a full commit id.
 fn rev(dir: &Path, r: &str) -> String {
@@ -73,7 +56,11 @@ fn conflicting_repo() -> (TempDir, PathBuf) {
     commit(&repo, "README.md", "base\n", "A: base");
     let base = rev(&repo, "HEAD");
     commit(&repo, "README.md", "main side\n", "M: main side");
-    git(&repo, &["checkout", "-q", "-b", "feature", &base]);
+    git_with_env(
+        &repo,
+        &["checkout", "-q", "-b", "feature", &base],
+        &GitEnv::fixture(),
+    );
     commit(&repo, "README.md", "feature side\n", "F: feature side");
     (tmp, repo)
 }
@@ -121,12 +108,13 @@ fn repo_with_origin(project: &Path, name: &str) -> PathBuf {
 /// A branch that exists only on `origin`, so the next fetch discovers it.
 fn push_branch_to_origin(project: &Path, name: &str, branch: &str) {
     let work = project.join(name);
-    git(&work, &["branch", branch, "HEAD"]);
-    git(&work, &["push", "-q", "origin", branch]);
-    git(&work, &["branch", "-D", branch]);
-    git(
+    git_with_env(&work, &["branch", branch, "HEAD"], &GitEnv::fixture());
+    git_with_env(&work, &["push", "-q", "origin", branch], &GitEnv::fixture());
+    git_with_env(&work, &["branch", "-D", branch], &GitEnv::fixture());
+    git_with_env(
         &work,
         &["update-ref", "-d", &format!("refs/remotes/origin/{branch}")],
+        &GitEnv::fixture(),
     );
 }
 
@@ -249,7 +237,7 @@ fn a_rebase_whose_label_names_both_sides_still_hands_off() {
 #[test]
 fn a_merge_that_stops_on_conflicts_opens_the_resolver() {
     let (_tmp, repo) = conflicting_repo();
-    git(&repo, &["checkout", "-q", "main"]);
+    git_with_env(&repo, &["checkout", "-q", "main"], &GitEnv::fixture());
     let mut state = AppState::for_roots(repo.parent().unwrap(), std::slice::from_ref(&repo));
     let root = registered_root(&state, &repo);
 
@@ -371,7 +359,13 @@ fn each_operation_kind_settles_to_its_own_report() {
             // protect `main`, and a protected branch refuses before git is
             // touched, which would settle the row as a failure.
             what: "rebase",
-            prepare: |repo| git(repo, &["checkout", "-q", "merged-branch"]),
+            prepare: |repo| {
+                git_with_env(
+                    repo,
+                    &["checkout", "-q", "merged-branch"],
+                    &GitEnv::fixture(),
+                );
+            },
             op: |root, settings| {
                 Operation::rebase_onto(
                     root,
@@ -396,7 +390,7 @@ fn each_operation_kind_settles_to_its_own_report() {
             what: "shelve",
             prepare: |repo| {
                 std::fs::write(repo.join("NOTES.md"), "to shelve\n").unwrap();
-                git(repo, &["add", "."]);
+                git_with_env(repo, &["add", "."], &GitEnv::fixture());
             },
             op: |root, _| Operation::shelve(root.clone(), Vec::new(), "Shelved before sweep"),
             expect: "Shelve",
@@ -431,8 +425,8 @@ fn each_operation_kind_settles_to_its_own_report() {
         // A branch pointing at HEAD: merging or replaying it changes nothing,
         // so every row's expected report is a literal rather than a count that
         // depends on how the fixture happened to land.
-        git(&alpha, &["branch", "merged-branch"]);
-        git(&alpha, &["branch", "spare"]);
+        git_with_env(&alpha, &["branch", "merged-branch"], &GitEnv::fixture());
+        git_with_env(&alpha, &["branch", "spare"], &GitEnv::fixture());
         (row.prepare)(&alpha);
         let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
         let root = registered_root(&state, &alpha);
@@ -539,7 +533,7 @@ fn stale_worktree(repo: &Path, root: &RootId) -> turbogit_domain::model::Worktre
 #[test]
 fn a_deleted_branch_arms_the_undo() {
     let (_tmp, project, alpha) = project_with_origin("alpha");
-    git(&alpha, &["branch", "doomed"]);
+    git_with_env(&alpha, &["branch", "doomed"], &GitEnv::fixture());
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
     let root = registered_root(&state, &alpha);
 

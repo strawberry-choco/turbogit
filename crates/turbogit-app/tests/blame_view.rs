@@ -11,37 +11,24 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use test_support::git_seed::{GitEnv, git_with_env};
 use turbogit_app::keyed_read::Read;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::{AppState, BlameTarget};
 use turbogit_domain::model::BlameLine;
 
-/// A `git` runner pinning the commit identity, not `git_seed::git`, which takes
-/// no per-call env. It covers the `rev-parse` and `add` calls too, and is what
-/// keeps a blame line's author the same on every machine.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// Every call is pinned per call through the fixture crate's runner, including
+// the `rev-parse` and `add` ones: it is the commit that has to be the same
+// author on every machine, or a blame line's author stops being an answer and
+// starts being an accident.
 
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     std::fs::write(dir.join(name), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
-    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git_with_env(dir, &["add", "."], &GitEnv::fixture());
+    git_with_env(dir, &["commit", "-q", "-m", msg], &GitEnv::fixture());
+    git_with_env(dir, &["rev-parse", "HEAD"], &GitEnv::fixture())
+        .trim()
+        .to_string()
 }
 
 /// One repo, two commits on `main`, both touching `a.txt` so its blame
@@ -50,9 +37,9 @@ fn seeded_repo() -> (tempfile::TempDir, PathBuf, String, String) {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("alpha");
     std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["config", "user.email", "t@t"]);
-    git(&repo, &["config", "user.name", "t"]);
+    git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
     let c1 = commit_file(&repo, "a.txt", "one\n", "c1");
     let c2 = commit_file(&repo, "a.txt", "one\ntwo\n", "c2");
     (tmp, repo, c1, c2)

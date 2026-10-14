@@ -10,27 +10,14 @@
 //! and are pinned in `crates/turbogit-ui/src/ui/branches_tree.rs`.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use test_support::git_seed::{GitEnv, git_with_env};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::BranchKind;
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// No repository `user.*` here, so every commit this fixture makes is pinned per
+// call through the fixture crate's runner: a headless machine has no global
+// identity to borrow.
 
 /// A repo on `main` with `a`, `b` and `c`, moved onto in that order **by git
 /// itself** — the fixture never touches the app, which is the point.
@@ -38,18 +25,19 @@ fn three_checkouts() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let work = project.join("work");
-    git(
+    git_with_env(
         &project,
         &["init", "-q", "-b", "main", work.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
     std::fs::write(work.join("README.md"), "x\n").unwrap();
-    git(&work, &["add", "."]);
-    git(&work, &["commit", "-q", "-m", "init"]);
+    git_with_env(&work, &["add", "."], &GitEnv::fixture());
+    git_with_env(&work, &["commit", "-q", "-m", "init"], &GitEnv::fixture());
     for b in ["a", "b", "c"] {
-        git(&work, &["branch", b]);
+        git_with_env(&work, &["branch", b], &GitEnv::fixture());
     }
     for b in ["a", "b", "c"] {
-        git(&work, &["checkout", "-q", b]);
+        git_with_env(&work, &["checkout", "-q", b], &GitEnv::fixture());
     }
     (tmp, work)
 }
@@ -107,9 +95,10 @@ fn a_repository_with_no_commits_yet_warms_to_an_empty_history() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let work = project.join("fresh");
-    git(
+    git_with_env(
         &project,
         &["init", "-q", "-b", "main", work.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
 
     let mut state = AppState::for_roots(&project, std::slice::from_ref(&work));

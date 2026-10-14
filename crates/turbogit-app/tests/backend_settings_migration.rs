@@ -10,33 +10,15 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use test_support::git_seed::{GitEnv, git_with_env};
 use turbogit_app::persistence;
 use turbogit_domain::model::{GitBackend, VcsSettings};
 use turbogit_engine::build_executor;
 
-/// A `git` runner that pins the commit identity on every invocation, and
-/// deliberately NOT `test_support::git_seed::git`, which takes no per-call env:
-/// this fixture's commits carry no repo-local `user.email` / `user.name` of
-/// their own, so without the pin they would commit as whatever the machine's
-/// global git config names.
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// No repository `user.*` here, so every commit this fixture makes is pinned per
+// call through the fixture crate's runner: a headless machine has no global
+// identity to borrow.
 
 /// One repo with a same-content `origin`, plus `feat` pushed there and deleted
 /// locally — so a branch created from `origin/feat` shows which adapter answered.
@@ -44,23 +26,33 @@ fn repo_with_remote_branch() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let bare = project.join("origin.git");
-    git(
+    git_with_env(
         &project,
         &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
     let work = project.join("work");
-    git(
+    git_with_env(
         &project,
         &["init", "-q", "-b", "main", work.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
     std::fs::write(work.join("README.md"), "x\n").unwrap();
-    git(&work, &["add", "."]);
-    git(&work, &["commit", "-q", "-m", "init"]);
-    git(&work, &["remote", "add", "origin", bare.to_str().unwrap()]);
-    git(&work, &["push", "-q", "-u", "origin", "main"]);
-    git(&work, &["branch", "feat", "HEAD"]);
-    git(&work, &["push", "-q", "origin", "feat"]);
-    git(&work, &["branch", "-D", "feat"]);
+    git_with_env(&work, &["add", "."], &GitEnv::fixture());
+    git_with_env(&work, &["commit", "-q", "-m", "init"], &GitEnv::fixture());
+    git_with_env(
+        &work,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+        &GitEnv::fixture(),
+    );
+    git_with_env(
+        &work,
+        &["push", "-q", "-u", "origin", "main"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(&work, &["branch", "feat", "HEAD"], &GitEnv::fixture());
+    git_with_env(&work, &["push", "-q", "origin", "feat"], &GitEnv::fixture());
+    git_with_env(&work, &["branch", "-D", "feat"], &GitEnv::fixture());
     (tmp, work)
 }
 
