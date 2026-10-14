@@ -12,7 +12,7 @@
 //! behaviour rather than on this file's prose.
 
 use std::path::{Path, PathBuf};
-use test_support::git_seed::{commit as git_commit, git};
+use test_support::git_seed::{commit as git_commit, git, pin_eol_lf};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -30,7 +30,7 @@ fn repo(parent: &Path) -> PathBuf {
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["config", "user.email", "t@t"]);
     git(&dir, &["config", "user.name", "t"]);
-    git(&dir, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&dir);
     git_commit(&dir, "note.txt", "one\ntwo\nthree\n", "note.txt");
     git_commit(&dir, "other.txt", "alpha\nbeta\n", "other.txt");
     dir

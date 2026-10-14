@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
-use test_support::git_seed::{GitEnv, git_with_env};
+use test_support::git_seed::{GitEnv, git_with_env, pin_eol_lf};
 use test_support::harness::{assert_not_painted, assert_painted, settle_quiet, shell_harness_over};
 use turbogit_app::state::{AppState, PendingConfirm};
 use turbogit_domain::model::{Change, ChangeStatus};
@@ -42,13 +42,7 @@ fn repo_with_modified_files() -> (TempDir, std::path::PathBuf) {
         &GitEnv::fixture(),
     );
     let alpha = project.join("alpha");
-    // Keep worktree line endings identical to the committed blobs so
-    // post-discard reverts compare byte-for-byte on Windows.
-    git_with_env(
-        &alpha,
-        &["config", "core.autocrlf", "false"],
-        &GitEnv::fixture(),
-    );
+    pin_eol_lf(&alpha);
     for name in ["a.txt", "b.txt", "c.txt"] {
         write(&alpha.join(name), "baseline\n");
     }

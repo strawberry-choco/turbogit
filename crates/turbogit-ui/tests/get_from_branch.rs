@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use egui::{Color32, Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use test_support::git_seed::{commit as git_commit, git};
+use test_support::git_seed::{commit as git_commit, git, pin_eol_lf};
 use test_support::harness::{
     PaintedGalley, filled_rects, painted_galleys, settle, settle_quiet, shell_harness_over,
 };
@@ -50,7 +50,7 @@ fn repo(parent: &Path) -> PathBuf {
     git(&dir, &["init", "-q", "-b", "main"]);
     git(&dir, &["config", "user.email", "t@t"]);
     git(&dir, &["config", "user.name", "t"]);
-    git(&dir, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&dir);
     git_commit(
         &dir,
         "base.txt",

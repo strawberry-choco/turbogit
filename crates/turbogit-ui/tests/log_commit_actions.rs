@@ -17,7 +17,7 @@ use std::time::Duration;
 use egui_kittest::kittest::NodeT as _;
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
-use test_support::git_seed::{commit, git};
+use test_support::git_seed::{commit, git, pin_eol_lf};
 use test_support::harness::{
     assert_menu_item_gated, assert_not_painted, assert_painted, click_menu_item, filled_rects,
     painted_galleys, right_click_row, settle_quiet, shell_harness_over,
@@ -69,7 +69,7 @@ fn seeded_repo() -> Seed {
     git(&alpha, &["init", "-q", "-b", "main"]);
     git(&alpha, &["config", "user.email", "t@t"]);
     git(&alpha, &["config", "user.name", "t"]);
-    git(&alpha, &["config", "core.autocrlf", "false"]);
+    pin_eol_lf(&alpha);
     let c1 = commit_file(&alpha, "a.txt", "one\n", "alpha: first commit");
     let c2 = commit_file(&alpha, "b.txt", "two\n", "alpha: second commit");
     git(&alpha, &["checkout", "-q", "-b", "feature", &c1]);

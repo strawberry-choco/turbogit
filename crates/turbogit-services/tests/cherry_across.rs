@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use test_support::git_seed::{GitEnv, git_with_env};
+use test_support::git_seed::{GitEnv, git_with_env, pin_eol_lf};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -36,14 +36,7 @@ fn init_repo(dir: &Path) {
     git_with_env(dir, &["init", "-q", "-b", "main"], &GitEnv::fixture());
     git_with_env(dir, &["config", "user.email", "t@t"], &GitEnv::fixture());
     git_with_env(dir, &["config", "user.name", "t"], &GitEnv::fixture());
-    // Keep worktree line endings identical to the committed blobs so
-    // checkout/apply comparisons are byte-for-byte (defaults on Git-for-
-    // Windows turn on core.autocrlf and rewrite LF to CRLF).
-    git_with_env(
-        dir,
-        &["config", "core.autocrlf", "false"],
-        &GitEnv::fixture(),
-    );
+    pin_eol_lf(dir);
 }
 
 /// A project with a source repo `alpha` (commits c1..c3 on main) and a
