@@ -15,32 +15,17 @@ use std::time::Duration;
 
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{assert_not_painted, assert_painted, settle_quiet, shell_harness_over};
 use turbogit_app::state::{AppState, PendingConfirm};
 use turbogit_domain::model::{Change, ChangeStatus};
 
 // --- git fixture ---------------------------------------------------------------
 
-/// Run `git <args>` in `dir`, panicking on failure.
-///
-/// Stays local for the `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` it sets on every
-/// `Command`: `git_seed::git` cannot express per-call env, and
-/// `repo_with_modified_files` configures no `user.*`, so those are the only
-/// author identity its `init` commit has.
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// No repository `user.*` here, so every call is pinned per call through the
+// fixture crate's runner, author AND committer: a headless machine has no global
+// identity to borrow, and this suite used to pin only the author, so its `init`
+// commit died here with `Committer identity unknown`.
 
 fn write(path: &Path, body: &str) {
     std::fs::write(path, body).unwrap();
@@ -51,19 +36,24 @@ fn write(path: &Path, body: &str) {
 fn repo_with_modified_files() -> (TempDir, std::path::PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    git(
+    git_with_env(
         &project,
         &["-c", "init.defaultBranch=main", "init", "alpha"],
+        &GitEnv::fixture(),
     );
     let alpha = project.join("alpha");
     // Keep worktree line endings identical to the committed blobs so
     // post-discard reverts compare byte-for-byte on Windows.
-    git(&alpha, &["config", "core.autocrlf", "false"]);
+    git_with_env(
+        &alpha,
+        &["config", "core.autocrlf", "false"],
+        &GitEnv::fixture(),
+    );
     for name in ["a.txt", "b.txt", "c.txt"] {
         write(&alpha.join(name), "baseline\n");
     }
-    git(&alpha, &["add", "."]);
-    git(&alpha, &["commit", "-m", "init"]);
+    git_with_env(&alpha, &["add", "."], &GitEnv::fixture());
+    git_with_env(&alpha, &["commit", "-m", "init"], &GitEnv::fixture());
     for name in ["a.txt", "b.txt", "c.txt"] {
         write(&alpha.join(name), "modified\n");
     }

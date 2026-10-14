@@ -17,9 +17,9 @@ use egui::epaint::ColorMode;
 use egui::{Color32, Pos2, Rect, Shape, Vec2};
 use egui_kittest::{Harness, kittest::Queryable as _};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_text, settle_quiet,
     shell_harness_over,
@@ -30,33 +30,15 @@ use turbogit_ui::ui::popups::Action;
 
 // --- git fixture ---------------------------------------------------------------
 
-/// Run `git <args>` in `dir`, panicking on failure. Identity comes from env so
-/// no per-repo config calls are needed.
-///
-/// Not `git_seed::git`, which takes no per-call env: `repo_project` below writes
-/// no `user.*` into its repository, so this env is the only identity the
-/// fixture's commits carry, and the confirm-dialog rows carry the author line.
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// `repo_project` below writes no `user.*` into its repository, so the pinned
+// identity is the only one the fixture's commits carry, and the confirm-dialog
+// rows carry the author line: every call is pinned per call through the fixture
+// crate's runner, because a headless machine has no global identity to borrow.
 
 fn commit_readme(repo: &Path) {
     std::fs::write(repo.join("README.md"), "x\n").unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-m", "init"]);
+    git_with_env(repo, &["add", "."], &GitEnv::fixture());
+    git_with_env(repo, &["commit", "-m", "init"], &GitEnv::fixture());
 }
 
 /// A project dir holding one real repo `alpha` on `main` with local branches
@@ -64,14 +46,15 @@ fn commit_readme(repo: &Path) {
 fn repo_project() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
-    git(
+    git_with_env(
         &project,
         &["-c", "init.defaultBranch=main", "init", "alpha"],
+        &GitEnv::fixture(),
     );
     let alpha = project.join("alpha");
     commit_readme(&alpha);
-    git(&alpha, &["branch", "feature-a"]);
-    git(&alpha, &["branch", "feature-b"]);
+    git_with_env(&alpha, &["branch", "feature-a"], &GitEnv::fixture());
+    git_with_env(&alpha, &["branch", "feature-b"], &GitEnv::fixture());
     (tmp, project)
 }
 
