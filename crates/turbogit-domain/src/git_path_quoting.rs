@@ -179,3 +179,13 @@ pub fn unescape_c(s: &str) -> String {
 pub fn find_quote_c(s: &str) -> Option<usize> {
     find_quote(s.as_bytes())
 }
+
+/// git's quoted spelling of a path under `trigger`, or the path itself when no
+/// byte of it forces quoting — the **Patch value**'s writer's entry.
+pub fn quote_c(path: &str, trigger: QuoteTrigger) -> String {
+    if needs_quote(path.as_bytes(), trigger) {
+        format!("\"{}\"", escape_c(path))
+    } else {
+        path.to_string()
+    }
+}

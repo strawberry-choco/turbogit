@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::git_path_quoting::{QuoteTrigger, quote_c};
+
 /// Identity of a git repository root: its absolute path.
 ///
 /// The path is shared through an [`Arc`] so the dozens of identity clones per
@@ -1470,7 +1472,10 @@ impl PatchFile {
     /// **combined** section carries.
     pub fn section_header_line(&self) -> String {
         if self.combined {
-            return format!("diff --cc {}", quote_path(&self.new_path));
+            return format!(
+                "diff --cc {}",
+                quote_c(&self.new_path, QuoteTrigger::GitSpelling)
+            );
         }
         format!(
             "diff --git {} {}",
@@ -1498,10 +1503,16 @@ impl PatchHeaderLine {
                 vec![format!("similarity index {percent}%")]
             }
             PatchHeaderLine::RenameFrom { path } => {
-                vec![format!("rename from {}", quote_path(path))]
+                vec![format!(
+                    "rename from {}",
+                    quote_c(path, QuoteTrigger::GitSpelling)
+                )]
             }
             PatchHeaderLine::RenameTo { path } => {
-                vec![format!("rename to {}", quote_path(path))]
+                vec![format!(
+                    "rename to {}",
+                    quote_c(path, QuoteTrigger::GitSpelling)
+                )]
             }
             PatchHeaderLine::NewFile { mode } => vec![format!("new file mode {mode}")],
             PatchHeaderLine::DeletedFile { mode } => vec![format!("deleted file mode {mode}")],
@@ -1554,39 +1565,7 @@ fn quote_side(side: &str) -> String {
     if side == "/dev/null" {
         return side.to_string();
     }
-    quote_path(side)
-}
-
-fn quote_path(path: &str) -> String {
-    if needs_quote(path) {
-        format!("\"{}\"", escape_c(path))
-    } else {
-        path.to_string()
-    }
-}
-
-/// git's `quote_c_style` trigger: a control byte, a non-ASCII byte, or one of
-/// the two characters the quoting itself uses. A plain space is **not** on the
-/// list, which is why a path with a space reaches the reader unquoted.
-fn needs_quote(s: &str) -> bool {
-    s.bytes()
-        .any(|b| !(0x20..0x7f).contains(&b) || matches!(b, b'"' | b'\\'))
-}
-
-fn escape_c(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for b in s.bytes() {
-        match b {
-            b'"' => out.push_str("\\\""),
-            b'\\' => out.push_str("\\\\"),
-            b'\t' => out.push_str("\\t"),
-            b'\n' => out.push_str("\\n"),
-            b'\r' => out.push_str("\\r"),
-            0x20..=0x7e => out.push(b as char),
-            _ => out.push_str(&format!("\\{b:03o}")),
-        }
-    }
-    out
+    quote_c(side, QuoteTrigger::GitSpelling)
 }
 
 impl std::fmt::Display for Patch {
