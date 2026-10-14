@@ -10,49 +10,40 @@
 
 use std::path::{Path, PathBuf};
 
+use test_support::git_seed::{GitEnv, git_with_env};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::cherry_across;
 
-/// A `git` runner that pins the commit identity on every invocation, and
-/// deliberately NOT `test_support::git_seed::git`, which takes no per-call env:
-/// the two repos this suite compares must agree on identity for a forecast to be
-/// about content rather than authorship.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// The two repos this suite compares must agree on identity for a forecast to be
+// about content rather than authorship, so every call is pinned per call through
+// the fixture crate's runner: a headless machine has no global identity to
+// borrow, and two repos that borrowed different ones would disagree about
+// authorship instead of about content.
 
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     std::fs::write(dir.join(name), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
-    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git_with_env(dir, &["add", "."], &GitEnv::fixture());
+    git_with_env(dir, &["commit", "-q", "-m", msg], &GitEnv::fixture());
+    git_with_env(dir, &["rev-parse", "HEAD"], &GitEnv::fixture())
+        .trim()
+        .to_string()
 }
 
 fn init_repo(dir: &Path) {
     std::fs::create_dir_all(dir).unwrap();
-    git(dir, &["init", "-q", "-b", "main"]);
-    git(dir, &["config", "user.email", "t@t"]);
-    git(dir, &["config", "user.name", "t"]);
+    git_with_env(dir, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(dir, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(dir, &["config", "user.name", "t"], &GitEnv::fixture());
     // Keep worktree line endings identical to the committed blobs so
     // checkout/apply comparisons are byte-for-byte (defaults on Git-for-
     // Windows turn on core.autocrlf and rewrite LF to CRLF).
-    git(dir, &["config", "core.autocrlf", "false"]);
+    git_with_env(
+        dir,
+        &["config", "core.autocrlf", "false"],
+        &GitEnv::fixture(),
+    );
 }
 
 /// A project with a source repo `alpha` (commits c1..c3 on main) and a
@@ -77,10 +68,14 @@ fn engine() -> CliExecutor {
 }
 
 fn subjects(root: &Path) -> Vec<String> {
-    git(root, &["log", "--format=%s", "--reverse"])
-        .lines()
-        .map(str::to_string)
-        .collect()
+    git_with_env(
+        root,
+        &["log", "--format=%s", "--reverse"],
+        &GitEnv::fixture(),
+    )
+    .lines()
+    .map(str::to_string)
+    .collect()
 }
 
 // --- apply_to_root --------------------------------------------------------------

@@ -8,8 +8,8 @@
 //! stay in parity.
 
 use std::path::Path;
-use std::process::Command;
 
+use test_support::git_seed::{GitEnv, GitIdent, git_with_env};
 use turbogit_domain::model::{BranchKind, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::git2_exec::Git2Executor;
@@ -17,46 +17,39 @@ use turbogit_engine_api::GitExecutor;
 
 const EPOCH: i64 = 1_700_000_000;
 
-// `git`, `commit` and `tip_repo` all stay local because `git_seed::git` takes no
-// per-call environment, and this file's runner needs it twice over: an author
-// (`ada`) that differs from the committer (`comm`) — no single `git config
-// user.*` can stand in — and a per-call `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`
-// pin, without which the asserted `old_tip.time.timestamp() == EPOCH` would be
-// asserting nothing.
+// Every call, `commit` and `tip_repo` included, goes through the fixture crate's
+// runner under one identity value: an author (`ada`) that differs from the
+// committer (`comm`) — no single `git config user.*` can stand in — and, on the
+// commits that take an epoch, a per-call date pin, without which the asserted
+// `old_tip.time.timestamp() == EPOCH` would assert nothing.
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "ada")
-        .env("GIT_AUTHOR_EMAIL", "ada@example")
-        .env("GIT_COMMITTER_NAME", "comm")
-        .env("GIT_COMMITTER_EMAIL", "comm@example")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
+/// What every call in this file commits as. Carried as a value rather than four
+/// literals because the difference between the two roles is the property under
+/// test here.
+fn ident() -> GitEnv {
+    GitEnv {
+        author: GitIdent {
+            name: "ada",
+            email: "ada@example",
+        },
+        committer: GitIdent {
+            name: "comm",
+            email: "comm@example",
+        },
+        author_date: None,
+        committer_date: None,
+    }
 }
 
 fn commit(repo: &Path, msg: &str, file: &str, epoch: Option<i64>) {
     std::fs::write(repo.join(file), format!("{msg}\n")).unwrap();
-    git(repo, &["add", "."]);
-    let mut cmd = Command::new("git");
-    cmd.args(["commit", "-q", "-m", msg])
-        .env("GIT_AUTHOR_NAME", "ada")
-        .env("GIT_AUTHOR_EMAIL", "ada@example")
-        .env("GIT_COMMITTER_NAME", "comm")
-        .env("GIT_COMMITTER_EMAIL", "comm@example")
-        .current_dir(repo);
+    git_with_env(repo, &["add", "."], &ident());
+    let mut env = ident();
     if let Some(e) = epoch {
-        cmd.env("GIT_AUTHOR_DATE", format!("@{e} +0000"))
-            .env("GIT_COMMITTER_DATE", format!("@{e} +0000"));
+        env.author_date = Some(format!("@{e} +0000"));
+        env.committer_date = Some(format!("@{e} +0000"));
     }
-    assert!(cmd.output().expect("commit").status.success());
+    git_with_env(repo, &["commit", "-q", "-m", msg], &env);
 }
 
 /// A repo on `main`: the pinned multi-line commit `# first topic`, branch
@@ -65,21 +58,33 @@ fn commit(repo: &Path, msg: &str, file: &str, epoch: Option<i64>) {
 fn tip_repo() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("r");
-    git(tmp.path(), &["-c", "init.defaultBranch=main", "init", "r"]);
+    git_with_env(
+        tmp.path(),
+        &["-c", "init.defaultBranch=main", "init", "r"],
+        &ident(),
+    );
     commit(
         &repo,
         "# first topic\n\nlonger body line",
         "a.txt",
         Some(EPOCH),
     );
-    git(&repo, &["branch", "old"]);
+    git_with_env(&repo, &["branch", "old"], &ident());
     commit(&repo, "second topic", "b.txt", None);
 
-    git(tmp.path(), &["clone", "--bare", "r", "origin.git"]);
-    git(&repo, &["remote", "add", "origin", "../origin.git"]);
-    git(&repo, &["push", "-q", "origin", "main"]);
-    git(&repo, &["push", "-q", "origin", "old"]);
-    git(&repo, &["fetch", "-q", "origin"]);
+    git_with_env(
+        tmp.path(),
+        &["clone", "--bare", "r", "origin.git"],
+        &ident(),
+    );
+    git_with_env(
+        &repo,
+        &["remote", "add", "origin", "../origin.git"],
+        &ident(),
+    );
+    git_with_env(&repo, &["push", "-q", "origin", "main"], &ident());
+    git_with_env(&repo, &["push", "-q", "origin", "old"], &ident());
+    git_with_env(&repo, &["fetch", "-q", "origin"], &ident());
     tmp
 }
 
@@ -124,7 +129,7 @@ fn tip_commit_attached_to_local_and_remote_rows_on_both_backends() {
             .find(|b| b.kind == BranchKind::Local && b.name == "main")
             .unwrap();
         let tip = main.tip.as_ref().unwrap();
-        let short = git(&repo, &["rev-parse", "--short", "HEAD"])
+        let short = git_with_env(&repo, &["rev-parse", "--short", "HEAD"], &ident())
             .trim()
             .to_string();
         assert_eq!(
