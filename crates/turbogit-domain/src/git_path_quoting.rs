@@ -34,6 +34,23 @@
 //! not a special case in any scan — until that ruling lands. Making the space
 //! trigger uniform in either direction is a second ruling on the same question:
 //! which artifact is authoritative.
+//!
+//! # The byte level is the grammar; the `String` level is a boundary
+//!
+//! Each piece below has exactly one implementation, over `&[u8]`; the `&str`
+//! entries delegate to it and add a conversion and nothing else. The byte level is
+//! the grammar because a patch is bytes on the wire and `ADR-0013` holds a
+//! rewritten header line to the byte — a non-UTF-8 name must survive as itself,
+//! never as replacement characters.
+//!
+//! The `String` entries carry one deliberate lossiness, `from_utf8_lossy` over
+//! octal-produced bytes, because that is what a `&str` reader has always been
+//! handed. It is a property of that interface, not of the grammar: the byte entry
+//! beside it is exact.
+//!
+//! There is deliberately **no `&str` quote-trigger predicate**: the value's
+//! writer reaches [`needs_quote`] only through its quote-and-escape entry, so a
+//! second `&str` entry would be an interface nobody calls.
 
 /// Which spelling of git's quoting a caller writes.
 ///
@@ -70,4 +87,95 @@ impl QuoteTrigger {
 /// Whether any byte of `path` forces quoting under `trigger`.
 pub fn needs_quote(path: &[u8], trigger: QuoteTrigger) -> bool {
     path.iter().any(|&b| trigger.forces(b))
+}
+
+/// git's C-style quoting of a path, byte for byte — the header rewriter's entry.
+pub fn escape(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + 4);
+    for &b in bytes {
+        match b {
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b' '..=b'~' => out.push(b),
+            // Three octal digits, one per byte: that is how a non-ASCII name comes
+            // back from a reader as itself rather than as Latin-1 mojibake.
+            other => out.extend_from_slice(format!("\\{other:03o}").as_bytes()),
+        }
+    }
+    out
+}
+
+/// git's C-style quoting undone, byte for byte — the header rewriter's entry.
+pub fn unescape(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'\\' {
+            out.push(bytes[at]);
+            at += 1;
+            continue;
+        }
+        at += 1;
+        let Some(&esc) = bytes.get(at) else { break };
+        at += 1;
+        match esc {
+            b'"' => out.push(b'"'),
+            b'\\' => out.push(b'\\'),
+            b't' => out.push(b'\t'),
+            b'n' => out.push(b'\n'),
+            b'r' => out.push(b'\r'),
+            d @ b'0'..=b'7' => {
+                let mut byte = d - b'0';
+                for _ in 0..2 {
+                    if matches!(bytes.get(at), Some(b'0'..=b'7')) {
+                        byte = byte * 8 + (bytes[at] - b'0');
+                        at += 1;
+                    } else {
+                        break;
+                    }
+                }
+                out.push(byte);
+            }
+            // git writes no other escape, but a name it did not write is still a
+            // name: the introducer goes and the byte it introduced stays.
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The index of the quote that ends a quoted token, or `None` if the token runs
+/// to the end of the bytes.
+pub fn find_quote(bytes: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'"' => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// git's C-style quoting of a path as text — the **Patch value**'s writer's entry.
+///
+/// The conversion is lossless by construction: [`escape`] turns every byte outside
+/// printable ASCII into an escape, so nothing else can reach it.
+pub fn escape_c(s: &str) -> String {
+    String::from_utf8(escape(s.as_bytes())).expect("escaped text is printable ASCII")
+}
+
+/// git's C-style quoting undone for a `&str` reader, which is handed one lossy
+/// conversion — the exact bytes are [`unescape`]'s to give.
+pub fn unescape_c(s: &str) -> String {
+    String::from_utf8_lossy(&unescape(s.as_bytes())).into_owned()
+}
+
+/// [`find_quote`] over the bytes of a `&str` — the port reader's entry.
+pub fn find_quote_c(s: &str) -> Option<usize> {
+    find_quote(s.as_bytes())
 }
