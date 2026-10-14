@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use test_support::git_seed::{commit, git};
+use test_support::git_seed::{commit, git, pin_eol_lf};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{RootId, Shelf, ShelfSource};
 use turbogit_services::shelve_stash;
@@ -23,6 +23,7 @@ fn repo_at(dir: &Path) -> PathBuf {
     git(dir, &["init", "-q", "-b", "main", dir.to_str().unwrap()]);
     git(dir, &["config", "user.email", "test@example.com"]);
     git(dir, &["config", "user.name", "Test"]);
+    pin_eol_lf(dir);
     commit(dir, "base.txt", "base\n", "init");
     dir.to_path_buf()
 }

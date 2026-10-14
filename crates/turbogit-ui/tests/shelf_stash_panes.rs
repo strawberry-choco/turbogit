@@ -34,7 +34,7 @@
 
 use egui_kittest::{Harness, kittest::Queryable};
 use std::path::{Path, PathBuf};
-use test_support::git_seed::git;
+use test_support::git_seed::{git, pin_eol_lf};
 use test_support::harness::{
     assert_not_painted, filled_rects, galley_origin, painted_galleys, shell_harness_over_unstyled,
 };
@@ -51,6 +51,7 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     git(&path, &["init", "-q"]);
     git(&path, &["config", "user.email", "test@example.com"]);
     git(&path, &["config", "user.name", "Test"]);
+    pin_eol_lf(&path);
     std::fs::write(path.join("base.txt"), "base\n").unwrap();
     git(&path, &["add", "."]);
     git(&path, &["commit", "-q", "-m", "init"]);

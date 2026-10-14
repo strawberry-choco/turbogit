@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use test_support::git_seed::{commit, git};
+use test_support::git_seed::{commit, git, pin_eol_lf};
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{Change, ChangeStatus, RootId, Shelf, ShelfSource};
 use turbogit_services::shelve_stash::{self, shelf_path};
@@ -32,6 +32,7 @@ fn project_that_is_a_repo() -> TempDir {
         &["config", "user.email", "test@example.com"],
     );
     git(project.path(), &["config", "user.name", "Test"]);
+    pin_eol_lf(project.path());
     commit(project.path(), "README.md", "x\n", "init");
     project
 }
