@@ -21,7 +21,7 @@
 use crate::theme::Palette;
 use crate::ui::components::{self, KitButton};
 use crate::ui::conflicts::{
-    CHOICE_BOTH_OURS_FIRST, CHOICE_BOTH_THEIRS_FIRST, CHOICE_OURS, CHOICE_THEIRS, compose,
+    CHOICE_BOTH_THEIRS_FIRST, CHOICE_OURS, CHOICE_THEIRS, compose, resolved_block_text,
     seed_conflict_state,
 };
 use crate::ui::kit::conflict_pane::{self, Side};
@@ -89,15 +89,7 @@ fn conflict_block(
         if active {
             result_text_edit(&mut cols[1], state);
         } else {
-            // Choice interpretation stays resolver-owned; only the inactive
-            // read-only path allocates text for the shared presentation kit.
-            let result_text = match chosen {
-                Some(CHOICE_THEIRS) => Some(theirs.to_owned()),
-                Some(CHOICE_BOTH_OURS_FIRST) => Some(format!("{ours}{theirs}")),
-                Some(CHOICE_BOTH_THEIRS_FIRST) => Some(format!("{theirs}{ours}")),
-                Some(_) => Some(ours.to_owned()),
-                None => None,
-            };
+            let result_text = chosen.and_then(|choice| resolved_block_text(ours, theirs, choice));
             conflict_pane::result_cell(&mut cols[1], result_text);
         }
         if chosen != Some(CHOICE_OURS) {

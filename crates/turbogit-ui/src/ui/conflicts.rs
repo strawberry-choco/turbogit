@@ -57,14 +57,32 @@ pub(crate) fn merge_editor_segments(
     parse_conflicts(content)
 }
 
-/// Per-conflict resolution choice, as `compose_impl` interprets it and as
-/// both surfaces' read-only Result composition does. Spelled raw inside this
-/// module's own matches; the resolver, which carries no raw spelling of its
+/// Per-conflict resolution choice, as `resolved_block_text` interprets it and
+/// as both surfaces' read-only Result composition does. Spelled raw inside
+/// this module's own match; the resolver, which carries no raw spelling of its
 /// own, imports these names.
 pub(crate) const CHOICE_OURS: u8 = 0;
 pub(crate) const CHOICE_THEIRS: u8 = 1;
 pub(crate) const CHOICE_BOTH_OURS_FIRST: u8 = 2; // existing "Ignore"
 pub(crate) const CHOICE_BOTH_THEIRS_FIRST: u8 = 3; // "Take both · theirs first" (issue #22)
+
+/// The text one resolved conflict block shows for `choice` — the single owner
+/// of the mapping the composer and both read-only Result previews share.
+///
+/// The unresolved case is NOT decided here: the caller supplies its own
+/// reading of a `None` (the inline editor's `<< unresolved >>` placeholder,
+/// the resolver's empty cell).
+///
+/// `CHOICE_BOTH_THEIRS_FIRST` reads theirs before ours, deliberately distinct
+/// from `CHOICE_BOTH_OURS_FIRST` (the existing "Ignore" choice) — issue #22.
+pub(crate) fn resolved_block_text(ours: &str, theirs: &str, choice: u8) -> Option<String> {
+    match choice {
+        CHOICE_THEIRS => Some(theirs.to_owned()),
+        CHOICE_BOTH_OURS_FIRST => Some(format!("{ours}{theirs}")),
+        CHOICE_BOTH_THEIRS_FIRST => Some(format!("{theirs}{ours}")),
+        _ => Some(ours.to_owned()),
+    }
+}
 
 /// The opener prologue both conflict surfaces repeat: read the file, build its
 /// segments, and seed `conflict_segs` / `conflict_res` together. Handing back
@@ -127,20 +145,13 @@ fn compose_impl(segs: &[(String, String, bool)], res: &[Option<u8>], placeholder
     for (a, b, is_conf) in segs {
         if *is_conf {
             ci += 1;
-            match res.get(ci - 1).copied().flatten() {
-                Some(1) => out.push_str(b),
-                Some(2) => {
-                    out.push_str(a);
-                    out.push_str(b);
-                }
-                Some(3) => {
-                    // "Take both · theirs first" (issue #22): theirs before
-                    // ours. Distinct from `Some(2)` which is ours-first
-                    // (the existing "Ignore" choice).
-                    out.push_str(b);
-                    out.push_str(a);
-                }
-                Some(_) => out.push_str(a),
+            match res
+                .get(ci - 1)
+                .copied()
+                .flatten()
+                .and_then(|choice| resolved_block_text(a, b, choice))
+            {
+                Some(text) => out.push_str(&text),
                 None => {
                     if placeholder {
                         out.push_str("<< unresolved >>\n");
@@ -283,15 +294,8 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             });
                             // Tinted yours/theirs sections + read-only result.
                             let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
-                            // Keep the legacy ordinal mapping (including Some(3)) at
-                            // the surface; the kit only receives composed visual text.
-                            let result_text = match chosen {
-                                Some(1) => Some(theirs.to_owned()),
-                                Some(2) => Some(format!("{ours}{theirs}")),
-                                Some(3) => Some(format!("{theirs}{ours}")),
-                                Some(_) => Some(ours.to_owned()),
-                                None => None,
-                            };
+                            let result_text =
+                                chosen.and_then(|choice| resolved_block_text(ours, theirs, choice));
                             crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
                                 crate::ui::kit::conflict_pane::side_section(
                                     &mut cols[0],
@@ -360,6 +364,39 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
             });
         if !open {
             state.ui.conflict_open = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rule's one owner, crossed directly at this module's interface: for
+    /// each of the four choices the core returns the block's text, and that
+    /// text is exactly what the composer writes into the composed buffer for
+    /// the same choice.
+    #[test]
+    fn resolved_block_text_matches_the_composer_for_every_choice() {
+        let ours = "OURS\n";
+        let theirs = "THEIRS\n";
+        let segs = vec![(ours.to_string(), theirs.to_string(), true)];
+        for (choice, want) in [
+            (CHOICE_OURS, "OURS\n"),
+            (CHOICE_THEIRS, "THEIRS\n"),
+            (CHOICE_BOTH_OURS_FIRST, "OURS\nTHEIRS\n"),
+            (CHOICE_BOTH_THEIRS_FIRST, "THEIRS\nOURS\n"),
+        ] {
+            assert_eq!(
+                resolved_block_text(ours, theirs, choice).as_deref(),
+                Some(want),
+                "choice {choice}: the core must compose the block's text"
+            );
+            assert_eq!(
+                compose(&segs, &[Some(choice)]),
+                want,
+                "choice {choice}: the composer must write the core's text"
+            );
         }
     }
 }
