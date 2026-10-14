@@ -16,6 +16,7 @@
 //! Lines before the first `diff --git` section (a `git log -p` commit header,
 //! say) are skipped; an empty diff is an empty value, which is an answer.
 
+use turbogit_domain::git_path_quoting::{find_quote_c, unescape_c};
 use turbogit_domain::model::{
     Patch, PatchFile, PatchHeaderLine, PatchHunk, PatchLine, PatchLineKind,
 };
@@ -317,7 +318,7 @@ fn split_hunk_header(after: &str) -> ((usize, usize, usize, usize), Option<Strin
 fn split_git_paths(rest: &str) -> (Option<String>, Option<String>) {
     let rest = rest.trim();
     if let Some(tail) = rest.strip_prefix(Q)
-        && let Some(end) = find_quote(tail)
+        && let Some(end) = find_quote_c(tail)
     {
         let old = side(&rest[..end + 2]);
         let after = rest[end + 2..].trim_start();
@@ -339,61 +340,15 @@ fn side(raw: &str) -> String {
         .to_string()
 }
 
-/// Unescape one quoted-or-plain path as git wrote it in a header line.
+/// Unescape one quoted-or-plain path as git wrote it in a header line. The quote
+/// marker is this reader's business — which header line means what — and the
+/// escaping inside it is the grammar's.
 fn unquote(raw: &str) -> String {
     let raw = raw.trim();
     if let Some(quoted) = raw.strip_prefix(Q).and_then(|b| b.strip_suffix(Q)) {
         return unescape_c(quoted);
     }
     raw.to_string()
-}
-
-fn find_quote(s: &str) -> Option<usize> {
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i += 2,
-            b'"' => return Some(i),
-            _ => i += 1,
-        }
-    }
-    None
-}
-
-/// git's C-style path quoting: `\"`, `\\`, `\t`, `\n`, and octal escapes — one
-/// per **byte**, which is how a non-ASCII name comes back as itself rather than
-/// as Latin-1 mojibake.
-fn unescape_c(s: &str) -> String {
-    let mut out: Vec<u8> = Vec::with_capacity(s.len());
-    let mut bytes = s.bytes().peekable();
-    while let Some(b) = bytes.next() {
-        if b != b'\\' {
-            out.push(b);
-            continue;
-        }
-        match bytes.next() {
-            Some(b'"') => out.push(b'"'),
-            Some(b'\\') => out.push(b'\\'),
-            Some(b't') => out.push(b'\t'),
-            Some(b'n') => out.push(b'\n'),
-            Some(b'r') => out.push(b'\r'),
-            Some(d @ b'0'..=b'7') => {
-                let mut byte = d - b'0';
-                for _ in 0..2 {
-                    if matches!(bytes.peek(), Some(b'0'..=b'7')) {
-                        byte = byte * 8 + (bytes.next().expect("peeked") - b'0');
-                    } else {
-                        break;
-                    }
-                }
-                out.push(byte);
-            }
-            Some(other) => out.push(other),
-            None => {}
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 const Q: char = '"';
