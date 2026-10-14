@@ -20,7 +20,7 @@ use turbogit_app::persistence::BranchesViewOptions;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, Dialog, NewBranchBase, PendingConfirm, Toast};
 use turbogit_app::sync_service::PushScope;
-use turbogit_domain::model::{Branch, BranchKind, Root, RootId, Upstream};
+use turbogit_domain::model::{Branch, BranchKind, RootId, Upstream};
 
 use crate::theme::{Palette, TYPE_CONTROL, chrome_font, data_font};
 use crate::ui::branch_menu::{BranchMenuAction, BranchMenuProps, branch_menu};
@@ -31,50 +31,6 @@ use crate::ui::components::{
 };
 use crate::ui::icons::Icon;
 use crate::ui::widgets;
-
-/// What the list area shows instead of a blank panel (issue 03, §2/§15).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ListState {
-    /// The focused repo has no branch data yet and a scan is in flight.
-    Reading,
-    /// The repo genuinely has no branches: one sentence + one create action.
-    Empty,
-    /// The grouped list renders.
-    Populated,
-}
-
-/// Decide what the list area shows for a focused root (issue 03). Branch data
-/// is warm from repo open. A root with no branch rows and no HEAD commit is
-/// either still being read (busy) or genuinely empty — an unborn current
-/// branch (fresh `git init`) does not count as data.
-pub fn list_state(root: &Root, busy: bool) -> ListState {
-    if !root.branches.is_empty() || root.head.is_some() {
-        ListState::Populated
-    } else if busy {
-        ListState::Reading
-    } else {
-        ListState::Empty
-    }
-}
-
-/// Local-row ordering (design doc §3): the current branch first, then
-/// everything else by most recent tip, ties broken alphabetically.
-pub fn ordered_locals(locals: &[Branch], current: Option<&str>) -> Vec<Branch> {
-    let mut rest: Vec<Branch> = locals
-        .iter()
-        .filter(|b| Some(b.name.as_str()) != current)
-        .cloned()
-        .collect();
-    rest.sort_by(|a, b| {
-        b.last_touched
-            .cmp(&a.last_touched)
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    if let Some(cur) = locals.iter().find(|b| Some(b.name.as_str()) == current) {
-        rest.insert(0, cur.clone());
-    }
-    rest
-}
 
 // --- Issue 04: row state at a glance ------------------------------------------
 
