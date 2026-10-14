@@ -1090,6 +1090,39 @@ mod tests {
         }
     }
 
+    /// The live listing rule, through the builder's public interface: the
+    /// favorite leads, the checked-out branch follows, and the rest sort
+    /// alphabetically. The input is deliberately out of both orders so a
+    /// passes-by-accident sort cannot hide a regression.
+    #[test]
+    fn finalize_orders_favorites_then_active_then_alphabetical() {
+        let repo = root_with(
+            "/alpha",
+            &[
+                local("feature-z", false, 0, 0),
+                local("main", false, 0, 0),
+                local("feature-a", false, 0, 0),
+                local("zebra", true, 0, 0),
+            ],
+            Some("main"),
+            false,
+        );
+        let view = build_branch_view(
+            &[repo],
+            &HashMap::new(),
+            &std::collections::HashMap::new(),
+            &|_| false,
+        );
+        let order: Vec<String> = leaf_labels(&view.repos[0].locals);
+        assert_eq!(
+            order,
+            ["zebra", "main", "feature-a", "feature-z"]
+                .map(|s| s.to_string())
+                .to_vec(),
+            "favorites first, then the active branch, then alphabetical"
+        );
+    }
+
     #[test]
     fn favorites_pin_within_remote_group_when_shown() {
         let mut fav = remote("origin/starred", "origin");

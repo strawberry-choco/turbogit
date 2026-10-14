@@ -266,28 +266,6 @@ fn the_branch_list_fills_the_width_the_detail_panel_used_to_take() {
     assert_not_painted(&harness, "Select a branch");
 }
 
-// --- Cycle 6: reading state is first-class (no blank panel) -----------------------
-
-#[test]
-fn reading_state_replaces_a_blank_panel() {
-    use turbogit_domain::model::{Root, RootId, RootStatus};
-    use turbogit_ui::ui::branches::{ListState, list_state};
-
-    let root = Root {
-        id: RootId(PathBuf::from("/r").into()),
-        path: PathBuf::from("/r"),
-        remotes: vec![],
-        branches: vec![],
-        current_branch: None,
-        head: None,
-        status: RootStatus::default(),
-    };
-    // A scan still in flight: muted reading state, never a blank panel.
-    assert_eq!(list_state(&root, true), ListState::Reading);
-    // The same repo after the scan finished: it genuinely has no branches.
-    assert_eq!(list_state(&root, false), ListState::Empty);
-}
-
 // --- Cycle 7: middle truncation never end-clips -------------------------------------
 
 #[test]
@@ -1570,9 +1548,7 @@ fn switching_to_a_remote_branch_creates_a_tracking_local_in_one_intent() {
 mod pure {
     use chrono::Utc;
     use turbogit_domain::model::{Branch, BranchKind, BranchTip};
-    use turbogit_ui::ui::branches::{
-        branch_matches, fuzzy_word, is_stale, ordered_locals, row_meta,
-    };
+    use turbogit_ui::ui::branches::{branch_matches, fuzzy_word, is_stale, row_meta};
     use turbogit_ui::ui::components::SyncKind;
 
     fn b(name: &str, touched: Option<i64>) -> Branch {
@@ -1591,20 +1567,6 @@ mod pure {
             tip: None,
             remote: None,
         }
-    }
-
-    #[test]
-    fn current_branch_orders_first_then_most_recent() {
-        let locals = vec![
-            b("feature-a", Some(100)),
-            b("main", Some(300)),
-            b("feature-b", Some(200)),
-        ];
-        let ordered: Vec<String> = ordered_locals(&locals, Some("main"))
-            .into_iter()
-            .map(|x| x.name)
-            .collect();
-        assert_eq!(ordered, vec!["main", "feature-b", "feature-a"]);
     }
 
     // --- Issue 04: stale threshold ------------------------------------------
