@@ -370,3 +370,28 @@ fn the_transforms_are_the_public_surface() {
     assert_eq!(PatchEncoding::Utf8WithBom.label(), "UTF-8 with BOM");
     let _ = patch_create::rewrite_paths as fn(&[u8], &Path, &str, usize) -> Vec<u8>;
 }
+
+/// A backslash is **not** one of this rewriter's quote triggers, so a path
+/// carrying one and no space is written raw on a freshly written `diff --git`
+/// line — and that raw backslash reaches `git apply` on a header line whose
+/// reader treats `\` as an escape introducer.
+///
+/// This is a characterization pin, not an approval: quoting backslash paths is a
+/// human ruling still owed, and this assertion is written to **fail** the moment
+/// somebody quotes it, because that failure is where the ruling lands. In the same
+/// edit, update the `HeaderPair` row of the leaf grammar's module doc — which
+/// names the omission as a preserved defect — and note that the escape table's
+/// backslash arm becomes reachable for the one case it exists for.
+#[test]
+fn a_backslash_path_is_written_unquoted_where_gits_own_spelling_would_escape_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = root(tmp.path());
+    let patch = "diff --git a/deep/we\\ird.txt b/deep/we\\ird.txt\n--- a/deep/we\\ird.txt\n+++ b/deep/we\\ird.txt\n";
+
+    let rewritten = String::from_utf8(rewrite_paths(patch.as_bytes(), &root, "", 1)).expect("text");
+
+    assert_eq!(
+        rewritten, "diff --git a/we\\ird.txt b/we\\ird.txt\n--- a/we\\ird.txt\n+++ b/we\\ird.txt\n",
+        "every path was rewritten, and the backslash was written raw and unquoted"
+    );
+}
