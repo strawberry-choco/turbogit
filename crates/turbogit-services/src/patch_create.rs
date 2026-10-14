@@ -33,6 +33,7 @@
 
 use std::path::{Component, Path, PathBuf};
 use turbogit_domain::error::{TgError, TgResult};
+use turbogit_domain::git_path_quoting::{QuoteTrigger, escape, find_quote, needs_quote, unescape};
 use turbogit_domain::model::PatchEncoding;
 
 /// The longest file name [`file_name`] derives from a comment, in bytes, before its
@@ -194,7 +195,8 @@ fn path_field(
     let mut full = marker.to_vec();
     full.extend_from_slice(&rewritten(&logical, base, root, strip));
     let quote = raw.starts_with(b"\"")
-        || (quoting == Quoting::AsNeeded && (needs_quote(&full) || full.is_empty()));
+        || (quoting == Quoting::AsNeeded
+            && (needs_quote(&full, QuoteTrigger::HeaderPair) || full.is_empty()));
     if quote {
         let mut out = Vec::with_capacity(full.len() + 2);
         out.push(b'"');
@@ -520,56 +522,6 @@ fn split_section_paths(rest: &[u8]) -> (Vec<u8>, Vec<u8>) {
     }
 }
 
-fn find_quote(bytes: &[u8]) -> Option<usize> {
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' => i += 2,
-            b'"' => return Some(i),
-            _ => i += 1,
-        }
-    }
-    None
-}
-
-/// git's C-style quoting undone — the same octal-and-escape grammar its reader resolves,
-/// kept byte-exact so a non-UTF-8 name survives a rewrite of the line carrying it.
-fn unescape(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] != b'\\' {
-            out.push(bytes[at]);
-            at += 1;
-            continue;
-        }
-        at += 1;
-        let Some(&esc) = bytes.get(at) else { break };
-        at += 1;
-        match esc {
-            b'n' => out.push(b'\n'),
-            b't' => out.push(b'\t'),
-            b'r' => out.push(b'\r'),
-            b'\\' => out.push(b'\\'),
-            b'"' => out.push(b'"'),
-            d @ b'0'..=b'7' => {
-                let mut value = d - b'0';
-                for _ in 0..2 {
-                    if matches!(bytes.get(at), Some(b'0'..=b'7')) {
-                        value = value * 8 + (bytes[at] - b'0');
-                        at += 1;
-                    } else {
-                        break;
-                    }
-                }
-                out.push(value);
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// A header token's bytes with git's `a/`/`b/` side marker and any quoting removed.
 fn without_side(raw: &[u8], marker: &[u8]) -> Vec<u8> {
     let bare = unquote(raw);
@@ -581,6 +533,8 @@ fn without_side(raw: &[u8], marker: &[u8]) -> Vec<u8> {
 }
 
 /// A quoted header token resolved to its bytes; anything else is already plain.
+/// The quote marker is this reader's business — which header line means what — and
+/// the escaping inside it is the grammar's.
 fn unquote(raw: &[u8]) -> Vec<u8> {
     if let Some(inner) = raw.strip_prefix(b"\"")
         && let Some(inner) = inner.strip_suffix(b"\"")
@@ -588,29 +542,4 @@ fn unquote(raw: &[u8]) -> Vec<u8> {
         return unescape(inner);
     }
     raw.to_vec()
-}
-
-/// The bytes that force quoting on a header line: a space, a quote, or something a line
-/// reader would not treat as part of a path.
-fn needs_quote(path: &[u8]) -> bool {
-    path.iter().any(|b| *b == b' ' || *b == b'"' || *b < 0x20)
-}
-
-/// git's C-style quoting of a path, byte for byte.
-fn escape(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len() + 4);
-    for b in bytes {
-        match b {
-            b'"' => out.extend_from_slice(b"\\\""),
-            b'\\' => out.extend_from_slice(b"\\\\"),
-            b'\t' => out.extend_from_slice(b"\\t"),
-            b'\n' => out.extend_from_slice(b"\\n"),
-            b'\r' => out.extend_from_slice(b"\\r"),
-            other if *other < 0x20 || *other > 0x7e => {
-                out.extend_from_slice(format!("\\{other:03o}").as_bytes());
-            }
-            other => out.push(*other),
-        }
-    }
-    out
 }
