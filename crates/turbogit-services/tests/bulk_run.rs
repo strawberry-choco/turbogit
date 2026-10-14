@@ -9,11 +9,12 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::RootId;
 use turbogit_services::bulk_run::{
-    RowState, RunControl, RunEvent, RunOutcome, monitor_rows, run_cascade,
+    RowState, RunControl, RunEvent, RunOutcome, RunRow, done_count, monitor_rows, run_cascade,
+    tally, total, update_progress, worker_slot,
 };
 
 fn rid(name: &str) -> RootId {
@@ -182,4 +183,118 @@ fn stop_remaining_halts_queued_work_without_touching_completed_roots() {
         .filter(|e| matches!(e, RunEvent::Stopped { .. }))
         .count();
     assert_eq!(stopped_count, 5, "one Stopped event per halted root");
+}
+
+fn row(name: &str, state: RowState, duration: Option<Duration>) -> RunRow {
+    RunRow {
+        root: rid(name),
+        name: name.to_string(),
+        state,
+        duration,
+    }
+}
+
+#[test]
+fn run_bookkeeping_tallies_each_row_state_and_reports_elapsed_and_eta() {
+    let rows = vec![
+        row("r0", RowState::Done, Some(Duration::from_millis(100))),
+        row("r1", RowState::Done, Some(Duration::from_millis(200))),
+        row("r2", RowState::Queued { slot: 1 }, None),
+        row("r3", RowState::Queued { slot: 2 }, None),
+        row("r4", RowState::Running, None),
+        row(
+            "r5",
+            RowState::Failed {
+                error: "boom".to_string(),
+                protected_branch: false,
+            },
+            None,
+        ),
+    ];
+
+    // The footer's (done, running, queued, skipped, failed) tuple counts
+    // each variant; the "N of M done" pair derives from it and the slice.
+    assert_eq!(tally(&rows), (2, 1, 2, 0, 1));
+    assert_eq!(done_count(&rows), 2);
+    assert_eq!(total(&rows), 6);
+
+    // Two finished rows average 150ms; three rows still owe work (a queued,
+    // a running, a failed) over three workers: 150ms × 3 / 3 = 150ms.
+    let snapshot = update_progress(&rows, 3, Instant::now() - Duration::from_secs(2));
+    assert!(
+        snapshot.0 >= Duration::from_secs(2),
+        "elapsed is measured from the run's start instant"
+    );
+    assert_eq!(snapshot.1, Some(Duration::from_millis(150)));
+
+    // Nothing has finished: no average, so no ETA can be estimated.
+    let fresh = vec![
+        row("a", RowState::Queued { slot: 1 }, None),
+        row("b", RowState::Running, None),
+    ];
+    assert_eq!(update_progress(&fresh, 2, Instant::now()).1, None);
+
+    // Everything settled: nothing remains, so no ETA is owed.
+    let settled = vec![
+        row("a", RowState::Done, Some(Duration::from_millis(50))),
+        row(
+            "b",
+            RowState::Skipped {
+                reason: "dirty worktree".to_string(),
+            },
+            None,
+        ),
+        row(
+            "c",
+            RowState::Failed {
+                error: "x".to_string(),
+                protected_branch: true,
+            },
+            None,
+        ),
+    ];
+    assert_eq!(update_progress(&settled, 2, Instant::now()).1, None);
+}
+
+#[test]
+fn requeued_subset_lands_on_the_slots_the_seeder_assigns() {
+    const WORKERS: usize = 4;
+    let fleet = vec![
+        (rid("a"), "a".to_string(), None),
+        (
+            rid("b"),
+            "b".to_string(),
+            Some("dirty worktree".to_string()),
+        ),
+        (rid("c"), "c".to_string(), None),
+        (rid("d"), "d".to_string(), None),
+        (rid("e"), "e".to_string(), None),
+        (rid("f"), "f".to_string(), None),
+    ];
+    let seeded = monitor_rows(&fleet, WORKERS);
+
+    // A retry pass requeues a subset in row order, numbering only the
+    // matching rows (a, c, e → index 0, 1, 2).
+    let retry = [rid("a"), rid("c"), rid("e")];
+    let requeued_slots: Vec<usize> = seeded
+        .iter()
+        .filter(|r| retry.contains(&r.root))
+        .enumerate()
+        .map(|(index, _)| worker_slot(index, WORKERS))
+        .collect();
+
+    // The seeder handing the same roots as a fresh fleet produces the same
+    // slots, so the retry pass and the seeder cannot drift apart.
+    let reseeded_fleet: Vec<(RootId, String, Option<String>)> =
+        retry.iter().map(|r| (r.clone(), r.name(), None)).collect();
+    let seeded_slots: Vec<usize> = monitor_rows(&reseeded_fleet, WORKERS)
+        .iter()
+        .map(|r| match r.state {
+            RowState::Queued { slot } => slot,
+            ref other => panic!("a fresh seed of will-run roots is all queued, got {other:?}"),
+        })
+        .collect();
+
+    assert_eq!(requeued_slots, seeded_slots);
+    assert_eq!(requeued_slots, vec![1, 2, 3]);
 }
