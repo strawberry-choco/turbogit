@@ -20,15 +20,102 @@ use crate::git_path_quoting::{QuoteTrigger, quote_c};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RootId(pub Arc<Path>);
 
+/// What a path calls itself on screen — the one owner of the rule, with each
+/// surface's placeholder carried in as an argument.
+///
+/// The hazard the code cannot show: **sixteen** call sites in this workspace
+/// chose the strict half and **fourteen** chose the lossy half, and nobody
+/// chose that split — it was whichever combinator the last editor reached for.
+/// Both halves ship, and they disagree about a repository directory whose name
+/// is not valid UTF-8: [`DisplayName::display_name_or`] drops the name and shows
+/// the caller's fallback, while [`DisplayName::display_name_lossy_or`] keeps it
+/// mangled but present. Two methods rather than one entry plus a policy
+/// argument, so the divergence reads as a word at each call site; that is the
+/// only reason it can ever be ruled on.
+///
+/// Which placeholder a surface shows is the one decision that is genuinely its
+/// own, so it stays an argument: `"<workspace>"`, `"<repo>"`, `"<worktree>"`,
+/// `"?"`, `"Project"`, or the path itself. Callers pass the string they passed
+/// before, and the rendered bytes are unchanged by using this.
+///
+/// Two callers consume the **borrowed strict** entry on purpose, because their
+/// `None` means "this path has no readable name" and they consume that `None`:
+/// the bulk-run summary's `filter_map` drops such a root from the toast, and
+/// the incoming-check poller records it as a workspace-wide event. Both losses
+/// are preserved deliberately and pinned; do not point either at the lossy
+/// entry or hand it a placeholder without the ruling those pins are waiting for.
+pub trait DisplayName {
+    /// The final component when it is UTF-8, otherwise `fallback`.
+    fn display_name_or(&self, fallback: &str) -> String;
+
+    /// The lossily-decoded final component, otherwise `fallback`.
+    fn display_name_lossy_or(&self, fallback: &str) -> String;
+
+    /// The final component when it is UTF-8, borrowed — for a site that wants
+    /// the name's *presence* rather than a label.
+    fn utf8_name(&self) -> Option<&str>;
+}
+
+impl DisplayName for Path {
+    fn display_name_or(&self, fallback: &str) -> String {
+        self.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(fallback)
+            .to_owned()
+    }
+
+    fn display_name_lossy_or(&self, fallback: &str) -> String {
+        self.file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| fallback.to_owned())
+    }
+
+    fn utf8_name(&self) -> Option<&str> {
+        self.file_name().and_then(|s| s.to_str())
+    }
+}
+
+// `PathBuf` and `RootId` forward to the `Path` rule rather than re-deriving it:
+// a call site reads the same one method call whichever shape it holds.
+impl DisplayName for PathBuf {
+    fn display_name_or(&self, fallback: &str) -> String {
+        self.as_path().display_name_or(fallback)
+    }
+
+    fn display_name_lossy_or(&self, fallback: &str) -> String {
+        self.as_path().display_name_lossy_or(fallback)
+    }
+
+    fn utf8_name(&self) -> Option<&str> {
+        self.as_path().utf8_name()
+    }
+}
+
+impl DisplayName for RootId {
+    fn display_name_or(&self, fallback: &str) -> String {
+        self.as_path().display_name_or(fallback)
+    }
+
+    fn display_name_lossy_or(&self, fallback: &str) -> String {
+        self.as_path().display_name_lossy_or(fallback)
+    }
+
+    fn utf8_name(&self) -> Option<&str> {
+        self.as_path().utf8_name()
+    }
+}
+
 impl RootId {
     pub fn as_path(&self) -> &Path {
         &self.0
     }
+    /// A root's name is its directory's name, lossily decoded — and the whole
+    /// path when it has no directory name at all. Its fallback is this type's
+    /// own decision rather than a caller's, so it is spelled here and the rule
+    /// itself is the owner's.
     pub fn name(&self) -> String {
-        self.0
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.0.to_string_lossy().into_owned())
+        self.as_path()
+            .display_name_lossy_or(&self.as_path().to_string_lossy())
     }
 }
 
