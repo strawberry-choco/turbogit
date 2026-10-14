@@ -26,7 +26,7 @@
 
 use egui::Ui;
 use turbogit_app::state::AppState;
-use turbogit_domain::model::RootId;
+use turbogit_domain::model::DisplayName;
 
 use crate::theme::Palette;
 use crate::ui::components::{KitButton, counted, kit_button};
@@ -52,7 +52,13 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     // about: a shelf's content is parked in one repository's stash list, and the
     // list below only ever offers shelves of the root this dialog was opened on.
     let title = match state.ui.dlg.unshelve_root.as_ref() {
-        Some(root) => format!("{UNSHELVE_KEEP} · {}", root_display_name(root)),
+        Some(root) => {
+            let path = root.as_path();
+            format!(
+                "{UNSHELVE_KEEP} · {}",
+                path.display_name_lossy_or(&path.display().to_string())
+            )
+        }
         None => UNSHELVE_KEEP.to_string(),
     };
     egui::Window::new(title)
@@ -157,13 +163,4 @@ fn body(ui: &mut Ui, state: &mut AppState) {
             state.ui.dialog = None;
         }
     });
-}
-
-/// The repository's own name as the title states it: the last component of the
-/// root's path, falling back to the full path for a root with no file name.
-fn root_display_name(root: &RootId) -> String {
-    let path = root.as_path();
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
 }

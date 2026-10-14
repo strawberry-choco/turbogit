@@ -32,7 +32,7 @@ use egui::Ui;
 
 use turbogit_app::patch_create;
 use turbogit_app::state::{AppState, Dialog, Toast};
-use turbogit_domain::model::{PatchEncoding, RootId};
+use turbogit_domain::model::{DisplayName, PatchEncoding, RootId};
 
 use crate::theme::{Palette, TYPE_BODY, data_font};
 use crate::ui::components::{KitButton, kit_button};
@@ -347,11 +347,7 @@ pub fn created_patch_ask(ui: &egui::Ui, state: &mut AppState) {
         return;
     };
     let ctx = ui.ctx().clone();
-    let name = ask
-        .path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| ask.path.to_string_lossy().into_owned());
+    let name = ask.path.display_name_lossy_or(&ask.path.to_string_lossy());
     let root = ask.root.name();
     let mut open = true;
     egui::Window::new("Patch created")
