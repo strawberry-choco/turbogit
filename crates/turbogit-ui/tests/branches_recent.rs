@@ -13,33 +13,18 @@
 //! position-counted rows around the `Local` header, `galley_origin` ordering,
 //! and the under-cap shape.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 
 use egui_kittest::{Harness, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{assert_not_painted, galley_origin, painted_galleys, settle_quiet};
 use turbogit_app::state::{AppState, Tab};
 
 // --- git fixture -------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// No repository `user.*` here, so every call is pinned per call through the
+// fixture crate's runner: a headless machine has no global identity to borrow.
 
 /// A repo `alpha` on `main` with `count` branches `r1..rN` that were checked
 /// out **in order** (r1 first), so the reflog answers newest-first: rN is the
@@ -48,18 +33,23 @@ fn checked_out_project(count: usize) -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let alpha = project.join("alpha");
-    git(
+    git_with_env(
         &project,
         &["-c", "init.defaultBranch=main", "init", "alpha"],
+        &GitEnv::fixture(),
     );
     std::fs::write(alpha.join("README.md"), "x\n").unwrap();
-    git(&alpha, &["add", "."]);
-    git(&alpha, &["commit", "-m", "init"]);
+    git_with_env(&alpha, &["add", "."], &GitEnv::fixture());
+    git_with_env(&alpha, &["commit", "-m", "init"], &GitEnv::fixture());
     for i in 1..=count {
-        git(&alpha, &["branch", &format!("r{i}")]);
+        git_with_env(&alpha, &["branch", &format!("r{i}")], &GitEnv::fixture());
     }
     for i in 1..=count {
-        git(&alpha, &["checkout", "-q", &format!("r{i}")]);
+        git_with_env(
+            &alpha,
+            &["checkout", "-q", &format!("r{i}")],
+            &GitEnv::fixture(),
+        );
     }
     (tmp, project)
 }

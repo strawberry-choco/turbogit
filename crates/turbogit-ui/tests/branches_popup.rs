@@ -21,6 +21,7 @@ use std::time::Duration;
 use egui::Key;
 use egui_kittest::{Harness, kittest::NodeT as _, kittest::Queryable as _};
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{
     assert_not_painted, assert_painted, galley_origin, painted_text, settle_quiet,
     shell_harness_over,
@@ -31,35 +32,16 @@ use turbogit_ui::ui::branch_widget;
 
 // --- git fixture -------------------------------------------------------------
 
-/// Run `git <args>` in `dir`, panicking on failure. Identity comes from env so
-/// no per-repo config calls are needed.
-///
-/// This runner stays local for the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` injection:
-/// `git_seed::git` cannot express per-call env, and here the env is not
-/// belt-and-braces — no repository configures `user.*`, so these four variables are the
-/// ONLY source of identity for the seeded commits. `commit_pinned` below also pins
-/// `GIT_*_DATE` per call, and the `3w` stale badge is measured against those epochs.
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// Identity is pinned per call through the fixture crate's runner, which is not
+// belt-and-braces: no repository here configures `user.*`, so that pin is the
+// ONLY source of identity for the seeded commits. `commit_pinned` below pins
+// `GIT_*_DATE` per call, and the `3w` stale badge is measured against those
+// epochs.
 
 fn commit_readme(repo: &Path) {
     std::fs::write(repo.join("README.md"), "x\n").unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-m", "init"]);
+    git_with_env(repo, &["add", "."], &GitEnv::fixture());
+    git_with_env(repo, &["commit", "-m", "init"], &GitEnv::fixture());
 }
 
 /// A project dir holding one real repo `alpha` on `main` with local branches
@@ -69,21 +51,34 @@ fn single_repo_project() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let alpha = project.join("alpha");
-    git(
+    git_with_env(
         &project,
         &["-c", "init.defaultBranch=main", "init", "alpha"],
+        &GitEnv::fixture(),
     );
     commit_readme(&alpha);
     for b in ["feature-a", "feature-b", "zebra"] {
-        git(&alpha, &["branch", b]);
+        git_with_env(&alpha, &["branch", b], &GitEnv::fixture());
     }
-    git(&alpha, &["tag", "v1.0"]);
+    git_with_env(&alpha, &["tag", "v1.0"], &GitEnv::fixture());
 
     // Bare remote with a branch that exists only remotely.
-    git(&project, &["clone", "--bare", "alpha", "origin.git"]);
-    git(&alpha, &["remote", "add", "origin", "../origin.git"]);
-    git(&alpha, &["push", "origin", "main:remote-only"]);
-    git(&alpha, &["fetch", "origin"]);
+    git_with_env(
+        &project,
+        &["clone", "--bare", "alpha", "origin.git"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(
+        &alpha,
+        &["remote", "add", "origin", "../origin.git"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(
+        &alpha,
+        &["push", "origin", "main:remote-only"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(&alpha, &["fetch", "origin"], &GitEnv::fixture());
     (tmp, project)
 }
 
@@ -91,7 +86,11 @@ fn single_repo_project() -> (TempDir, PathBuf) {
 fn two_repo_project() -> (TempDir, PathBuf) {
     let (tmp, project) = single_repo_project();
     let beta = project.join("beta");
-    git(&project, &["-c", "init.defaultBranch=main", "init", "beta"]);
+    git_with_env(
+        &project,
+        &["-c", "init.defaultBranch=main", "init", "beta"],
+        &GitEnv::fixture(),
+    );
     commit_readme(&beta);
     (tmp, project)
 }
@@ -420,42 +419,72 @@ fn sync_repo_project() -> (TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let alpha = project.join("alpha");
-    git(
+    git_with_env(
         &project,
         &["-c", "init.defaultBranch=main", "init", "alpha"],
+        &GitEnv::fixture(),
     );
-    git(&alpha, &["config", "user.email", "t@t"]);
-    git(&alpha, &["config", "user.name", "t"]);
+    git_with_env(&alpha, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(&alpha, &["config", "user.name", "t"], &GitEnv::fixture());
     commit_pinned(&alpha, "c1", old);
 
-    git(&project, &["clone", "--bare", "alpha", "origin.git"]);
-    git(&alpha, &["remote", "add", "origin", "../origin.git"]);
-    git(&alpha, &["push", "-q", "origin", "main"]);
+    git_with_env(
+        &project,
+        &["clone", "--bare", "alpha", "origin.git"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(
+        &alpha,
+        &["remote", "add", "origin", "../origin.git"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(
+        &alpha,
+        &["push", "-q", "origin", "main"],
+        &GitEnv::fixture(),
+    );
 
     // ghost: tracked upstream that will be deleted and pruned.
-    git(&alpha, &["branch", "ghost"]);
-    git(&alpha, &["push", "-q", "-u", "origin", "ghost"]);
-    git(&alpha, &["fetch", "-q", "origin"]);
+    git_with_env(&alpha, &["branch", "ghost"], &GitEnv::fixture());
+    git_with_env(
+        &alpha,
+        &["push", "-q", "-u", "origin", "ghost"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(&alpha, &["fetch", "-q", "origin"], &GitEnv::fixture());
     // zebra: stale untracked branch on the old commit.
-    git(&alpha, &["branch", "zebra"]);
+    git_with_env(&alpha, &["branch", "zebra"], &GitEnv::fixture());
 
     // feat: two fresh commits past the fork; main advances one fresh commit.
-    git(&alpha, &["branch", "feat"]);
-    git(&alpha, &["branch", "--set-upstream-to=origin/main", "feat"]);
-    git(&alpha, &["checkout", "-q", "feat"]);
+    git_with_env(&alpha, &["branch", "feat"], &GitEnv::fixture());
+    git_with_env(
+        &alpha,
+        &["branch", "--set-upstream-to=origin/main", "feat"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(&alpha, &["checkout", "-q", "feat"], &GitEnv::fixture());
     commit_pinned(&alpha, "c2", now);
     commit_pinned(&alpha, "c3", now);
-    git(&alpha, &["checkout", "-q", "main"]);
+    git_with_env(&alpha, &["checkout", "-q", "main"], &GitEnv::fixture());
     commit_pinned(&alpha, "c4", now);
-    git(&alpha, &["push", "-q", "origin", "main"]);
+    git_with_env(
+        &alpha,
+        &["push", "-q", "origin", "main"],
+        &GitEnv::fixture(),
+    );
 
     // Delete the remote ghost branch and prune its tracking ref: the local
     // ghost branch still tracks it, so the popup shows `origin/ghost  gone`.
-    git(
+    git_with_env(
         &project.join("origin.git"),
         &["update-ref", "-d", "refs/heads/ghost"],
+        &GitEnv::fixture(),
     );
-    git(&alpha, &["fetch", "-q", "--prune", "origin"]);
+    git_with_env(
+        &alpha,
+        &["fetch", "-q", "--prune", "origin"],
+        &GitEnv::fixture(),
+    );
     (tmp, project)
 }
 
@@ -463,7 +492,7 @@ fn sync_repo_project() -> (TempDir, PathBuf) {
 /// each commit touches a file so no commit is empty.
 fn commit_pinned(repo: &Path, msg: &str, epoch: i64) {
     std::fs::write(repo.join("f.txt"), format!("{msg}\n")).unwrap();
-    git(repo, &["add", "."]);
+    git_with_env(repo, &["add", "."], &GitEnv::fixture());
     let out = Command::new("git")
         .args(["commit", "-q", "-m", msg])
         .env("GIT_AUTHOR_DATE", format!("@{epoch} +0000"))
