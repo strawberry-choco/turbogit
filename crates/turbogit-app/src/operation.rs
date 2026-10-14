@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::{
-    Change, CleanTreeMethod, CommitId, MergeOpts, RebaseOpts, RebasePlanEntry, Root, RootId,
-    UpdateMethod, VcsSettings,
+    Change, CleanTreeMethod, CommitId, DisplayName, MergeOpts, RebaseOpts, RebasePlanEntry, Root,
+    RootId, UpdateMethod, VcsSettings,
 };
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::integrate_service::OwnedOperation;
@@ -789,10 +789,7 @@ impl Operation {
             // comes from: the verb's whole subject is one path across two sides,
             // so a record that said only "Get from Branch" would not say which.
             Self::GetFileFromBranch { source, path, .. } => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                let name = path.display_name_lossy_or(&path.to_string_lossy());
                 format!("Get {name} from {source}")
             }
             // The count is the fact the record needs: an apply over three files

@@ -40,6 +40,7 @@
 //!   public entry a caller may still reach directly; it keeps the effect it has
 //!   today rather than becoming a second answer to the same question.
 
+use turbogit_domain::model::DisplayName;
 use turbogit_services::changes;
 use turbogit_services::shelve_stash::stash_ref;
 
@@ -238,14 +239,14 @@ pub fn prompt(state: &AppState, c: &PendingConfirm) -> Prompt {
         PendingConfirm::RemoveWorktree { path } => Prompt::question(
             format!(
                 "Remove worktree '{}'? This cannot be undone.",
-                file_name_or(path, "<worktree>")
+                path.display_name_or("<worktree>")
             ),
             vec![Button::ok(), Button::cancel()],
         ),
         PendingConfirm::DeinitSubmodule { path } => Prompt::question(
             format!(
                 "De-init submodule '{}'? Its working copy is removed.",
-                file_name_or(path, "<submodule>")
+                path.display_name_or("<submodule>")
             ),
             vec![Button::ok(), Button::cancel()],
         ),
@@ -615,11 +616,4 @@ impl Button {
     fn cancel() -> Self {
         Self::new("Cancel", ConfirmAction::Close)
     }
-}
-
-/// `path`'s own name, or `fallback` for a path with no file name in it.
-fn file_name_or<'a>(path: &'a std::path::Path, fallback: &'a str) -> &'a str {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(fallback)
 }

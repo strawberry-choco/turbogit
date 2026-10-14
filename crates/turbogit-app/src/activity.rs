@@ -6,6 +6,8 @@
 use chrono::{DateTime, Local};
 use std::path::Path;
 
+use turbogit_domain::model::DisplayName;
+
 /// Severity of one activity entry; drives its color in the panel
 /// (success/error coloring, issue #04).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -107,9 +109,10 @@ impl ActivityLog {
 
 /// Display label for a root path: the basename, or the whole path when it
 /// has no file name (e.g. `/`).
+///
+/// A forwarding shim over [`DisplayName`], kept only for the UI's activity
+/// panel: the rule is the owner's and the fallback is the caller's, so nothing
+/// is decided here.
 pub fn root_label(path: &Path) -> String {
-    path.file_name()
-        .and_then(|s| s.to_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| path.display().to_string())
+    path.display_name_or(&path.display().to_string())
 }

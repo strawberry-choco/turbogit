@@ -36,7 +36,7 @@
 //!   `match` in [`rules_for`] — never by a `kind ==` test at the call site.
 
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::RootId;
+use turbogit_domain::model::{DisplayName, RootId};
 use turbogit_services::bulk_run;
 
 use crate::activity::{ActivityEntry, ActivityKind};
@@ -265,12 +265,10 @@ pub fn bulk_completed(state: &mut AppState, label: String, results: Vec<(RootId,
         results
             .iter()
             .map(|(id, r)| {
-                let name =
-                    id.0.file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("?")
-                        .to_string();
-                (name, r.clone().map_err(|e| e.to_string()))
+                (
+                    id.display_name_or("?"),
+                    r.clone().map_err(|e| e.to_string()),
+                )
             })
             .collect(),
     );
@@ -726,7 +724,10 @@ fn record_apply_outcome(state: &mut AppState, rules: RuleSet) {
 pub(crate) fn activity_repo_label(affected: &Affected) -> Option<String> {
     match affected {
         Affected::All => None,
-        Affected::Root(id) => Some(crate::activity::root_label(&id.0)),
+        Affected::Root(id) => {
+            let path = id.as_path();
+            Some(path.display_name_or(&path.display().to_string()))
+        }
     }
 }
 

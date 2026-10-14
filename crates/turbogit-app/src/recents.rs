@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use turbogit_domain::error::TgResult;
+use turbogit_domain::model::DisplayName;
 
 /// Maximum number of recent projects kept in the store.
 pub const MAX_RECENTS: usize = 10;
@@ -112,7 +113,7 @@ pub fn record_into(recents: &mut Recents, path: &Path) {
     }
     recents.projects.push(RecentProject {
         path: path.to_path_buf(),
-        name: project_name(path),
+        name: path.display_name_lossy_or(&path.to_string_lossy()),
         last_opened: now,
         kind: RecentKind::Project,
         repo_count: None,
@@ -144,13 +145,14 @@ pub fn record_workspace_into(recents: &mut Recents, path: &Path, repo_count: usi
     }
 }
 
-/// Display name for a project directory: its final component. The canonical
-/// naming rule for recents rows (used by [`record_into`] and by the workspace
-/// picker's synthesized current row).
+/// Display name for a project directory: its final component, or the whole
+/// path when it has none.
+///
+/// A forwarding shim over [`DisplayName`], kept only for the workspace picker's
+/// synthesized current row: recents rows ask the owner themselves, and the
+/// picker is the last caller left.
 pub fn project_name(path: &Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+    path.display_name_lossy_or(&path.to_string_lossy())
 }
 
 /// Human-readable last-opened meta line ("Last opened 2026-08-22 14:03").
