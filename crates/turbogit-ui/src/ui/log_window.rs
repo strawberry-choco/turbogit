@@ -90,8 +90,8 @@ use turbogit_app::state::{
 };
 use turbogit_app::sync_service;
 use turbogit_domain::model::{
-    BranchKind, ChangeStatus, Commit, CommitId, DateFormat, GitRefKind, PatchOrigin, RefState,
-    Root, RootId, SignatureState, forward_slash_path,
+    BranchKind, ChangeStatus, Commit, CommitId, DateFormat, DisplayName, GitRefKind, PatchOrigin,
+    RefState, Root, RootId, SignatureState, forward_slash_path,
 };
 
 // --- Pane metrics (spec §8.3) -------------------------------------------------
@@ -1471,20 +1471,18 @@ fn commit_facts<'a>(state: &'a AppState, root: &'a RootId, cid: &str) -> CommitF
         // repository. The same set the status bar's `N repos in scope` counter
         // reports and every fleet verb reads.
         scope: rewrite_gating::scope_of(&state.ui.repo_selection, root),
-        repo_name: root_display_name(root),
+        // The repository's own name — its directory's, which is what the
+        // branches pane's ROOTS filter and the shell already call it. Borrowed
+        // off the root id so the menu can name the repository a commit belongs
+        // to without copying a `String` per frame per row, which is why this is
+        // the owner's *borrowed* entry and not its label: the two-level
+        // fallback is the path's own `to_str()` and then the empty string.
+        repo_name: root
+            .as_path()
+            .utf8_name()
+            .or_else(|| root.as_path().to_str())
+            .unwrap_or_default(),
     }
-}
-
-/// The repository's own name — its directory's, which is what the branches
-/// pane's ROOTS filter and the shell already call it. Borrowed off the root id
-/// so the menu can name the repository a commit belongs to without copying a
-/// `String` per frame per row.
-fn root_display_name(root: &RootId) -> &str {
-    let path = root.as_path();
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .or_else(|| path.to_str())
-        .unwrap_or_default()
 }
 
 /// The Git Log's commit context menu: the one place a commit action lives. The

@@ -31,7 +31,7 @@ use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes;
 use turbogit_app::smart_rules::SmartGroupRule;
 use turbogit_app::state::{AppState, Dialog, Toast};
-use turbogit_domain::model::forward_slash_path;
+use turbogit_domain::model::{DisplayName, forward_slash_path};
 
 /// Left rail width (screen 01); also used by the shell's geometry.
 pub const SIDEBAR_WIDTH: f32 = 280.0;
@@ -520,12 +520,7 @@ const WORKSPACE_SWITCH_HINT: &str = "Switch workspace";
 /// interaction exists, because the hover state it answers to is only known
 /// once the row has a click target.
 fn render_workspace_header(ui: &mut Ui, state: &mut AppState) {
-    let name = state
-        .project_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("<workspace>")
-        .to_string();
+    let name = state.project_dir.display_name_or("<workspace>");
     let total = state.multi.roots.len().to_string();
     let rail_width = ui.available_width();
     // The chevron's size is both the slot it occupies and the stroke scale.
