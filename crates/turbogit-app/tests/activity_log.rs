@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use turbogit_app::activity::ActivityKind;
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
@@ -17,29 +18,14 @@ use turbogit_app::state::AppState;
 
 // --- git fixture ---------------------------------------------------------------
 
-/// A `git` runner that pins the commit identity on every invocation, and
-/// deliberately NOT `test_support::git_seed::git`, which takes no per-call env.
-fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_AUTHOR_COMMITTER_NAME", "t")
-        .env("GIT_AUTHOR_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// No repository `user.*` here, so every commit this fixture makes is pinned per
+// call through the fixture crate's runner: a headless machine has no global
+// identity to borrow.
 
 fn commit_readme(repo: &Path) {
     std::fs::write(repo.join("README.md"), "x\n").unwrap();
-    git(repo, &["add", "."]);
-    git(repo, &["commit", "-m", "init"]);
+    git_with_env(repo, &["add", "."], &GitEnv::fixture());
+    git_with_env(repo, &["commit", "-m", "init"], &GitEnv::fixture());
 }
 
 /// One bare local remote (`origin`) plus one local repo `alpha` on `main`
@@ -48,21 +34,28 @@ fn repo_project() -> (TempDir, PathBuf, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path().to_path_buf();
     let remote = project.join("origin.git");
-    git(
+    git_with_env(
         &project,
         &["init", "--bare", "-b", "main", remote.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
-    git(
+    git_with_env(
         &project,
         &["-c", "init.defaultBranch=main", "init", "alpha"],
+        &GitEnv::fixture(),
     );
     let alpha = project.join("alpha");
     commit_readme(&alpha);
-    git(
+    git_with_env(
         &alpha,
         &["remote", "add", "origin", remote.to_str().unwrap()],
+        &GitEnv::fixture(),
     );
-    git(&alpha, &["push", "-u", "origin", "main"]);
+    git_with_env(
+        &alpha,
+        &["push", "-u", "origin", "main"],
+        &GitEnv::fixture(),
+    );
     (tmp, project, alpha)
 }
 
@@ -148,12 +141,24 @@ fn git_ok_or_fail(dir: &Path, args: &[&str]) {
 /// Put `alpha` into an in-progress merge with one conflicted file, as if a
 /// merge just stopped mid-resolution.
 fn plant_merge_conflict(alpha: &Path) {
-    git(alpha, &["checkout", "-q", "-b", "feature"]);
+    git_with_env(
+        alpha,
+        &["checkout", "-q", "-b", "feature"],
+        &GitEnv::fixture(),
+    );
     std::fs::write(alpha.join("README.md"), "feature side\n").unwrap();
-    git(alpha, &["commit", "-qam", "feature change"]);
-    git(alpha, &["checkout", "-q", "main"]);
+    git_with_env(
+        alpha,
+        &["commit", "-qam", "feature change"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(alpha, &["checkout", "-q", "main"], &GitEnv::fixture());
     std::fs::write(alpha.join("README.md"), "main side\n").unwrap();
-    git(alpha, &["commit", "-qam", "main change"]);
+    git_with_env(
+        alpha,
+        &["commit", "-qam", "main change"],
+        &GitEnv::fixture(),
+    );
     git_ok_or_fail(alpha, &["merge", "feature", "--no-edit"]);
     let status = Command::new("git")
         .args(["status", "--porcelain"])

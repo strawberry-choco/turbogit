@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
+use test_support::git_seed::{GitEnv, git_with_env};
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::log_states::{self, LogRecovery, LogState, named_states};
 use turbogit_app::root_caches::{Affected, LogRead, LogScope};
@@ -20,35 +21,27 @@ use turbogit_domain::model::RootId;
 
 // --- fixtures -------------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
+// The repository does configure `user.*`, and every call is pinned per call on
+// top of it: a headless machine has no global identity to borrow, and a suite
+// whose commits read back the machine's would make its log rows an accident of
+// the machine.
 
 /// A repository with `n` commits, each writing `token<i>` into `f.txt`, so a
 /// path scope and a pickaxe search both have real work to do.
 fn seeded(project: &Path, n: usize) -> PathBuf {
     let repo = project.join("alpha");
     std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["config", "user.email", "t@t"]);
-    git(&repo, &["config", "user.name", "t"]);
+    git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
     for i in 0..n {
         std::fs::write(repo.join("f.txt"), format!("token{i}\n")).unwrap();
-        git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-q", "-m", &format!("c{i}")]);
+        git_with_env(&repo, &["add", "."], &GitEnv::fixture());
+        git_with_env(
+            &repo,
+            &["commit", "-q", "-m", &format!("c{i}")],
+            &GitEnv::fixture(),
+        );
     }
     repo
 }
@@ -58,9 +51,9 @@ fn seeded(project: &Path, n: usize) -> PathBuf {
 fn unborn(project: &Path) -> PathBuf {
     let repo = project.join("alpha");
     std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["config", "user.email", "t@t"]);
-    git(&repo, &["config", "user.name", "t"]);
+    git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
     repo
 }
 
@@ -669,7 +662,7 @@ fn a_multi_root_listing_never_collapses_to_one_root() {
     let alpha = seeded(&project, 3);
     let beta = project.join("beta");
     std::fs::create_dir_all(&beta).unwrap();
-    git(&beta, &["init", "-q", "-b", "main"]);
+    git_with_env(&beta, &["init", "-q", "-b", "main"], &GitEnv::fixture());
     let mut state = AppState::for_roots(&project, &[alpha.clone(), beta.clone()]);
     assert_eq!(
         state.multi.roots.len(),
