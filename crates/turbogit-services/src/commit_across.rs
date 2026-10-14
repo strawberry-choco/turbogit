@@ -19,7 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::{CommitId, RootId};
+use turbogit_domain::model::{CommitId, DisplayName, RootId};
 use turbogit_engine_api::GitExecutor;
 
 /// Why a root will not take part in the cascade commit.
@@ -65,11 +65,7 @@ pub fn plan(vcs: &dyn GitExecutor, paths: &[PathBuf]) -> Vec<PlanRow> {
     paths
         .iter()
         .map(|path| {
-            let name = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("?")
-                .to_string();
+            let name = path.display_name_or("?");
             let staged = vcs
                 .status(path)
                 .ok()

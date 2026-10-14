@@ -173,12 +173,7 @@ pub fn preflight(
                 let outcome = classify(op, dirty, ahead, behind, upstream, protected, rebase);
                 PreflightRow {
                     root: root.id.clone(),
-                    name: root
-                        .path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("?")
-                        .to_string(),
+                    name: root.path.display_name_or("?"),
                     branch: root.current_branch.clone(),
                     dirty,
                     ahead,
@@ -691,12 +686,7 @@ pub fn branch_preflight(
                 };
                 BranchPreflightRow {
                     root: root.id.clone(),
-                    name: root
-                        .path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("?")
-                        .to_string(),
+                    name: root.path.display_name_or("?"),
                     branch: root.current_branch.clone(),
                     dirty,
                     target: name.to_string(),
