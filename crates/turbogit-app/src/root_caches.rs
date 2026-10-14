@@ -1,7 +1,8 @@
 //! Root caches (CONTEXT.md "Root caches"): the in-memory cache layer keyed
 //! by repository root — commit logs, ref decorations, changed-file lists,
 //! path-scoped logs, ahead/behind counts, worktree lists, submodule
-//! lists, and stash listings.
+//! lists, stash listings, tag lists (with their decoration states) and
+//! checkout histories.
 //!
 //! One deep module with a small interface: the maps are private,
 //! lazy-fill logic lives *inside* (`ensure_*`), and callers get typed
@@ -14,8 +15,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use turbogit_domain::model::{
-    Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, RootId, Stash, Submodule, Worktree,
-    forward_slash_path,
+    Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, RecentCheckout, RefState, RootId,
+    Stash, Submodule, Worktree, forward_slash_path,
 };
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::hunk_stats::{self, FileHunks};
@@ -164,6 +165,16 @@ pub struct RootCaches {
     /// these, which is why the Shelf pane and the stash verbs all read through
     /// here rather than asking git again.
     stash_cache: HashMap<RootId, Vec<Stash>>,
+    /// Tag lists per root (redesign issue 02): `git tag -l` names with each
+    /// tag's decoration state, the Branches tree's TAGS group source. The bare
+    /// read carries no states, so the fill records [`RefState::Default`] and a
+    /// surface holding real decorations upgrades them for its own view.
+    tag_cache: HashMap<RootId, Vec<(String, RefState)>>,
+    /// Checkout histories per root: HEAD's own reflog, newest first, the
+    /// Branches tree's Recent group source. Derived from the reflog rather than
+    /// bookkept, so it survives a restart and already carries a checkout made
+    /// in a terminal.
+    recent_cache: HashMap<RootId, Vec<RecentCheckout>>,
     /// Per-root hunk-span statistics over the three working-tree diffs
     /// (issue 20): HEAD↔worktree, HEAD↔index, and index↔worktree, each
     /// parsed into per-file hunk spans.
@@ -564,6 +575,31 @@ impl RootCaches {
         self.stash_cache.get(root).map(|v| v.as_slice())
     }
 
+    /// The cached tag list of `root` with each tag's decoration state, if
+    /// loaded (redesign issue 02).
+    pub fn tags(&self, root: &RootId) -> Option<&[(String, RefState)]> {
+        self.tag_cache.get(root).map(|v| v.as_slice())
+    }
+
+    /// The whole per-root tag map, for the branch view builder: a read-only
+    /// borrow, never the per-frame clone the surface used to make. Keys the
+    /// branches tree already speaks; a repo absent from the map has no list.
+    pub fn tags_by_root(&self) -> &HashMap<RootId, Vec<(String, RefState)>> {
+        &self.tag_cache
+    }
+
+    /// The cached checkout history of `root`, newest first, if loaded — the
+    /// Recent group's source.
+    pub fn recents(&self, root: &RootId) -> Option<&[RecentCheckout]> {
+        self.recent_cache.get(root).map(|v| v.as_slice())
+    }
+
+    /// The whole per-root checkout-history map, for the branch view builder —
+    /// same borrow contract as [`Self::tags_by_root`].
+    pub fn recents_by_root(&self) -> &HashMap<RootId, Vec<RecentCheckout>> {
+        &self.recent_cache
+    }
+
     /// The cached hunk-span statistics of `root`, if loaded (issue 20).
     pub fn hunk_stats(&self, root: &RootId) -> Option<&RootHunkStats> {
         self.hunk_stats.get(root)
@@ -686,6 +722,36 @@ impl RootCaches {
             .get(&key)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Compute `root`'s tag list through the engine seam on miss and cache it
+    /// (redesign issue 02) — the fill behind the Branches surface's per-frame
+    /// warm. A failed read caches an empty list rather than leaving the entry
+    /// absent, exactly as the warm helper did: a surface must not re-ask git
+    /// every frame about a repository that answered nothing.
+    pub fn ensure_tags(&mut self, exec: &dyn GitExecutor, root: &RootId) {
+        if self.tag_cache.contains_key(root) {
+            return;
+        }
+        let tags = exec
+            .tag_list(&root.0)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|name| (name, RefState::Default))
+            .collect();
+        self.tag_cache.insert(root.clone(), tags);
+    }
+
+    /// Compute `root`'s checkout history through the engine seam on miss and
+    /// cache it — the fill behind the Recent group's warm. A repository with no
+    /// reflog yet, and one that is not there at all, both cache an empty
+    /// history: no surface may show an error for "nothing yet".
+    pub fn ensure_recents(&mut self, exec: &dyn GitExecutor, root: &RootId) {
+        if self.recent_cache.contains_key(root) {
+            return;
+        }
+        let history = exec.recent_checkouts(&root.0).unwrap_or_default();
+        self.recent_cache.insert(root.clone(), history);
     }
 
     /// The held window of one scoped listing in `root`, computed through the
@@ -966,6 +1032,18 @@ impl RootCaches {
         self.stash_cache.insert(root, stashes);
     }
 
+    /// Store a freshly loaded tag list for `root` (redesign issue 02),
+    /// replacing whatever it held.
+    pub fn store_tags(&mut self, root: RootId, tags: Vec<(String, RefState)>) {
+        self.tag_cache.insert(root, tags);
+    }
+
+    /// Store a freshly loaded checkout history for `root`, replacing whatever
+    /// it held. An empty history is an answer, not an absence.
+    pub fn store_recents(&mut self, root: RootId, recents: Vec<RecentCheckout>) {
+        self.recent_cache.insert(root, recents);
+    }
+
     // --- Invalidation -------------------------------------------------------
 
     /// Drop the caches for the affected scope. One sanctioned per-cache
@@ -991,6 +1069,8 @@ impl RootCaches {
                 self.ahead_behind.remove(root);
                 self.submodule_cache.remove(root);
                 self.stash_cache.remove(root);
+                self.tag_cache.remove(root);
+                self.recent_cache.remove(root);
                 self.hunk_stats.remove(root);
                 // A root's failures go with its windows: an operation that
                 // changed the repository must not leave a pane still reporting
@@ -1027,6 +1107,8 @@ impl RootCaches {
         self.worktree_cache.clear();
         self.submodule_cache.clear();
         self.stash_cache.clear();
+        self.tag_cache.clear();
+        self.recent_cache.clear();
         self.hunk_stats.clear();
         self.log_failed.clear();
     }
@@ -1045,6 +1127,8 @@ impl RootCaches {
             && self.worktree_cache.is_empty()
             && self.submodule_cache.is_empty()
             && self.stash_cache.is_empty()
+            && self.tag_cache.is_empty()
+            && self.recent_cache.is_empty()
             && self.hunk_stats.is_empty()
             && self.log_failed.is_empty()
     }

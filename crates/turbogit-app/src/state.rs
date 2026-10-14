@@ -1501,20 +1501,6 @@ pub struct UiState {
     // window and the Log window's branches pane. See [`TreeState`].
     pub branches_tree: TreeState,
     pub log_tree: TreeState,
-    /// Cached tag lists for the Branches tab, keyed by the root each list was
-    /// read for (redesign issue 02: tags are a per-repo group). Each entry
-    /// carries the tag's decoration state (plan D8) — the warm fill records
-    /// [`RefState::Default`]; a surface holding real decorations upgrades it.
-    pub branches_tags:
-        std::collections::HashMap<RootId, Vec<(String, turbogit_domain::model::RefState)>>,
-    /// The checkout history behind the Branches tab's Recent group, keyed by the
-    /// repository it was read from and ordered newest-first — HEAD's own reflog,
-    /// which is why the group survives a restart and carries a checkout made in a
-    /// terminal. Warmed per repository on the surface's first render like the tag
-    /// list beside it, and dropped for the affected roots whenever an operation
-    /// settles, so a checkout made here is at the top of the group on the frame it
-    /// settles rather than next time the project opens.
-    pub branches_recents: std::collections::HashMap<RootId, Vec<RecentCheckout>>,
     /// Focus the search input on the next render (tab open, issue 06/15).
     pub branches_focus_search: bool,
     /// Delete-with-care state (issue 12): the human-terms consequence shown in
@@ -2720,18 +2706,6 @@ impl AppState {
         // the granular module: they only hold while the path is still fully
         // staged.
         granular::prune_on_refresh(self);
-        // The Recent group's checkout history follows the same wholesale rule as
-        // the values beside it, and for a sharper reason: HEAD's reflog is written
-        // by the very checkout that just settled, so a kept entry would show the
-        // branch the user has *left* as the one they are on. Dropping the affected
-        // roots' entries costs one reflog read per repository per operation, on the
-        // seam that is already reading every one of those repositories.
-        match &affected {
-            Affected::All => self.ui.branches_recents.clear(),
-            Affected::Root(id) => {
-                self.ui.branches_recents.remove(id);
-            }
-        }
         // Only roots that are actually registered take part in the refresh.
         // The ids' shared `Arc<Path>` handles clone by refcount here and flow
         // into `register_all` / the ahead-behind refresh unchanged.

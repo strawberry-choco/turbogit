@@ -783,7 +783,10 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
         .iter()
         .filter_map(|id| state.multi.by_id(id).cloned())
         .collect();
-    let mut tags_by_root = state.ui.branches_tags.clone();
+    let mut deco_by_root: std::collections::HashMap<
+        RootId,
+        std::collections::HashMap<String, RefState>,
+    > = std::collections::HashMap::new();
     for root in &mut roots {
         let mut deco: std::collections::HashMap<String, RefState> =
             std::collections::HashMap::new();
@@ -803,23 +806,29 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
                 b.gone = deco.get(&full).is_some_and(|st| *st == RefState::Gone);
             }
         }
-        if let Some(tags) = tags_by_root.get_mut(&root.id) {
-            for (name, st) in tags {
-                if let Some(d) = deco.get(name) {
-                    *st = *d;
-                }
-            }
-        }
+        deco_by_root.insert(root.id.clone(), deco);
     }
     // This pane shows remotes for every repository alike, and no Recent group:
     // the checkout history is the Branches tab's question, so this read is not
     // asked and the group the model would carry for it stays empty.
-    let view = build_branch_view(
+    let tags_by_root = state.caches.tags_by_root();
+    let mut view = build_branch_view(
         &roots,
-        &tags_by_root,
+        tags_by_root,
         &std::collections::HashMap::new(),
         &|_| state.ui.log_tree.show_remotes,
     );
+    // The decorations upgrade the warmed tag states (plan D8). The cache map is
+    // borrowed read-only, so the upgrade lands on the built model's tag rows.
+    for repo in &mut view.repos {
+        if let Some(deco) = deco_by_root.get(&repo.root_id) {
+            for tag in &mut repo.tags {
+                if let Some(d) = deco.get(&tag.name) {
+                    tag.state = *d;
+                }
+            }
+        }
+    }
 
     // The shared tree component with the pane's narrower capability set
     // (plan D7): no inline rename, no per-row actions, no repo-scope picker.
@@ -827,7 +836,7 @@ pub fn branches_pane(ui: &mut Ui, state: &mut AppState) {
         view: &view,
         filter: &state.ui.log_branch_filter,
         repo_filter: None,
-        tags_by_root: &tags_by_root,
+        tags_by_root,
         multi_repo: state.multi.roots.len() > 1,
         busy: false,
         has_any_data: true,

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use turbogit_domain::model::{
     Commit, CommitId, ConflictVersions, LogOpts, MergeStrategy, RebaseAction, RebasePlanEntry,
-    RecentCheckout, RefState, Root, RootId, Upstream,
+    Root, RootId, Upstream,
 };
 use turbogit_services::history_editor::RebaseCaution;
 use turbogit_services::integrate_service::MergePreview;
@@ -124,63 +124,39 @@ impl AppState {
         self.executor.rewrite_backup_ref().to_string()
     }
 
-    /// The names of `root`'s tags. Both branch trees and the tag dialog ask;
-    /// each keeps its own caching policy, so this is the bare read. `None`
-    /// when git could not answer, which lets a caller that caches the list
-    /// ask again next frame rather than cache an empty one.
+    /// The names of `root`'s tags, for the tag dialog's own one-shot read.
+    /// `None` when git could not answer, which lets the dialog ask again next
+    /// frame rather than cache an empty one. The branch trees no longer ask
+    /// here — they read the Root caches' tag list, which is why this stays bare.
     pub fn tag_names(&self, root: &RootId) -> Option<Vec<String>> {
         self.executor.tag_list(root.as_path()).ok()
     }
 
-    /// Warm the shared per-root tag list for every registered root (plan D10):
-    /// whichever tool window opens first fills it for both. The bare read
-    /// carries no decoration states, so a surface holding real ref
-    /// decorations upgrades them.
+    /// Fill the Root caches' per-root tag list for every registered root on
+    /// miss (redesign issue 02): whichever tool window opens first fills it for
+    /// both, and the fill is a no-op for a root already holding a list. The
+    /// bare read carries no decoration states, so the fill records
+    /// `RefState::Default` and a surface holding real ref decorations upgrades
+    /// them for its own view.
     pub fn warm_branch_tags(&mut self) {
-        let missing: Vec<RootId> = self
-            .multi
-            .roots
-            .iter()
-            .filter(|r| !self.ui.branches_tags.contains_key(&r.id))
-            .map(|r| r.id.clone())
-            .collect();
-        for id in missing {
-            let tags = self
-                .tag_names(&id)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|name| (name, RefState::Default))
-                .collect();
-            self.ui.branches_tags.insert(id, tags);
+        let ids: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
+        let exec = self.executor.clone();
+        for id in ids {
+            self.caches.ensure_tags(exec.as_ref(), &id);
         }
     }
 
-    /// The names of `root`'s recent checkouts, newest first, as HEAD's reflog
-    /// reports them. A repository with no reflog yet answers empty — the port
-    /// treats absence of history as a normal answer — and a repository that is
-    /// not there at all fails, which this reports the same way as an empty
-    /// history because no surface may show an error for "nothing yet".
-    pub fn recent_checkouts(&self, root: &RootId) -> Option<Vec<RecentCheckout>> {
-        self.executor.recent_checkouts(root.as_path()).ok()
-    }
-
-    /// Warm the per-root checkout history behind the Branches tab's Recent
-    /// group. Derived from the reflog rather than bookkept by the app, so it
-    /// survives a restart and already contains the checkouts made in a
-    /// terminal; a completed operation drops the affected roots' entries on the
-    /// refresh seam, so a checkout made here is at the top of the group on the
-    /// frame it settles.
+    /// Fill the Root caches' per-root checkout history behind the Branches
+    /// tab's Recent group on miss. Derived from the reflog rather than bookkept
+    /// by the app, so it survives a restart and already contains the checkouts
+    /// made in a terminal; a completed operation drops the affected roots'
+    /// entries through the cache's own invalidation, so a checkout made here is
+    /// at the top of the group on the frame it settles.
     pub fn warm_branch_recents(&mut self) {
-        let missing: Vec<RootId> = self
-            .multi
-            .roots
-            .iter()
-            .filter(|r| !self.ui.branches_recents.contains_key(&r.id))
-            .map(|r| r.id.clone())
-            .collect();
-        for id in missing {
-            let history = self.recent_checkouts(&id).unwrap_or_default();
-            self.ui.branches_recents.insert(id, history);
+        let ids: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
+        let exec = self.executor.clone();
+        for id in ids {
+            self.caches.ensure_recents(exec.as_ref(), &id);
         }
     }
 

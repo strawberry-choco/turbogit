@@ -51,7 +51,10 @@ fn names(state: &AppState, work: &Path) -> Vec<String> {
         .expect("the fixture repo is a root")
         .id
         .clone();
-    state.ui.branches_recents[&root]
+    state
+        .caches
+        .recents(&root)
+        .unwrap_or_default()
         .iter()
         .map(|r| r.name.clone())
         .collect()
