@@ -128,3 +128,61 @@ pub(crate) fn current_branch_upstream(
         .find(|b| b.kind == BranchKind::Local && cur.as_deref() == Some(&b.name))
         .and_then(|b| b.tracking.clone().map(|up| (b.name.clone(), up.git_ref()))))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A root whose path has no final component at all — the filesystem root,
+    /// spelled with the platform's own separator so the shape is portable. It is
+    /// registered nowhere: nothing about settling a poll needs a repository on
+    /// disk, and the point of the pin is the *label*, not the fetch.
+    fn nameless_root() -> RootId {
+        RootId(std::sync::Arc::from(std::path::PathBuf::from(
+            std::path::MAIN_SEPARATOR_STR,
+        )))
+    }
+
+    /// A root the feed cannot name is recorded as an operation against **every
+    /// project in the workspace**: the poller's `None` means "this directory
+    /// name is not readable", and the activity feed has always read `None` as
+    /// "this operation spanned every project". So a background refresh of one
+    /// repository lands in a durable, searchable log under the wrong scope, and
+    /// stays there.
+    ///
+    /// This is a characterization pin, not an approval: whether a nameless root
+    /// gets a placeholder label, or a distinct "unknown scope" value, is a human
+    /// ruling still owed — and it is a change to `ActivityEntry`'s vocabulary,
+    /// not to the display-name owner. This assertion is written to **fail** the
+    /// moment somebody attributes the entry to the root, because that failure is
+    /// where the ruling lands. In the same edit, update this settle arm's
+    /// repository derivation and [`crate::settle::activity_repo_label`]'s
+    /// contract, which is where `None` is defined to mean the whole workspace.
+    #[test]
+    fn an_unnameable_root_records_its_incoming_check_as_workspace_wide() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut state = AppState::for_roots(dir.path(), &[]);
+        let root = nameless_root();
+
+        // Three behind, so the entry is recorded at all: a poll that found
+        // nothing says nothing, and asserting an absence would prove nothing.
+        state.settle_incoming_poll(root, Ok(Some((0, 3))));
+
+        let entry = state
+            .ui
+            .activity
+            .entries
+            .last()
+            .expect("the poll recorded an entry");
+        assert_eq!(
+            entry.message, "Incoming check · 3 incoming commits",
+            "the entry that lands is the per-repository fetch's own message"
+        );
+        assert_eq!(
+            entry.repo, None,
+            "…attributed to no repository at all, which the activity feed reads \
+             as the whole workspace: a per-repository background refresh recorded \
+             as a workspace-wide one, permanently"
+        );
+    }
+}
