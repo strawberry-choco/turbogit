@@ -125,23 +125,19 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     if state.multi.roots.is_empty() {
         return;
     }
-    // Warm the per-root tag cache for every in-scope root (plan D10: one
-    // shared step, keyed by repository, so whichever surface renders first
-    // warms the cache for both).
+    // Warm the Root caches' per-root tag list and checkout history for every
+    // in-scope root (one shared step, keyed by repository, so whichever surface
+    // renders first warms them for both).
     branch_tree_view::warm_tags(state);
-    // The Recent group's history is the other read the snapshot has no room for.
     state.warm_branch_recents();
-    // Build the repo-grouped view model once (pure; issue 01).
-    let tags_by_root = state.ui.branches_tags.clone();
-    let recents_by_root = state.ui.branches_recents.clone();
-    let branches_tree = &state.ui.branches_tree;
-    let options = state.ui.branches_view;
+    // Build the repo-grouped view model once (pure; issue 01) over borrowed
+    // cache maps — no per-frame copy of what the cache already holds.
     let view = branches_tree::build_branch_view_with(
         &state.multi.roots,
-        &tags_by_root,
-        &recents_by_root,
-        &|root| branch_tree_view::remotes_revealed(branches_tree, root),
-        &options,
+        state.caches.tags_by_root(),
+        state.caches.recents_by_root(),
+        &|root| branch_tree_view::remotes_revealed(&state.ui.branches_tree, root),
+        &state.ui.branches_view,
     );
 
     // Esc clears the gear's toggle list first, then the filter, then the context
@@ -533,28 +529,10 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
         .roots
         .iter()
         .any(|r| !r.branches.is_empty() || r.head.is_some());
-    let tags_by_root = state.ui.branches_tags.clone();
     // Owned copies of the surface-owned string props: the component borrows
     // them while the surface keeps &mut AppState for the banner and events.
     let filter = state.ui.branches_filter.clone();
     let repo_filter = state.ui.branches_repo_filter.clone();
-    let props = TreeProps {
-        view,
-        filter: &filter,
-        repo_filter: repo_filter.as_ref(),
-        tags_by_root: &tags_by_root,
-        multi_repo: state.multi.roots.len() > 1,
-        busy: state.ui.busy,
-        has_any_data,
-        merge_in_progress: state.ui.merge_in_progress,
-        last_fetch: state.ui.branches_last_fetch,
-        now: chrono::Utc::now(),
-        allows_rename: true,
-        allows_context_menu: true,
-        id_salt: "branches_list",
-        full_height: true,
-        collapse_remotes_by_default: false,
-    };
 
     // Issue 15: an operation in flight and the delete-undo window both speak
     // above the list. They share a lane that is allocated every frame, with or
@@ -582,6 +560,26 @@ fn list_area(ui: &mut Ui, state: &mut AppState, view: &BranchView) {
             );
         });
     }
+
+    // Built after the banner so the borrow of the cache's tag map does not
+    // overlap the `&mut AppState` the banner needs.
+    let props = TreeProps {
+        view,
+        filter: &filter,
+        repo_filter: repo_filter.as_ref(),
+        tags_by_root: state.caches.tags_by_root(),
+        multi_repo: state.multi.roots.len() > 1,
+        busy: state.ui.busy,
+        has_any_data,
+        merge_in_progress: state.ui.merge_in_progress,
+        last_fetch: state.ui.branches_last_fetch,
+        now: chrono::Utc::now(),
+        allows_rename: true,
+        allows_context_menu: true,
+        id_salt: "branches_list",
+        full_height: true,
+        collapse_remotes_by_default: false,
+    };
 
     let events = branch_tree_view::branch_tree(ui, &props, &mut state.ui.branches_tree);
     for event in events {

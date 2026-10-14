@@ -26,9 +26,11 @@ use test_support::git_seed::git;
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::operation::OpKind;
 use turbogit_app::root_caches::{Affected, LogScope, RootCaches};
+use turbogit_app::shell_writes::tag as tag_writes;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{
-    Commit, LogOpts, RootId, Signature, SignatureState, Stash, VcsSettings,
+    Commit, LogOpts, RecentCheckout, RefState, RootId, Signature, SignatureState, Stash, TagSpec,
+    VcsSettings,
 };
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
@@ -312,6 +314,145 @@ fn a_stash_listing_is_invalidated_with_its_own_root_and_no_further() {
     assert!(
         state.caches.stashes(&alpha_id).is_none() && state.caches.stashes(&beta_id).is_none(),
         "every root's listing goes with a project-wide invalidation"
+    );
+}
+
+/// One fake checkout-history row in the shape the reflog read answers.
+fn recent(name: &str) -> RecentCheckout {
+    RecentCheckout {
+        name: name.to_string(),
+        at: 0,
+    }
+}
+
+/// A root's **tag list** and **checkout history** are per-root cached values
+/// like the stash listing above: each goes when its root is invalidated, and
+/// nothing else does. The tag list used to be cleared by nothing, so a tag made
+/// in the session was invisible until a restart; folding it in here is what
+/// puts it under the one invalidation rule.
+#[test]
+fn a_tag_list_and_checkout_history_are_invalidated_with_their_own_root_and_no_further() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+    let beta_id = RootId(p.beta.clone().into());
+
+    let mut state = AppState::for_roots(&p.dir, &[p.alpha.clone(), p.beta.clone()]);
+    state.caches.store_tags(
+        alpha_id.clone(),
+        vec![("alpha-v1".to_string(), RefState::Default)],
+    );
+    state
+        .caches
+        .store_recents(alpha_id.clone(), vec![recent("alpha-move")]);
+    state.caches.store_tags(
+        beta_id.clone(),
+        vec![("beta-v1".to_string(), RefState::Default)],
+    );
+    state
+        .caches
+        .store_recents(beta_id.clone(), vec![recent("beta-move")]);
+
+    state
+        .tx
+        .send(AppEvent::OpCompleted {
+            kind: OpKind::Other,
+            label: "op".to_string(),
+            affected: Affected::Root(alpha_id.clone()),
+            result: Ok(()),
+        })
+        .expect("send OpCompleted");
+    state.drain_events();
+
+    assert!(
+        state.caches.tags(&alpha_id).is_none() && state.caches.recents(&alpha_id).is_none(),
+        "the root the op named loses its tag list and its checkout history"
+    );
+    assert_eq!(
+        state.caches.tags(&beta_id).map(|t| t.len()),
+        Some(1),
+        "and the root the op never named keeps its own tag list"
+    );
+    assert_eq!(
+        state.caches.recents(&beta_id).map(|r| r.len()),
+        Some(1),
+        "…and its own checkout history"
+    );
+
+    // A whole-project invalidation takes every root's list and history.
+    state.caches.store_tags(
+        alpha_id.clone(),
+        vec![("alpha-v1".to_string(), RefState::Default)],
+    );
+    state
+        .caches
+        .store_recents(alpha_id.clone(), vec![recent("alpha-move")]);
+    state.caches.store_tags(
+        beta_id.clone(),
+        vec![("beta-v1".to_string(), RefState::Default)],
+    );
+    state
+        .caches
+        .store_recents(beta_id.clone(), vec![recent("beta-move")]);
+    state
+        .tx
+        .send(AppEvent::OpCompleted {
+            kind: OpKind::Other,
+            label: "switch".to_string(),
+            affected: Affected::All,
+            result: Ok(()),
+        })
+        .expect("send OpCompleted");
+    state.drain_events();
+    assert!(
+        state.caches.tags(&alpha_id).is_none()
+            && state.caches.tags(&beta_id).is_none()
+            && state.caches.recents(&alpha_id).is_none()
+            && state.caches.recents(&beta_id).is_none(),
+        "every root's tag list and checkout history go with a project-wide invalidation"
+    );
+}
+
+/// **A tag created in-session reaches the cache's tag list once the operation
+/// settles.** This is the stale-tag hole the fold closes: the list used to be
+/// filled only for roots *missing* from the map and cleared by nothing, so a
+/// tag made in the session never showed until a restart. With the list in
+/// [`RootCaches`], the settle invalidates the affected root and the surface's
+/// per-frame warm refills it from git.
+#[test]
+fn a_tag_created_in_session_is_in_the_cached_tag_list_once_the_op_settles() {
+    let p = two_root_project();
+    let alpha_id = RootId(p.alpha.clone().into());
+
+    let mut state = AppState::for_roots(&p.dir, std::slice::from_ref(&p.alpha));
+    // Warm the cache BEFORE the tag exists — the entry the fold must drop.
+    state.warm_branch_tags();
+    assert!(
+        state
+            .caches
+            .tags(&alpha_id)
+            .is_some_and(|tags| tags.iter().all(|(name, _)| name != "v1")),
+        "the cold tag list must not already hold the tag"
+    );
+
+    let spec = TagSpec {
+        name: "v1".to_string(),
+        target: None,
+        message: None,
+        tagger: None,
+        sign: false,
+    };
+    state.dispatch(tag_writes::create(&alpha_id, &spec, false));
+    state.drain_events();
+
+    // The settle invalidated the root; the surface's per-frame warm refills it
+    // from git, and the tag the session made is in the list — no restart.
+    state.warm_branch_tags();
+    assert!(
+        state
+            .caches
+            .tags(&alpha_id)
+            .is_some_and(|tags| tags.iter().any(|(name, _)| name == "v1")),
+        "a tag created in-session must be in the root caches' tag list after the op settles"
     );
 }
 
