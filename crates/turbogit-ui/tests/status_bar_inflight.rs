@@ -28,12 +28,12 @@
 //! so the idle sibling root is asserted silent in every painted case.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use egui::{Color32, Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{filled_rects, painted_galleys, settle, shell_harness_over_animated};
 use turbogit_app::operation::{LifecycleVerb, Operation};
 use turbogit_app::state::{AppState, Tab};
@@ -85,52 +85,38 @@ struct Project {
     beta: PathBuf,
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .env("GIT_EDITOR", "true")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// Every call is pinned per call through the fixture crate's runner: a headless
+// machine has no global identity to borrow. The runner this replaced also set
+// `GIT_EDITOR=true`, and none of the fixture's own calls open an editor — each
+// commit carries its message on the command line.
 
 /// `git` that may fail: a conflicting merge is the point, and git exits non-zero
-/// exactly because it stopped mid-operation.
+/// exactly because it stopped mid-operation. It keeps its own runner because the
+/// owner's asserts success, but takes its identity from the owner's builder.
 fn git_allow_fail(dir: &Path, args: &[&str]) {
-    let _ = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
+    let _ = GitEnv::fixture()
+        .command(dir, args)
         .env("GIT_EDITOR", "true")
         .output();
 }
 
 fn write_commit(dir: &Path, file: &str, body: &str, msg: &str) {
     std::fs::write(dir.join(file), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
+    git_with_env(dir, &["add", "."], &GitEnv::fixture());
+    git_with_env(dir, &["commit", "-q", "-m", msg], &GitEnv::fixture());
 }
 
 fn repo(parent: &Path, name: &str) -> PathBuf {
     let dir = parent.join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    git(&dir, &["init", "-q", "-b", "main"]);
-    git(&dir, &["config", "user.email", "t@t"]);
-    git(&dir, &["config", "user.name", "t"]);
-    git(&dir, &["config", "core.autocrlf", "false"]);
+    git_with_env(&dir, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(&dir, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(&dir, &["config", "user.name", "t"], &GitEnv::fixture());
+    git_with_env(
+        &dir,
+        &["config", "core.autocrlf", "false"],
+        &GitEnv::fixture(),
+    );
     write_commit(&dir, "base.txt", "base\n", "the base commit");
     write_commit(&dir, "a.txt", "one\n", &format!("{name} 1"));
     dir
@@ -165,9 +151,13 @@ fn cherry_pick_in_flight(repo: &Path) {
 /// `git merge --abort` can actually finish it.
 fn merge_conflict_in_flight(repo: &Path) {
     write_commit(repo, "c.txt", "MAIN-side\n", "main side");
-    git(repo, &["checkout", "-q", "-b", "side", "HEAD~1"]);
+    git_with_env(
+        repo,
+        &["checkout", "-q", "-b", "side", "HEAD~1"],
+        &GitEnv::fixture(),
+    );
     write_commit(repo, "c.txt", "OTHER-side\n", "other side");
-    git(repo, &["checkout", "-q", "main"]);
+    git_with_env(repo, &["checkout", "-q", "main"], &GitEnv::fixture());
     git_allow_fail(repo, &["merge", "--no-edit", "side"]);
     assert!(
         repo.join(".git/MERGE_HEAD").exists(),

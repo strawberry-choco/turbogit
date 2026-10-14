@@ -12,6 +12,7 @@ use egui::accesskit::Role;
 use egui_kittest::kittest::NodeT as _;
 use egui_kittest::{Harness, kittest::Queryable as _};
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{
     assert_painted, click_menu_item, right_click_row, settle_quiet, shell_harness_over,
 };
@@ -24,41 +25,25 @@ use turbogit_services::bulk_run::RowState;
 
 // --- git fixture ---------------------------------------------------------------
 
-/// A `git` runner that pins the commit identity on every invocation.
-///
-/// Not `test_support::git_seed::git`, which takes no per-call env: `init_repo` writes the
-/// identity into the repository too, and the dialog rows carry the author line, so
-/// the two repos have to agree on it.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// `init_repo` writes the identity into the repository too, and the dialog rows
+// carry the author line, so the two repos have to agree on it: every call is
+// pinned per call through the fixture crate's runner as well, because a
+// headless machine has no global identity to borrow.
 
 fn commit_file(dir: &Path, name: &str, body: &str, msg: &str) -> String {
     std::fs::write(dir.join(name), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
-    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git_with_env(dir, &["add", "."], &GitEnv::fixture());
+    git_with_env(dir, &["commit", "-q", "-m", msg], &GitEnv::fixture());
+    git_with_env(dir, &["rev-parse", "HEAD"], &GitEnv::fixture())
+        .trim()
+        .to_string()
 }
 
 fn init_repo(dir: &Path) {
     std::fs::create_dir_all(dir).unwrap();
-    git(dir, &["init", "-q", "-b", "main"]);
-    git(dir, &["config", "user.email", "t@t"]);
-    git(dir, &["config", "user.name", "t"]);
+    git_with_env(dir, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(dir, &["config", "user.email", "t@t"], &GitEnv::fixture());
+    git_with_env(dir, &["config", "user.name", "t"], &GitEnv::fixture());
 }
 
 struct Seed {
@@ -251,7 +236,7 @@ fn executing_queues_the_run_and_reports_through_the_monitor() {
     assert_painted(&harness, "Done");
 
     // The pick really landed in the target repo.
-    let subjects = git(&seed.beta, &["log", "--format=%s"]);
+    let subjects = git_with_env(&seed.beta, &["log", "--format=%s"], &GitEnv::fixture());
     assert!(
         subjects.contains("alpha: second commit"),
         "the target gained the picked commit: {subjects}"

@@ -39,12 +39,12 @@
 //! branch and selection state are all still the clean ones the test sets up.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use egui::{Pos2, Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use tempfile::TempDir;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{
     assert_menu_item_gated, assert_not_painted, assert_painted, painted_galleys,
     shell_harness_over_animated,
@@ -173,24 +173,18 @@ struct Project {
     beta: PathBuf,
 }
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .env("GIT_AUTHOR_DATE", "@100 +0000")
-        .env("GIT_COMMITTER_DATE", "@100 +0000")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
+// Every call is pinned per call through the fixture crate's runner: a headless
+// machine has no global identity to borrow. The dates ride on the same pin
+// because the gating rows are ordered by time, and an unpinned wall clock makes
+// a "was this commit old enough" row an accident of when the suite ran.
+
+/// The shared pin, with both roles committing at a fixed epoch: one value for
+/// every call here, which is what the old runner's fixed `GIT_*_DATE` did.
+fn dated() -> GitEnv {
+    let mut env = GitEnv::fixture();
+    env.author_date = Some("@100 +0000".to_string());
+    env.committer_date = Some("@100 +0000".to_string());
+    env
 }
 
 /// One repository: `base` ← `<name> 1` ← `<name> 2` on `main`, a `side` branch
@@ -199,15 +193,15 @@ fn git(dir: &Path, args: &[&str]) -> String {
 fn repo(parent: &Path, name: &str) -> PathBuf {
     let dir = parent.join(name);
     std::fs::create_dir_all(&dir).unwrap();
-    git(&dir, &["init", "-q", "-b", "main"]);
-    git(&dir, &["config", "user.email", "t@t"]);
-    git(&dir, &["config", "user.name", "t"]);
-    git(&dir, &["config", "core.autocrlf", "false"]);
+    git_with_env(&dir, &["init", "-q", "-b", "main"], &dated());
+    git_with_env(&dir, &["config", "user.email", "t@t"], &dated());
+    git_with_env(&dir, &["config", "user.name", "t"], &dated());
+    git_with_env(&dir, &["config", "core.autocrlf", "false"], &dated());
     write_commit(&dir, "base.txt", "base\n", "the base commit");
     write_commit(&dir, "a.txt", "one\n", &format!("{name} 1"));
     write_commit(&dir, "b.txt", "two\n", &format!("{name} 2"));
-    git(&dir, &["branch", "side", "HEAD~2"]);
-    git(&dir, &["checkout", "-q", "-b", "feature"]);
+    git_with_env(&dir, &["branch", "side", "HEAD~2"], &dated());
+    git_with_env(&dir, &["checkout", "-q", "-b", "feature"], &dated());
     dir
 }
 
@@ -217,9 +211,11 @@ fn repo(parent: &Path, name: &str) -> PathBuf {
 /// in every run, and the row a test right-clicks is the row the menu opens on.
 fn write_commit(dir: &Path, file: &str, body: &str, msg: &str) -> String {
     std::fs::write(dir.join(file), body).unwrap();
-    git(dir, &["add", "."]);
-    git(dir, &["commit", "-q", "-m", msg]);
-    git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+    git_with_env(dir, &["add", "."], &dated());
+    git_with_env(dir, &["commit", "-q", "-m", msg], &dated());
+    git_with_env(dir, &["rev-parse", "HEAD"], &dated())
+        .trim()
+        .to_string()
 }
 
 fn project() -> Project {
@@ -259,13 +255,13 @@ fn revert_in_flight(repo: &Path) {
 /// parent-count reason has a real row to state itself on.
 fn project_with_merge() -> Project {
     let p = project();
-    git(&p.alpha, &["checkout", "-q", "side"]);
+    git_with_env(&p.alpha, &["checkout", "-q", "side"], &dated());
     write_commit(&p.alpha, "s.txt", "side\n", "side commit");
-    git(&p.alpha, &["checkout", "-q", "feature"]);
-    git(&p.alpha, &["merge", "-q", "--no-edit", "side"]);
-    let merge = git(&p.alpha, &["rev-parse", "HEAD"]);
+    git_with_env(&p.alpha, &["checkout", "-q", "feature"], &dated());
+    git_with_env(&p.alpha, &["merge", "-q", "--no-edit", "side"], &dated());
+    let merge = git_with_env(&p.alpha, &["rev-parse", "HEAD"], &dated());
     assert_eq!(
-        git(&p.alpha, &["cat-file", "-p", merge.trim()])
+        git_with_env(&p.alpha, &["cat-file", "-p", merge.trim()], &dated())
             .lines()
             .filter(|line| line.starts_with("parent "))
             .count(),
