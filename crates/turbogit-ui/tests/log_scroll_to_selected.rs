@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use egui::Shape;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{painted_text, shell_harness_over};
 use turbogit_app::state::{AppState, LOG_BATCH_SIZE};
 
@@ -79,26 +80,10 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// A `git` runner that pins the commit identity on every invocation, and deliberately
-/// NOT `test_support::git_seed::git`, which takes no per-call env: these rows are
-/// matched by subject and hash, so a machine-dependent identity moves the labels.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// No repository `user.*` here: every call is pinned per call through the fixture
+// crate's runner, because a headless machine has no global identity to borrow.
+// These rows are matched by subject and hash, so a machine-dependent identity
+// would move the labels the assertions name.
 
 const COMMITS: usize = 2 * LOG_BATCH_SIZE;
 
@@ -113,9 +98,13 @@ fn seeded() -> Seed {
     let project = tmp.path().join("project");
     let repo = project.join("alpha");
     std::fs::create_dir_all(&repo).expect("alpha dir");
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["config", "user.email", "t@example.com"]);
-    git(&repo, &["config", "user.name", "t"]);
+    git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+    git_with_env(
+        &repo,
+        &["config", "user.email", "t@example.com"],
+        &GitEnv::fixture(),
+    );
+    git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
     // One fast-import batch rather than one subprocess per commit.
     //
     // Two files, for two different callers:
@@ -182,7 +171,11 @@ fn seeded() -> Seed {
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
-    git(&repo, &["reset", "-q", "--hard", "main"]);
+    git_with_env(
+        &repo,
+        &["reset", "-q", "--hard", "main"],
+        &GitEnv::fixture(),
+    );
     Seed {
         _tmp: tmp,
         project,
@@ -194,7 +187,7 @@ fn seeded() -> Seed {
 /// subjects are unique, which is what lets a test name a row by what it paints
 /// and still click it.
 fn hash_of(repo: &Path, subject: &str) -> String {
-    git(repo, &["log", "--format=%H %s"])
+    git_with_env(repo, &["log", "--format=%H %s"], &GitEnv::fixture())
         .lines()
         .find_map(|line| {
             let (hash, rest) = line.split_once(' ')?;

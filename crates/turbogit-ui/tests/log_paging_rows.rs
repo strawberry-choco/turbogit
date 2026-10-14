@@ -12,6 +12,7 @@ use std::sync::{Arc, OnceLock};
 
 use egui_kittest::{Harness, kittest::Queryable};
 use test_support::RecordingExecutor;
+use test_support::git_seed::{GitEnv, git_with_env};
 use test_support::harness::{assert_painted, painted_text, shell_harness_over};
 use turbogit_app::state::{AppState, LOG_BATCH_SIZE};
 use turbogit_domain::model::VcsSettings;
@@ -50,28 +51,9 @@ fn settle_until(harness: &mut Harness<'_, AppState>, needle: &str) {
 
 // --- Fixture: one long history, seeded once for the whole binary ---------------
 
-/// A `git` runner that pins the commit identity on every invocation.
-///
-/// Not `test_support::git_seed::git`, which takes no per-call env: the `rev-parse`
-/// calls naming the head row run through this runner too, so handing them to the
-/// shared one would commit as whatever the developer's global config names.
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
-        .output()
-        .expect("git must be on PATH");
-    assert!(
-        out.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
+// No repository `user.*` here: every call, the `rev-parse` ones naming the head
+// row included, is pinned per call through the fixture crate's runner, because a
+// headless machine has no global identity to borrow.
 
 fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
@@ -79,8 +61,12 @@ fn short(id: &str) -> String {
 
 /// The row label `commit_row` publishes: `<short hash> <subject>`.
 fn row_label(repo: &Path, nth_from_head: usize) -> String {
-    let id = git(repo, &["rev-parse", &format!("HEAD~{}", nth_from_head)]);
-    let head = git(repo, &["rev-list", "--count", "HEAD"]);
+    let id = git_with_env(
+        repo,
+        &["rev-parse", &format!("HEAD~{}", nth_from_head)],
+        &GitEnv::fixture(),
+    );
+    let head = git_with_env(repo, &["rev-list", "--count", "HEAD"], &GitEnv::fixture());
     let total: usize = head.trim().parse().expect("commit count");
     format!("{} c{}", short(id.trim()), total - nth_from_head - 1)
 }
@@ -93,9 +79,9 @@ fn seeded_project(n: usize) -> (PathBuf, PathBuf) {
         let project = dir.path().join("project");
         let repo = project.join("alpha");
         std::fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "t@t"]);
-        git(&repo, &["config", "user.name", "t"]);
+        git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
         let mut stream = String::new();
         let data = |stream: &mut String, s: &str| {
             stream.push_str(&format!("data {}\n{s}", s.len()));
@@ -135,7 +121,11 @@ fn seeded_project(n: usize) -> (PathBuf, PathBuf) {
             "git fast-import failed with {:?}",
             out.status
         );
-        git(&repo, &["reset", "-q", "--hard", "main"]);
+        git_with_env(
+            &repo,
+            &["reset", "-q", "--hard", "main"],
+            &GitEnv::fixture(),
+        );
         // The temp dir outlives every test in this binary.
         std::mem::forget(dir);
         (project, repo)
@@ -178,7 +168,7 @@ fn log_harness_over(project: &Path, repo: &Path) -> Harness<'static, AppState> {
     settle(&mut harness);
     // The head commit's short hash is one painted galley; the full row label is
     // an accessibility label, not painted text, so the wait is on the hash.
-    let head = git(repo, &["rev-parse", "HEAD"]);
+    let head = git_with_env(repo, &["rev-parse", "HEAD"], &GitEnv::fixture());
     settle_until(&mut harness, &short(head.trim()));
     harness
 }
