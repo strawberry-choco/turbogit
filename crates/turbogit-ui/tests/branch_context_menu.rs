@@ -560,35 +560,18 @@ fn clicking_the_copy_item_returns_its_action_and_nothing_else() {
 // --- production path: the Branches surface ---------------------------------------
 
 pub(crate) mod surface {
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
+    use std::path::PathBuf;
     use std::time::Duration;
 
     use egui_kittest::Harness;
     use egui_kittest::kittest::{NodeT, Queryable};
+    use test_support::git_seed::{GitEnv, git_with_env};
     use test_support::harness::{assert_painted, click_menu_item, painted_galleys, settle_quiet};
     use turbogit_app::state::{AppState, Tab};
 
-    /// Stays local: it sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*` on every
-    /// `Command`, which `git_seed::git` cannot express, and that env overrides
-    /// the repo's own `user.email`. No assertion here reads an author.
-    pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
-            .expect("git must be on PATH");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    }
+    // Every call is pinned per call through the fixture crate's runner: a
+    // headless machine has no global identity to borrow. No assertion here
+    // reads an author, so nothing about what git records is under test.
 
     /// A project under the gitignored `<workspace>/.scratch/` holding one
     /// repo `alpha` on `main` with locals `feature-a` and `plain-b`. `main`
@@ -602,23 +585,44 @@ pub(crate) mod surface {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("alpha")).unwrap();
         let repo = base.join("alpha");
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "test@example.com"]);
-        git(&repo, &["config", "user.name", "Test"]);
+        git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(
+            &repo,
+            &["config", "user.email", "test@example.com"],
+            &GitEnv::fixture(),
+        );
+        git_with_env(&repo, &["config", "user.name", "Test"], &GitEnv::fixture());
         std::fs::write(repo.join("base.txt"), "base\n").unwrap();
-        git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-q", "-m", "init"]);
-        git(&base, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
-        git(&repo, &["remote", "add", "origin", "../origin.git"]);
-        git(&repo, &["push", "-q", "-u", "origin", "main"]);
-        git(&repo, &["branch", "feature-a"]);
-        git(
+        git_with_env(&repo, &["add", "."], &GitEnv::fixture());
+        git_with_env(&repo, &["commit", "-q", "-m", "init"], &GitEnv::fixture());
+        git_with_env(
+            &base,
+            &["init", "-q", "--bare", "-b", "main", "origin.git"],
+            &GitEnv::fixture(),
+        );
+        git_with_env(
+            &repo,
+            &["remote", "add", "origin", "../origin.git"],
+            &GitEnv::fixture(),
+        );
+        git_with_env(
+            &repo,
+            &["push", "-q", "-u", "origin", "main"],
+            &GitEnv::fixture(),
+        );
+        git_with_env(&repo, &["branch", "feature-a"], &GitEnv::fixture());
+        git_with_env(
             &repo,
             &["push", "-q", "--set-upstream", "origin", "feature-a"],
+            &GitEnv::fixture(),
         );
-        git(&repo, &["push", "-q", "origin", "main:remote-only"]);
-        git(&repo, &["fetch", "-q", "origin"]);
-        git(&repo, &["branch", "plain-b"]);
+        git_with_env(
+            &repo,
+            &["push", "-q", "origin", "main:remote-only"],
+            &GitEnv::fixture(),
+        );
+        git_with_env(&repo, &["fetch", "-q", "origin"], &GitEnv::fixture());
+        git_with_env(&repo, &["branch", "plain-b"], &GitEnv::fixture());
         base
     }
 

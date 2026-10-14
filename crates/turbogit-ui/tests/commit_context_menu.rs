@@ -658,6 +658,7 @@ mod surface {
     use egui_kittest::Harness;
     use egui_kittest::kittest::{NodeT, Queryable};
     use tempfile::TempDir;
+    use test_support::git_seed::{GitEnv, git_with_env};
     use test_support::harness::{
         assert_menu_item_gated, assert_not_painted, assert_painted, filled_rects, painted_galleys,
     };
@@ -677,23 +678,9 @@ mod surface {
         pub base: String,
     }
 
-    fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
-            .expect("git must be on PATH");
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    }
+    // No repository `user.*` here: every call is pinned per call through the
+    // fixture crate's runner, because a headless machine has no global identity
+    // to borrow.
 
     /// Commit with an explicit author/committer date. The log orders newest
     /// first and falls back to the commit id on a tie, so same-second commits
@@ -701,33 +688,25 @@ mod surface {
     /// covers a different row than the one the test means to click.
     fn commit_file(dir: &Path, name: &str, body: &str, msg: &str, epoch: i64) -> String {
         let stamp = format!("@{epoch} +0000");
-        let run = |args: &[&str]| {
-            let out = Command::new("git")
-                .args(args)
-                .current_dir(dir)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_DATE", &stamp)
-                .env("GIT_AUTHOR_DATE", &stamp)
-                .output()
-                .expect("git must be on PATH");
-            assert!(
-                out.status.success(),
-                "git {args:?} failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
+        let mut env = GitEnv::fixture();
+        env.author_date = Some(stamp.clone());
+        env.committer_date = Some(stamp);
         std::fs::write(dir.join(name), body).unwrap();
-        run(&["add", "."]);
-        run(&["commit", "-q", "-m", msg]);
-        git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+        git_with_env(dir, &["add", "."], &env);
+        git_with_env(dir, &["commit", "-q", "-m", msg], &env);
+        git_with_env(dir, &["rev-parse", "HEAD"], &env)
+            .trim()
+            .to_string()
     }
 
     /// A commit authored by whatever the REPOSITORY's config says, with only the
     /// date pinned. `commit_file` pins the author in the environment, which is
     /// what keeps the log's order deterministic — and also what would hide a
     /// history with more than one identity behind it.
+    ///
+    /// Stays local for the same reason it did before: the owner's identity value
+    /// always pins an author, and this helper must not pin one. Two date names
+    /// are what it spells, and they are not an identity.
     fn commit_as_configured(dir: &Path, name: &str, body: &str, msg: &str, epoch: i64) -> String {
         let stamp = format!("@{epoch} +0000");
         let run = |args: &[&str]| {
@@ -747,7 +726,9 @@ mod surface {
         std::fs::write(dir.join(name), body).unwrap();
         run(&["add", "."]);
         run(&["commit", "-q", "-m", msg]);
-        git(dir, &["rev-parse", "HEAD"]).trim().to_string()
+        git_with_env(dir, &["rev-parse", "HEAD"], &GitEnv::fixture())
+            .trim()
+            .to_string()
     }
 
     /// `main`: base ← c1 ← c2, with `feature` forked at c1. The seeded history
@@ -757,10 +738,14 @@ mod surface {
         let project = tmp.path().join(tag);
         let alpha = project.join("alpha");
         std::fs::create_dir_all(&alpha).unwrap();
-        git(&alpha, &["init", "-q", "-b", "main"]);
-        git(&alpha, &["config", "user.email", "t@t"]);
-        git(&alpha, &["config", "user.name", "t"]);
-        git(&alpha, &["config", "core.autocrlf", "false"]);
+        git_with_env(&alpha, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(&alpha, &["config", "user.email", "t@t"], &GitEnv::fixture());
+        git_with_env(&alpha, &["config", "user.name", "t"], &GitEnv::fixture());
+        git_with_env(
+            &alpha,
+            &["config", "core.autocrlf", "false"],
+            &GitEnv::fixture(),
+        );
         let base = commit_file(&alpha, "base.txt", "base\n", "the base commit", 100);
         let c1 = commit_file(&alpha, "a.txt", "one\n", "alpha: first commit", 200);
         let c2 = commit_file(
@@ -770,7 +755,7 @@ mod surface {
             "alpha: second commit\n\nThe body the pane still shows.",
             300,
         );
-        git(&alpha, &["branch", "feature", &c1]);
+        git_with_env(&alpha, &["branch", "feature", &c1], &GitEnv::fixture());
         Seed {
             _tmp: tmp,
             project,
@@ -1108,7 +1093,11 @@ mod surface {
                         .any(|c| c.message.to_lowercase().starts_with("revert"))
                 })
         });
-        let subject = git(&seed.alpha, &["log", "-1", "--format=%s"]);
+        let subject = git_with_env(
+            &seed.alpha,
+            &["log", "-1", "--format=%s"],
+            &GitEnv::fixture(),
+        );
         assert!(
             subject.to_lowercase().starts_with("revert"),
             "HEAD is the inverse commit; got {subject:?}"
@@ -1196,7 +1185,12 @@ mod surface {
             "a click on the refused row changes nothing"
         );
         assert_eq!(
-            git(&seed.alpha, &["rev-list", "--count", "main"]).trim(),
+            git_with_env(
+                &seed.alpha,
+                &["rev-list", "--count", "main"],
+                &GitEnv::fixture()
+            )
+            .trim(),
             "3",
             "and no commit lands on the branch the picker refused"
         );
@@ -1209,7 +1203,11 @@ mod surface {
     #[test]
     fn a_protected_branch_that_is_not_checked_out_is_refused_as_protected() {
         let seed = seeded_repo("pick-protected");
-        git(&seed.alpha, &["checkout", "-q", "feature"]);
+        git_with_env(
+            &seed.alpha,
+            &["checkout", "-q", "feature"],
+            &GitEnv::fixture(),
+        );
         let mut harness = log_harness(&seed);
         settle(&mut harness);
 
@@ -1292,7 +1290,7 @@ mod surface {
         // A tag appears behind the app's back while the dialog is closed. The
         // dialog read the tag list on the first visit, so only a re-read can
         // notice this one.
-        git(&seed.alpha, &["tag", "v-leaked"]);
+        git_with_env(&seed.alpha, &["tag", "v-leaked"], &GitEnv::fixture());
 
         // Second visit, on a different commit.
         right_click_row(&mut harness, "alpha: second commit");
@@ -1356,17 +1354,22 @@ mod surface {
 
         assert!(harness.state().ui.dialog.is_none(), "the dialog went");
         assert_eq!(
-            git(&seed.alpha, &["tag", "-l"]).trim(),
+            git_with_env(&seed.alpha, &["tag", "-l"], &GitEnv::fixture()).trim(),
             "",
             "and no tag was created"
         );
         assert_eq!(
-            git(&seed.alpha, &["rev-parse", "HEAD"]).trim(),
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
             seed.c2,
             "and the repository is exactly where it was"
         );
         assert_eq!(
-            git(&seed.alpha, &["symbolic-ref", "--short", "HEAD"]).trim(),
+            git_with_env(
+                &seed.alpha,
+                &["symbolic-ref", "--short", "HEAD"],
+                &GitEnv::fixture()
+            )
+            .trim(),
             "main",
             "still on the branch it was on"
         );
@@ -1408,11 +1411,21 @@ mod surface {
         // the picker could ever offer. A cherry-pick test then runs the
         // identical gesture against both repositories and only the real git
         // state of each says which one was used.
-        let clean_base = git(&clean, &["rev-parse", "HEAD~1"]).trim().to_string();
-        git(&clean, &["branch", "landing", &clean_base]);
-        git(&dirty, &["branch", "landing", "HEAD"]);
-        let landing = git(&clean, &["rev-parse", "landing"]).trim().to_string();
-        let other_landing = git(&dirty, &["rev-parse", "landing"]).trim().to_string();
+        let clean_base = git_with_env(&clean, &["rev-parse", "HEAD~1"], &GitEnv::fixture())
+            .trim()
+            .to_string();
+        git_with_env(
+            &clean,
+            &["branch", "landing", &clean_base],
+            &GitEnv::fixture(),
+        );
+        git_with_env(&dirty, &["branch", "landing", "HEAD"], &GitEnv::fixture());
+        let landing = git_with_env(&clean, &["rev-parse", "landing"], &GitEnv::fixture())
+            .trim()
+            .to_string();
+        let other_landing = git_with_env(&dirty, &["rev-parse", "landing"], &GitEnv::fixture())
+            .trim()
+            .to_string();
         let mut state = AppState::new(project);
         state.drain_events();
         state.ui.tab = Tab::Log;
@@ -1439,7 +1452,9 @@ mod surface {
         harness.state_mut().ui.log_filter = "clean work".to_string();
         settle(&mut harness);
 
-        let commit = git(&clean, &["rev-parse", "HEAD"]).trim().to_string();
+        let commit = git_with_env(&clean, &["rev-parse", "HEAD"], &GitEnv::fixture())
+            .trim()
+            .to_string();
         let parent = clean_base;
         CrossRoot {
             _tmp: tmp,
@@ -1533,7 +1548,7 @@ mod surface {
             other_landing,
             ..
         } = cross_root_row("dialog-root");
-        let other_head = git(&selected_path, &["rev-parse", "HEAD"])
+        let other_head = git_with_env(&selected_path, &["rev-parse", "HEAD"], &GitEnv::fixture())
             .trim()
             .to_string();
 
@@ -1561,25 +1576,39 @@ mod surface {
         wait_for(&mut harness, |s| s.ui.toast.is_some());
 
         assert_ne!(
-            git(&row_root_path, &["rev-parse", "landing"]).trim(),
+            git_with_env(
+                &row_root_path,
+                &["rev-parse", "landing"],
+                &GitEnv::fixture()
+            )
+            .trim(),
             landing,
             "the cherry-picked commit landed on the branch in the ROW's repository, \
              not nowhere"
         );
         assert_eq!(
-            git(&row_root_path, &["log", "-1", "--format=%s", "landing"])
-                .trim()
-                .to_string(),
+            git_with_env(
+                &row_root_path,
+                &["log", "-1", "--format=%s", "landing"],
+                &GitEnv::fixture()
+            )
+            .trim()
+            .to_string(),
             "clean work commit",
             "and it is the row's commit that landed there"
         );
         assert_eq!(
-            git(&selected_path, &["rev-parse", "landing"]).trim(),
+            git_with_env(
+                &selected_path,
+                &["rev-parse", "landing"],
+                &GitEnv::fixture()
+            )
+            .trim(),
             other_landing,
             "the OTHER repository's branch did not move"
         );
         assert_eq!(
-            git(&selected_path, &["rev-parse", "HEAD"]).trim(),
+            git_with_env(&selected_path, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
             other_head,
             "nor did its checkout"
         );
@@ -1610,9 +1639,9 @@ mod surface {
         std::fs::create_dir_all(&clean).unwrap();
         std::fs::create_dir_all(&dirty).unwrap();
         for (repo, name) in [(&clean, "clean"), (&dirty, "dirty")] {
-            git(repo, &["init", "-q", "-b", "main"]);
-            git(repo, &["config", "user.email", "t@t"]);
-            git(repo, &["config", "user.name", "t"]);
+            git_with_env(repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+            git_with_env(repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+            git_with_env(repo, &["config", "user.name", "t"], &GitEnv::fixture());
             commit_file(
                 repo,
                 "base.txt",
@@ -1811,7 +1840,7 @@ mod surface {
         });
 
         assert_eq!(
-            git(&seed.alpha, &["rev-parse", "HEAD"]).trim(),
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
             seed.c1,
             "HEAD stands on the commit that was right-clicked, not on its tip"
         );
@@ -1841,7 +1870,9 @@ mod surface {
     fn the_drop_preflight_says_what_will_happen_before_anything_runs() {
         let seed = seeded_repo("preflight");
         let mut harness = log_harness(&seed);
-        let head = git(&seed.alpha, &["rev-parse", "HEAD"]).trim().to_string();
+        let head = git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture())
+            .trim()
+            .to_string();
         // The default settings protect `main`, and a protected current branch
         // refuses the verb on the item — this run exercises the happy path.
         harness
@@ -1877,7 +1908,10 @@ mod surface {
         assert_painted(&harness, "RECOVERY");
         assert_painted(&harness, "refs/turbogit/preflight-backup");
         // And nothing has moved: this is a briefing, not a rewrite.
-        assert_eq!(git(&seed.alpha, &["rev-parse", "HEAD"]).trim(), head);
+        assert_eq!(
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
+            head
+        );
     }
 
     /// Reword commit opens an editor seeded with the commit's OWN message — the
@@ -1888,7 +1922,9 @@ mod surface {
     fn the_reword_editor_opens_seeded_with_the_commit_s_own_message() {
         let seed = seeded_repo("reword-editor");
         let mut harness = log_harness(&seed);
-        let head = git(&seed.alpha, &["rev-parse", "HEAD"]).trim().to_string();
+        let head = git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture())
+            .trim()
+            .to_string();
         harness
             .state_mut()
             .settings
@@ -1914,7 +1950,7 @@ mod surface {
         assert_painted(&harness, "alpha: second commit");
         assert_painted(&harness, "The body the pane still shows.");
         assert_eq!(
-            git(&seed.alpha, &["rev-parse", "HEAD"]).trim(),
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
             head,
             "and nothing has moved: this is a draft"
         );
@@ -1983,10 +2019,16 @@ mod surface {
     fn cancelling_the_reword_editor_changes_nothing() {
         let seed = seeded_repo("reword-cancel");
         let mut harness = log_harness(&seed);
-        let head = git(&seed.alpha, &["rev-parse", "HEAD"]).trim().to_string();
-        let count = git(&seed.alpha, &["rev-list", "--count", "main"])
+        let head = git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture())
             .trim()
             .to_string();
+        let count = git_with_env(
+            &seed.alpha,
+            &["rev-list", "--count", "main"],
+            &GitEnv::fixture(),
+        )
+        .trim()
+        .to_string();
         harness
             .state_mut()
             .settings
@@ -2008,14 +2050,23 @@ mod surface {
             "",
             "and the draft is discarded, not held for the next open"
         );
-        assert_eq!(git(&seed.alpha, &["rev-parse", "HEAD"]).trim(), head);
         assert_eq!(
-            git(&seed.alpha, &["rev-list", "--count", "main"]).trim(),
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
+            head
+        );
+        assert_eq!(
+            git_with_env(
+                &seed.alpha,
+                &["rev-list", "--count", "main"],
+                &GitEnv::fixture()
+            )
+            .trim(),
             count,
             "the history is where it was"
         );
         assert!(
-            !git(&seed.alpha, &["show-ref"]).contains("preflight-backup"),
+            !git_with_env(&seed.alpha, &["show-ref"], &GitEnv::fixture())
+                .contains("preflight-backup"),
             "and no backup ref was written: nothing ran"
         );
     }
@@ -2027,7 +2078,9 @@ mod surface {
     fn a_reword_with_no_message_is_refused_and_states_why() {
         let seed = seeded_repo("reword-empty");
         let mut harness = log_harness(&seed);
-        let head = git(&seed.alpha, &["rev-parse", "HEAD"]).trim().to_string();
+        let head = git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture())
+            .trim()
+            .to_string();
         harness
             .state_mut()
             .settings
@@ -2059,7 +2112,7 @@ mod surface {
             .selected_root
             .clone()
             .expect("a selected root");
-        let target = git(&seed.alpha, &["rev-parse", "HEAD~1"])
+        let target = git_with_env(&seed.alpha, &["rev-parse", "HEAD~1"], &GitEnv::fixture())
             .trim()
             .to_string();
         harness.state_mut().open_rewrite_preflight(
@@ -2091,7 +2144,10 @@ mod surface {
             !toast.contains("git would keep"),
             "the git mechanism is not a second statement of the bound: {toast:?}"
         );
-        assert_eq!(git(&seed.alpha, &["rev-parse", "HEAD"]).trim(), head);
+        assert_eq!(
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
+            head
+        );
     }
 
     /// Reword commit's preflight is the same briefing with the verb's own facts:
@@ -2103,7 +2159,9 @@ mod surface {
     fn the_reword_preflight_says_what_it_will_change_and_what_it_costs() {
         let seed = seeded_repo("reword-preflight");
         let mut harness = log_harness(&seed);
-        let head = git(&seed.alpha, &["rev-parse", "HEAD"]).trim().to_string();
+        let head = git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture())
+            .trim()
+            .to_string();
         harness
             .state_mut()
             .settings
@@ -2150,7 +2208,7 @@ mod surface {
         assert_painted(&harness, "RECOVERY");
         assert_painted(&harness, "refs/turbogit/preflight-backup");
         assert_eq!(
-            git(&seed.alpha, &["rev-parse", "HEAD"]).trim(),
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
             head,
             "and nothing has moved: this is still a briefing"
         );
@@ -2195,23 +2253,27 @@ mod surface {
         let project = tmp.path().join(tag);
         let repo = project.join("alpha");
         std::fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "t@t"]);
-        git(&repo, &["config", "user.name", "t"]);
+        git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
         commit_file(&repo, "a.txt", "one\n", "alpha: first commit", 100);
         // `side` is never merged, so its commit is the one the current branch's
         // history does NOT contain — which is what makes it off-branch.
-        git(&repo, &["checkout", "-q", "-b", "side"]);
+        git_with_env(&repo, &["checkout", "-q", "-b", "side"], &GitEnv::fixture());
         commit_file(&repo, "s.txt", "side\n", "alpha: side work", 120);
-        git(&repo, &["checkout", "-q", "main"]);
+        git_with_env(&repo, &["checkout", "-q", "main"], &GitEnv::fixture());
         // `topic` forks from main, NOT from `side`: a topic branched off `side`
         // would carry side's commit into main when it is merged, and the
         // off-branch case would stop being off-branch.
-        git(&repo, &["checkout", "-q", "-b", "topic"]);
+        git_with_env(
+            &repo,
+            &["checkout", "-q", "-b", "topic"],
+            &GitEnv::fixture(),
+        );
         commit_file(&repo, "t.txt", "topic\n", "alpha: topic work", 150);
-        git(&repo, &["checkout", "-q", "main"]);
+        git_with_env(&repo, &["checkout", "-q", "main"], &GitEnv::fixture());
         commit_file(&repo, "b.txt", "two\n", "alpha: second commit", 200);
-        git(
+        git_with_env(
             &repo,
             &[
                 "merge",
@@ -2221,6 +2283,7 @@ mod surface {
                 "Merge topic into main",
                 "topic",
             ],
+            &GitEnv::fixture(),
         );
         (tmp, project, repo)
     }
@@ -2240,9 +2303,9 @@ mod surface {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("alpha");
         std::fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "t@t"]);
-        git(&repo, &["config", "user.name", "t"]);
+        git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
         // A base commit, because a root commit has no first parent to rewrite
         // from and the verb refuses it before it ever reaches a plan.
         commit_as_configured(&repo, "base.txt", "base\n", "alpha: base commit", 100);
@@ -2250,9 +2313,9 @@ mod surface {
         // A second identity, and every commit above the base on ONE path:
         // dropping the first leaves the two survivors sharing that path, which
         // is what the conflict caution counts.
-        git(&repo, &["config", "user.name", "Other"]);
+        git_with_env(&repo, &["config", "user.name", "Other"], &GitEnv::fixture());
         commit_as_configured(&repo, "shared.txt", "two\n", "alpha: second commit", 300);
-        git(&repo, &["config", "user.name", "t"]);
+        git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
         commit_as_configured(&repo, "shared.txt", "three\n", "alpha: third commit", 400);
 
         let mut harness = harness_over_state(state_with_log_at(repo));
@@ -2286,9 +2349,9 @@ mod surface {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("alpha");
         std::fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "t@t"]);
-        git(&repo, &["config", "user.name", "t"]);
+        git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
         // Thirty commits, so dropping one past the midpoint leaves a plan of 16
         // — more than the twelve rows the list shows.
         for n in 1..=30 {
@@ -2551,7 +2614,10 @@ mod surface {
             before,
             "and cancelling changed nothing"
         );
-        assert_eq!(git(&seed.alpha, &["rev-parse", "HEAD"]).trim(), seed.c2);
+        assert_eq!(
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
+            seed.c2
+        );
 
         // Accepting the same dialog takes the detached checkout the menu asked
         // for, not a branch switch.
@@ -2571,7 +2637,7 @@ mod surface {
                 .is_some_and(|r| r.current_branch.is_none())
         });
         assert_eq!(
-            git(&seed.alpha, &["rev-parse", "HEAD"]).trim(),
+            git_with_env(&seed.alpha, &["rev-parse", "HEAD"], &GitEnv::fixture()).trim(),
             seed.c1,
             "the confirmation landed on the commit, detached"
         );
@@ -2627,7 +2693,11 @@ mod surface {
         // git's own verdict is the assertion that matters, not a text shape.
         // Stand the worktree at the commit's PARENT, where the patch's file does
         // not exist yet, and ask git whether it could apply.
-        git(&seed.alpha, &["checkout", "-q", &seed.base]);
+        git_with_env(
+            &seed.alpha,
+            &["checkout", "-q", &seed.base],
+            &GitEnv::fixture(),
+        );
         let check = Command::new("git")
             .args(["apply", "--check", file.to_str().unwrap()])
             .current_dir(&seed.alpha)
@@ -2706,9 +2776,9 @@ mod surface {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "t@t"]);
-        git(&repo, &["config", "user.name", "t"]);
+        git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
         commit_file(
             &repo,
             "before.txt",
@@ -2716,11 +2786,21 @@ mod surface {
             "a base commit",
             100,
         );
-        git(&repo, &["mv", "before.txt", "after.txt"]);
+        git_with_env(
+            &repo,
+            &["mv", "before.txt", "after.txt"],
+            &GitEnv::fixture(),
+        );
         std::fs::write(repo.join("pic.png"), bytes_of_a_png()).unwrap();
-        git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-q", "-m", "rename and add a binary"]);
-        let renamed = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
+        git_with_env(&repo, &["add", "."], &GitEnv::fixture());
+        git_with_env(
+            &repo,
+            &["commit", "-q", "-m", "rename and add a binary"],
+            &GitEnv::fixture(),
+        );
+        let renamed = git_with_env(&repo, &["rev-parse", "HEAD"], &GitEnv::fixture())
+            .trim()
+            .to_string();
 
         let mut harness = harness_over_state(state_with_log_at(repo.clone()));
         warm_logs(&mut harness);
@@ -2762,13 +2842,14 @@ mod surface {
         let tmp = tempfile::tempdir().unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "-q", "-b", "main"]);
-        git(&repo, &["config", "user.email", "t@t"]);
-        git(&repo, &["config", "user.name", "t"]);
+        git_with_env(&repo, &["init", "-q", "-b", "main"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.email", "t@t"], &GitEnv::fixture());
+        git_with_env(&repo, &["config", "user.name", "t"], &GitEnv::fixture());
         commit_file(&repo, "base.txt", "base\n", "a base commit", 100);
-        git(
+        git_with_env(
             &repo,
             &["commit", "-q", "--allow-empty", "-m", "an empty commit"],
+            &GitEnv::fixture(),
         );
 
         let mut harness = harness_over_state(state_with_log_at(repo.clone()));
