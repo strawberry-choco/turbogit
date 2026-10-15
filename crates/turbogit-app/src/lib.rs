@@ -39,6 +39,7 @@ pub mod diff_data;
 pub mod diff_load;
 pub mod diff_model;
 pub mod events;
+pub mod fetch_admission;
 pub mod granular;
 pub mod keyed_read;
 pub mod log_display;

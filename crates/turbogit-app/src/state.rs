@@ -4,6 +4,7 @@
 //! calls git directly; git work is dispatched as an
 //! [`Operation`] via [`AppState::dispatch`].
 use crate::events::{AppEvent, LogBatchMode};
+use crate::fetch_admission::InflightFetch;
 use crate::granular;
 use crate::operation::Operation;
 use crate::root_caches::{
@@ -1979,34 +1980,9 @@ pub struct AppState {
     hold_reads: bool,
     #[cfg(test)]
     held_reads: Vec<HeldRead>,
-    /// In-flight log fetches per root (log-open perf, D2): the tool-window
-    /// body asks for the log every frame while the cache is cold, so the
-    /// fetch gets the same one-per-root guard as the worktree fetches. The
-    /// guard releases when the `LogLoaded` event drains — on Ok and Err
-    /// alike, because the worker always posts the event.
-    log_fetch_inflight: HashSet<RootId>,
-    /// In-flight SCOPED log fetches per (root, scope) (log-view-scaling 02):
-    /// one per scope, not one per root, so two scopes of one root batch at once
-    /// and a slow scope cannot block a fast one. The guard releases when that
-    /// scope's `LogBatchLoaded` event drains — on Ok and Err alike, because the
-    /// worker always posts the event.
-    scoped_log_fetch_inflight: HashSet<(RootId, LogScope)>,
-    /// In-flight ref-decoration fetches per root (log-open perf, D2): guards
-    /// `fetch_refs` against re-dispatching every frame while a fetch is in
-    /// flight; the guard releases when the `RefsLoaded` event drains, on Ok
-    /// and Err alike.
-    fetching_refs: HashSet<RootId>,
-    /// In-flight per-commit file-stat fetches (logs-panels redesign issue 02):
-    /// the changed-files pane asks every frame while the counts are missing, so
-    /// the guard holds one worker per (root, commit). It releases when the
-    /// `FileStatsLoaded` event drains, on Ok and Err alike.
-    fetching_stats: HashSet<(RootId, CommitId)>,
-    /// In-flight submodule-list fetches per root (issue 14).
-    fetching_submodules: HashSet<RootId>,
-    /// In-flight stash-listing fetches per root (surface 07): the Stash pane
-    /// asks every frame while its root's answer is missing, so the guard holds
-    /// one worker per root and releases on the `StashesLoaded` settlement.
-    fetching_stashes: HashSet<RootId>,
+    /// own admission for the in-flight fetches, keyed by fetch kind (ticket
+    /// 02): one fetch per key, released on that fetch's settlement event.
+    fetch_admission: crate::fetch_admission::FetchAdmission,
     /// Last dispatch instant of the background incoming check (issue #27);
     /// `None` while disabled or never polled.
     pub(crate) incoming_poll_last: Option<std::time::Instant>,
@@ -2091,12 +2067,7 @@ impl AppState {
             hold_reads: false,
             #[cfg(test)]
             held_reads: Vec::new(),
-            log_fetch_inflight: HashSet::new(),
-            scoped_log_fetch_inflight: HashSet::new(),
-            fetching_refs: HashSet::new(),
-            fetching_stats: HashSet::new(),
-            fetching_submodules: HashSet::new(),
-            fetching_stashes: HashSet::new(),
+            fetch_admission: crate::fetch_admission::FetchAdmission::default(),
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
             rollback_recovery: HashMap::new(),
@@ -2310,7 +2281,7 @@ impl AppState {
         // One fetch per root in flight (log-open perf, D2): the tool-window
         // body asks every frame while the cache is cold; a second fetch for
         // the same root while one is pending is a no-op.
-        if !self.log_fetch_inflight.insert(root.clone()) {
+        if !self.fetch_admission.admit(InflightFetch::Log(root.clone())) {
             return;
         }
         let (opts, mode) = self.log_batch_plan(&root);
@@ -2350,7 +2321,10 @@ impl AppState {
     /// root while one is pending is a no-op; the guard releases when the
     /// `RefsLoaded` event drains, on Ok and Err alike.
     pub fn fetch_refs(&mut self, root: RootId) {
-        if !self.fetching_refs.insert(root.clone()) {
+        if !self
+            .fetch_admission
+            .admit(InflightFetch::Refs(root.clone()))
+        {
             return;
         }
         self.pump_read(move |executor, tx| {
@@ -2365,7 +2339,9 @@ impl AppState {
     /// the guard releases when the `FileStatsLoaded` event drains.
     pub fn fetch_file_stats(&mut self, root: RootId, commit: CommitId) {
         if self.caches.file_stats_loaded(&root, &commit)
-            || !self.fetching_stats.insert((root.clone(), commit.clone()))
+            || !self
+                .fetch_admission
+                .admit(InflightFetch::FileStats(root.clone(), commit.clone()))
         {
             return;
         }
@@ -2471,7 +2447,10 @@ impl AppState {
     /// (issue 14 Submodules tab). One fetch per root in flight, mirroring
     /// [`Self::fetch_worktrees`].
     pub fn fetch_submodules(&mut self, root: RootId) {
-        if !self.fetching_submodules.insert(root.clone()) {
+        if !self
+            .fetch_admission
+            .admit(InflightFetch::Submodules(root.clone()))
+        {
             return;
         }
         self.pump_read(move |executor, tx| {
@@ -2490,7 +2469,11 @@ impl AppState {
     /// an operation that could have moved the stash stack drops the entry with
     /// the rest of that root's caches, and the pane asks again after that.
     pub fn fetch_stashes(&mut self, root: RootId) {
-        if self.caches.stashes(&root).is_some() || !self.fetching_stashes.insert(root.clone()) {
+        if self.caches.stashes(&root).is_some()
+            || !self
+                .fetch_admission
+                .admit(InflightFetch::Stashes(root.clone()))
+        {
             return;
         }
         self.pump_read(move |executor, tx| {
@@ -2636,8 +2619,8 @@ impl AppState {
         // One fetch per (root, scope) in flight — the scope is half the key,
         // so one scope's slow read cannot hold another scope's batch.
         if !self
-            .scoped_log_fetch_inflight
-            .insert((root.clone(), scope.clone()))
+            .fetch_admission
+            .admit(InflightFetch::ScopedLog(root.clone(), scope.clone()))
         {
             return;
         }
@@ -5061,9 +5044,8 @@ impl AppState {
                     commits,
                     mode,
                 } => {
-                    // Release the in-flight guard on Ok and Err alike — the
-                    // worker always posts the event (log-open perf, D2).
-                    self.log_fetch_inflight.remove(&root);
+                    self.fetch_admission
+                        .release(InflightFetch::Log(root.clone()));
                     match commits {
                         Ok(batch) => {
                             // The read answered, so its failure is history. The
@@ -5095,12 +5077,8 @@ impl AppState {
                     commits,
                     mode,
                 } => {
-                    // Release the in-flight guard on Ok and Err alike — the
-                    // worker always posts the event (log-view-scaling 02).
-                    // Keyed by the scope that was read, so a batch frees only
-                    // the read that is waiting on it.
-                    self.scoped_log_fetch_inflight
-                        .remove(&(root.clone(), scope.clone()));
+                    self.fetch_admission
+                        .release(InflightFetch::ScopedLog(root.clone(), scope.clone()));
                     match commits {
                         Ok(batch) => {
                             self.caches
@@ -5128,9 +5106,8 @@ impl AppState {
                     }
                 }
                 AppEvent::RefsLoaded { root, deco } => {
-                    // Release the in-flight guard on Ok and Err alike — the
-                    // worker always posts the event (log-open perf, D2).
-                    self.fetching_refs.remove(&root);
+                    self.fetch_admission
+                        .release(InflightFetch::Refs(root.clone()));
                     match deco {
                         Ok(d) => self.caches.store_refs(root, d),
                         Err(e) => self.last_error = Some(e.to_string()),
@@ -5141,8 +5118,8 @@ impl AppState {
                     commit,
                     stats,
                 } => {
-                    // Release the in-flight guard first (log-open perf, D2).
-                    self.fetching_stats.remove(&(root.clone(), commit.clone()));
+                    self.fetch_admission
+                        .release(InflightFetch::FileStats(root.clone(), commit.clone()));
                     match stats {
                         Ok(s) => {
                             self.caches
@@ -5237,14 +5214,16 @@ impl AppState {
                     }
                 }
                 AppEvent::SubmodulesLoaded { root, submodules } => {
-                    self.fetching_submodules.remove(&root);
+                    self.fetch_admission
+                        .release(InflightFetch::Submodules(root.clone()));
                     match submodules {
                         Ok(s) => self.caches.store_submodules(root, s),
                         Err(e) => self.last_error = Some(e.to_string()),
                     }
                 }
                 AppEvent::StashesLoaded { root, stashes } => {
-                    self.fetching_stashes.remove(&root);
+                    self.fetch_admission
+                        .release(InflightFetch::Stashes(root.clone()));
                     match stashes {
                         // An empty listing stores an answered-empty cache, which
                         // is what keeps the pane on its "Nothing is stashed here"
