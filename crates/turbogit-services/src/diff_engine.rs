@@ -114,6 +114,21 @@ fn is_binary(content: &str) -> bool {
     content.as_bytes().contains(&0)
 }
 
+/// A worktree file's content admitted for a creation patch, or `None` when no
+/// patch can be built from it: an empty file, a NUL-bearing file (git's own
+/// binaryness test), or content that is not UTF-8. The first field is the
+/// repo-relative, slash-separated path a patch header wants.
+pub fn untracked_content(root: &Path, rel: &Path) -> Option<(String, String)> {
+    let bytes = std::fs::read(root.join(rel)).ok()?;
+    // Decode before sniffing so the one text-shaped `is_binary` stays the only
+    // copy of git's test: a NUL-bearing side — UTF-8 or not — still refuses.
+    let content = String::from_utf8(bytes).ok()?;
+    if content.is_empty() || is_binary(&content) {
+        return None;
+    }
+    Some((forward_slashes(rel), content))
+}
+
 /// The in-process answer for one file section, as a patch **value**. A `None`
 /// side is a creation or a deletion; equal text contents produce no section at
 /// all, exactly like `git diff` printing nothing for an unchanged path.
@@ -319,6 +334,32 @@ fn push_normal(segs: &mut Vec<(String, String, bool)>, text: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The creation-patch admission refuses exactly what git's binaryness test
+    /// and UTF-8 decoding refuse, and spells the header path forward-slashed
+    /// and repo-relative.
+    #[test]
+    fn untracked_content_refuses_empty_binary_and_non_utf8_and_spells_the_path() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src").join("deep")).unwrap();
+        let nested = Path::new("src").join("deep").join("new.rs");
+        std::fs::write(root.path().join(&nested), "fn a() {}\n").unwrap();
+        let (rel, content) =
+            untracked_content(root.path(), &nested).expect("a text file is admitted");
+        assert_eq!(rel, "src/deep/new.rs", "forward slashes, repo-relative");
+        assert_eq!(content, "fn a() {}\n");
+
+        std::fs::write(root.path().join("empty.md"), "").unwrap();
+        assert!(untracked_content(root.path(), Path::new("empty.md")).is_none());
+
+        // A NUL anywhere is git's binaryness test, valid UTF-8 or not.
+        std::fs::write(root.path().join("blob.bin"), [b'a', 0, b'b']).unwrap();
+        assert!(untracked_content(root.path(), Path::new("blob.bin")).is_none());
+
+        // No NUL, but not decodable as UTF-8 either.
+        std::fs::write(root.path().join("invalid.txt"), [0xff, 0xfe]).unwrap();
+        assert!(untracked_content(root.path(), Path::new("invalid.txt")).is_none());
+    }
 
     #[test]
     fn unreadable_worktree_falls_back_instead_of_synthesizing_deletion() {
