@@ -202,9 +202,7 @@ fn first_index(harness: &Harness<'_, AppState>, needle: &str) -> usize {
 
 /// The payload as text: the bytes the settings would hand over right now.
 fn payload_text(harness: &Harness<'_, AppState>) -> String {
-    let bytes = harness
-        .state()
-        .create_patch_payload()
+    let bytes = turbogit_app::create_patch::payload(harness.state())
         .expect("the settings describe a patch");
     String::from_utf8_lossy(&bytes).into_owned()
 }
@@ -626,7 +624,11 @@ fn a_log_commit_skips_the_comment_and_names_the_file_from_its_subject() {
         root.clone(),
         vec![cached(&root, &id, "Align the parser output")],
     );
-    state.open_create_patch_on(root.clone(), PatchOrigin::Commit { id: id.clone() });
+    turbogit_app::create_patch::open_on(
+        &mut state,
+        root.clone(),
+        PatchOrigin::Commit { id: id.clone() },
+    );
     let harness = settled(state);
 
     assert_eq!(
@@ -661,7 +663,8 @@ fn a_file_revision_routes_straight_to_the_settings_naming_one_file() {
         root.clone(),
         vec![cached(&root, &id, "Align the parser output")],
     );
-    state.open_create_patch_on(
+    turbogit_app::create_patch::open_on(
+        &mut state,
         root.clone(),
         PatchOrigin::FileRevision {
             commit: id.clone(),
@@ -727,7 +730,7 @@ fn a_checked_file_narrows_the_patch_to_that_file_alone() {
         .map(|c| root.canonical_key(c))
         .expect("Util.java is a local change");
     state.ui.selected.insert(key);
-    state.open_create_patch_from_selection();
+    turbogit_app::create_patch::open_from_selection(&mut state);
     let mut harness = settled(state);
     assert_eq!(
         harness.state().ui.dialog,
@@ -748,7 +751,7 @@ fn a_checked_file_narrows_the_patch_to_that_file_alone() {
     );
     // And the same verb with nothing checked is the whole set: one route, two answers.
     let mut nothing_checked = state_over(std::slice::from_ref(&dir), tmp.path());
-    nothing_checked.open_create_patch_from_selection();
+    turbogit_app::create_patch::open_from_selection(&mut nothing_checked);
     assert_eq!(
         nothing_checked.ui.dlg.create_patch_origin,
         Some(PatchOrigin::LocalChanges { paths: vec![] }),
@@ -782,7 +785,7 @@ fn switching_the_create_root_drops_a_count_measured_against_another_tree() {
     assert_painted(&harness, "Remove Leading Directory [1]");
 
     let other = root_id(&second);
-    harness.state_mut().set_create_patch_root(&other);
+    turbogit_app::create_patch::set_root(harness.state_mut(), &other);
     settle(&mut harness);
     assert_eq!(
         harness.state().ui.dlg.create_patch_strip_leading,

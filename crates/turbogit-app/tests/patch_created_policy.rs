@@ -111,7 +111,7 @@ fn armed_ask(fx: &Fixture) -> Option<PathBuf> {
 #[test]
 fn asking_leaves_the_created_patch_waiting_for_an_answer() {
     let mut fx = fixture(PatchCreatedPolicy::Ask);
-    fx.state.finish_create_patch();
+    turbogit_app::create_patch::finish(&mut fx.state);
 
     let file = written(&fx).expect("the write itself is not the policy's job");
     assert_eq!(
@@ -147,7 +147,7 @@ fn asking_leaves_the_created_patch_waiting_for_an_answer() {
 #[test]
 fn showing_in_files_hands_the_file_to_the_surface_that_reads_patches() {
     let mut fx = fixture(PatchCreatedPolicy::ShowInFiles);
-    fx.state.finish_create_patch();
+    turbogit_app::create_patch::finish(&mut fx.state);
 
     let file = written(&fx).expect("the patch is written whatever the policy is");
     assert!(
@@ -168,7 +168,7 @@ fn showing_in_files_hands_the_file_to_the_surface_that_reads_patches() {
 #[test]
 fn doing_nothing_arms_no_ask_and_opens_no_window() {
     let mut fx = fixture(PatchCreatedPolicy::DoNothing);
-    fx.state.finish_create_patch();
+    turbogit_app::create_patch::finish(&mut fx.state);
 
     assert!(written(&fx).is_some(), "the patch itself was still created");
     assert!(armed_ask(&fx).is_none());
@@ -189,7 +189,7 @@ fn every_arm_records_the_created_patch_in_the_durable_feed() {
         PatchCreatedPolicy::DoNothing,
     ] {
         let mut fx = fixture(policy);
-        fx.state.finish_create_patch();
+        turbogit_app::create_patch::finish(&mut fx.state);
         let file = written(&fx).expect("a created patch");
         let named = fx
             .state
@@ -220,7 +220,7 @@ fn the_clipboard_route_creates_no_file_and_so_asks_nothing() {
     for policy in [PatchCreatedPolicy::Ask, PatchCreatedPolicy::DoNothing] {
         let mut fx = fixture(policy);
         fx.state.ui.dlg.create_patch_to_clipboard = true;
-        fx.state.finish_create_patch();
+        turbogit_app::create_patch::finish(&mut fx.state);
 
         assert!(
             written(&fx).is_none(),

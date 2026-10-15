@@ -1612,7 +1612,11 @@ fn apply_commit_action(
             // The Log route: one commit against its first parent, reached from the row
             // that was clicked — so the patch names THIS root and not whichever tree is
             // focused by the time the settings dialog paints.
-            state.open_create_patch_on(root.clone(), PatchOrigin::Commit { id: cid.to_owned() });
+            turbogit_app::create_patch::open_on(
+                state,
+                root.clone(),
+                PatchOrigin::Commit { id: cid.to_owned() },
+            );
         }
         CommitMenuAction::RewordCommit => {
             // Two steps, deliberately: the message is written here, and the cost
@@ -2222,7 +2226,8 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
             // A patch of one file's change in one revision, named by the row the
             // menu opened on rather than by whatever is selected when the dialog
             // paints (the file-revision route).
-            state.open_create_patch_on(
+            turbogit_app::create_patch::open_on(
+                state,
                 root_id.clone(),
                 PatchOrigin::FileRevision {
                     commit: cid.to_owned(),
@@ -2334,7 +2339,8 @@ fn apply_file_action(state: &mut AppState, root: &RootId, cid: &CommitId, action
             state.ui.log_selected_file = None;
         }
         FileAction::CreatePatch(path) => {
-            state.open_create_patch_on(
+            turbogit_app::create_patch::open_on(
+                state,
                 root.clone(),
                 PatchOrigin::FileRevision {
                     commit: cid.to_owned(),

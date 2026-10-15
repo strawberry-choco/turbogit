@@ -30,6 +30,7 @@
 
 use egui::Ui;
 
+use turbogit_app::create_patch;
 use turbogit_app::patch_create;
 use turbogit_app::state::{AppState, Dialog, Toast};
 use turbogit_domain::model::{DisplayName, PatchEncoding, RootId};
@@ -68,7 +69,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 /// routes fill the same slot, so neither can hand over a different artifact — and a
 /// success reported before `copy_text` has run would describe an act nobody performed.
 pub fn drain_clipboard(ctx: &egui::Context, state: &mut AppState) {
-    if let Some(text) = state.take_create_patch_clipboard() {
+    if let Some(text) = create_patch::take_clipboard(state) {
         ctx.copy_text(text);
         state.show_patch_toast(Toast::success("Patch copied to the clipboard"));
     }
@@ -107,7 +108,7 @@ fn comment_step(ui: &mut Ui, state: &mut AppState) {
                     close(state);
                 }
                 if kit_button(ui, KitButton::Primary, "OK").clicked() {
-                    state.create_patch_from_comment();
+                    create_patch::from_comment(state);
                 }
             });
         });
@@ -123,7 +124,7 @@ fn settings(ui: &mut Ui, state: &mut AppState) {
     // The fields are brought in line with the current origin, reversal and base path
     // before anything is painted, so a frame never shows a count measured against a patch
     // that is no longer the one in the dialog.
-    state.sync_create_patch();
+    create_patch::sync(state);
     let mut open = true;
     let root = state
         .ui
@@ -164,7 +165,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
                     &id.name(),
                 );
                 if btn.clicked() {
-                    state.set_create_patch_root(id);
+                    create_patch::set_root(state, id);
                 }
             }
         });
@@ -184,7 +185,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
                     .desired_width(300.0),
             );
             if ui.button("Save to…").clicked() {
-                state.choose_create_patch_location();
+                create_patch::choose_location(state);
             }
         });
         ui.label("Name");
@@ -262,10 +263,10 @@ fn directory_paths(ui: &mut Ui, state: &mut AppState) {
                 .button(format!("Remove Leading Directory [{removed}]"))
                 .clicked()
             {
-                state.remove_leading_directory();
+                create_patch::remove_leading_directory(state);
             }
             if ui.button("Remove All Leading Directories").clicked() {
-                state.remove_all_leading_directories();
+                create_patch::remove_all_leading_directories(state);
             }
         });
     });
@@ -274,10 +275,10 @@ fn directory_paths(ui: &mut Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
         ui.add_enabled_ui(removed > 0, |ui| {
             if ui.button("Restore Leading Directory").clicked() {
-                state.restore_leading_directory();
+                create_patch::restore_leading_directory(state);
             }
             if ui.button("Restore All Leading Directories").clicked() {
-                state.restore_all_leading_directories();
+                create_patch::restore_all_leading_directories(state);
             }
         });
     });
@@ -288,7 +289,7 @@ fn directory_paths(ui: &mut Ui, state: &mut AppState) {
 /// so the two halves of this surface describe one kind of thing — and the reading of git's
 /// syntax stays in the layer that owns it.
 fn paths(ui: &mut Ui, state: &mut AppState) {
-    let Some(patch) = state.create_patch_preview() else {
+    let Some(patch) = create_patch::preview(state) else {
         return;
     };
     widgets::group_title(
@@ -316,7 +317,7 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
             close(state);
         }
         if kit_button(ui, KitButton::Primary, "OK").clicked() && !busy {
-            state.finish_create_patch();
+            create_patch::finish(state);
         }
     });
 }
@@ -360,20 +361,20 @@ pub fn created_patch_ask(ui: &egui::Ui, state: &mut AppState) {
                     .on_hover_text("Park this patch on the shelf without applying it")
                     .clicked()
                 {
-                    state.import_created_patch_to_shelf();
+                    create_patch::import_created_to_shelf(state);
                 }
                 if kit_button(ui, KitButton::Quiet, "Apply patch\u{2026}")
                     .on_hover_text("Open the patch in the window that applies it")
                     .clicked()
                 {
-                    state.apply_created_patch();
+                    create_patch::apply_created(state);
                 }
                 if ui.button("Do nothing").clicked() {
-                    state.dismiss_created_patch();
+                    create_patch::dismiss_created(state);
                 }
             });
         });
     if !open {
-        state.dismiss_created_patch();
+        create_patch::dismiss_created(state);
     }
 }
