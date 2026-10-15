@@ -424,3 +424,54 @@ fn both_backends_cut_the_same_pages() {
         "a path-filtered page is identical across backends"
     );
 }
+
+/// `git log -- <path>` is rename-BLIND: it asks whether each commit touched the
+/// literal path, never following a rename to the path's new name. A commit that
+/// renames `old.txt` to `new.txt` therefore counts for `old.txt` (it removed that
+/// name), while the root that created `old.txt` must NOT count for `new.txt`.
+/// No existing fixture covers this — the scoped fixtures elsewhere write their
+/// tracked path in place — so both adapters are pinned here against the CLI's
+/// plain `-- <path>` reading, not rename-following `--follow`.
+#[test]
+fn a_path_filter_is_rename_blind_across_both_backends() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("renamed-path");
+    init(&repo);
+
+    std::fs::write(repo.join("old.txt"), "stable\ncontent\n").expect("write old.txt");
+    git(&repo, &["add", "old.txt"]);
+    let root = commit(&repo, "add old.txt");
+
+    git(&repo, &["mv", "old.txt", "new.txt"]);
+    let renamed = commit(&repo, "rename old.txt to new.txt");
+
+    std::fs::write(repo.join("new.txt"), "stable\ncontent changed\n").expect("edit new.txt");
+    git(&repo, &["add", "new.txt"]);
+    let edited = commit(&repo, "edit new.txt");
+
+    for (backend, exec) in backends() {
+        let scoped = |path: &str| {
+            exec.log(
+                &repo,
+                &LogOpts {
+                    path: Some(PathBuf::from(path)),
+                    ..Default::default()
+                },
+            )
+            .expect("scoped log")
+        };
+
+        assert_eq!(
+            ids(&scoped("old.txt")),
+            vec![renamed.clone(), root.clone()],
+            "{backend}: the rename commit counts for its OLD name, and the root \
+             that created it does too"
+        );
+        assert_eq!(
+            ids(&scoped("new.txt")),
+            vec![edited.clone(), renamed.clone()],
+            "{backend}: the filter does not follow the rename — the root must not \
+             appear under the new name"
+        );
+    }
+}
