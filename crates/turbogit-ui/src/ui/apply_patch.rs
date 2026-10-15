@@ -25,6 +25,7 @@
 
 use egui::{Key, Ui};
 
+use turbogit_app::apply_patch;
 use turbogit_app::patch_apply::{ApplyOutcome, Preflight};
 use turbogit_app::state::{AppState, PatchSource};
 
@@ -41,7 +42,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     // Every field the developer has since touched is brought in line before
     // anything is painted, so a frame never shows a verdict about a patch that is
     // no longer the one in the field.
-    state.sync_apply_patch();
+    apply_patch::sync(state);
     let ctx = ui.ctx().clone();
     let mut open = true;
     let root = state
@@ -82,7 +83,7 @@ fn body(ui: &mut Ui, state: &mut AppState) {
                     &id.name(),
                 );
                 if btn.clicked() {
-                    state.set_apply_patch_root(id);
+                    apply_patch::set_root(state, id);
                 }
             }
         });
@@ -118,7 +119,7 @@ fn route(ui: &mut Ui, state: &mut AppState) {
                 // Which payload the switch drops is the app's rule, not this
                 // frame's: the other route's patch text goes, the working tree's
                 // unfinished rollback stays.
-                state.set_apply_patch_source(variant);
+                apply_patch::set_source(state, variant);
             }
         }
     });
@@ -132,7 +133,7 @@ fn route(ui: &mut Ui, state: &mut AppState) {
                     .desired_width(360.0),
             );
             if ui.button("Choose file…").clicked() {
-                state.choose_apply_patch_file();
+                apply_patch::choose_file(state);
             }
         });
     } else {
@@ -320,7 +321,7 @@ fn outcome(ui: &mut Ui, state: &mut AppState) {
             // it works, the window says which state the tree is in afterwards.
             let busy = state.ui.busy;
             if kit_button(ui, KitButton::Primary, "Restore recorded content").clicked() && !busy {
-                state.retry_apply_patch_restore();
+                apply_patch::retry_restore(state);
             }
         }
     }
@@ -342,7 +343,7 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
         // `Show Diff` is a read of git's verdict and nothing else.
         let show_diff = ui.button("Show Diff").clicked() || command_d;
         if show_diff && loaded && !inflight {
-            state.preflight_apply_patch();
+            apply_patch::preflight(state);
         }
         if command_d {
             ui.label("⌘D");
@@ -359,7 +360,7 @@ fn footer(ui: &mut Ui, state: &mut AppState) {
         }
         let apply = kit_button(ui, KitButton::Primary, VERB);
         if apply.clicked() && loaded && !inflight {
-            state.dispatch_apply_patch();
+            apply_patch::dispatch(state);
         }
     });
 }
