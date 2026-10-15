@@ -110,18 +110,7 @@ fn decode_image(bytes: &[u8]) -> Option<DecodedImage> {
 /// format. `None` falls back to engine behaviour (unreadable, binary, or empty
 /// files).
 pub(crate) fn synthetic_untracked_patch(root: &Path, rel: &Path) -> Option<Patch> {
-    let bytes = std::fs::read(root.join(rel)).ok()?;
-    // Binary (NUL byte) or empty content has no meaningful granular diff.
-    if bytes.is_empty() || bytes.contains(&0) {
-        return None;
-    }
-    let content = String::from_utf8(bytes).ok()?;
-    // Patch paths are slash-separated repo-relative on every platform.
-    let display = rel
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/");
+    let (display, content) = turbogit_services::diff_engine::untracked_content(root, rel)?;
     Some(turbogit_services::diff_engine::file_patch(
         &display,
         None,
