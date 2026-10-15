@@ -23,7 +23,6 @@ use turbogit_services::branch_service;
 use turbogit_services::bulk_ops::{self, BulkOp, BulkPlan, Preflight};
 use turbogit_services::bulk_run;
 use turbogit_services::commit_across;
-use turbogit_services::patch_create;
 
 /// Where a unit of git work runs.
 ///
@@ -400,17 +399,10 @@ pub struct DialogState {
     /// configured: the shallowest path's directory count, which moves when the base
     /// path or `Reverse patch` moves.
     pub create_patch_removable: usize,
-    /// The origin and reverse flag the raw patch below was generated from. The memo
-    /// key: git is asked once per change of either, never once per frame.
-    pub create_patch_raw_key: Option<(PatchOrigin, bool)>,
     /// git's own bytes for the current origin — the unedited patch every transform
-    /// starts from, kept as bytes because a patch body is file content.
+    /// starts from, kept as bytes because a patch body is file content. The memo that
+    /// says when to re-ask git for them lives in the `create_patch` module.
     pub create_patch_raw: Option<Vec<u8>>,
-    /// The signature the removal bound was last measured under: origin, reverse and
-    /// **base path**. Base path moves the bound without moving the patch's content,
-    /// so the two memos are not one — and re-reading git because a directory name was
-    /// typed would be a git call for a byte that never changed.
-    pub create_patch_limit_key: Option<(PatchOrigin, bool, String)>,
     /// Why the patch could not be generated or written. Stated rather than left as an
     /// empty dialog: "git answered nothing" and "this encoding cannot hold the patch"
     /// are different things to fix.
@@ -1713,8 +1705,9 @@ pub struct UiState {
     /// produced it has already closed — the ask outlives the window that answered it,
     /// and a value living in `dlg` would be reset by the next visit to the create
     /// group while still painted. Nothing about the patch is decided here until one of
-    /// [`AppState::import_created_patch_to_shelf`], [`AppState::apply_created_patch`]
-    /// or [`AppState::dismiss_created_patch`] runs.
+    /// [`crate::create_patch::import_created_to_shelf`],
+    /// [`crate::create_patch::apply_created`] or
+    /// [`crate::create_patch::dismiss_created`] runs.
     pub patch_created: Option<PatchCreated>,
     // commit-tab inline diff preview (Epic C3)
     pub preview_change: Option<PathBuf>,
@@ -1993,6 +1986,10 @@ pub struct AppState {
     /// The per-root rollback records a tree is still waiting on. The apply flow
     /// owns the rules over them: [`crate::apply_patch::ApplyRecovery`].
     pub(crate) apply_recovery: crate::apply_patch::ApplyRecovery,
+    /// The create flow's two memos, keyed by origin/reverse and by
+    /// origin/reverse/base. The `create_patch` module owns the rules over them;
+    /// the values they describe stay in [`Self::ui`].
+    pub(crate) create_patch_memos: crate::create_patch::Memos,
 }
 
 impl AppState {
@@ -2063,6 +2060,7 @@ impl AppState {
             incoming_poll_last: None,
             incoming_poll_inflight: HashSet::new(),
             apply_recovery: Default::default(),
+            create_patch_memos: Default::default(),
         }
     }
 
@@ -3327,35 +3325,6 @@ impl AppState {
         self.import_patch_to_shelf(&root, name, &text)
     }
 
-    /// The `When patch is created: Ask` follow-up's deferral verb: park the file the
-    /// create route just wrote, under the root it was generated from.
-    pub fn import_created_patch_to_shelf(&mut self) {
-        let Some(PatchCreated { path, root }) = self.ui.patch_created.clone() else {
-            return;
-        };
-        let name = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Imported patch".to_string());
-        match std::fs::read_to_string(&path)
-            .map_err(TgError::Io)
-            .and_then(|text| self.import_patch_to_shelf(&root, &name, &text))
-        {
-            Ok(shelf) => {
-                self.ui.patch_created = None;
-                self.show_toast(Toast::success(format!(
-                    "'{}' is on the shelf — nothing was applied",
-                    shelf.name
-                )));
-            }
-            Err(e) => {
-                self.ui.patch_created = None;
-                self.last_error = Some(e.to_string());
-                self.show_toast(Toast::error(e.to_string()));
-            }
-        }
-    }
-
     /// Choose the patch file to import, through the same read seam the apply window
     /// uses: a native open dialog has no headless equivalent, and the path field is
     /// where the developer's choice has to land for the verb to read it.
@@ -3736,490 +3705,6 @@ impl AppState {
         dlg.cherry_targets
             .sort_by_key(|t| order.iter().position(|o| o == t).unwrap_or(usize::MAX));
         self.cherry_reforecast();
-    }
-
-    // ------------------------------------------------------ create a patch ----
-
-    /// Open the create flow for `origin`: the comment step first when the source has
-    /// no name of its own, `Patch File Settings` when it does.
-    ///
-    /// A commit and a file revision are named by the commit they come from, and the
-    /// reference's comment step asks for the comment that a commit already has — so
-    /// those routes open the settings directly, seeded from the commit's own subject.
-    /// Local changes have no subject, which is exactly what the step is for.
-    ///
-    /// The commit's subject is read from the **cached log**, the same value the details
-    /// pane shows and Copy message copies; a create route that spawned its own `git
-    /// show` would be the uncached read ADR-0021 exists to prevent.
-    pub fn open_create_patch(&mut self, origin: PatchOrigin) {
-        let Some(root) = self.selected_root.clone() else {
-            self.show_toast(Toast::info(
-                "Create patch needs a repository: open a workspace first.",
-            ));
-            return;
-        };
-        self.open_create_patch_on(root, origin);
-    }
-
-    /// [`Self::open_create_patch`] with the root named — the form for a caller that
-    /// already knows which tree it means, which is every row-scoped route: a Log commit
-    /// and a file revision both carry their row's root, and taking the focused root at
-    /// the last moment would generate a patch of a different repository than the one the
-    /// developer clicked.
-    pub fn open_create_patch_on(&mut self, root: RootId, origin: PatchOrigin) {
-        let needs_comment = origin.needs_comment();
-        self.reset_create_patch(root.clone(), origin.clone());
-        if needs_comment {
-            // Seeded from the Commit window's own message box when the developer has
-            // already written the comment they are about to ship: the step asks for the
-            // commit comment, and one typed seconds earlier is that comment.
-            self.ui.dlg.create_patch_comment = self.ui.commit_message.clone();
-            self.ui.dialog = Some(Dialog::CreatePatchComment);
-            return;
-        }
-        let subject = self.patch_origin_subject(&root);
-        self.ui.dlg.create_patch_comment = subject.clone();
-        self.ui.dlg.create_patch_name = patch_create::file_name(&subject);
-        self.open_patch_settings();
-    }
-
-    /// `Create Patch from Local Changes` as the Commit window reaches it: the checked
-    /// files when any are checked — the reference's "file or changelist" — and every
-    /// local change of this root when nothing is.
-    ///
-    /// The checked set is read here rather than at the write, so the patch and the
-    /// Commit window's own box state describe the same files.
-    pub fn open_create_patch_from_selection(&mut self) {
-        let origin = self.local_changes_origin();
-        self.open_create_patch(origin);
-    }
-
-    /// [`Self::open_create_patch_from_selection`]'s verb with **no dialog at all**.
-    pub fn copy_patch_from_selection(&mut self) {
-        let origin = self.local_changes_origin();
-        self.copy_patch_to_clipboard(origin);
-    }
-
-    /// The focused root's local changes as an origin: `paths` empty is the whole set,
-    /// and non-empty is exactly the files the developer included.
-    fn local_changes_origin(&self) -> PatchOrigin {
-        let paths = self
-            .selected_root
-            .as_ref()
-            .and_then(|id| self.multi.by_id(id))
-            .map(|root| {
-                root.status
-                    .changes
-                    .iter()
-                    .filter(|c| self.ui.selected.contains(&root.canonical_key(c)))
-                    .map(|c| c.path.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-        PatchOrigin::LocalChanges { paths }
-    }
-
-    /// The comment step's answer: the comment names the file, and the settings step
-    /// opens on it. An empty comment is not refused — the name simply falls back to
-    /// the artifact's own name, which the dialog shows before it is used.
-    pub fn create_patch_from_comment(&mut self) {
-        let name = patch_create::file_name(&self.ui.dlg.create_patch_comment.clone());
-        self.ui.dlg.create_patch_name = name;
-        self.open_patch_settings();
-    }
-
-    /// Open `Patch File Settings` on the payload as it now stands: the default
-    /// location is the repository the patch is generated FROM, and git is asked for
-    /// the patch itself on the first sync rather than here, so opening a window and
-    /// changing one field cost the same one read.
-    pub fn open_patch_settings(&mut self) {
-        let location = self
-            .ui
-            .dlg
-            .create_patch_root
-            .as_ref()
-            .map(|r| r.as_path().to_string_lossy().into_owned())
-            .unwrap_or_default();
-        self.ui.dlg.create_patch_location = location;
-        self.sync_create_patch();
-        self.ui.dialog = Some(Dialog::PatchFileSettings);
-    }
-
-    /// Point the create flow at `root`. The patch, its base path and its removal count
-    /// are all facts about ONE working tree, so switching root
-    /// drops the answer measured against the other tree rather than painting it here.
-    pub fn set_create_patch_root(&mut self, root: &RootId) {
-        if self.ui.dlg.create_patch_root.as_ref() == Some(root) {
-            return;
-        }
-        let Some(origin) = self.ui.dlg.create_patch_origin.clone() else {
-            return;
-        };
-        self.reset_create_patch(root.clone(), origin);
-        self.sync_create_patch();
-    }
-
-    /// Start the create group again for one visit to one root. Everything the last
-    /// patch worked out for itself — the removal count, the verdict on the bytes, the
-    /// error — belongs to that patch and is cleared here rather than at the frame that
-    /// paints it.
-    fn reset_create_patch(&mut self, root: RootId, origin: PatchOrigin) {
-        let d = &mut self.ui.dlg;
-        d.create_patch_root = Some(root);
-        d.create_patch_origin = Some(origin);
-        d.create_patch_comment.clear();
-        d.create_patch_name.clear();
-        d.create_patch_location.clear();
-        d.create_patch_to_clipboard = false;
-        d.create_patch_base_path.clear();
-        d.create_patch_reverse = false;
-        d.create_patch_encoding = PatchEncoding::default();
-        d.create_patch_strip_leading = 0;
-        d.create_patch_removable = 0;
-        d.create_patch_raw = None;
-        d.create_patch_raw_key = None;
-        d.create_patch_limit_key = None;
-        d.create_patch_error = None;
-    }
-
-    /// `Remove Leading Directory`, `Remove All Leading Directories`, and their two
-    /// restores: the counting repair pair, driven as four methods on one field.
-    ///
-    /// The count is clamped at [`DialogState::create_patch_removable`] — the
-    /// shallowest path's directory count — because a removal applies to every path in
-    /// the patch, and a count that erased `README.md`'s name would produce a patch that
-    /// names nothing rather than a shorter path. `Restore` is one step at a time, which
-    /// is what makes the bracketed number worth reading.
-    pub fn remove_leading_directory(&mut self) {
-        let limit = self.ui.dlg.create_patch_removable;
-        let at = &mut self.ui.dlg.create_patch_strip_leading;
-        *at = (*at + 1).min(limit);
-    }
-
-    pub fn remove_all_leading_directories(&mut self) {
-        let limit = self.ui.dlg.create_patch_removable;
-        self.ui.dlg.create_patch_strip_leading = limit;
-    }
-
-    pub fn restore_leading_directory(&mut self) {
-        let at = &mut self.ui.dlg.create_patch_strip_leading;
-        *at = at.saturating_sub(1);
-    }
-
-    pub fn restore_all_leading_directories(&mut self) {
-        self.ui.dlg.create_patch_strip_leading = 0;
-    }
-
-    /// Bring the generated patch and the removal bound in line with what the developer
-    /// has since typed, pressed or switched. Runs once per frame, and asks git only when
-    /// the ORIGIN or `Reverse patch` moved: a base path is a statement about the paths
-    /// this application rewrites afterwards, so it cannot change what git was asked.
-    pub fn sync_create_patch(&mut self) {
-        let Some(origin) = self.ui.dlg.create_patch_origin.clone() else {
-            return;
-        };
-        let (reverse, base, root) = {
-            let d = &self.ui.dlg;
-            (
-                d.create_patch_reverse,
-                d.create_patch_base_path.clone(),
-                d.create_patch_root.clone(),
-            )
-        };
-        let Some(root) = root else { return };
-        if self.ui.dlg.create_patch_raw_key.as_ref() != Some(&(origin.clone(), reverse)) {
-            match self.executor.patch_bytes(root.as_path(), &origin, reverse) {
-                Ok(bytes) => {
-                    let d = &mut self.ui.dlg;
-                    d.create_patch_raw = Some(bytes);
-                    d.create_patch_raw_key = Some((origin.clone(), reverse));
-                    d.create_patch_error = None;
-                }
-                Err(e) => {
-                    let d = &mut self.ui.dlg;
-                    d.create_patch_raw = None;
-                    d.create_patch_raw_key = Some((origin.clone(), reverse));
-                    d.create_patch_error = Some(format!("Create patch: {e}"));
-                    return;
-                }
-            }
-        }
-        if self.ui.dlg.create_patch_limit_key.as_ref()
-            != Some(&(origin.clone(), reverse, base.clone()))
-        {
-            let bound = self
-                .ui
-                .dlg
-                .create_patch_raw
-                .as_ref()
-                .map(|raw| {
-                    patch_create::removable_leading_directories(&patch_create::rewrite_paths(
-                        raw,
-                        root.as_path(),
-                        &base,
-                        0,
-                    ))
-                })
-                .unwrap_or(0);
-            let d = &mut self.ui.dlg;
-            d.create_patch_removable = bound;
-            // The bound shrinking must not leave the count claiming directories that
-            // are no longer in the paths: clamp down to what the patch can now lose.
-            d.create_patch_strip_leading = d.create_patch_strip_leading.min(bound);
-            d.create_patch_limit_key = Some((origin, reverse, base));
-        }
-    }
-
-    /// The patch as the settings say it should be written: git's bytes, path-rewritten,
-    /// then encoded. `Err` is a refusal to write, never a partially transformed patch.
-    pub fn create_patch_payload(&self) -> TgResult<Vec<u8>> {
-        let d = &self.ui.dlg;
-        let raw = d
-            .create_patch_raw
-            .as_deref()
-            .filter(|raw| !raw.is_empty())
-            .ok_or_else(|| TgError::Other("nothing to write — this change is empty".to_string()))?;
-        let Some(root) = d.create_patch_root.as_ref() else {
-            return Err(TgError::Other("no repository is in scope".to_string()));
-        };
-        let rewritten = patch_create::rewrite_paths(
-            raw,
-            root.as_path(),
-            &d.create_patch_base_path,
-            d.create_patch_strip_leading,
-        );
-        patch_create::encode(&rewritten, d.create_patch_encoding)
-    }
-
-    /// The patch as the settings describe it, read back into the value the surface paints.
-    ///
-    /// Parse failure is no preview rather than an error: a patch that does not parse is
-    /// still bytes this dialog can write, and `FILES THE PATCH NAMES` is a listing, not a
-    /// verdict. The reading of git's syntax happens here because the app layer owns that
-    /// engine call — the UI paints a value and never parses (`ADR-0022`).
-    pub fn create_patch_preview(&self) -> Option<Patch> {
-        let payload = self.create_patch_payload().ok()?;
-        let patch = turbogit_engine_api::patch::parse_patch(&String::from_utf8_lossy(&payload));
-        (!patch.is_empty()).then_some(patch)
-    }
-
-    /// The settings dialog's affirmative: write the file, or hand the text to the frame
-    /// that owns the clipboard. A refusal leaves the dialog OPEN with its reason in it —
-    /// closing a dialog that failed is how a developer loses the setting that failed.
-    pub fn finish_create_patch(&mut self) {
-        let to_clipboard = self.ui.dlg.create_patch_to_clipboard;
-        let payload = match self.create_patch_payload() {
-            Ok(payload) => payload,
-            Err(e) => {
-                self.ui.dlg.create_patch_error = Some(e.to_string());
-                return;
-            }
-        };
-        if to_clipboard {
-            match patch_create::clipboard_text(&payload) {
-                Ok(text) => {
-                    let d = &mut self.ui.dlg;
-                    d.create_patch_clipboard = Some(text);
-                    d.create_patch_error = None;
-                    self.ui.dialog = None;
-                    // The toast arrives from the frame that drains the slot, because
-                    // until `copy_text` has run nothing has been copied.
-                }
-                Err(e) => {
-                    self.ui.dlg.create_patch_error = Some(e.to_string());
-                    return;
-                }
-            }
-        } else {
-            let written = self.patch_destination();
-            match std::fs::write(&written, &payload) {
-                Ok(()) => {
-                    self.ui.dialog = None;
-                    self.report_created_patch(&written);
-                }
-                Err(e) => {
-                    self.ui.dlg.create_patch_error = Some(format!(
-                        "`{}` could not be written — {e}",
-                        written.display()
-                    ));
-                    return;
-                }
-            }
-        }
-        self.ui.dlg.create_patch_origin = None;
-    }
-
-    /// What happens **after** a create route wrote a patch file: the durable feed
-    /// first, then the `When patch is created:` arm the developer chose.
-    ///
-    /// The feed entry is written before the policy is read and is not gated by it,
-    /// because the durable record is not part of what a policy arm may withhold:
-    /// `Do nothing` withholds the *transient* report — the toast, the ask, the window —
-    /// and cannot be allowed to also erase the record. The two asking and showing arms
-    /// are told apart by what they leave armed, never by whether the file was mentioned.
-    fn report_created_patch(&mut self, written: &std::path::Path) {
-        let root = self.ui.dlg.create_patch_root.clone();
-        let name = written.display_name_lossy_or(&written.to_string_lossy());
-        let affected = root.clone().map(Affected::Root).unwrap_or(Affected::All);
-        self.ui.activity.push(crate::activity::ActivityEntry {
-            at: chrono::Local::now(),
-            repo: crate::settle::activity_repo_label(&affected),
-            message: format!("Patch created · {name}"),
-            kind: crate::activity::ActivityKind::Success,
-        });
-        match self.settings.when_patch_is_created {
-            PatchCreatedPolicy::Ask => {
-                // A patch generated outside every repository still has a file; what it
-                // cannot have is a root to park it under, and an ask that could not
-                // honour its own first verb would be a decoy. So the ask names the root
-                // it came from, and there is no ask without one.
-                if let Some(root) = root {
-                    self.ui.patch_created = Some(PatchCreated {
-                        path: written.to_path_buf(),
-                        root,
-                    });
-                } else {
-                    self.show_toast(Toast::success(format!("Wrote {name}")));
-                }
-            }
-            PatchCreatedPolicy::ShowInFiles => {
-                if let Some(root) = root {
-                    self.show_created_patch(written, root);
-                } else {
-                    self.show_toast(Toast::success(format!("Wrote {name}")));
-                }
-            }
-            PatchCreatedPolicy::DoNothing => {}
-        }
-    }
-
-    /// The `Show in {0}` arm. The reference reveals the file in the operating
-    /// system's file manager; this build has no reveal seam, so the created patch
-    /// goes to the one surface that reads a patch file and lists what it names —
-    /// recorded as a divergence rather than dropped into silence.
-    fn show_created_patch(&mut self, written: &std::path::Path, root: RootId) {
-        crate::apply_patch::open(self, PatchSource::File);
-        if self.ui.dialog != Some(Dialog::ApplyPatch) {
-            return;
-        }
-        crate::apply_patch::set_root(self, &root);
-        self.ui.dlg.apply_patch_path = written.to_string_lossy().into_owned();
-    }
-
-    /// The ask's second verb: take the created file to the window that reads it.
-    pub fn apply_created_patch(&mut self) {
-        let Some(PatchCreated { path, root }) = self.ui.patch_created.take() else {
-            return;
-        };
-        self.show_created_patch(&path, root);
-    }
-
-    /// The ask's refusal: nothing is done with the patch, and the ask goes away. The
-    /// feed entry the write already made stays, which is what makes silence auditable.
-    pub fn dismiss_created_patch(&mut self) {
-        self.ui.patch_created = None;
-    }
-
-    /// `Copy as Patch to Clipboard`: the same generation with **no dialog at all** —
-    /// default location, default base, no removal, no reversal, UTF-8.
-    ///
-    /// The verb's whole point is that it asks nothing, so it cannot open a window, and
-    /// it reads git directly rather than borrowing a dialog's memo: the clipboard route
-    /// and the dialog route are two callers of one engine read, not two patches.
-    pub fn copy_patch_to_clipboard(&mut self, origin: PatchOrigin) {
-        let Some(root) = self.selected_root.clone() else {
-            self.show_toast(Toast::info(
-                "Copy as patch needs a repository: open a workspace first.",
-            ));
-            return;
-        };
-        let payload = self
-            .executor
-            .patch_bytes(root.as_path(), &origin, false)
-            .and_then(|raw| {
-                if raw.is_empty() {
-                    return Err(TgError::Other(
-                        "this change is empty, so there is no patch to copy".to_string(),
-                    ));
-                }
-                Ok(patch_create::rewrite_paths(&raw, root.as_path(), "", 0))
-            })
-            .and_then(|bytes| patch_create::clipboard_text(&bytes));
-        match payload {
-            Ok(text) => {
-                self.ui.dlg.create_patch_clipboard = Some(text);
-                self.show_toast(Toast::success("Patch copied to the clipboard"));
-            }
-            Err(e) => self.show_toast(Toast::error(e.to_string())),
-        }
-    }
-
-    /// Take the pending clipboard payload. The UI frame that owns an `egui::Context`
-    /// drains this and calls `copy_text`, which is the app's only clipboard write and
-    /// the reason it is a slot rather than a call from `AppState`.
-    pub fn take_create_patch_clipboard(&mut self) -> Option<String> {
-        self.ui.dlg.create_patch_clipboard.take()
-    }
-
-    /// The native save-dialog seam: the developer's chosen file replaces the typed
-    /// location and name. Declining writes nothing and changes nothing.
-    pub fn choose_create_patch_location(&mut self) {
-        let Some(writer) = self.patch_writer.take() else {
-            self.show_toast(Toast::info("Type the patch file's path instead."));
-            return;
-        };
-        let chosen = writer();
-        self.patch_writer = Some(writer);
-        let Some(path) = chosen else { return };
-        if let Some(dir) = path.parent() {
-            self.ui.dlg.create_patch_location = dir.to_string_lossy().into_owned();
-        }
-        if let Some(name) = path.file_name() {
-            self.ui.dlg.create_patch_name = name.to_string_lossy().into_owned();
-        }
-    }
-
-    /// Where the settings dialog writes: the location field as a directory, plus the
-    /// name field — which is the comment's first line unless the developer renamed it.
-    fn patch_destination(&self) -> PathBuf {
-        let location = self.ui.dlg.create_patch_location.trim();
-        let name = if self.ui.dlg.create_patch_name.trim().is_empty() {
-            "patch.patch"
-        } else {
-            self.ui.dlg.create_patch_name.trim()
-        };
-        if location.is_empty() {
-            return PathBuf::from(name);
-        }
-        let dir = Path::new(location);
-        // A location that already IS the chosen file — which is what the native save
-        // dialog answers with — must not be joined into itself.
-        if location.ends_with(".patch") || name.contains('/') || name.contains('\\') {
-            if dir.is_dir() {
-                return dir.join(name);
-            }
-            return PathBuf::from(location);
-        }
-        dir.join(name)
-    }
-
-    /// The commit subject the patch's file name is seeded from, read from the cached
-    /// log for the origin's own commit. `None` when the cache does not hold it, which
-    /// leaves the name empty rather than inventing one.
-    fn patch_origin_subject(&self, root: &RootId) -> String {
-        let Some(origin) = self.ui.dlg.create_patch_origin.as_ref() else {
-            return String::new();
-        };
-        let commit = match origin {
-            PatchOrigin::Commit { id } => id.clone(),
-            PatchOrigin::FileRevision { commit, .. } => commit.clone(),
-            PatchOrigin::LocalChanges { .. } => return String::new(),
-        };
-        self.caches
-            .log(root)
-            .and_then(|commits| commits.iter().find(|c| c.id == commit))
-            .map(|c| c.message.lines().next().unwrap_or_default().to_string())
-            .unwrap_or_default()
     }
 
     /// Focus a commit in the dialog's patch preview rail (issue 16) and load

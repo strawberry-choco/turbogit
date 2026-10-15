@@ -265,8 +265,8 @@ pub fn run_action(state: &mut AppState, action: Action) {
         // The two create routes, and the difference between them is the number of
         // dialogs: one ends in `Patch File Settings`, the other hands the bytes to
         // the clipboard and asks nothing on the way.
-        Action::CreatePatch => state.open_create_patch_from_selection(),
-        Action::CopyPatchToClipboard => state.copy_patch_from_selection(),
+        Action::CreatePatch => turbogit_app::create_patch::open_from_selection(state),
+        Action::CopyPatchToClipboard => turbogit_app::create_patch::copy_from_selection(state),
         // The unshelve window opens through the app's own opener, shared with the
         // Shelf pane's header action, so the two routes cannot arm different defaults.
         Action::Unshelve => state.open_unshelve_dialog(),

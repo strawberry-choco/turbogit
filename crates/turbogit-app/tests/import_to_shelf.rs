@@ -365,10 +365,10 @@ fn the_created_patch_ask_can_park_the_file_it_just_named() {
     d.create_patch_raw = Some(PATCH.as_bytes().to_vec());
     d.create_patch_location = out.path().to_string_lossy().into_owned();
     d.create_patch_name = "align.patch".to_string();
-    state.finish_create_patch();
+    turbogit_app::create_patch::finish(&mut state);
     assert!(state.ui.patch_created.is_some(), "Ask armed the follow-up");
 
-    state.import_created_patch_to_shelf();
+    turbogit_app::create_patch::import_created_to_shelf(&mut state);
 
     assert_eq!(names(&state.shelves_for(&id)), vec!["align"]);
     assert!(
