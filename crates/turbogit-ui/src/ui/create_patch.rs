@@ -33,10 +33,11 @@ use egui::Ui;
 use turbogit_app::create_patch;
 use turbogit_app::patch_create;
 use turbogit_app::state::{AppState, Dialog, Toast};
-use turbogit_domain::model::{DisplayName, PatchEncoding, RootId};
+use turbogit_domain::model::{DisplayName, PatchEncoding};
 
 use crate::theme::{Palette, TYPE_BODY, data_font};
 use crate::ui::components::{KitButton, kit_button};
+use crate::ui::patch_chrome;
 use crate::ui::widgets;
 
 /// The verb's name in one place: the palette route and the dialogs all say the same thing.
@@ -145,31 +146,12 @@ fn settings(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn body(ui: &mut Ui, state: &mut AppState) {
-    // One patch is generated from one working tree, and a multi-root workspace has more
-    // than one it could mean. Painted whenever there is a choice, exactly as the apply
-    // window does it: collapsing this to the focused root would be the per-root
-    // rule reduced to a guess.
-    let roots: Vec<RootId> = state.multi.roots.iter().map(|r| r.id.clone()).collect();
-    if roots.len() > 1 {
-        widgets::group_title(ui, "REPOSITORY");
-        ui.horizontal(|ui| {
-            for id in &roots {
-                let chosen = state.ui.dlg.create_patch_root.as_ref() == Some(id);
-                let btn = kit_button(
-                    ui,
-                    if chosen {
-                        KitButton::Primary
-                    } else {
-                        KitButton::Quiet
-                    },
-                    &id.name(),
-                );
-                if btn.clicked() {
-                    create_patch::set_root(state, id);
-                }
-            }
-        });
-    }
+    patch_chrome::repository_chooser(
+        ui,
+        state,
+        |s| s.ui.dlg.create_patch_root.as_ref(),
+        create_patch::set_root,
+    );
 
     // --- 1. location, or `To clipboard` ---
     widgets::group_title(ui, "PATCH FILE LOCATION");
@@ -284,30 +266,13 @@ fn directory_paths(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// The paths the patch names **as the settings leave them**, read off the value the app
-/// layer parsed. The header count is the apply window's own vocabulary for the artifact,
-/// so the two halves of this surface describe one kind of thing — and the reading of git's
-/// syntax stays in the layer that owns it.
+/// The paths the patch names **as the settings leave them**, read from the app layer's
+/// parsed value — the reading of git's syntax stays in the layer that owns it.
 fn paths(ui: &mut Ui, state: &mut AppState) {
     let Some(patch) = create_patch::preview(state) else {
         return;
     };
-    widgets::group_title(
-        ui,
-        &format!("FILES THE PATCH NAMES · {}", patch.files.len()),
-    );
-    for file in &patch.files {
-        let name = if file.new_path.is_empty() {
-            &file.old_path
-        } else {
-            &file.new_path
-        };
-        ui.label(
-            egui::RichText::new(name.clone())
-                .font(data_font(TYPE_BODY))
-                .color(Palette::INK_2),
-        );
-    }
+    patch_chrome::files_the_patch_names(ui, &patch);
 }
 
 fn footer(ui: &mut Ui, state: &mut AppState) {
