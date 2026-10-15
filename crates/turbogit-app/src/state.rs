@@ -1975,14 +1975,10 @@ pub struct AppState {
     held_reads: Vec<HeldRead>,
     /// own admission for the in-flight fetches, keyed by fetch kind (ticket
     /// 02): one fetch per key, released on that fetch's settlement event.
-    fetch_admission: crate::fetch_admission::FetchAdmission,
+    pub(crate) fetch_admission: crate::fetch_admission::FetchAdmission,
     /// Last dispatch instant of the background incoming check (issue #27);
     /// `None` while disabled or never polled.
     pub(crate) incoming_poll_last: Option<std::time::Instant>,
-    /// Roots with an in-flight incoming-check poll (issue #27): the guard
-    /// keeps the scheduler from stacking fetches on the same repo; entries
-    /// only clear with the poll's settlement.
-    pub(crate) incoming_poll_inflight: HashSet<RootId>,
     /// The per-root rollback records a tree is still waiting on. The apply flow
     /// owns the rules over them: [`crate::apply_patch::ApplyRecovery`].
     pub(crate) apply_recovery: crate::apply_patch::ApplyRecovery,
@@ -2058,7 +2054,6 @@ impl AppState {
             held_reads: Vec::new(),
             fetch_admission: crate::fetch_admission::FetchAdmission::default(),
             incoming_poll_last: None,
-            incoming_poll_inflight: HashSet::new(),
             apply_recovery: Default::default(),
             create_patch_memos: Default::default(),
         }

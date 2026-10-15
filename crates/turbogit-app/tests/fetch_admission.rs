@@ -1,7 +1,7 @@
 //! In-flight fetch admission — the one rule behind every fetch kind (ticket 02).
 //!
-//! The six per-kind guards are one owner now, so its contract is asserted once
-//! here rather than six times: a second admit for a key already in flight is a
+//! The seven per-kind guards are one owner now, so its contract is asserted once
+//! here rather than seven times: a second admit for a key already in flight is a
 //! no-op, and a release — the settlement arm's one call, made before it matches
 //! on the outcome — frees the slot for the next ask, Ok and Err alike.
 
@@ -49,5 +49,34 @@ fn one_fetch_in_flight_per_key_and_a_release_frees_the_slot() {
     assert!(
         admission.admit(log.clone()),
         "an Err settlement frees it too"
+    );
+}
+
+#[test]
+fn an_incoming_poll_key_admits_once_and_frees_on_release() {
+    let mut admission = FetchAdmission::default();
+    let alpha = root("alpha");
+    let poll = InflightFetch::IncomingPoll(alpha.clone());
+
+    assert!(
+        admission.admit(poll.clone()),
+        "a free poll key admits its fetch"
+    );
+    assert!(
+        !admission.admit(poll.clone()),
+        "a root already polling is not admitted a second time"
+    );
+
+    // The key is per root, like the other kinds: the same root's other fetch
+    // kinds take their own slots.
+    assert!(
+        admission.admit(InflightFetch::Log(alpha.clone())),
+        "the same root's other fetch kind is a separate slot"
+    );
+
+    admission.release(poll.clone());
+    assert!(
+        admission.admit(poll.clone()),
+        "the poll's settlement frees the slot"
     );
 }

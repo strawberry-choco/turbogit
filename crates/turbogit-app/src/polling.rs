@@ -58,7 +58,12 @@ impl AppState {
     fn dispatch_incoming_poll(&mut self) {
         let roots: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
         for root in roots {
-            if !self.incoming_poll_inflight.insert(root.clone()) {
+            if !self
+                .fetch_admission
+                .admit(crate::fetch_admission::InflightFetch::IncomingPoll(
+                    root.clone(),
+                ))
+            {
                 continue;
             }
             let path = root.as_path().to_path_buf();
@@ -77,7 +82,10 @@ impl AppState {
         root: RootId,
         result: TgResult<Option<(usize, usize)>>,
     ) {
-        self.incoming_poll_inflight.remove(&root);
+        self.fetch_admission
+            .release(crate::fetch_admission::InflightFetch::IncomingPoll(
+                root.clone(),
+            ));
         match result {
             Ok(Some((ahead, behind))) => {
                 self.caches
