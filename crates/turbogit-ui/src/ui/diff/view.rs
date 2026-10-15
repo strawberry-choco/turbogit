@@ -755,6 +755,79 @@ fn render_unified(
     }
 }
 
+/// Paint the full-width display row of one kind: the file row, the rename
+/// header, and the hunk band. Both render modes paint these three identically,
+/// so the paint is stated once here and a fourth full-width kind is one arm
+/// below rather than an edit in two loops.
+///
+/// The caller owns the row shell and its per-mode bookkeeping — the unified
+/// loop's hover plumbing, the side-by-side loop's `rows_rect` union and
+/// `frame_hover` capture — and passes the `rect` it allocated plus the row's
+/// `display` index. Returns whether the kind was one of the three; `false`
+/// leaves the changed rows (`Context` / `Del` / `Add`) to the mode's own paint.
+#[allow(clippy::too_many_arguments)]
+fn paint_full_width_row(
+    ui: &mut Ui,
+    state: &mut AppState,
+    rect: &Rect,
+    row: &Row,
+    display: usize,
+    painter: &egui::Painter,
+    font: &FontId,
+    paint: egui::Id,
+    status: ChangeStatus,
+    path: &Option<std::path::PathBuf>,
+    plan: &PaintPlan,
+    hovered: bool,
+) -> bool {
+    match row.kind {
+        RowKind::Meta if is_file_row(row) => file_row(
+            ui,
+            state,
+            rect,
+            &row.text,
+            plan.file_counts(display),
+            font,
+            hovered,
+        ),
+        RowKind::Meta => paint_cell(
+            painter,
+            rect.left() + TEXT_X,
+            rect,
+            &row.text,
+            Palette::INK_3,
+            font,
+        ),
+        RowKind::RenameHeader => paint_rename_header(painter, rect, &row.text, font),
+        RowKind::Hunk => {
+            painter.rect_filled(*rect, CornerRadius::ZERO, Palette::SURFACE);
+            paint_cell(
+                painter,
+                rect.left() + TEXT_X,
+                rect,
+                &row.text,
+                Palette::INK_3,
+                font,
+            );
+            hunk_gutter_actions(ui, state, *rect, paint, row.hunk, status, path);
+            let staged_state = viewer_hunk_staged_state(state, path, row.span);
+            hunk_header_extras(
+                ui,
+                state,
+                *rect,
+                paint,
+                row.hunk,
+                plan.hunk_lines.get(row.hunk).copied().unwrap_or(0),
+                state.ui.diff_collapsed.contains(&row.hunk),
+                plan.hunk_hidden.get(row.hunk).copied().unwrap_or(0),
+                staged_state,
+            );
+        }
+        RowKind::Context | RowKind::Del | RowKind::Add => return false,
+    }
+    true
+}
+
 /// One unified band: allocation, hover tracking, click toggle, and the
 /// token-exact paint for a single underlying row (spec §8.4/R2). Hunk
 /// scrolling is handled centrally by the [`ScrollArea::show_rows`] caller.
@@ -808,51 +881,23 @@ fn unified_row(
             granular::toggle_line_selection(state, path, row.hunk, row.line_ord);
         }
     }
+    if paint_full_width_row(
+        ui,
+        state,
+        &rect,
+        row,
+        display,
+        painter,
+        font,
+        paint,
+        status,
+        path,
+        plan,
+        resp.hovered(),
+    ) {
+        return;
+    }
     match row.kind {
-        RowKind::Meta if is_file_row(row) => file_row(
-            ui,
-            state,
-            &rect,
-            &row.text,
-            plan.file_counts(display),
-            font,
-            resp.hovered(),
-        ),
-        RowKind::Meta => {
-            paint_cell(
-                painter,
-                rect.left() + TEXT_X,
-                &rect,
-                &row.text,
-                Palette::INK_3,
-                font,
-            );
-        }
-        RowKind::RenameHeader => paint_rename_header(painter, &rect, &row.text, font),
-        RowKind::Hunk => {
-            painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-            paint_cell(
-                painter,
-                rect.left() + TEXT_X,
-                &rect,
-                &row.text,
-                Palette::INK_3,
-                font,
-            );
-            hunk_gutter_actions(ui, state, rect, paint, row.hunk, status, path);
-            let staged_state = viewer_hunk_staged_state(state, path, row.span);
-            hunk_header_extras(
-                ui,
-                state,
-                rect,
-                paint,
-                row.hunk,
-                plan.hunk_lines.get(row.hunk).copied().unwrap_or(0),
-                state.ui.diff_collapsed.contains(&row.hunk),
-                plan.hunk_hidden.get(row.hunk).copied().unwrap_or(0),
-                staged_state,
-            );
-        }
         RowKind::Context => {
             paint_gutter(painter, &rect, " ", row.new_no, Palette::INK_3, font);
             paint_cell(
@@ -943,6 +988,7 @@ fn unified_row(
                 );
             }
         }
+        _ => {}
     }
 }
 /// Side-by-side pane header band (SURFACE, spec §8.4).
@@ -1177,73 +1223,31 @@ fn render_side_by_side(
     for &di in &plan.sbs[start..end] {
         match &model.display[di] {
             DisplayRow::Full(row) => match row.kind {
-                RowKind::Meta => {
+                // The three full-width kinds share this row shell; the painter
+                // below states their paint, so its "handled" answer is true here.
+                RowKind::Meta | RowKind::RenameHeader | RowKind::Hunk => {
                     let (rect, resp) =
                         ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
                     rows_rect = Some(match rows_rect {
                         Some(union) => union.union(rect),
                         None => rect,
                     });
-                    if is_file_row(row) {
-                        file_row(
-                            ui,
-                            state,
-                            &rect,
-                            &row.text,
-                            plan.file_counts(di),
-                            &font,
-                            resp.hovered(),
-                        );
-                    } else {
-                        paint_cell(
-                            &painter,
-                            rect.left() + TEXT_X,
-                            &rect,
-                            &row.text,
-                            Palette::INK_3,
-                            &font,
-                        );
-                    }
-                }
-                RowKind::RenameHeader => {
-                    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-                    rows_rect = Some(match rows_rect {
-                        Some(union) => union.union(rect),
-                        None => rect,
-                    });
-                    paint_rename_header(&painter, &rect, &row.text, &font);
-                }
-                RowKind::Hunk => {
-                    let (rect, resp) =
-                        ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-                    rows_rect = Some(match rows_rect {
-                        Some(union) => union.union(rect),
-                        None => rect,
-                    });
-                    if resp.hovered() {
+                    if row.kind == RowKind::Hunk && resp.hovered() {
                         frame_hover = Some(row.hunk);
                     }
-                    painter.rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
-                    paint_cell(
-                        &painter,
-                        rect.left() + TEXT_X,
-                        &rect,
-                        &row.text,
-                        Palette::INK_3,
-                        &font,
-                    );
-                    hunk_gutter_actions(ui, state, rect, paint, row.hunk, status, path);
-                    let staged_state = viewer_hunk_staged_state(state, path, row.span);
-                    hunk_header_extras(
+                    paint_full_width_row(
                         ui,
                         state,
-                        rect,
+                        &rect,
+                        row,
+                        di,
+                        &painter,
+                        &font,
                         paint,
-                        row.hunk,
-                        plan.hunk_lines.get(row.hunk).copied().unwrap_or(0),
-                        state.ui.diff_collapsed.contains(&row.hunk),
-                        plan.hunk_hidden.get(row.hunk).copied().unwrap_or(0),
-                        staged_state,
+                        status,
+                        path,
+                        plan,
+                        resp.hovered(),
                     );
                 }
                 RowKind::Context => {
