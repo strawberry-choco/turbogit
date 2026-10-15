@@ -31,6 +31,7 @@ use turbogit_app::state::{AppState, PatchSource};
 
 use crate::theme::{Palette, TYPE_BODY, data_font};
 use crate::ui::components::{KitButton, kit_button};
+use crate::ui::patch_chrome;
 use crate::ui::widgets;
 
 /// The verb's name in one place: the palette route, the window's title and its
@@ -62,32 +63,12 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 }
 
 fn body(ui: &mut Ui, state: &mut AppState) {
-    // The per-root choice, painted whenever the workspace has more than one tree
-    // an apply could mean. One apply writes one working tree; a window that
-    // silently took the focused root would be the multi-root collapse the
-    // programme forbids wearing a dialog.
-    let roots: Vec<turbogit_domain::model::RootId> =
-        state.multi.roots.iter().map(|r| r.id.clone()).collect();
-    if roots.len() > 1 {
-        widgets::group_title(ui, "REPOSITORY");
-        ui.horizontal(|ui| {
-            for id in &roots {
-                let chosen = state.ui.dlg.apply_patch_root.as_ref() == Some(id);
-                let btn = kit_button(
-                    ui,
-                    if chosen {
-                        KitButton::Primary
-                    } else {
-                        KitButton::Quiet
-                    },
-                    &id.name(),
-                );
-                if btn.clicked() {
-                    apply_patch::set_root(state, id);
-                }
-            }
-        });
-    }
+    patch_chrome::repository_chooser(
+        ui,
+        state,
+        |s| s.ui.dlg.apply_patch_root.as_ref(),
+        apply_patch::set_root,
+    );
 
     route(ui, state);
     provenance(ui, state);
@@ -182,28 +163,10 @@ fn provenance(ui: &mut Ui, state: &mut AppState) {
     }
 }
 
-/// The files the patch names — the blast radius, stated from the parsed value
-/// rather than from git's answer, so a developer sees what will be written before
-/// anything is written.
+/// The patch the window has parsed, listed by the shared painter.
 fn touched(ui: &mut Ui, state: &mut AppState) {
-    let Some(patch) = state.ui.dlg.apply_patch_patch.clone() else {
-        return;
-    };
-    widgets::group_title(
-        ui,
-        &format!("FILES THE PATCH NAMES · {}", patch.files.len()),
-    );
-    for file in &patch.files {
-        let name = if file.new_path.is_empty() {
-            &file.old_path
-        } else {
-            &file.new_path
-        };
-        ui.label(
-            egui::RichText::new(name.clone())
-                .font(data_font(TYPE_BODY))
-                .color(Palette::INK_2),
-        );
+    if let Some(patch) = state.ui.dlg.apply_patch_patch.as_ref() {
+        patch_chrome::files_the_patch_names(ui, patch);
     }
 }
 

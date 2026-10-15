@@ -54,6 +54,8 @@ pub mod interactive_rebase;
 pub(crate) mod kit;
 pub mod log_window;
 pub mod multi_selection;
+/// The chrome the two patch windows share; internal to the surfaces that call it.
+pub(crate) mod patch_chrome;
 pub mod popups;
 pub mod project_tree;
 pub mod push_control;
