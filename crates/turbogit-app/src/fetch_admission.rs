@@ -34,6 +34,9 @@ pub enum InflightFetch {
     Submodules(RootId),
     /// A root's stash listing (`AppState::fetch_stashes`), one per root.
     Stashes(RootId),
+    /// A root's background incoming-check poll (`AppState::tick_incoming_poll`),
+    /// one per root.
+    IncomingPoll(RootId),
 }
 
 /// The one admission owner for the app's in-flight fetches: the keys that are
