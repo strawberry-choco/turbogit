@@ -258,8 +258,10 @@ pub fn run_action(state: &mut AppState, action: Action) {
         Action::SkipCommit => run_lifecycle_verb(state, LifecycleVerb::Skip),
         // The two apply routes, both reaching the same window: what differs is only
         // whether the developer is asked for a file.
-        Action::ApplyPatch => state.open_apply_patch(PatchSource::File),
-        Action::ApplyPatchFromClipboard => state.open_apply_patch(PatchSource::Clipboard),
+        Action::ApplyPatch => turbogit_app::apply_patch::open(state, PatchSource::File),
+        Action::ApplyPatchFromClipboard => {
+            turbogit_app::apply_patch::open(state, PatchSource::Clipboard)
+        }
         // The two create routes, and the difference between them is the number of
         // dialogs: one ends in `Patch File Settings`, the other hands the bytes to
         // the clipboard and asks nothing on the way.

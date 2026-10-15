@@ -30,6 +30,7 @@ pub use turbogit_services::{
 pub use turbogit_engine_api::OwnedOperation;
 
 pub mod activity;
+pub mod apply_patch;
 pub mod banner;
 pub mod bulk_history;
 pub mod bulk_run_view;

@@ -314,10 +314,10 @@ fn the_apply_window_can_park_the_patch_it_holds_instead_of_applying_it() {
     let mut state = AppState::for_roots(project.path(), std::slice::from_ref(&lib))
         .with_settings(VcsSettings::default());
     state.selected_root = Some(state.multi.roots[0].id.clone());
-    state.open_apply_patch(PatchSource::File);
+    turbogit_app::apply_patch::open(&mut state, PatchSource::File);
     let path = patch_file(project.path());
     state.ui.dlg.apply_patch_path = path.to_string_lossy().into_owned();
-    state.sync_apply_patch();
+    turbogit_app::apply_patch::sync(&mut state);
     state.ui.dlg.apply_patch_message = "Align the note".to_string();
 
     state.import_patch_from_apply_window();

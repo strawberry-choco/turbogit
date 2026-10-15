@@ -100,7 +100,7 @@ fn format_patch(parent: &Path, dir: &Path) -> PathBuf {
 fn window(dir: &Path, parent: &Path, source: PatchSource) -> Harness<'static, AppState> {
     let mut state =
         AppState::for_roots(parent, &[dir.to_path_buf()]).with_settings(VcsSettings::default());
-    state.open_apply_patch(source);
+    turbogit_app::apply_patch::open(&mut state, source);
     let mut harness = shell_harness_over(state, Vec2::new(1280.0, 800.0));
     settle(&mut harness);
     assert_eq!(harness.state().ui.dialog, Some(Dialog::ApplyPatch));
@@ -242,7 +242,7 @@ fn switching_the_target_root_drops_a_verdict_measured_against_another_tree() {
     settle(&mut harness);
     assert_painted(&harness, "Applies cleanly");
 
-    harness.state_mut().set_apply_patch_root(&root_id(&other));
+    turbogit_app::apply_patch::set_root(harness.state_mut(), &root_id(&other));
     settle(&mut harness);
     assert!(
         harness.state().ui.dlg.apply_patch_preflight.is_none(),
@@ -314,7 +314,7 @@ fn a_failed_apply_paints_the_aborted_state_over_a_tree_that_is_back_to_what_it_h
     harness.state_mut().ui.dlg.apply_patch_path = patch.to_string_lossy().into_owned();
     settle(&mut harness);
 
-    harness.state_mut().dispatch_apply_patch();
+    turbogit_app::apply_patch::dispatch(harness.state_mut());
     settle(&mut harness);
 
     // The content check: the first file WAS written by the apply, and the tree has
@@ -587,7 +587,7 @@ fn reopening_the_window_leaves_the_failed_rollback_resolvable() {
     click(&mut harness, "Close");
     settle(&mut harness);
     assert_eq!(harness.state().ui.dialog, None, "the window is closed");
-    harness.state_mut().open_apply_patch(PatchSource::Clipboard);
+    turbogit_app::apply_patch::open(harness.state_mut(), PatchSource::Clipboard);
     settle(&mut harness);
 
     assert_still_rescuable(&mut harness, &dir);

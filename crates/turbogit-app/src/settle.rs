@@ -191,7 +191,7 @@ pub fn op_completed(
     // asks the window what actually happened and the failure arm
     // has to name the paths the rollback failed on.
     if kind == OpKind::ApplyPatch {
-        state.settle_apply_patch();
+        crate::apply_patch::settle(state);
     }
     let rules = rules_for(kind);
     match result {
@@ -715,7 +715,7 @@ fn record_failure_in_activity(
 /// error, and git never learned what the rollback then did.
 fn record_apply_outcome(state: &mut AppState, rules: RuleSet) {
     if rules.apply_outcome {
-        state.record_apply_outcome();
+        crate::apply_patch::record_outcome(state);
     }
 }
 
