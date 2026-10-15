@@ -27,18 +27,16 @@ use turbogit_domain::error::{TgError, TgResult};
 use turbogit_domain::model::{MultiRootManager, RootId, RootStatus};
 use turbogit_engine_api::GitExecutor;
 
-use crate::conflict::{parse_conflict_markers, write_resolution};
+use crate::conflict::{parse_conflict_markers, resolved_block_text, write_resolution};
 
-/// One conflict-hunk resolution choice; matches the UI's
-/// `conflict_resolver::CHOICE_*` constants exactly so a propagated
-/// resolution can be replayed verbatim.
+/// One conflict-hunk resolution choice, an ordinal from the vocabulary
+/// `conflict` owns (`conflict::CHOICE_OURS` … `conflict::CHOICE_BOTH_THEIRS_FIRST`),
+/// so a propagated resolution can be replayed verbatim.
 pub type Choice = u8;
 
-/// Per-conflict resolution choices in hunk order. `Some(0)` = ours,
-/// `Some(1)` = theirs, `Some(2)` = both (ours first), `Some(3)` = both
-/// (theirs first). `None` = not yet resolved; propagation refuses to
-/// replay an unresolved hunk (writes are gated on every hunk having a
-/// choice).
+/// Per-conflict resolution choices in hunk order, one per conflict hunk.
+/// `None` = not yet resolved; propagation refuses to replay an unresolved hunk
+/// (writes are gated on every hunk having a choice).
 pub type Resolutions = Vec<Option<Choice>>;
 
 /// One conflicting hunk's `(ours, theirs)` signature, in file order.
@@ -258,20 +256,11 @@ fn compose(content: &str, resolutions: &Resolutions) -> TgResult<String> {
                 }
             };
             ci += 1;
-            match choice {
-                0 => out.push_str(a), // ours
-                1 => out.push_str(b), // theirs
-                2 => {
-                    out.push_str(a);
-                    out.push_str(b);
-                } // both, ours first
-                3 => {
-                    out.push_str(b);
-                    out.push_str(a);
-                } // both, theirs first
-                other => {
+            match resolved_block_text(a, b, choice) {
+                Some(text) => out.push_str(&text),
+                None => {
                     return Err(TgError::Other(format!(
-                        "unknown resolution choice {other} for hunk {ci}"
+                        "unknown resolution choice {choice} for hunk {ci}"
                     )));
                 }
             }

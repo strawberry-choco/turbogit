@@ -26,6 +26,7 @@ use test_support::git_seed::git;
 use turbogit_domain::model::{MultiRootManager, Root, RootId, RootStatus};
 use turbogit_engine::build_executor;
 use turbogit_engine_api::GitExecutor;
+use turbogit_services::conflict::{CHOICE_OURS, CHOICE_THEIRS};
 use turbogit_services::conflict_propagation::{apply_to_matches, find_matches};
 use turbogit_services::multi_root::register;
 
@@ -134,7 +135,7 @@ fn seed_conflict(repo: &Repo, main_content: &str, side_content: &str) {
 /// theirs on hunk 2. This is the resolution the propagation service must
 /// replay verbatim into every matching target file.
 fn source_resolutions() -> Vec<Option<u8>> {
-    vec![Some(0), Some(1)] // (CHOICE_OURS, CHOICE_THEIRS)
+    vec![Some(CHOICE_OURS), Some(CHOICE_THEIRS)]
 }
 
 /// The composed source content the service must replay into matching
