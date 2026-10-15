@@ -178,27 +178,16 @@ fn signature_state_of(repo: &git2::Repository, oid: &git2::Oid) -> SignatureStat
 /// Returns `true` if `commit` changed `path` relative to its first
 /// parent. The CLI's `git log -- <path>` filter is implemented by
 /// libgit2's revwalk having no path filter of its own, so we walk each
-/// commit and diff against parent 0. Root commits (no parent) are
-/// diffed against an empty tree, so all files in that commit count as
-/// "added" and match any path filter.
+/// commit and re-run the parent-vs-commit diff its single owner resolves
+/// — with rename detection off, because `git log -- <path>` is
+/// rename-blind and does not follow a rename to the path's new name.
+///
+/// Any failure answering that diff counts the commit as NOT touching the
+/// path (`false`), unlike `commit_tree_diff`, which surfaces the same
+/// failure as a `TgError`; the filter only ever asks a yes/no question.
 fn commit_touches_path(repo: &git2::Repository, commit: &git2::Commit<'_>, path: &Path) -> bool {
-    let new_tree = match commit.tree() {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-    let old_tree = match commit.parent(0) {
-        Ok(p) => match p.tree() {
-            Ok(t) => t,
-            Err(_) => return false,
-        },
-        Err(_) => match empty_tree(repo) {
-            Ok(t) => t,
-            Err(_) => return false,
-        },
-    };
-    let diff = match repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None) {
-        Ok(d) => d,
-        Err(_) => return false,
+    let Ok(diff) = parent_tree_diff(repo, commit, false) else {
+        return false;
     };
     diff.deltas()
         .any(|d| d.new_file().path() == Some(path) || d.old_file().path() == Some(path))
@@ -209,6 +198,36 @@ fn commit_touches_path(repo: &git2::Repository, commit: &git2::Commit<'_>, path:
 fn empty_tree(repo: &git2::Repository) -> Result<git2::Tree<'_>, git2::Error> {
     let oid = repo.treebuilder(None)?.write()?;
     repo.find_tree(oid)
+}
+
+/// The tree-vs-parent diff of `commit`: `commit.tree()` against the first
+/// parent's tree, or against the empty tree when the commit is a root (the
+/// `--root` baseline). This is the one owner of that old-side rule.
+///
+/// `detect_renames` is a parameter, deliberately NOT a constant folded into
+/// one flavour: `commit_tree_diff` passes `true` to mirror `git diff-tree -M`,
+/// while the `log` path filter passes `false` because plain `git log -- <path>`
+/// is rename-blind — collapsing the two into rename-on would change the
+/// filter's answer.
+fn parent_tree_diff<'a>(
+    repo: &'a git2::Repository,
+    commit: &git2::Commit<'_>,
+    detect_renames: bool,
+) -> TgResult<git2::Diff<'a>> {
+    let new_tree = commit.tree().map_err(err)?;
+    let old_tree = match commit.parent(0) {
+        Ok(parent) => parent.tree().map_err(err)?,
+        Err(_) => empty_tree(repo).map_err(err)?,
+    };
+    let mut diff = repo
+        .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)
+        .map_err(err)?;
+    if detect_renames {
+        let mut find_opts = git2::DiffFindOptions::new();
+        find_opts.renames(true);
+        diff.find_similar(Some(&mut find_opts)).map_err(err)?;
+    }
+    Ok(diff)
 }
 
 /// The tree-vs-parent diff of `commit`, with rename detection on — libgit2's
@@ -223,18 +242,7 @@ fn commit_tree_diff<'a>(repo: &'a git2::Repository, commit: &str) -> TgResult<gi
         .map_err(err)?
         .peel_to_commit()
         .map_err(err)?;
-    let new_tree = commit.tree().map_err(err)?;
-    let old_tree = match commit.parent(0) {
-        Ok(parent) => parent.tree().map_err(err)?,
-        Err(_) => empty_tree(repo).map_err(err)?,
-    };
-    let mut diff = repo
-        .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)
-        .map_err(err)?;
-    let mut find_opts = git2::DiffFindOptions::new();
-    find_opts.renames(true);
-    diff.find_similar(Some(&mut find_opts)).map_err(err)?;
-    Ok(diff)
+    parent_tree_diff(repo, &commit, true)
 }
 
 impl GitExecutor for Git2Executor {
