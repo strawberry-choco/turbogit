@@ -91,6 +91,35 @@ pub fn unresolved(status: &RootStatus) -> usize {
     status.conflicted.len()
 }
 
+/// One conflict-hunk resolution choice: 0 ours, 1 theirs, 2 ours then theirs,
+/// 3 theirs then ours. These four named choices are the whole vocabulary; any
+/// other ordinal is unresolved.
+pub const CHOICE_OURS: u8 = 0;
+pub const CHOICE_THEIRS: u8 = 1;
+pub const CHOICE_BOTH_OURS_FIRST: u8 = 2; // the merge editor's "Ignore"
+pub const CHOICE_BOTH_THEIRS_FIRST: u8 = 3; // "Take both · theirs first" (issue #22)
+
+/// The text one resolved conflict block shows for `choice` — the single owner
+/// of the mapping the merge editor, the resolver's previews and the propagation
+/// composer all read.
+///
+/// A choice outside the four named ones is unresolved (`None`); each caller
+/// reads that `None` for itself — the merge editor's `<< unresolved >>`
+/// placeholder or its ours fallback, the propagation composer's refusal to
+/// rewrite a partially-resolved hunk.
+///
+/// `CHOICE_BOTH_THEIRS_FIRST` reads theirs before ours, deliberately distinct
+/// from `CHOICE_BOTH_OURS_FIRST` (the "Ignore" choice) — issue #22.
+pub fn resolved_block_text(ours: &str, theirs: &str, choice: u8) -> Option<String> {
+    match choice {
+        CHOICE_OURS => Some(ours.to_owned()),
+        CHOICE_THEIRS => Some(theirs.to_owned()),
+        CHOICE_BOTH_OURS_FIRST => Some(format!("{ours}{theirs}")),
+        CHOICE_BOTH_THEIRS_FIRST => Some(format!("{theirs}{ours}")),
+        _ => None,
+    }
+}
+
 /// Parse a file's conflict markers into alternating normal / conflict blocks.
 ///
 /// Returns `(segments, conflict_count)` where each segment is
@@ -167,6 +196,32 @@ mod tests {
         assert_eq!(written, "resolved!");
         let calls = engine.calls.lock().unwrap();
         assert_eq!(calls.len(), 1, "one stage call recorded");
+    }
+
+    /// The mapping's one owner: each of the four named choices resolves to its
+    /// block text, and anything else is unresolved — a `None` the callers read
+    /// for themselves rather than a silent fallback to ours.
+    #[test]
+    fn resolved_block_text_maps_each_named_choice_and_reports_the_rest_unresolved() {
+        let ours = "OURS\n";
+        let theirs = "THEIRS\n";
+        for (choice, want) in [
+            (CHOICE_OURS, "OURS\n"),
+            (CHOICE_THEIRS, "THEIRS\n"),
+            (CHOICE_BOTH_OURS_FIRST, "OURS\nTHEIRS\n"),
+            (CHOICE_BOTH_THEIRS_FIRST, "THEIRS\nOURS\n"),
+        ] {
+            assert_eq!(
+                resolved_block_text(ours, theirs, choice).as_deref(),
+                Some(want),
+                "choice {choice}: each named choice maps to its block text"
+            );
+        }
+        assert_eq!(
+            resolved_block_text(ours, theirs, 4),
+            None,
+            "an unknown choice is unresolved, not a fallback to ours"
+        );
     }
 
     #[test]

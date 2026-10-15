@@ -57,32 +57,15 @@ pub(crate) fn merge_editor_segments(
     parse_conflicts(content)
 }
 
-/// Per-conflict resolution choice, as `resolved_block_text` interprets it and
-/// as both surfaces' read-only Result composition does. Spelled raw inside
-/// this module's own match; the resolver, which carries no raw spelling of its
-/// own, imports these names.
-pub(crate) const CHOICE_OURS: u8 = 0;
-pub(crate) const CHOICE_THEIRS: u8 = 1;
-pub(crate) const CHOICE_BOTH_OURS_FIRST: u8 = 2; // existing "Ignore"
-pub(crate) const CHOICE_BOTH_THEIRS_FIRST: u8 = 3; // "Take both · theirs first" (issue #22)
-
-/// The text one resolved conflict block shows for `choice` — the single owner
-/// of the mapping the composer and both read-only Result previews share.
-///
-/// The unresolved case is NOT decided here: the caller supplies its own
-/// reading of a `None` (the inline editor's `<< unresolved >>` placeholder,
-/// the resolver's empty cell).
-///
-/// `CHOICE_BOTH_THEIRS_FIRST` reads theirs before ours, deliberately distinct
-/// from `CHOICE_BOTH_OURS_FIRST` (the existing "Ignore" choice) — issue #22.
-pub(crate) fn resolved_block_text(ours: &str, theirs: &str, choice: u8) -> Option<String> {
-    match choice {
-        CHOICE_THEIRS => Some(theirs.to_owned()),
-        CHOICE_BOTH_OURS_FIRST => Some(format!("{ours}{theirs}")),
-        CHOICE_BOTH_THEIRS_FIRST => Some(format!("{theirs}{ours}")),
-        _ => Some(ours.to_owned()),
-    }
-}
+/// The resolution-choice vocabulary and its text mapping, owned by
+/// `turbogit_services::conflict` (which also owns the marker grammar). Re-exported
+/// through the app crate's conflict re-export so the resolver keeps importing
+/// these names — its own copy is what the re-duplication ratchet refuses — and
+/// the UI crate still holds no `turbogit-services` dependency.
+pub(crate) use turbogit_app::conflict::{
+    CHOICE_BOTH_OURS_FIRST, CHOICE_BOTH_THEIRS_FIRST, CHOICE_OURS, CHOICE_THEIRS,
+    resolved_block_text,
+};
 
 /// The opener prologue both conflict surfaces repeat: read the file, build its
 /// segments, and seed `conflict_segs` / `conflict_res` together. Handing back
@@ -315,13 +298,13 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                             // Per-block resolutions drive the composed Result.
                             ui.horizontal(|ui| {
                                 if ui.button(format!("Accept Yours {block}")).clicked() {
-                                    resolve(state, res_i, 0);
+                                    resolve(state, res_i, CHOICE_OURS);
                                 }
                                 if ui.button(format!("Accept Theirs {block}")).clicked() {
-                                    resolve(state, res_i, 1);
+                                    resolve(state, res_i, CHOICE_THEIRS);
                                 }
                                 if ui.button(format!("Ignore {block}")).clicked() {
-                                    resolve(state, res_i, 2);
+                                    resolve(state, res_i, CHOICE_BOTH_OURS_FIRST);
                                 }
                             });
                             ui.add_space(4.0);
@@ -372,10 +355,10 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 mod tests {
     use super::*;
 
-    /// The rule's one owner, crossed directly at this module's interface: for
-    /// each of the four choices the core returns the block's text, and that
-    /// text is exactly what the composer writes into the composed buffer for
-    /// the same choice.
+    /// The mapping's owner (`conflict`) and this module's composer agree: for
+    /// each of the four named choices the mapping returns the block's text, and
+    /// that text is exactly what the composer writes into the composed buffer
+    /// for the same choice.
     #[test]
     fn resolved_block_text_matches_the_composer_for_every_choice() {
         let ours = "OURS\n";
