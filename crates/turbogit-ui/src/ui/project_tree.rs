@@ -86,9 +86,10 @@ pub struct ProjectTree {
     pub nodes: Vec<ProjectNode>,
 }
 
-/// Every repo node of the tree in pre-order (tree order matches the
-/// sidebar's paint order).
-pub fn iter_repos(tree: &ProjectTree) -> impl Iterator<Item = &RepoNode> {
+/// Every repo node of `nodes` in pre-order: a repo node pushes itself then
+/// recurses into its children; a folder recurses into its children. Shared
+/// by [`iter_repos`] and the selection module's subtree walk.
+pub(crate) fn iter_repos_from(nodes: &[ProjectNode]) -> impl Iterator<Item = &RepoNode> {
     fn walk<'a>(nodes: &'a [ProjectNode], out: &mut Vec<&'a RepoNode>) {
         for node in nodes {
             match node {
@@ -101,8 +102,14 @@ pub fn iter_repos(tree: &ProjectTree) -> impl Iterator<Item = &RepoNode> {
         }
     }
     let mut out = Vec::new();
-    walk(&tree.nodes, &mut out);
+    walk(nodes, &mut out);
     out.into_iter()
+}
+
+/// Every repo node of the tree in pre-order (tree order matches the
+/// sidebar's paint order).
+pub fn iter_repos(tree: &ProjectTree) -> impl Iterator<Item = &RepoNode> {
+    iter_repos_from(&tree.nodes)
 }
 
 /// Build the recursive project tree from exactly the flat registered-root
