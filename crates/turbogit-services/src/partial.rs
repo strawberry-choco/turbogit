@@ -106,6 +106,33 @@ pub fn compose(patch: &Patch, selection: &Selection) -> Patch {
     Patch { files }
 }
 
+/// Validate the change status, compose the selection off the patch value, and
+/// return the composed patch — or `None` when an empty selection makes the op
+/// the no-op it is (nothing touches the engine).
+fn composed_or_noop(
+    patch: &Patch,
+    selection: &Selection,
+    status: ChangeStatus,
+) -> TgResult<Option<Patch>> {
+    ensure_granular_allowed(status)?;
+    let composed = compose(patch, selection);
+    if composed.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(composed))
+}
+
+/// Apply one already-composed patch to the index in the named direction,
+/// retrying while it hits a transient index-lock collision.
+fn apply_composed(
+    vcs: &dyn GitExecutor,
+    root: &Path,
+    patch: &Patch,
+    direction: ApplyDirection,
+) -> TgResult<()> {
+    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, patch, direction))
+}
+
 /// Old-side and new-side line counts of kept body lines. A context line counts
 /// on both sides; the `\ No newline at end of file` marker rides on the changed
 /// line above it and contributes nothing of its own.
@@ -184,12 +211,10 @@ pub fn stage_selection(
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
-    ensure_granular_allowed(status)?;
-    let composed = compose(patch, selection);
-    if composed.is_empty() {
-        return Ok(());
+    match composed_or_noop(patch, selection, status)? {
+        Some(composed) => apply_composed(vcs, root, &composed, ApplyDirection::Forward),
+        None => Ok(()),
     }
-    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &composed, ApplyDirection::Forward))
 }
 
 /// Unstage the selected hunks/lines of one file's patch from the index.
@@ -205,12 +230,10 @@ pub fn unstage_selection(
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
-    ensure_granular_allowed(status)?;
-    let composed = compose(patch, selection);
-    if composed.is_empty() {
-        return Ok(());
+    match composed_or_noop(patch, selection, status)? {
+        Some(composed) => apply_composed(vcs, root, &composed, ApplyDirection::Reverse),
+        None => Ok(()),
     }
-    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &composed, ApplyDirection::Reverse))
 }
 
 /// Stage part of an untracked file's content into the index.
@@ -226,15 +249,15 @@ pub fn stage_untracked_selection(
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
-    ensure_granular_allowed(status)?;
-    let composed = compose(patch, selection);
-    if composed.is_empty() {
-        return Ok(());
+    match composed_or_noop(patch, selection, status)? {
+        Some(composed) => {
+            // Both calls take the index lock (`add -N` writes the index too),
+            // so each gets the transient-collision retry independently.
+            retry_on_transient_lock(|| vcs.add_intent_to_add(root, paths))?;
+            apply_composed(vcs, root, &composed, ApplyDirection::Forward)
+        }
+        None => Ok(()),
     }
-    // Both calls take the index lock (`add -N` writes the index too), so
-    // each gets the transient-collision retry independently.
-    retry_on_transient_lock(|| vcs.add_intent_to_add(root, paths))?;
-    retry_on_transient_lock(|| vcs.apply_patch_to_index(root, &composed, ApplyDirection::Forward))
 }
 
 /// Which changed lines of one hunk body survive composition, and how.
