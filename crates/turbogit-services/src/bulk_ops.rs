@@ -93,6 +93,21 @@ impl SkipReason {
     }
 }
 
+/// Total the given reasons per kind, most frequent first, ties broken
+/// ascending by [`SkipReason::label`] so the painted header line is
+/// deterministic.
+fn tally_skips(reasons: impl Iterator<Item = SkipReason>) -> Vec<(SkipReason, usize)> {
+    let mut totals: Vec<(SkipReason, usize)> = Vec::new();
+    for reason in reasons {
+        match totals.iter_mut().find(|(k, _)| *k == reason) {
+            Some((_, n)) => *n += 1,
+            None => totals.push((reason, 1)),
+        }
+    }
+    totals.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.label().cmp(b.0.label())));
+    totals
+}
+
 /// One row of the preflight matrix: a selected repo, its current state, and
 /// whether it will run or be skipped (with reason).
 #[derive(Debug, Clone)]
@@ -130,17 +145,7 @@ impl Preflight {
     /// Skipped rows totaled per reason, most frequent first — the header
     /// line's "2 skipped (dirty worktree) · 1 skipped (diverged)".
     pub fn skip_totals(&self) -> Vec<(SkipReason, usize)> {
-        let mut totals: Vec<(SkipReason, usize)> = Vec::new();
-        for r in &self.rows {
-            if let Err(reason) = r.outcome {
-                match totals.iter_mut().find(|(k, _)| *k == reason) {
-                    Some((_, n)) => *n += 1,
-                    None => totals.push((reason, 1)),
-                }
-            }
-        }
-        totals.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.label().cmp(b.0.label())));
-        totals
+        tally_skips(self.rows.iter().filter_map(|r| r.outcome.err()))
     }
 }
 
@@ -622,17 +627,10 @@ impl BranchPreflight {
     /// Skipped rows totaled per reason, most frequent first — the same
     /// header summary the bulk preflight paints.
     pub fn skip_totals(&self) -> Vec<(SkipReason, usize)> {
-        let mut totals: Vec<(SkipReason, usize)> = Vec::new();
-        for r in &self.rows {
-            if let BranchAction::Skip(reason) = r.action {
-                match totals.iter_mut().find(|(k, _)| *k == reason) {
-                    Some((_, n)) => *n += 1,
-                    None => totals.push((reason, 1)),
-                }
-            }
-        }
-        totals.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.label().cmp(b.0.label())));
-        totals
+        tally_skips(self.rows.iter().filter_map(|r| match r.action {
+            BranchAction::Skip(reason) => Some(reason),
+            _ => None,
+        }))
     }
 
     /// The roots the run executes on — the non-skipped rows.

@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use turbogit_domain::model::RootId;
 
 use super::multi_selection::{CheckState, LastCommit, SelectionRow, SelectionSummary, age_label};
-use super::project_tree::{FolderNode, ProjectNode, ProjectTree, RepoNode, iter_repos};
+use super::project_tree::{FolderNode, ProjectTree, RepoNode, iter_repos, iter_repos_from};
 
 /// Toggle one repo's checkbox: repos check independently of their group
 /// and of any nested repos.
@@ -102,24 +102,12 @@ pub fn selection_summary(
 /// Every repo node under a folder, in pre-order (its subtree at any depth,
 /// including repos nested beneath repo children).
 fn subtree_repos(folder: &FolderNode) -> impl Iterator<Item = &RepoNode> {
-    fn walk<'a>(nodes: &'a [ProjectNode], out: &mut Vec<&'a RepoNode>) {
-        for node in nodes {
-            match node {
-                ProjectNode::Repo(r) => {
-                    out.push(r);
-                    walk(&r.children, out);
-                }
-                ProjectNode::Folder(f) => walk(&f.children, out),
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(&folder.children, &mut out);
-    out.into_iter()
+    iter_repos_from(&folder.children)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::project_tree::ProjectNode;
     use super::*;
     use std::path::{Path, PathBuf};
     use turbogit_domain::model::{Change, ChangeStatus, Root, RootId, RootStatus};
