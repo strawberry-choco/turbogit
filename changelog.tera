@@ -1,0 +1,30 @@
+{%- import "macros" as macros -%}
+{%- set breaking = commits | filter(attribute="breaking_change", value=true) -%}
+{%- set normal = commits | filter(attribute="breaking_change", value=false) -%}
+{% if version.tag -%}
+    ## {{ version.tag }} - {{ date | date(format="%Y-%m-%d") }}
+{% else -%}
+    {% set from = commits | last -%}
+    {% set to = version.id-%}
+    {% set from_shorthand = from.id | truncate(length=7, end="") -%}
+    {% set to_shorthand = to | truncate(length=7, end="") -%}
+    ## Unreleased ({{ from_shorthand ~ ".." ~ to_shorthand }})
+{% endif -%}
+
+{% if breaking -%}
+#### Breaking changes
+{% for commit in breaking -%}
+{{macros::simple(commit=commit)}}
+{% endfor -%}
+{% endif -%}
+{% for value in normal | group_by_type -%}
+  #### {{ value.0 | upper_first }}
+{% for scope, scoped_commits in value.1 | group_by(attribute="scope") -%}
+{% for commit in scoped_commits | sort(attribute="scope") -%}
+{{macros::simple(commit=commit)}}
+{% endfor -%}
+{% endfor -%}
+{% for commit in value.1 | unscoped -%}
+{{macros::simple(commit=commit)}}
+{% endfor -%}
+{% endfor -%}
