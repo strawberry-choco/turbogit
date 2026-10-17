@@ -10,6 +10,9 @@ resolver = "3"
 # Single source of truth for every shared dependency version in the workspace.
 [workspace.dependencies]
 chrono = { version = "0.4.45", features = ["serde"] }
+# The one commit-message parser (ADR-0028 D2). Tooling-only — the `default`
+# feature is `["cli"]`, which drags clap in for a bin we never run.
+cocogitto = { version = "7.0.0", default-features = false }
 crossbeam-channel = "0.5.16"
 # The pixel-diff metric egui_kittest uses to decide a snapshot comparison; a
 # direct dependency so a suite can report the same number the verdict is made

@@ -1,0 +1,14 @@
+[package]
+name = "commit-lint"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cocogitto = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
