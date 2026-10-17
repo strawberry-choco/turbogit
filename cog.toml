@@ -15,6 +15,12 @@ post_bump_hooks = [
   "sed -i 's/^version = \".*\"/version = \"{{version}}\"/' Cargo.toml",
 ]
 
+# The release workflow triggers on `v*` tags and generates its body with
+# `cog changelog --at <tag>`; cocogitto's default `tag_prefix` is None, under
+# which `Tag::from_str("v1.2.3")` fails semver parsing — `--at v…` errors and
+# `cog bump` cuts unprefixed `1.2.3` tags the workflow trigger never matches.
+tag_prefix = "v"
+
 # D6: release notes are generated to stdout at release time and published on GitHub releases only — there is no CHANGELOG.md and none will be created; sections are Breaking changes, Features, Bug Fixes, then docs/refactor/test/chore/style/perf/build/ci/revert folded into one Miscellaneous.
 # ADR-0028 calls that taxonomy "the tool default", but cocogitto 7.0.0's default gives every type its own section and has no Breaking-changes section at all — hence the explicit mapping here and in changelog.tera.
 disable_changelog = true

@@ -1,0 +1,75 @@
+name: Release
+
+# ADR-0028 D7: the release machinery is configured but dormant — a `v*` tag
+# push is the only event that fires this workflow, so nothing runs until the
+# first tag is cut.
+on:
+  push:
+    tags: ['v*']
+
+# Creating the release and uploading its assets is the only write this
+# workflow performs.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os_name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_name: linux
+          - os: windows-latest
+            os_name: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # The root package is the application; the eight crates ride along (D7).
+      - run: cargo build --release -p turbogit
+
+      - name: Package the binary (linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          tar -czf "dist/turbogit-${GITHUB_REF_NAME}-linux-x86_64.tar.gz" -C target/release turbogit
+
+      - name: Package the binary (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path target/release/turbogit.exe -DestinationPath "dist/turbogit-$($env:GITHUB_REF_NAME)-windows-x86_64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turbogit-${{ matrix.os_name }}
+          path: dist/*
+
+  release:
+    name: Release notes and publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: the notes are generated from the commits up to the tag.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      # The one parser and notes generator everywhere (ADR-0028 D2), pinned to
+      # the same 7.0.0 the commit-lint hook and the CI commits job use.
+      - name: Install cocogitto
+        run: cargo install cocogitto@7.0.0 --locked
+      - name: Generate the release notes
+        # D6: the notes live on the release page only — stdout is captured into
+        # the runner temp dir, never into a file inside the repository.
+        run: cog changelog --at "${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/release-notes.md"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file "${RUNNER_TEMP}/release-notes.md" dist/*
