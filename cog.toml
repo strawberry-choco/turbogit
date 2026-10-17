@@ -4,7 +4,7 @@
 # fails every commit through the hook — validate edits by running them through
 # `cog verify` and `cargo run -p commit-lint`, never by eye.
 
-# D1: types and scopes are free — omitting `scopes` skips the scope check entirely (an empty list would reject every scoped commit) and no type enumeration is enforced; both breaking notations (`type!:` and a `BREAKING CHANGE:` footer) are accepted at parser level, no setting needed.
+# D1: scopes are free — omitting `scopes` skips the scope check entirely (an empty list would reject every scoped commit); types are the shared parser's built-in vocabulary (feat, fix, chore, revert, perf, docs, style, refactor, test, build, ci), extendable via `[commit_types]` — no repo-side enumeration is layered on top; both breaking notations (`type!:` and a `BREAKING CHANGE:` footer) are accepted at parser level, no setting needed.
 
 # D5: merge and fixup commits stay in history but are skipped here — the setting is what makes `cog verify` agree with commit-lint, which skips them unconditionally.
 ignore_merge_commits = true
