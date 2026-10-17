@@ -53,3 +53,29 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y git
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install cocogitto@7.0.0 --locked
+      - name: Lint the pull request commit range
+        if: github.event_name == 'pull_request'
+        # merge-base, not github.event.pull_request.base.sha: that field is the base
+        # branch tip, so the range would lint commits the PR does not carry. The range
+        # is positional — cocogitto 7.0.0's `cog check` has no --range flag.
+        run: |
+          BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          cog check "${BASE}..HEAD"
+      - name: Lint the pushed commit range
+        if: github.event_name == 'push'
+        run: |
+          # A new branch tip carries no `before`; degrade to a no-op (D4: backstop).
+          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            echo "New branch tip; no pushed range to lint"
+          else
+            cog check "${{ github.event.before }}..${{ github.sha }}"
+          fi
