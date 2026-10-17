@@ -76,6 +76,10 @@ jobs:
           # A new branch tip carries no `before`; degrade to a no-op (D4: backstop).
           if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
             echo "New branch tip; no pushed range to lint"
+          # A force-push (D8's one-time history rewrite) orphans `before`; skip rather than fail on an unreachable range.
+          elif ! git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            echo "Pushed 'before' SHA does not resolve in this checkout (orphaned by a force-push); nothing to lint"
+            exit 0
           else
             cog check "${{ github.event.before }}..${{ github.sha }}"
           fi

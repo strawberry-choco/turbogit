@@ -5,6 +5,9 @@ is rewritten by this file; the `git filter-repo` callback below is executed verb
 later, human-gated ticket only after this table is approved (execution-plan step 06,
 gate 1; force-push itself is gate 2).
 
+Why `docs/` and not the issue tracker: the table must survive the history rewrite — a
+fresh-clone verification looks it up afterward — and `.scratch/` is gitignored.
+
 ## Provenance
 
 - Sweep: `git log --format=%s main` over the whole of `main` — **383 subjects =

@@ -20,7 +20,7 @@
 {% for value in normal | group_by_type -%}
   #### {{ value.0 | upper_first }}
 {% for scope, scoped_commits in value.1 | group_by(attribute="scope") -%}
-{% for commit in scoped_commits | sort(attribute="scope") -%}
+{% for commit in scoped_commits -%}
 {{macros::simple(commit=commit)}}
 {% endfor -%}
 {% endfor -%}

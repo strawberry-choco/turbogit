@@ -5,6 +5,11 @@
 
 use std::process::ExitCode;
 
+// ADR-0028 D5: the lint tools skip merge and fixup commits by default, and git
+// runs commit-msg for both.
+const IGNORE_MERGE_COMMITS: bool = true;
+const IGNORE_FIXUP_COMMITS: bool = true;
+
 fn main() -> ExitCode {
     // cocogitto 7.0.0 panics on any settings access when the config path was
     // never set — `get_config_path` unwraps its `OnceLock` outside tests, and
@@ -28,10 +33,10 @@ fn main() -> ExitCode {
     };
 
     match cocogitto::conventional::commit::verify(
-        None, &message,
-        // ADR-0028 D5: the lint tools skip merge and fixup commits by default,
-        // and git runs commit-msg for both.
-        true, true,
+        None,
+        &message,
+        IGNORE_MERGE_COMMITS,
+        IGNORE_FIXUP_COMMITS,
     ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
