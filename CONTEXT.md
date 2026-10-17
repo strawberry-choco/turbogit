@@ -353,3 +353,18 @@ current branch, so branch-scoped actions state why they are blocked and history
 edits are unavailable. Reached by checking out a commit or a tag.
 _Avoid_: detached (as an action name — checking out a commit is the verb), no
 branch
+
+**Conventional commit**:
+A commit whose subject is `type(scope)!: subject` — a type verb, an optional scope, and
+a subject line. The structure is the contract, not the vocabulary: types and scopes are
+conventions, not an enforced list, and multi-scopes are legal. `!` after the type or
+scope, or a `BREAKING CHANGE:` footer, marks a breaking change. Every commit reachable
+from main carries it, including the ones history was reworded into.
+_Avoid_: semantic commit, free-form subject, `issue-N:` prefix subjects
+
+**Release notes**:
+The per-release text generated from the conventional commits since the previous
+release: breaking changes first, then features, then fixes, everything else folded
+into a miscellaneous section. Published on the release and nowhere else — no committed
+mirror of it exists.
+_Avoid_: changelog, CHANGELOG.md, release body
