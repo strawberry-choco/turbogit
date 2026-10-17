@@ -1,0 +1,3 @@
+#!/bin/sh
+# The one-line spec gate; the parser is cocogitto's via commit-lint (ADR-0028 D2).
+exec cargo run --quiet -p commit-lint -- "$1"

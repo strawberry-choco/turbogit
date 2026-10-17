@@ -82,6 +82,11 @@ turbogit-ui = { workspace = true }
 # The cross-layer parity suite is the root's one test that legitimately spans
 # every crate; those consumers are dev-only.
 [dev-dependencies]
+# Installs `.cargo-husky/hooks/*` into `.git/hooks` on build (ADR-0028 D3).
+# `default-features = false` is load-bearing: the defaults generate their own
+# cargo-running hook scripts, while `user-hooks` makes cargo-husky a pure
+# installer for the scripts the repo commits.
+cargo-husky = { version = "1.5.0", default-features = false, features = ["user-hooks"] }
 similar = { workspace = true }
 tempfile = { workspace = true }
 test-support = { workspace = true }
