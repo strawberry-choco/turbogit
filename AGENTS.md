@@ -38,7 +38,9 @@ plus a thin root composition root.
 Dependencies flow strictly downward: domain ← engine-api ← {engine, services}
 ← app ← ui, with the root composition root above ui. Every shared version lives
 in `[workspace.dependencies]` in the root manifest; members inherit clippy
-deny-warnings via `[lints] workspace = true`.
+deny-warnings via `[lints] workspace = true`. `crates/commit-lint` is tooling,
+not a layer: the `crates/*` glob pulls it into the workspace, and nothing in
+the layer stack may depend on it.
 
 ### One sanctioned impurity
 
@@ -81,8 +83,12 @@ All are choices to make once the layer boundaries exist; none is a prerequisite.
   deadline — not from a shared temp name, since every test gets its own
   `tempfile::tempdir()`. Re-run the failing target alone before reading a red there
   as a defect, and never write a failure off as known flakiness without that re-run.
+- The `commits` CI job — the fifth gate, CI-side rather than local: it lints the
+  PR's commit range (and pushes to `main` as a backstop) with the repo's
+  `cog.toml`, through the same cocogitto parser the commit-msg hook runs
+  (ADR-0028). Nothing to run by hand; the hook is its local counterpart.
 
-All four gates must pass; a failure in any one blocks the change.
+All five gates must pass; a failure in any one blocks the change.
 
 ### Other Commands
 
@@ -134,9 +140,17 @@ root `tests/`.
 
 ## Commit & Pull Request Guidelines
 
-Use concise, lowercase summaries, often prefixed as `docs:` or another
-Conventional Commits category; keep subjects imperative and under about 72
-characters.
+Every commit subject follows `type(scope)!: subject`: one type verb, an
+optional free-form scope, a subject. Types and scopes are conventions, not an
+enforced enumeration, and both breaking notations are legal — `!` after
+type/scope, or a `BREAKING CHANGE:` footer. The commit-msg hook and the CI
+`commits` job both enforce it through cocogitto's parser — one parser, per
+ADR-0028. Subjects stay imperative and lowercase at about 72 characters; that
+is house style, not something the parser polices.
+
+PRs merge by rebase, so what lands on `main` is what was written and linted —
+every main commit is a lint target. The merge commits already in history are
+exempt; the tools skip them by default.
 
 ## Agent skills
 
