@@ -1,0 +1,34 @@
+# The commit spec as tool settings (ADR-0028): the hook, the CI job and the
+# future bump/notes path all read this one file. Every key must match
+# cocogitto 7.0.0's `Settings` exactly (`deny_unknown_fields`), so a typo here
+# fails every commit through the hook — validate edits by running them through
+# `cog verify` and `cargo run -p commit-lint`, never by eye.
+
+# D1: types and scopes are free — omitting `scopes` skips the scope check entirely (an empty list would reject every scoped commit) and no type enumeration is enforced; both breaking notations (`type!:` and a `BREAKING CHANGE:` footer) are accepted at parser level, no setting needed.
+
+# D5: merge and fixup commits stay in history but are skipped here — the setting is what makes `cog verify` agree with commit-lint, which skips them unconditionally.
+ignore_merge_commits = true
+ignore_fixup_commits = true
+
+# D7: dormant until the first `cog bump` — nothing here runs at any other time.
+post_bump_hooks = [
+  "sed -i 's/^version = \".*\"/version = \"{{version}}\"/' Cargo.toml",
+]
+
+# D6: release notes are generated to stdout at release time and published on GitHub releases only — there is no CHANGELOG.md and none will be created; sections are Breaking changes, Features, Bug Fixes, then docs/refactor/test/chore/style/perf/build/ci/revert folded into one Miscellaneous.
+# ADR-0028 calls that taxonomy "the tool default", but cocogitto 7.0.0's default gives every type its own section and has no Breaking-changes section at all — hence the explicit mapping here and in changelog.tera.
+disable_changelog = true
+
+[commit_types]
+build = { changelog_title = "Miscellaneous", order = 3 }
+chore = { changelog_title = "Miscellaneous", order = 3 }
+ci = { changelog_title = "Miscellaneous", order = 3 }
+docs = { changelog_title = "Miscellaneous", order = 3 }
+perf = { changelog_title = "Miscellaneous", order = 3 }
+refactor = { changelog_title = "Miscellaneous", order = 3 }
+revert = { changelog_title = "Miscellaneous", order = 3 }
+style = { changelog_title = "Miscellaneous", order = 3 }
+test = { changelog_title = "Miscellaneous", order = 3 }
+
+[changelog]
+template = "changelog.tera"
