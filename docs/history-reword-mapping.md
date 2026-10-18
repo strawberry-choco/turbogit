@@ -1,9 +1,10 @@
 # History-reword mapping table (ADR-0028 D8 — Gate 1 draft)
 
-**Status: DRAFT, awaiting Gate-1 approval. Nothing here has been executed.** No history
-is rewritten by this file; the `git filter-repo` callback below is executed verbatim by a
-later, human-gated ticket only after this table is approved (execution-plan step 06,
-gate 1; force-push itself is gate 2).
+**Status: APPROVED (Gate 1) — being executed (Gate 2 confirmed).** The operator
+approved the table and the force-push; the reword runs against `main` via
+`git filter-branch --msg-filter` applying the identical first-line-only dict below
+(`git-filter-repo` is unavailable on this machine and ruled out by the operator —
+the callback snippet stays as the record of the approved mapping).
 
 Why `docs/` and not the issue tracker: the table must survive the history rewrite — a
 fresh-clone verification looks it up afterward — and `.scratch/` is gitignored.
