@@ -145,6 +145,29 @@ pub fn record_workspace_into(recents: &mut Recents, path: &Path, repo_count: usi
     }
 }
 
+/// Drop `path` from the recents store and persist the result. Returns the
+/// updated store. Best-effort persistence, mirroring [`record`]: a read-only
+/// config dir must not break the Welcome page's remove control.
+///
+/// Removing a row is not destructive to the project — the directory on disk is
+/// untouched, and opening it again re-records it — so this carries no undo.
+pub fn remove(config_dir: &Path, path: &Path) -> Recents {
+    let mut recents = load(config_dir);
+    remove_into(&mut recents, path);
+    let _ = save(config_dir, &recents);
+    recents
+}
+
+/// In-memory drop used by [`remove`] (pure, unit-testable). Retains every row
+/// whose path differs, so one project's removal never disturbs its neighbours.
+/// Returns whether a row was actually dropped, which is how a caller tells
+/// "removed" from "was not there".
+pub fn remove_into(recents: &mut Recents, path: &Path) -> bool {
+    let before = recents.projects.len();
+    recents.projects.retain(|p| p.path != path);
+    recents.projects.len() != before
+}
+
 /// Human-readable last-opened meta line ("Last opened 2026-08-22 14:03").
 pub fn format_last_opened(unix_millis: i64) -> String {
     let secs = unix_millis.div_euclid(1000);
@@ -215,6 +238,89 @@ mod tests {
         assert_eq!(loaded.projects[0].kind, RecentKind::Project);
         assert_eq!(loaded.projects[1].kind, RecentKind::Workspace);
         assert_eq!(loaded.projects[1].repo_count, Some(41));
+    }
+
+    #[test]
+    fn remove_into_drops_only_the_named_row_and_reports_whether_it_was_there() {
+        let mut recents = Recents {
+            projects: vec![
+                RecentProject {
+                    path: PathBuf::from("C:/projects/alpha"),
+                    name: "alpha".into(),
+                    last_opened: 3,
+                    kind: RecentKind::Project,
+                    repo_count: None,
+                },
+                RecentProject {
+                    path: PathBuf::from("C:/workspaces/big"),
+                    name: "big".into(),
+                    last_opened: 2,
+                    kind: RecentKind::Workspace,
+                    repo_count: Some(41),
+                },
+            ],
+        };
+
+        // The middle row of a three-row list is the one a positional or
+        // off-by-one removal gets wrong, so remove from a three-row store.
+        recents.projects.insert(
+            0,
+            RecentProject {
+                path: PathBuf::from("C:/projects/oldest"),
+                name: "oldest".into(),
+                last_opened: 1,
+                kind: RecentKind::Project,
+                repo_count: None,
+            },
+        );
+        assert!(
+            remove_into(&mut recents, Path::new("C:/projects/alpha")),
+            "removing a stored path reports that a row was dropped"
+        );
+        let paths: Vec<_> = recents.projects.iter().map(|p| &p.path).collect();
+        assert_eq!(
+            paths,
+            vec![
+                &PathBuf::from("C:/projects/oldest"),
+                &PathBuf::from("C:/workspaces/big"),
+            ],
+            "the neighbours keep their order and their kind/repo_count"
+        );
+
+        assert!(
+            !remove_into(&mut recents, Path::new("C:/projects/alpha")),
+            "removing an absent path is a no-op, not a false report"
+        );
+        assert_eq!(recents.projects.len(), 2, "the store is left as it was");
+    }
+
+    #[test]
+    fn remove_persists_the_dropped_row() {
+        let config = tempfile::tempdir().unwrap();
+        let kept = PathBuf::from("C:/projects/kept");
+        let gone = PathBuf::from("C:/projects/gone");
+        record(config.path(), &kept);
+        record(config.path(), &gone);
+        assert_eq!(load(config.path()).projects.len(), 2);
+
+        let after = remove(config.path(), &gone);
+
+        assert_eq!(
+            after.projects.iter().map(|p| &p.path).collect::<Vec<_>>(),
+            vec![&kept]
+        );
+        // The file, not just the returned store: the Welcome page's list is
+        // rebuilt from disk at every launch.
+        let reloaded = load(config.path());
+        assert_eq!(
+            reloaded
+                .projects
+                .iter()
+                .map(|p| &p.path)
+                .collect::<Vec<_>>(),
+            vec![&kept],
+            "the removed row must not come back on the next launch"
+        );
     }
 
     #[test]

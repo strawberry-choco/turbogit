@@ -42,6 +42,15 @@ const STEP_PILL: f32 = 20.0;
 /// ramp — which is why it stays here rather than joining `theme`'s row heights.
 const RECENT_ROW_HEIGHT: f32 = 64.0;
 
+/// Right zone of a recent row reserved for its remove control: the shared
+/// [`widgets::icon_button`] square, a 6px gap clear of the chips, and the
+/// row's own 10px gutter. The row's open target and both chips stop at the
+/// zone's left edge, so the control can never overlap the row it belongs to —
+/// and reserving the zone up front means the row does not reflow when the
+/// control appears. The button's own size is the vocabulary's, not this
+/// number's: only the gap and the gutter are stated here.
+const RECENT_ACTIONS_ZONE: f32 = 44.0;
+
 /// Paint alpha of the hero's soft `BRAND` gradient overlay (spec §5.1). A mix
 /// fraction, not a design token — egui has no linear-gradient fill, so the halo
 /// is one `BRAND`-tinted rect blended over [`Palette::BG`].
@@ -588,15 +597,37 @@ fn recents_column(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
+/// One recent-project row: name, path and last-opened on the left, the live
+/// branch chip (and a workspace row's repo count) in the right chip lane, and
+/// the remove control in the reserved zone past them.
+///
+/// The row's own click target stops at [`RECENT_ACTIONS_ZONE`]'s left edge
+/// (the sidebar's rule-row reservation), so one click stays one intent: a
+/// click on the trash cannot also open the project. Hover is read off the
+/// *whole* row rather than the click target, so pointing at the remove
+/// control does not make the row it belongs to lose its highlight.
 fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents::RecentProject) {
     let width = ui.available_width();
-    let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(width, RECENT_ROW_HEIGHT), Sense::click());
-    let hovered = response.hovered();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, RECENT_ROW_HEIGHT), Sense::hover());
+    let clickable = Rect::from_min_max(
+        rect.min,
+        Pos2::new(
+            (rect.right() - RECENT_ACTIONS_ZONE).max(rect.left()),
+            rect.bottom(),
+        ),
+    );
+    let response = ui.interact(
+        clickable,
+        ui.auto_id_with(("recent_row", &project.path)),
+        Sense::click(),
+    );
+    let hovered = ui.rect_contains_pointer(rect);
     let painter = ui.painter().clone();
     widgets::paint_row(ui, rect, components::RowState::from_flags(false, hovered));
 
     let pad_x = 10.0;
+    // Chips lay out to the left of the remove zone, right-aligned to it.
+    let chips_right = rect.right() - RECENT_ACTIONS_ZONE;
 
     let name_galley = painter.layout_no_wrap(
         truncate(&project.name, 24),
@@ -624,14 +655,14 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     // clears ~2.5:1, while ACCENT_TEXT reaches 4.5:1 on the SELECTION chip
     // (see the design_tokens audit). The SELECTION fill is the deliberate
     // brand-warm contrast change from spec §4.
-    if let Some(branch) = cached_branch(state, &project.path) {
+    let branch = cached_branch(state, &project.path);
+    if let Some(branch) = &branch {
         let branch_galley = painter.layout_no_wrap(
-            truncate(&branch, 18),
+            truncate(branch, 18),
             crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::ACCENT_TEXT,
         );
-        let chip_rect =
-            widgets::chip_rect_right(rect.right() - pad_x, rect.center().y, &branch_galley);
+        let chip_rect = widgets::chip_rect_right(chips_right, rect.center().y, &branch_galley);
         widgets::paint_chip(
             &painter,
             chip_rect,
@@ -642,8 +673,8 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
     }
 
     // Workspace rows (issue #34) additionally show their indexed repo count
-    // as a chip opposite the branch indicator, then restore via the attach
-    // flow instead of a single-project open.
+    // as a chip in the same lane, then restore via the attach flow instead of
+    // a single-project open.
     if project.kind == turbogit_app::recents::RecentKind::Workspace
         && let Some(count) = project.repo_count
     {
@@ -653,15 +684,14 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
             crate::theme::chrome_font(crate::theme::TYPE_CONTROL),
             Palette::ACCENT_TEXT,
         );
-        let right_edge = rect.right() - pad_x;
-        // A branch chip would already own the right side; stack the count
-        // above it, or sit at the row's vertical middle when absent.
-        let cy = if rect.contains(Pos2::new(right_edge, rect.center().y)) {
+        // A branch chip already owns the lane's vertical middle; stack the
+        // count above it, or centre it when there is no branch chip.
+        let cy = if branch.is_some() {
             rect.top() + 10.0
         } else {
             rect.center().y
         };
-        let count_rect = widgets::chip_rect_right(right_edge, cy, &count_galley);
+        let count_rect = widgets::chip_rect_right(chips_right, cy, &count_galley);
         widgets::paint_chip(
             &painter,
             count_rect,
@@ -669,6 +699,37 @@ fn recent_row(ui: &mut Ui, state: &mut AppState, project: &turbogit_app::recents
             Palette::SURFACE_3,
             Palette::ACCENT_TEXT,
         );
+    }
+
+    // Remove control: a square ghost trash button inside the reserved zone —
+    // the row's own interact does not reach it, and it is registered after, so
+    // a click lands on exactly one of the two. Removing a row only forgets the
+    // path — the project on disk is untouched and reopening it re-records it —
+    // so this is a single click, not a confirmation-gated one.
+    let remove_zone = Rect::from_min_max(
+        Pos2::new(chips_right, rect.top()),
+        Pos2::new(rect.right(), rect.bottom()),
+    );
+    let mut remove_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(remove_zone)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    // The row's own gutter, applied in a right-to-left zone so the button sits
+    // `pad_x` in from the row's edge and keeps the vocabulary's own size.
+    remove_ui.add_space(pad_x);
+    let remove = widgets::icon_button(&mut remove_ui, Icon::TRASH_2);
+    remove.widget_info(|| {
+        WidgetInfo::labeled(
+            WidgetType::Button,
+            true,
+            format!("Remove recent project {}", project.name),
+        )
+    });
+    let remove = remove.on_hover_text(format!("Remove '{}' from recent projects", project.name));
+    if remove.clicked() {
+        state.remove_recent(&project.path);
+        return;
     }
 
     // Accessibility / headless-test queryability: rows are labelled by the

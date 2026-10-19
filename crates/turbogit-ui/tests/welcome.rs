@@ -780,6 +780,213 @@ fn clicking_a_recent_reopens_the_project() {
     assert!(!s.ui.welcome_visible);
 }
 
+/// A recent row carries a remove control, and pressing it removes **that row
+/// only** — the neighbouring row stays, and the removal survives the frame.
+///
+/// The click reaching the trash and not the row beneath it is the fact worth
+/// testing: the row's own target and the control's zone are disjoint, so one
+/// press is one intent. A control that overlapped its row would either open the
+/// project as well or be unreachable, and only this assertion can tell those
+/// apart.
+#[test]
+fn a_recent_row_offers_a_remove_control_that_drops_only_that_row() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let alpha = seed_repo(project.path(), "alpha");
+    let beta = seed_repo(project.path(), "beta");
+
+    seed_recents(
+        config.path(),
+        &[
+            RecentProject {
+                path: alpha.clone(),
+                name: "alpha".into(),
+                last_opened: 1_755_000_000_000,
+                kind: turbogit_app::recents::RecentKind::Project,
+                repo_count: None,
+            },
+            RecentProject {
+                path: beta.clone(),
+                name: "beta".into(),
+                last_opened: 1_754_000_000_000,
+                kind: turbogit_app::recents::RecentKind::Project,
+                repo_count: None,
+            },
+        ],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = shell_harness_over(
+        AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
+    );
+    settle(&mut harness);
+    assert_painted(&harness, "alpha");
+    assert_painted(&harness, "beta");
+
+    harness.get_by_label("Remove recent project alpha").click();
+    settle(&mut harness);
+
+    // The removed row is gone from the screen. Asked through the accessibility
+    // tree rather than painted text: the removal notice still *names* the
+    // project it dropped, so a substring assertion would read that notice as
+    // the row surviving.
+    let buttons: Vec<String> = harness
+        .get_all_by_role(egui::accesskit::Role::Button)
+        .filter_map(|n| n.accesskit_node().label().map(|l| l.to_string()))
+        .collect();
+    assert!(
+        !buttons.iter().any(|l| l == "alpha"),
+        "the removed row's own control is gone; buttons: {buttons:#?}"
+    );
+    assert!(
+        buttons.contains(&"beta".to_string()),
+        "the neighbour keeps its row; buttons: {buttons:#?}"
+    );
+    // Only that row's remove control went with it.
+    let removes: Vec<_> = buttons
+        .iter()
+        .filter(|l| l.starts_with("Remove recent project"))
+        .collect();
+    assert_eq!(
+        removes,
+        vec!["Remove recent project beta"],
+        "one remove control per listed row, and only the removed row's is gone"
+    );
+
+    // The press did not also open the project the row points at.
+    assert!(
+        harness.state().show_welcome(),
+        "removing a row must not open it — the control and the row are one click apart"
+    );
+
+    // …and the list backing the screen agrees.
+    let listed: Vec<_> = harness
+        .state()
+        .ui
+        .recent_projects
+        .iter()
+        .map(|p| p.path.clone())
+        .collect();
+    assert_eq!(listed, vec![beta], "exactly one row left");
+}
+
+/// The removal is durable and it is announced: the row leaves the global
+/// recents file (so it does not come back at the next launch), and the user is
+/// told which project vanished — the list is the only place that used to say so,
+/// and now it no longer shows the row at all.
+#[test]
+fn removing_a_recent_row_says_which_project_it_dropped() {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let config = tempfile::tempdir().expect("temp config dir");
+    let alpha = seed_repo(project.path(), "alpha");
+
+    seed_recents(
+        config.path(),
+        &[RecentProject {
+            path: alpha.clone(),
+            name: "alpha".into(),
+            last_opened: 1_755_000_000_000,
+            kind: turbogit_app::recents::RecentKind::Project,
+            repo_count: None,
+        }],
+    );
+
+    let cfg = config.path().to_path_buf();
+    let mut harness = shell_harness_over(
+        AppState::launch_in(None, Some(cfg)),
+        egui::vec2(1024.0, 768.0),
+    );
+    settle(&mut harness);
+
+    harness.get_by_label("Remove recent project alpha").click();
+    settle(&mut harness);
+
+    // The last row going leaves the card's own empty state — the card is
+    // still there, it just has nothing to list.
+    assert_painted(&harness, "RECENT PROJECTS");
+    assert_painted(&harness, "No recent projects yet.");
+
+    // Durable: the store the next launch reads no longer names the project.
+    assert!(
+        turbogit_app::recents::load(config.path())
+            .projects
+            .is_empty(),
+        "the removed row must not come back on the next launch"
+    );
+    // And the project itself is untouched — removal forgets the path, nothing
+    // on disk is deleted.
+    assert!(
+        alpha.is_dir(),
+        "removing a recent must not touch the project"
+    );
+
+    let toast = harness
+        .state()
+        .ui
+        .toast
+        .as_ref()
+        .expect("the removal reports itself");
+    assert!(
+        toast.message.contains("alpha"),
+        "the notice names the project the list no longer shows; got {:?}",
+        toast.message
+    );
+}
+
+/// The control lives in the row's own right-hand zone, past the chip lane and
+/// inside the row band — not floating over the card, and not covering the name
+/// the row is read by.
+#[test]
+fn the_remove_control_sits_in_the_row_band_past_the_chips() {
+    let mut fx = bare_fixture();
+    let repo = seed_repo(fx._project.path(), "zoned");
+    fx.harness.state_mut().ui.recent_projects = vec![RecentProject {
+        path: repo,
+        name: "zoned".into(),
+        last_opened: 1_755_000_000_000,
+        kind: turbogit_app::recents::RecentKind::Project,
+        repo_count: None,
+    }];
+    settle(&mut fx.harness);
+    wait_painted(&mut fx.harness, "main", "current branch");
+
+    let button = fx
+        .harness
+        .get_by_label("Remove recent project zoned")
+        .rect();
+    let row = fx.harness.get_by_label("zoned").rect();
+    let name = painted_text_centers(&fx.harness, "zoned")
+        .into_iter()
+        .next()
+        .expect("the row's name paints");
+
+    assert!(
+        button.max.x > row.max.x,
+        "the control sits past the row's own target: button {button:?}, row {row:?}"
+    );
+    assert!(
+        button.center().y > row.center().y - 1.0 && button.center().y < row.center().y + 1.0,
+        "the control is vertically centred on its row: button {button:?}, row {row:?}"
+    );
+    assert!(
+        button.min.x > name.x,
+        "the control never covers the name it removes: name at x={}, button {button:?}",
+        name.x
+    );
+    // The chip lane keeps its own room: the branch chip ends left of the
+    // control rather than under it.
+    let chip = painted_text_centers(&fx.harness, "main")
+        .into_iter()
+        .next()
+        .expect("the branch chip paints");
+    assert!(
+        chip.x < button.min.x,
+        "the branch chip ends before the control: chip x={}, button {button:?}",
+        chip.x
+    );
+}
+
 // --- Cycle 4: branch indicators are live-at-render with in-memory caching -----
 
 #[test]

@@ -4002,6 +4002,34 @@ impl AppState {
         }
     }
 
+    /// Drop `path` from the global recents store (the Welcome row's remove
+    /// control) and refresh the in-memory copy. Returns whether a row was
+    /// actually removed.
+    ///
+    /// **Non-destructive, so nothing to confirm and nothing to undo**: the
+    /// directory on disk is untouched and opening the project again re-records
+    /// it, which is why a single click can remove a row. The entry's cached
+    /// branch indicator goes with it — otherwise every row a user ever removes
+    /// stays cached for the rest of the session.
+    pub fn remove_recent(&mut self, path: &Path) -> bool {
+        // The in-memory list is what the user just clicked on; a path that is
+        // not in it has nothing to remove, and the file is left alone rather
+        // than rewritten with an identical store.
+        let Some(index) = self.ui.recent_projects.iter().position(|p| p.path == path) else {
+            return false;
+        };
+        let removed = self.ui.recent_projects.remove(index);
+        self.ui.welcome_branch_cache.remove(path);
+        if let Some(cfg) = self.recents_config() {
+            crate::recents::remove(&cfg, path);
+        }
+        self.ui.toast = Some(Toast::info(format!(
+            "Removed '{}' from recent projects.",
+            removed.name
+        )));
+        true
+    }
+
     /// Drop the cached branch indicators so the next render recomputes them
     /// live (ADR-0005: never stored, always fresh at render time).
     pub fn invalidate_welcome_branches(&mut self) {
