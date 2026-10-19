@@ -200,18 +200,30 @@ _Avoid_: recent repos
 **Changelist**:
 A named bucket of local uncommitted changes; exactly one is active at a time,
 and new edits land in the active changelist. The changelist model is what the
-Commit tool window's one tree **replaced**: it ships the staging sections (see
-Staging area mode) plus an "Unversioned Files" group at the bottom of the tree
-and a "Merge conflicts" group of its own. User-created changelists are backlog.
+Commit tool window's one tree **replaced** (see Flat file list). User-created
+changelists are backlog.
 _Avoid_: change set, change list, pending changes, group
 
-**Staging area mode**:
-The organization that ships: the Commit tool window's one tree mirrors Git's
-index, with unstaged content under UNSTAGED and fully staged files under
-STAGED, plus the "Unversioned Files" and "Merge conflicts" groups. It replaced
-the **Changelist** model, and granularly-completed paths stay visible under
-STAGED rather than leaving the list.
-_Avoid_: index view, git staging
+**Flat file list**:
+The organization that ships: the Commit tool window's one tree lists every
+changed path of a repository root in a single run sorted by path, with a
+"Merge conflicts" group of its own. Files are not sorted into STAGED and
+UNSTAGED, and untracked files are rows of the same list rather than a section
+of their own — where a file sits in the list says what it is, not what the
+index holds. Repository roots stay separate labelled sections, because that
+answers the other question: which repository a file belongs to.
+_Avoid_: staging area mode, index view, git staging
+
+**Staging checkbox**:
+The per-file box that puts one whole file into or takes it out of Git's index,
+in three states derived from what the status read reports: ticked when the
+whole file is staged, empty when none of it is, half-filled when only part of
+it is. Its states are derived per frame and never stored, so a ticked box and a
+staged file cannot disagree. Clicking it stages or un-stages the whole file,
+which is what makes a partly staged file the shortest one-click route to being
+fully staged. Distinct from **Partial staging**, which is the diff viewer's
+per-hunk and per-line act.
+_Avoid_: include box, commit checkbox, tick
 
 **Outgoing commits**:
 The commits a root is ahead of its upstream — what the Push dialog lists per
