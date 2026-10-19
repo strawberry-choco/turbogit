@@ -393,8 +393,8 @@ fn gutter_stage_on_untracked_file_intents_to_add_then_applies_forward() {
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
 
-    // Untracked files live in the bottom `Unversioned Files` group of the
-    // one tree (issue 04) — no sub-tab switch needed; select one for preview.
+    // Untracked files are ordinary rows of the one flat list — select one for
+    // preview.
     h.get_by_label("new.txt").click();
     h.run();
 
@@ -574,18 +574,21 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
     h.get_by_label("Stage hunk 1").click();
     h.run();
 
-    // Story 9, as reshaped by issue 20: with no unstaged changes left,
-    // words.txt is fully staged. The completion is recorded (it now only
-    // drives focus advancement — the staging sections keep fully staged
-    // files listed, under STAGED), and preview focus advances to the next
-    // changed file.
+    // Story 9: with no unstaged changes left, words.txt is fully staged. The
+    // completion is recorded (it drives focus advancement — the flat list
+    // keeps the fully staged file visible with a ticked box), and preview
+    // focus advances to the next changed file.
     assert!(
         wait_until(15_000, || !h.state().ui.granularly_completed.is_empty()),
         "the granular completion must be recorded"
     );
     assert!(
         h.query_by_label("words.txt").is_some(),
-        "the staging view keeps fully staged files listed, under STAGED"
+        "the flat list keeps a fully staged file visible"
+    );
+    assert!(
+        h.query_by_label("Unstage words.txt (staged)").is_some(),
+        "and its checkbox now reads fully staged"
     );
     assert!(
         wait_until(15_000, || h.state().ui.preview_change
@@ -598,7 +601,7 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
 // ------------------------------------------------- partial-stage indicator --
 
 #[test]
-fn partially_staged_file_shows_a_coarse_indicator() {
+fn a_partially_staged_file_renders_the_checkbox_middle_state() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "partial-indicator");
     // words.txt partially staged by hand (MM); base.txt plainly modified.
@@ -641,13 +644,57 @@ fn partially_staged_file_shows_a_coarse_indicator() {
 
     h.get_by_label("words.txt");
 
-    // Exactly one coarse indicator: on the partially staged file only —
-    // never on the plainly modified one.
+    // The partially staged file's box is in its middle state and says so; the
+    // plainly modified one beside it is empty. The coarse warning dot is gone:
+    // the checkbox is where partial staging is said now.
     assert!(
-        wait_until(15_000, || h.get_all_by_label("Partially staged").count()
-            == 1),
-        "exactly one 'Partially staged' indicator should paint, found {}",
-        h.get_all_by_label("Partially staged").count()
+        wait_until(15_000, || h
+            .query_by_label("Stage all of words.txt (partially staged)")
+            .is_some()),
+        "the partially staged file's checkbox must read its middle state"
+    );
+    h.get_by_label("Stage base.txt (unstaged)");
+    assert!(
+        !painted_text(&h)
+            .iter()
+            .any(|t| t.contains("Partially staged")),
+        "the old warning dot is gone — the checkbox carries the state"
+    );
+}
+
+/// **Partial staging is reachable from the diff viewer and lands in the index**
+/// — the path that makes the middle checkbox state reachable at all. Read back
+/// out of git, not out of the window's own state.
+#[test]
+fn staging_one_hunk_from_the_diff_viewer_makes_the_row_partially_staged() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "partial-from-viewer");
+    seed_two_hunk_change(&repo);
+
+    let (state, _recorder) =
+        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
+    let mut h = harness(state);
+
+    h.get_by_label("words.txt").click();
+    h.run();
+    assert!(
+        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
+        "diff preview should load"
+    );
+
+    h.get_by_label("Stage hunk 1").click();
+    h.run();
+    assert!(
+        wait_until(15_000, || git(&repo.path, &["diff", "--cached"])
+            .contains("+BRAVO")),
+        "one hunk reached the index"
+    );
+
+    assert!(
+        wait_until(15_000, || h
+            .query_by_label("Stage all of words.txt (partially staged)")
+            .is_some()),
+        "the row's checkbox must show the middle state after a partial stage"
     );
 }
 

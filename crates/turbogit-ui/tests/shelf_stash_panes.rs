@@ -408,6 +408,26 @@ fn the_two_empty_states_name_their_own_mechanism() {
 
 // ------------------------------------------------------------------ setup --
 
+/// Select `name` the way a row click in the Commit window does: the canonical,
+/// root-scoped key every real selection is written under. Seeding the bare
+/// repo-relative path instead would have the fixture describe a form nothing
+/// writes, and the mismatch would hide a bug in the reader.
+fn select_in_commit_list(state: &mut AppState, name: &str) {
+    let key = state
+        .multi
+        .roots
+        .iter()
+        .find_map(|r| {
+            r.status
+                .changes
+                .iter()
+                .find(|c| c.path.ends_with(name))
+                .map(|c| r.canonical_key(c))
+        })
+        .unwrap_or_else(|| panic!("{name} is a local change of a registered root"));
+    state.ui.selected.insert(key);
+}
+
 /// Shelve one real change through the production dialog path: a modified file
 /// included in the selection, a name typed, `Shelve selected` clicked. The
 /// shelf record and the stash entry holding its content both come from that
@@ -415,7 +435,7 @@ fn the_two_empty_states_name_their_own_mechanism() {
 fn shelve_one_change(repo: &Path, name: &str) {
     std::fs::write(repo.join("base.txt"), "shelved work\n").unwrap();
     let mut state = app_state(&[repo.to_path_buf()]);
-    state.ui.selected.insert(PathBuf::from("base.txt"));
+    select_in_commit_list(&mut state, "base.txt");
     state.ui.dlg.shelve_name = name.to_string();
     state.ui.dialog = Some(Dialog::Shelve);
     let mut h = harness(state);

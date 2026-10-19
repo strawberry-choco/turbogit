@@ -2697,6 +2697,11 @@ impl AppState {
                 self.last_error = Some(e.to_string());
             }
         }
+        // The selection outlives every operation, so it accumulates paths that
+        // are no longer rows. Pruned here rather than beside the exclusion
+        // prune above because "no longer a row" is only true of the snapshots
+        // `register_all` just replaced.
+        granular::prune_selection_on_refresh(self);
 
         // Ahead/behind of each affected root's current branch vs upstream, on
         // the same seam everywhere: under `Spawned` it answers on a later frame,

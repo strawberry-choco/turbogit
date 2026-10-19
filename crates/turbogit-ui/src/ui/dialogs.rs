@@ -1252,7 +1252,11 @@ fn shelve(ui: &mut Ui, state: &mut AppState) {
                 && let Some(root) = state.multi.by_id(id)
             {
                 for c in &root.status.changes {
-                    if state.ui.selected.contains(&c.path) {
+                    // `canonical_key`, not `c.path`: the selection set is
+                    // written by every row click under the absolute,
+                    // root-scoped form, so reading the repo-relative one here
+                    // matched nothing a real click could produce.
+                    if state.ui.selected.contains(&root.canonical_key(c)) {
                         changes.push(c.clone());
                     }
                 }

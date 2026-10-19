@@ -2,21 +2,32 @@
 //! and Stash panes.
 //!
 //! Layout: a sub-tab strip (Local Changes / Shelf / Stash) above two zones — a
-//! fixed-width Commit panel of collapsible groups with count badges on the
+//! fixed-width Commit panel of collapsible repo groups with count badges on the
 //! left, and a permanent diff-preview pane (above the message editor and the
 //! Amend / Commit / Commit-and-Push action row) on the right. Local Changes is
-//! the one tree: files with unstaged content under UNSTAGED, fully staged files
-//! under STAGED, plus a Merge conflicts group and a bottom Unversioned Files
-//! group listing untracked files includable in commits. Empty buckets are
-//! dropped, and a granularly-completed path stays visible under STAGED.
-//! For multi-root projects each group nests per-root sub-groups with count
-//! badges and a select-all checkbox; single-root projects list files flat.
-//! Commit stays disabled until a non-empty message AND at least one included
-//! change exist. Shelf and Stash are real panes — each root's own shelf records
-//! and its own `git stash` listing, with the keep/remove verb pairs on every row
-//! — which supersedes ADR-0008's labelled placeholders. The "Advanced
-//! options..." control renders per the mockup but is deliberately inert in v1
-//! (ADR-0010). User-created changelists remain backlog.
+//! **one flat, path-sorted list per repository** — unstaged, staged and
+//! untracked files together — plus a Merge conflicts group. Empty buckets are
+//! dropped, ignored files never enter the list, and staging state is said by
+//! the per-file checkbox rather than by a heading, so a staging action never
+//! re-sorts the list under the cursor.
+//!
+//! **The checkbox is a view of the index, not a set of its own.** Its three
+//! states are derived per frame from the status read's staged/unstaged pair, and
+//! clicking it stages or un-stages the whole file through plain git. Clicking
+//! the row body selects the file for the diff preview and does nothing else —
+//! browsing is not an edit. `AppState::ui.selected` therefore means "the files
+//! I am looking at": it drives the row highlight, Create Patch from Local
+//! Changes, Discard Changes and the Shelve dialog, and the commit path does not
+//! read it at all. Commit commits the index and is disabled with a stated
+//! reason when the index is empty.
+//!
+//! For multi-root projects each repository is its own collapsible group, which
+//! is the only way to tell which repository a file belongs to. Shelf and Stash
+//! are real panes — each root's own shelf records and its own `git stash`
+//! listing, with the keep/remove verb pairs on every row — which supersedes
+//! ADR-0008's labelled placeholders. The "Advanced options..." control renders
+//! per the mockup but is deliberately inert in v1 (ADR-0010). User-created
+//! changelists remain backlog.
 //!
 //! Design system v2: the changes card is headed by the one shared pane header
 //! ([`widgets::pane_header`]) — a tracked title, a count chip for the *file*
@@ -48,21 +59,23 @@ use std::path::{Path, PathBuf};
 use turbogit_app::granular;
 use turbogit_app::root_caches::{Affected, StatsView};
 use turbogit_app::shell_writes;
-use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
-use turbogit_domain::model::{Change, ChangeStatus, DisplayName, Root};
+use turbogit_app::state::{AppState, CommitSubTab, Dialog, DiffComparison, PendingConfirm, Toast};
+use turbogit_domain::model::{Change, ChangeStatus, DisplayName, Root, RootId};
 
 /// Fixed width of the Commit panel (redesign 03, screen 01): the Commit
 /// window is exactly two zones — this fixed-width panel on the left and
 /// a flexible diff preview on the right.
 pub const COMMIT_PANEL_WIDTH: f32 = 340.0;
 
-/// Canonical bucket names. The staging sections (issue 20, screen 06) mirror
-/// Git's index: files with unstaged content under UNSTAGED, fully staged
-/// files under STAGED; conflicts keep their own group. The Unversioned Files
-/// sub-tab keeps its canonical bucket name.
-pub const UNSTAGED: &str = "UNSTAGED";
-pub const STAGED: &str = "STAGED";
-pub const UNVERSIONED_FILES: &str = "Unversioned Files";
+/// Name of the one flat bucket every non-conflicted change of a repository
+/// falls into. It paints nothing — staging state and repository both have their
+/// own header — and exists so the row block's id can tell the flat list from
+/// the conflicts group below it.
+const CHANGES: &str = "Changes";
+
+/// The conflicts group's name, and the only heading the file list paints.
+/// Conflicts are a different axis from staging and a distinct review surface,
+/// so they stay visibly grouped.
 pub const MERGE_CONFLICTS: &str = "Merge conflicts";
 
 /// One canonical bucket: its name plus that root's changes. Borrows the
@@ -74,54 +87,71 @@ struct Bucket<'a> {
     changes: Vec<&'a Change>,
 }
 
+/// How much of one file the index currently holds. The checkbox is a view of
+/// this and never stores it, so "ticked but not staged" cannot be represented
+/// and the box survives a refresh with no extra git call. An enum rather than
+/// the `staged`/`unstaged` pair it is derived from, because that pair allows
+/// the combination no row means.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StageState {
+    None,
+    Partial,
+    All,
+}
+
+impl StageState {
+    /// Derive from the status read's pair: fully staged, partly staged, or not
+    /// staged at all. `staged` alone is the index's half, `unstaged` the
+    /// working tree's, and a file is "all" only when the first is on and the
+    /// second is off.
+    fn of(c: &Change) -> Self {
+        match (c.staged, c.unstaged) {
+            (true, false) => Self::All,
+            (true, true) => Self::Partial,
+            _ => Self::None,
+        }
+    }
+}
+
 /// Deferred row interaction collected while rendering borrowed buckets;
 /// applied after the pane finishes (same pattern as the widget button seam).
 enum RowAction {
-    /// Include/exclude one change, keyed by absolute path so multi-root
-    /// projects never conflate same-named files across roots.
-    Toggle { key: PathBuf, include: bool },
+    /// Stage or un-stage one whole file: root id so multi-root projects never
+    /// conflate same-named files, repo-relative path so git accepts it. The
+    /// direction is decided from the row's [`StageState`] when the action is
+    /// applied, so the click and the painted box cannot disagree.
+    ToggleStage { root: RootId, path: PathBuf },
     /// Expand / collapse one repo group of the one-tree (issue 04), keyed
     /// by root id. The focused repo is never the target — its group is
     /// always expanded ("focus = expand").
     ToggleGroup(turbogit_domain::model::RootId),
-    /// Select one file for both the commit selection and the diff preview
-    /// (issue 05): the row click gesture — "what I'm committing and what
-    /// I'm looking at are the same thing". Keyed by canonical root-scoped
-    /// path.
+    /// Select one file for the diff preview — the row click gesture. Keyed by
+    /// canonical root-scoped path because the selection is per-root.
     Select { key: PathBuf, path: PathBuf },
     /// Select a file for the diff preview pane.
     Preview(PathBuf),
 }
 
-/// Split one root's status into the staging sections (issue 20, screen 06):
-/// files with unstaged content under UNSTAGED, fully staged files under
-/// STAGED, and conflicts in their own group (empty buckets are dropped).
-/// Untracked files are excluded here — the one-tree redesign (issue 04)
-/// renders them in the bottom `Unversioned Files` group instead. The staging
-/// view mirrors the index itself, so granularly-completed paths still show
-/// under STAGED — unlike the old changelist view they replaced, where they
-/// left the list.
-fn staging_buckets(state: &AppState) -> Vec<Bucket<'_>> {
+/// One root's changes as two buckets: the flat file list, then the conflicts
+/// group. This used to do two jobs at once — ordering by staging state *and*
+/// keeping noise out — and only the ordering went: ignored files are still
+/// dropped here, untracked files now stay (they are new files the checkbox
+/// stages, and a section for them would put staging state back in the page).
+fn change_buckets(state: &AppState) -> Vec<Bucket<'_>> {
     let mut out = Vec::new();
     for root in &state.multi.roots {
-        let mut unstaged = Vec::new();
-        let mut staged = Vec::new();
+        let mut files = Vec::new();
         let mut conflicts = Vec::new();
         for c in &root.status.changes {
             match c.status {
                 ChangeStatus::Conflicted => conflicts.push(c),
-                // Fully staged content only: a partially staged file still
-                // has unstaged work and belongs in UNSTAGED.
-                _ if c.staged && !c.unstaged => staged.push(c),
-                ChangeStatus::Ignored | ChangeStatus::Unversioned => {}
-                _ => unstaged.push(c),
+                ChangeStatus::Ignored => {}
+                _ => files.push(c),
             }
         }
-        for (name, changes) in [
-            (UNSTAGED, unstaged),
-            (STAGED, staged),
-            (MERGE_CONFLICTS, conflicts),
-        ] {
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        conflicts.sort_by(|a, b| a.path.cmp(&b.path));
+        for (name, changes) in [(CHANGES, files), (MERGE_CONFLICTS, conflicts)] {
             if !changes.is_empty() {
                 out.push(Bucket {
                     name,
@@ -138,16 +168,8 @@ fn staging_buckets(state: &AppState) -> Vec<Bucket<'_>> {
 fn apply_actions(state: &mut AppState, actions: Vec<RowAction>) {
     for action in actions {
         match action {
-            RowAction::Toggle { key, include } => {
-                if include {
-                    state.ui.selected.insert(key);
-                } else {
-                    state.ui.selected.remove(&key);
-                }
-            }
+            RowAction::ToggleStage { root, path } => set_file_staged(state, &root, &path),
             RowAction::Select { key, path } => {
-                // Row click gesture: check the box (idempotent — the checkbox
-                // glyph alone toggles it off) and drive the preview together.
                 state.ui.selected.insert(key);
                 state.ui.preview_change = Some(path);
             }
@@ -163,7 +185,68 @@ fn apply_actions(state: &mut AppState, actions: Vec<RowAction>) {
     }
 }
 
-/// Collect the `Change` objects of the selected root whose path is included.
+/// One checkbox click's whole effect: stage the file if the index does not
+/// already hold all of it, un-stage it if it does.
+///
+/// Two callers — the row's checkbox and `Space` on the previewed row — and one
+/// function, so the keyboard cannot take a different route than the mouse.
+/// The direction is read from the status snapshot rather than from a stored
+/// flag, which is the same fact the box paints.
+fn set_file_staged(state: &mut AppState, root: &RootId, path: &Path) {
+    let Some(change) = state.multi.by_id(root).and_then(|r| r.resolve_change(path)) else {
+        return;
+    };
+    let stage = StageState::of(change) != StageState::All;
+    state.dispatch(shell_writes::commit::set_staged(root, path, stage));
+    follow_the_staging_decision(state, path, stage);
+}
+
+/// Move the diff preview to what the click just staged, or back to the working
+/// version. Only the file already being previewed moves: re-pointing the whole
+/// pane at a file the developer did not click would make a staging action
+/// change what they are reading.
+///
+/// The un-tick direction lands on `Repo` (HEAD↔worktree) rather than on another
+/// staged view, so a file that no longer has staged content can never be left
+/// showing an empty one.
+fn follow_the_staging_decision(state: &mut AppState, path: &Path, stage: bool) {
+    if state.ui.preview_change.as_deref() != Some(path) {
+        return;
+    }
+    state.ui.diff_comparison = if stage {
+        DiffComparison::Staged
+    } else {
+        DiffComparison::Repo
+    };
+}
+
+/// Space: toggle the staging checkbox of the row being previewed. The
+/// previewed row *is* the focused one — `preview_change` is the single file
+/// this window is looking at, and a row click is what sets it. With nothing
+/// previewed there is no focused row and the key does nothing; defaulting to
+/// the first row would stage a file nobody aimed at.
+pub fn toggle_previewed_row_checkbox(state: &mut AppState) {
+    let Some(root) = state.selected_root.clone() else {
+        return;
+    };
+    let Some(path) = state.ui.preview_change.clone() else {
+        return;
+    };
+    if state
+        .multi
+        .by_id(&root)
+        .and_then(|r| r.resolve_change(&path))
+        .is_some_and(|c| c.status == ChangeStatus::Conflicted)
+    {
+        // A conflicted path has no checkbox, so it has no Space gesture either.
+        return;
+    }
+    set_file_staged(state, &root, &path);
+}
+
+/// Collect the `Change` objects of the selected root the developer is looking
+/// at — the input to Create Patch from Local Changes, Discard Changes and
+/// Shelve. Not the commit's input: that is the index.
 fn selected_changes(state: &AppState) -> Vec<Change> {
     let mut out = Vec::new();
     if let Some(id) = &state.selected_root
@@ -178,16 +261,17 @@ fn selected_changes(state: &AppState) -> Vec<Change> {
     out
 }
 
-/// Whether the selected root has at least one included change — the Commit
-/// buttons' gate, computed without building an owned change list (plan §1.4).
-fn has_selected_changes(state: &AppState) -> bool {
+/// Whether the selected root's index holds anything — the Commit control's
+/// half-gate, computed without building an owned change list (plan §1.4).
+///
+/// Not "is anything selected": a row click is a preview, and previewing a file
+/// is not a promise to commit it.
+fn has_staged_changes(state: &AppState) -> bool {
     state.selected_root.as_ref().is_some_and(|id| {
-        state.multi.by_id(id).is_some_and(|root| {
-            root.status
-                .changes
-                .iter()
-                .any(|c| state.ui.selected.contains(&root.canonical_key(c)))
-        })
+        state
+            .multi
+            .by_id(id)
+            .is_some_and(|root| root.status.changes.iter().any(|c| c.staged))
     })
 }
 
@@ -571,8 +655,7 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
             state.ui.changes_expanded.clear();
         }
 
-        let (buckets, no_match) = filter_buckets(state, staging_buckets(state));
-        let (unversioned, _) = filter_buckets(state, unversioned_buckets(state));
+        let (buckets, no_match) = filter_buckets(state, change_buckets(state));
         // **This site produces the empty state's words and does not paint it.** The
         // sentence is the *filter's* answer — the clean-tree statement when nothing matched,
         // and the filter's own "nothing matches <query>" when a query excluded
@@ -590,7 +673,7 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
             &no_match
         };
         let mut actions = Vec::new();
-        changes_tree(ui, state, &buckets, &unversioned, empty_text, &mut actions);
+        changes_tree(ui, state, &buckets, empty_text, &mut actions);
         apply_actions(state, actions);
     });
 }
@@ -600,14 +683,12 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
 /// badge. Non-focused groups collapse by default so the selected repo's
 /// files are the visual focus ("focus = expand"); the user can expand any
 /// other group manually ([`AppState::ui`] `changes_expanded`). Each expanded
-/// group lists that repo's staging sections flat — the group itself is the
-/// per-repo scoping, so the old per-root sub-groups are gone. A single
-/// `Unversioned Files` group sits at the bottom of the same tree.
+/// group lists that repo's files flat and path-sorted, with the conflicts
+/// group below.
 fn changes_tree(
     ui: &mut Ui,
     state: &AppState,
     buckets: &[Bucket<'_>],
-    unversioned_buckets: &[Bucket<'_>],
     empty_text: &str,
     actions: &mut Vec<RowAction>,
 ) {
@@ -633,79 +714,10 @@ fn changes_tree(
                 painted = true;
                 repo_group(ui, state, root, &root_buckets, actions);
             }
-            if !unversioned_buckets.is_empty() {
-                painted = true;
-                unversioned_group(ui, state, unversioned_buckets, actions);
-            }
             if !painted {
                 widgets::empty_state(ui, empty_text);
             }
         });
-}
-
-/// The bottom `Unversioned Files` group of the one tree (issue 04): one
-/// collapsible group listing every root's untracked files. Multi-root
-/// projects keep a small per-root sub-label so same-named paths stay
-/// attributable (rows still key by canonical root-scoped path).
-///
-/// The collapse is a persisted flag of this module's own rather than an
-/// [`egui::CollapsingHeader`], because this group now wears the **shared**
-/// group header (the section band, the count chip) and the stock header paints
-/// its own frame, its own inset and its own type — three more opinions about a
-/// row the rest of this list already answers for. The state is the one thing
-/// worth keeping, and it is a single `bool` in egui's persisted data, keyed by
-/// this group's own id so two groups never share it.
-fn unversioned_group(
-    ui: &mut Ui,
-    state: &AppState,
-    buckets: &[Bucket<'_>],
-    actions: &mut Vec<RowAction>,
-) {
-    let total: usize = buckets.iter().map(|b| b.changes.len()).sum();
-    let id = ui.id().with(("unversioned_group",));
-    let mut open = ui
-        .ctx()
-        .data_mut(|d| d.get_persisted::<bool>(id))
-        .unwrap_or(true);
-    let label = format!("{UNVERSIONED_FILES} ({total})");
-    let header = group_header_row(
-        ui,
-        id.with("header"),
-        GroupHeader {
-            label: &label,
-            name: UNVERSIONED_FILES,
-            meta: None,
-            count: total,
-            expanded: Some(open),
-            focused: false,
-            lead: None,
-        },
-    );
-    if header.clicked() {
-        open = !open;
-        ui.ctx().data_mut(|d| d.insert_persisted(id, open));
-        ui.request_repaint();
-    }
-    if !open {
-        return;
-    }
-    ui.indent(id.with("body"), |ui| {
-        let multi_root = state.multi.roots.len() > 1;
-        for bucket in buckets {
-            if multi_root {
-                // The per-root sub-label is metadata, so it dims — the same
-                // step the branch name beside a repo group takes.
-                ui.label(
-                    RichText::new(bucket.root.id.name())
-                        .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-                        .color(Palette::INK_3),
-                );
-            }
-            for c in &bucket.changes {
-                change_row(ui, state, bucket.root, c, actions);
-            }
-        }
-    });
 }
 
 /// One group header of the changes tree, as a value so the three call sites
@@ -939,13 +951,11 @@ fn indent_guide(ui: &Ui, block: Rect) {
     );
 }
 
-/// One bucket's file rows inside an expanded repo group. Issue 07 removes the
-/// per-repo `UNSTAGED (n)` / `STAGED (n)` header rows and their repeated
-/// `Stage all` / `Unstage all` actions — staging now lives in the per-file
-/// checkboxes (issue 05), so those sections paint flat. The `Merge conflicts`
-/// group keeps its header: conflicts are a distinct review surface with no
-/// checkbox, so they stay visibly grouped — on the same shared band every
-/// other group header wears, not as a bare bold line.
+/// One bucket's file rows inside an expanded repo group. Only the conflicts
+/// bucket paints a header: it is a different axis from staging and a distinct
+/// review surface with no checkbox, so it stays visibly grouped — on the same
+/// shared band every other group header wears, not as a bare bold line. The
+/// flat list paints no heading of its own, which is the whole point of it.
 fn group_section(ui: &mut Ui, state: &AppState, bucket: &Bucket<'_>, actions: &mut Vec<RowAction>) {
     if bucket.name == MERGE_CONFLICTS {
         let count = bucket.changes.len();
@@ -979,47 +989,14 @@ fn group_section(ui: &mut Ui, state: &AppState, bucket: &Bucket<'_>, actions: &m
     indent_guide(ui, body.response.rect);
 }
 
-/// Untracked files of every root as one canonical bucket per root (issue #18:
-/// the Unversioned Files sub-tab's active data). Granularly completed paths
-/// are skipped (spec R2 story 9). Borrows the status snapshots (plan §1.4).
-fn unversioned_buckets(state: &AppState) -> Vec<Bucket<'_>> {
-    let mut out = Vec::new();
-    for root in &state.multi.roots {
-        let untracked: Vec<&Change> = root
-            .status
-            .changes
-            .iter()
-            .filter(|c| matches!(c.status, ChangeStatus::Unversioned))
-            .filter(|c| {
-                !state
-                    .ui
-                    .granularly_completed
-                    .contains(&root.canonical_key(c))
-            })
-            .collect();
-        if !untracked.is_empty() {
-            out.push(Bucket {
-                name: UNVERSIONED_FILES,
-                root,
-                changes: untracked,
-            });
-        }
-    }
-    out
-}
-
 /// Flat changed-file paths of the active Commit sub-tab in display order —
 /// the F7/Shift+F7 cross-file traversal list (spec R7). Unfiltered by the
-/// file filter: navigation walks the real staging sections. Local Changes
-/// spans both the per-repo staging sections and the bottom `Unversioned
-/// Files` group (issue 04). The Phase-J placeholder tabs contribute nothing.
+/// file filter: navigation walks the real file list. Local Changes spans each
+/// repo's flat list and its conflicts group; the placeholder tabs contribute
+/// nothing.
 pub(crate) fn active_subtab_files(state: &AppState) -> Vec<PathBuf> {
     let buckets = match state.ui.commit_subtab {
-        CommitSubTab::LocalChanges => {
-            let mut b = staging_buckets(state);
-            b.extend(unversioned_buckets(state));
-            b
-        }
+        CommitSubTab::LocalChanges => change_buckets(state),
         CommitSubTab::Shelf | CommitSubTab::Stash => return Vec::new(),
     };
     buckets
@@ -1028,7 +1005,10 @@ pub(crate) fn active_subtab_files(state: &AppState) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Status glyph + semantic tint for a change row (Lucide tokens, issue #7).
+/// Status glyph + semantic tint for a conflicted path's review row (Lucide
+/// tokens, issue #7). Only the conflict row wears an icon: every other row
+/// says its state in one letter, and a conflicted row is the one state a
+/// letter alone would understate.
 fn status_glyph(status: ChangeStatus) -> (Icon, Color32) {
     match status {
         ChangeStatus::Modified => (Icon::FILE, Palette::STATE_WARNING),
@@ -1042,20 +1022,36 @@ fn status_glyph(status: ChangeStatus) -> (Icon, Color32) {
     }
 }
 
-/// Badge letter per the canonical M/A/C scheme (spec §commit): conflicts
-/// show `C` rather than git porcelain's `U`.
-fn badge_letter(status: ChangeStatus) -> &'static str {
-    match status {
-        ChangeStatus::Conflicted => "C",
-        other => other.short(),
+/// The change-kind badge letter: `N` new, `M` modified, `D` deleted, `C`
+/// copied or conflicted, `R` renamed.
+///
+/// Derived from the whole `Change` rather than from its `ChangeStatus`,
+/// because "new and modified at once" is not visible in the status alone —
+/// git reports `A` for a file it has never seen even after its content
+/// diverges from the index. One letter has to answer both facts, and modified
+/// wins: a file that also has unstaged edits is a file being worked on, which
+/// is the thing a developer scanning this list is looking for.
+///
+/// **Accepted loss**: a file staged for the first time and then edited again
+/// reports `Modified`, so it reads `M` rather than `N`. Recovering the signal
+/// would cost a git call and a cache per row to disambiguate two states the
+/// letter deliberately collapses.
+fn badge_letter(c: &Change) -> &'static str {
+    match c.status {
+        ChangeStatus::Conflicted | ChangeStatus::Copied => "C",
+        ChangeStatus::Deleted => "D",
+        ChangeStatus::Added | ChangeStatus::Unversioned if !c.unstaged => "N",
+        _ => "M",
     }
 }
 
-/// Status-**letter** colour for a file row (issue 05, design doc §4): M
-/// modified blue, A added green, U unversioned olive — the redesign tokens;
-/// every remaining state maps onto a real semantic hue so no row ever paints
-/// a fallback (deleted keeps error red, renames the brand, copies share the
-/// added green, ignored dims to INK_3, conflicts stay error red).
+/// Status-**letter** colour: the three-rung change-kind grammar — `N` added
+/// green, `M` modified blue, `D` deleted grey — with renames on the brand,
+/// ignored dimming to `INK_3` and conflicts staying error red. Every remaining
+/// state maps onto a real semantic hue, so no row ever paints a fallback.
+///
+/// `D` is grey rather than the error red it used to be: a deleted file is a
+/// fact about the base side, not work the developer has to answer for.
 ///
 /// **The file *name* does not take this colour** (conformance issue 10). A
 /// semantic hue is the answer to "what state is this file in", and the one
@@ -1064,17 +1060,30 @@ fn badge_letter(status: ChangeStatus) -> &'static str {
 /// of what the ink ramp is for — hierarchy by *step*, not by category. The
 /// name reads at [`Palette::INK`] and the letter keeps its hue, so the state
 /// is still one glance away and the list reads as one list.
-fn status_color(status: ChangeStatus) -> Color32 {
-    match status {
-        ChangeStatus::Modified => Palette::STATUS_MODIFIED,
-        ChangeStatus::Added => Palette::STATUS_ADDED,
-        ChangeStatus::Unversioned => Palette::STATUS_UNVERSIONED,
-        ChangeStatus::Deleted => Palette::STATE_ERROR,
+fn status_color(c: &Change) -> Color32 {
+    match c.status {
+        ChangeStatus::Deleted => Palette::STATUS_DELETED,
         ChangeStatus::Renamed => Palette::BRAND,
-        ChangeStatus::Copied => Palette::STATUS_ADDED,
         ChangeStatus::Ignored => Palette::INK_3,
         ChangeStatus::Conflicted => Palette::STATE_ERROR,
+        _ => match badge_letter(c) {
+            "N" => Palette::STATUS_ADDED,
+            _ => Palette::STATUS_MODIFIED,
+        },
     }
+}
+
+/// The preview header's status pill tint: the same change-kind colour the file
+/// row's badge letter wears, resolved through the same [`status_color`] so the
+/// pill and the letter cannot drift. `Modified` is the fallback for a path the
+/// status no longer lists, matching `granular::preview_status`'s own.
+fn preview_status_tint(state: &AppState, path: &Path) -> Color32 {
+    state
+        .selected_root
+        .as_ref()
+        .and_then(|id| state.multi.by_id(id))
+        .and_then(|root| root.resolve_change(path))
+        .map_or(Palette::STATUS_MODIFIED, status_color)
 }
 
 /// Row text split for the `[filename] … [dim location]` layout (issue 05):
@@ -1091,21 +1100,26 @@ fn row_display(path: &Path) -> (String, Option<String>) {
     (name, location)
 }
 
-/// Coarse partially-staged marker (spec R2 story 12): a small warning-tinted
-/// dot at `center`, accessibility-labeled so tooling and screen readers can
-/// spot partially staged rows without opening the diff.
-fn partially_staged_dot_at(ui: &mut Ui, center: Pos2, salt: &PathBuf) {
-    const DOT_R: f32 = 2.5;
-    let rect = Rect::from_center_size(center, Vec2::splat(14.0));
-    ui.painter()
-        .circle_filled(center, DOT_R, Palette::STATE_WARNING);
-    let resp = ui.interact(rect, ui.auto_id_with(("partial_dot", salt)), Sense::hover());
-    resp.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, "Partially staged"));
-    resp.on_hover_text("Partially staged");
+/// The per-file checkbox's accessible label: what the click will do, then the
+/// state it is acting on.
+///
+/// Both halves are load-bearing. `WidgetInfo::labeled` carries no checked flag
+/// for this widget, so a screen reader would hear the same "stage this file" on
+/// three boxes that mean three different things; and the verb is what makes the
+/// label the query handle the suites address a row's box by. The
+/// **repo-relative path**, not the bare file name: two rows in a multi-root
+/// project can share a name.
+fn stage_label(path: &Path, stage: StageState) -> String {
+    let name = path.display();
+    match stage {
+        StageState::None => format!("Stage {name} (unstaged)"),
+        StageState::Partial => format!("Stage all of {name} (partially staged)"),
+        StageState::All => format!("Unstage {name} (staged)"),
+    }
 }
 
-/// Paint the per-file checkbox glyph at `rect` (issue 05): the **quiet**
-/// checkbox, not a brand-filled one.
+/// Paint the per-file checkbox glyph at `rect` in one of its three states:
+/// the **quiet** checkbox, not a brand-filled one.
 ///
 /// **Why quiet** (conformance issue 10, R1/R4). The brand token has exactly
 /// three jobs in this app: the primary action's fill, the active tab's
@@ -1114,15 +1128,19 @@ fn partially_staged_dot_at(ui: &mut Ui, center: Pos2, salt: &PathBuf) {
 /// in the window — and made the *selected* row's own accent rail compete with
 /// the boxes in every other row for the user's attention. Brand is how the app
 /// says "this is the one thing to do"; a checkbox says "this file is in your
-/// commit", which is a fact, not an instruction.
+/// index", which is a fact, not an instruction.
 ///
 /// So the box is the raised-on-card surface with an ink border, and the
-/// checked state adds an `INK` tick: the same shape, one step further. The
+/// ticked state adds an `INK` tick: the same shape, one step further. The
 /// hover answer is the border stepping up to `INK`, which is the one thing
 /// about the box that responds to the pointer.
-fn paint_checkbox(ui: &Ui, rect: Rect, checked: bool, resp: &egui::Response) {
+///
+/// The middle state is a bar rather than a shrunken tick: a tick drawn short
+/// enough to read as "half" is the same drawing as a tick drawn wrong. The bar
+/// replaces the warning dot the partial state used to get.
+fn paint_checkbox(ui: &Ui, rect: Rect, stage: StageState, resp: &egui::Response) {
     let radius = CornerRadius::same(crate::theme::CHIP_RADIUS);
-    let border = if checked || resp.hovered() {
+    let border = if stage != StageState::None || resp.hovered() {
         Palette::INK
     } else {
         Palette::INK_2
@@ -1135,13 +1153,26 @@ fn paint_checkbox(ui: &Ui, rect: Rect, checked: bool, resp: &egui::Response) {
         .rect_filled(rect, radius, Palette::RAISED_ON_CARD);
     ui.painter()
         .rect_stroke(rect, radius, Stroke::new(1.0, border), StrokeKind::Inside);
-    if checked {
-        let p1 = Pos2::new(rect.left() + 3.5, rect.center().y - 1.0);
-        let p2 = Pos2::new(rect.left() + 6.0, rect.center().y + 2.0);
-        let p3 = Pos2::new(rect.left() + 11.5, rect.center().y - 3.5);
-        let check = Stroke::new(1.6, Palette::INK);
-        ui.painter().line_segment([p1, p2], check);
-        ui.painter().line_segment([p2, p3], check);
+    match stage {
+        StageState::None => {}
+        StageState::All => {
+            let p1 = Pos2::new(rect.left() + 3.5, rect.center().y - 1.0);
+            let p2 = Pos2::new(rect.left() + 6.0, rect.center().y + 2.0);
+            let p3 = Pos2::new(rect.left() + 11.5, rect.center().y - 3.5);
+            let check = Stroke::new(1.6, Palette::INK);
+            ui.painter().line_segment([p1, p2], check);
+            ui.painter().line_segment([p2, p3], check);
+        }
+        StageState::Partial => {
+            let half = rect.center().y;
+            ui.painter().line_segment(
+                [
+                    Pos2::new(rect.left() + 3.5, half),
+                    Pos2::new(rect.right() - 3.5, half),
+                ],
+                Stroke::new(1.6, Palette::INK),
+            );
+        }
     }
 }
 
@@ -1157,8 +1188,6 @@ const ROW_CHECKBOX: f32 = 16.0;
 const ROW_GAP: f32 = 6.0;
 /// Right padding of the row: the dim location column ends here.
 const ROW_EDGE: f32 = 12.0;
-/// Space the partially-staged dot reserves after the status letter.
-const PARTIAL_DOT_COLUMN: f32 = 18.0;
 /// Lead of the rename arrow (plus its gap) before the renamed-from path.
 const RENAME_ARROW_W: f32 = 24.0;
 /// Narrowest name column a row accepts before the dim location gives up its
@@ -1188,23 +1217,19 @@ const GROUP_COUNT_SLOT: f32 = 44.0;
 /// clipped at the pane edge or painted over the dim location.
 ///
 /// The row is the shared row shell: the one row-state fill, and — for the
-/// chosen row — the 2px accent rail at its leading edge (conformance issue
+/// selected row — the 2px accent rail at its leading edge (conformance issue
 /// 10). The rail is **paint over the row's own leading pad, never padding
 /// beside it**: reserving the width would move every row's content the moment
 /// it is selected, and the names would stop lining up down the column. The
-/// checkbox therefore keeps the same x whether or not the row is chosen.
+/// checkbox therefore keeps the same x whether or not the row is selected.
 ///
-/// The status letter colour-codes the row — M blue / A green / U olive — while
-/// the filename reads at [`Palette::INK`] and the parent directory renders dim
-/// at the pane edge; hunk counts moved out of rows into the diff header
-/// (issue 06). Clicking the row body checks the box AND previews the diff, so
-/// "what I'm committing and what I'm looking at are the same thing"; the
-/// checkbox glyph alone toggles commit inclusion without moving the preview.
-/// Renames/copies (spec R8) keep a muted arrow plus the old path; partially
-/// staged files (staged AND unstaged) keep the coarse warning dot. Conflicts
-/// render as a single review row through [`conflict_row`]. Interactions are
-/// pushed onto `actions` and applied by the caller after rendering (plan §1.4
-/// defer pattern).
+/// The status letter says what happened to the file — N green / M blue / D
+/// grey — while the filename reads at [`Palette::INK`] and the parent directory
+/// renders dim at the pane edge. Clicking the checkbox stages or un-stages the
+/// whole file; clicking the row body selects it and previews its diff, and
+/// changes nothing else. Renames/copies keep a muted arrow plus the old path;
+/// conflicts render as one review row through [`conflict_row`]. Interactions
+/// are pushed onto `actions` and applied by the caller after rendering.
 #[allow(clippy::too_many_lines)]
 fn change_row(
     ui: &mut Ui,
@@ -1219,8 +1244,13 @@ fn change_row(
         return;
     }
 
-    let included = state.ui.selected.contains(&key);
-    let tint = status_color(c.status);
+    // Two independent facts about one row: which file the developer is
+    // looking at (`selected`, which owns the highlight) and how much of it the
+    // index holds (`stage`, which owns the checkbox). Browsing sets the first
+    // and never touches the second.
+    let selected = state.ui.selected.contains(&key);
+    let stage = StageState::of(c);
+    let tint = status_color(c);
     let (name, location) = row_display(&c.path);
     // The file-row name rides the shared body type (T2) — one size role for
     // filename/body text across tool windows, not a local fractional copy.
@@ -1231,27 +1261,16 @@ fn change_row(
     // The row's height is a function of its text, so everything is laid out
     // first: the name's wrap width depends on the fixed prefix columns and
     // on whether the dim location keeps its first-line seat.
-    let letter_galley =
-        painter.layout_no_wrap(badge_letter(c.status).to_owned(), font.clone(), tint);
+    let letter_galley = painter.layout_no_wrap(badge_letter(c).to_owned(), font.clone(), tint);
     let (letter_w, letter_h) = letter_galley.size().into();
     let left = ui.cursor().left_top();
     let content_right = left.x + ui.available_width() - ROW_EDGE;
     // x of the name column: the row's left edge plus the fixed prefix — the
-    // checkbox, the status letter, and the partially-staged dot when the
-    // file is partly staged. The accent rail is *not* in this sum: it is
-    // painted over the leading pad, so a chosen row's columns are an
-    // unchosen row's columns.
-    let name_x = left.x
-        + ROW_PAD_X
-        + ROW_CHECKBOX
-        + ROW_GAP
-        + letter_w
-        + ROW_GAP
-        + if c.staged && c.unstaged {
-            PARTIAL_DOT_COLUMN
-        } else {
-            0.0
-        };
+    // checkbox, the status letter, and one gap. The accent rail is *not* in
+    // this sum: it is painted over the leading pad, so a chosen row's columns
+    // are an unchosen row's columns. Nothing here is conditional, so every
+    // row in the list names at the same x however its file is staged.
+    let name_x = left.x + ROW_PAD_X + ROW_CHECKBOX + ROW_GAP + letter_w + ROW_GAP;
     // The dim location keeps its own right-aligned column on the first line
     // as long as the name keeps a readable width; on deep paths in a narrow
     // pane it drops onto its own line beneath the name instead of squeezing
@@ -1308,19 +1327,20 @@ fn change_row(
     ui.allocate_exact_size(row.size(), Sense::hover());
 
     // The shared row shell, and the only place in this list a fill is
-    // chosen: the row-selected token for the chosen row, the shared hover
+    // chosen: the row-selected token for the selected row, the shared hover
     // fill under the pointer, and the 2px brand rail at the leading edge of
-    // whichever row is chosen. `RowState::from_flags` is the app's one
+    // whichever row is selected. `RowState::from_flags` is the app's one
     // selected-or-hovered decision, so a file row cannot drift from the log
     // table, the sidebar tree or the rebase todo about what "selected" means.
     //
-    // The checkbox, the inclusion fact and the diff preview all derive from
-    // the same `included` flag the row state derives from, so the box, the
-    // band and the rail can never disagree about what is in the commit.
+    // The band follows `selected`, never the checkbox: the highlight answers
+    // "which file am I looking at", and the box answers "what is in the
+    // index". Reading it off the box would put a staging action and a browse
+    // in the same visual channel, which is the coupling this row no longer has.
     components::row_shell(
         ui,
         row,
-        components::RowState::from_flags(included, ui.rect_contains_pointer(row)),
+        components::RowState::from_flags(selected, ui.rect_contains_pointer(row)),
         components::RowShell::Railed,
     );
 
@@ -1329,28 +1349,30 @@ fn change_row(
     let block_top = row.top() + (row_h - content_h) / 2.0;
     let cy = block_top + line_h / 2.0;
 
-    // Checkbox: toggles commit inclusion only, never the preview.
+    // Checkbox: a direct control over the index. It reads the staged/unstaged
+    // pair for this row and nothing else, so the box cannot tick itself, and
+    // its click asks for the whole file — plain `git add` / `git restore
+    // --staged`, never the granular pipeline's peek on the diff cache, which
+    // makes a staging click a silent no-op on a cold slot.
     let cb = ROW_CHECKBOX;
     let cb_rect = Rect::from_min_max(
         Pos2::new(row.left() + ROW_PAD_X, cy - cb / 2.0),
         Pos2::new(row.left() + ROW_PAD_X + cb, cy + cb / 2.0),
     );
-    let mut is_included = included;
     let cb_resp = ui.interact(
         cb_rect,
         ui.auto_id_with(("row_checkbox", &key)),
         Sense::click(),
     );
-    cb_resp
-        .widget_info(|| WidgetInfo::labeled(WidgetType::Checkbox, true, format!("Select {name}")));
+    let cb_label = stage_label(&c.path, stage);
+    cb_resp.widget_info(|| WidgetInfo::labeled(WidgetType::Checkbox, true, cb_label.clone()));
     if cb_resp.clicked() {
-        is_included = !is_included;
-        actions.push(RowAction::Toggle {
-            key: key.clone(),
-            include: is_included,
+        actions.push(RowAction::ToggleStage {
+            root: root.id.clone(),
+            path: c.path.clone(),
         });
     }
-    paint_checkbox(ui, cb_rect, is_included, &cb_resp);
+    paint_checkbox(ui, cb_rect, stage, &cb_resp);
 
     // Status letter, then the filename, then the dim location. The letter is
     // the row's state and keeps its semantic hue; the name is the row's
@@ -1362,12 +1384,6 @@ fn change_row(
         letter_galley,
         tint,
     );
-
-    if c.staged && c.unstaged {
-        // The dot's 14 px hit rect is centred in its own slot, just left of
-        // the name column.
-        partially_staged_dot_at(ui, Pos2::new(name_x - PARTIAL_DOT_COLUMN + 7.0, cy), &key);
-    }
 
     painter.galley_with_override_text_color(
         Pos2::new(name_x, block_top),
@@ -1423,10 +1439,10 @@ fn change_row(
         );
     }
 
-    // Row body: one select gesture — checks the box AND previews. Registered
-    // after the checkbox so the checkbox owns its own clicks. The body rect
-    // starts *past* the checkbox, so neither widget can steal the other's
-    // clicks and the register order is belt-and-braces.
+    // Row body: one select gesture — the selection and the diff preview, and
+    // nothing else. Registered after the checkbox so the checkbox owns its own
+    // clicks. The body rect starts *past* the checkbox, so neither widget can
+    // steal the other's clicks and the register order is belt-and-braces.
     let body_rect = Rect::from_min_max(
         Pos2::new(row.left() + ROW_PAD_X + ROW_CHECKBOX + ROW_GAP, row.top()),
         row.max,
@@ -1469,7 +1485,7 @@ fn conflict_row(
 ) {
     let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
     let (glyph, glyph_tint) = status_glyph(c.status);
-    let label = format!("{} {}", badge_letter(c.status), c.path.display());
+    let label = format!("{} {}", badge_letter(c), c.path.display());
     let font = FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional);
     let painter = ui.painter().clone();
 
@@ -1489,13 +1505,25 @@ fn conflict_row(
         components::RowShell::Railed,
     );
 
-    // The badge letter takes the status letter's column and hue; the path is
-    // the row's answer and reads at the primary ink.
+    // The badge letter and the path take the columns every other row uses, so
+    // the list reads as one column of names down the pane. The checkbox slot is
+    // left empty rather than painted over: an unmerged path cannot be staged,
+    // and a box that could be ticked and meant nothing would be worse than no
+    // box. The gap is reserved at the same `ROW_CHECKBOX` width so the name
+    // lands where every other row's name lands.
     let cy = row.center().y;
-    let text_x = row.left() + ROW_PAD_X;
-    let galley = painter.layout_no_wrap(label.clone(), font.clone(), Palette::INK);
+    let letter_x = row.left() + ROW_PAD_X + ROW_CHECKBOX + ROW_GAP;
+    let letter_galley =
+        painter.layout_no_wrap(badge_letter(c).to_owned(), font.clone(), glyph_tint);
+    let (letter_w, letter_h) = letter_galley.size().into();
     painter.galley_with_override_text_color(
-        Pos2::new(text_x, cy - galley.size().y / 2.0),
+        Pos2::new(letter_x, cy - letter_h / 2.0),
+        letter_galley,
+        glyph_tint,
+    );
+    let galley = painter.layout_no_wrap(c.path.display().to_string(), font.clone(), Palette::INK);
+    painter.galley_with_override_text_color(
+        Pos2::new(letter_x + letter_w + ROW_GAP, cy - galley.size().y / 2.0),
         galley,
         Palette::INK,
     );
@@ -1835,7 +1863,11 @@ fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {
                     WidgetInfo::labeled(WidgetType::Label, true, format!("Previewing {path_text}"))
                 });
                 let status = granular::preview_status(state, Some(path));
-                pill(ui, status_chip_label(status), status_color(status));
+                pill(
+                    ui,
+                    status_chip_label(status),
+                    preview_status_tint(state, path),
+                );
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if let Some(path) = path {
@@ -2196,7 +2228,6 @@ fn commit_meta_row(ui: &mut Ui, state: &mut AppState) {
     );
     if clear.clicked() {
         state.ui.commit_message.clear();
-        state.ui.selected.clear();
     }
 
     right -= clear_w + ROW_GAP;
@@ -2261,7 +2292,16 @@ fn amend_checkbox_at(ui: &mut Ui, rect: Rect, amend: &mut bool) -> egui::Respons
         checked = !checked;
         *amend = checked;
     }
-    paint_checkbox(ui, box_rect, checked, &response);
+    paint_checkbox(
+        ui,
+        box_rect,
+        if checked {
+            StageState::All
+        } else {
+            StageState::None
+        },
+        &response,
+    );
     painter.galley_with_override_text_color(
         Pos2::new(
             box_rect.right() + ROW_GAP,
@@ -2365,25 +2405,12 @@ fn meta_button(ui: &mut Ui, label: &str) -> egui::Response {
 /// belongs to the Commit control alone — a card with two filled greys and a
 /// filled blue reads as three actions of equal weight.
 fn commit_action_row(ui: &mut Ui, state: &mut AppState) {
-    // With nothing included, the commit leans on `git commit -a` to find the
-    // work, so the file list no longer says what is about to be committed —
-    // the note does (ticket 21b). Only the empty-selection case needs it: with
-    // a selection the list is already the answer.
-    if state.settings.commit_all_when_nothing_staged && !has_selected_changes(state) {
-        ui.add_space(2.0);
-        ui.label(
-            RichText::new("Nothing is staged — Commit will include every tracked change.")
-                .size(crate::theme::TYPE_BODY)
-                .color(Palette::INK_2),
-        );
-        ui.add_space(2.0);
-    }
     ui.horizontal(|ui| {
-        // The selection gate is the setting's other half: an empty selection
-        // is committable only while the opt-in is on. The message gate stays
-        // independent — an empty *message* is never committable.
-        let can_commit = !state.ui.commit_message.trim().is_empty()
-            && (has_selected_changes(state) || state.settings.commit_all_when_nothing_staged);
+        // The two gates are independent: an empty *message* is never
+        // committable, and an empty *index* is not either. The index is what
+        // the commit reads, so "something is selected in the file list" is not
+        // a gate at all any more.
+        let can_commit = !state.ui.commit_message.trim().is_empty() && has_staged_changes(state);
         commit_control(ui, state, can_commit);
         ui.add_space(10.0);
         if widgets::ghost_button(ui, None, "Shelve\u{2026}")
@@ -2424,13 +2451,36 @@ fn commit_action_row(ui: &mut Ui, state: &mut AppState) {
 /// - **The fill and ink decisions are the shared primary's**, through
 ///   [`widgets::ButtonVariant::Primary`]; only the geometry is local, because
 ///   the shared primary has no split variant.
+///
+/// The one Commit control, or why it is not one right now.
+///
+/// A refused control reports its reason on hover. It has to go through
+/// `on_disabled_hover_text` rather than `on_hover_text`: a `Ui` that is
+/// disabled reports no hover for the widgets inside it, so the ordinary call
+/// would be exactly the one control in this window that cannot explain itself.
 fn commit_control(ui: &mut Ui, state: &mut AppState, can_commit: bool) {
-    let halves = widgets::disabled_child_scope(ui, can_commit, commit_control_paint);
+    let mut halves = widgets::disabled_child_scope(ui, can_commit, commit_control_paint);
+    if !can_commit {
+        halves.label = halves
+            .label
+            .on_disabled_hover_text(commit_blocked_reason(state));
+    }
     if can_commit && halves.label.clicked() {
         do_commit(state, false);
     }
     if can_commit {
         commit_split_menu(&halves.chevron, state);
+    }
+}
+
+/// Why the Commit control is refusing. A disabled button that cannot say why
+/// reads as broken, and this one refuses for two independent reasons a
+/// developer can fix from two different places.
+fn commit_blocked_reason(state: &AppState) -> &'static str {
+    if state.ui.commit_message.trim().is_empty() {
+        "Enter a commit message to commit"
+    } else {
+        "Stage at least one file — Commit commits the index and nothing else"
     }
 }
 
@@ -2559,7 +2609,6 @@ fn commit_split_menu(chevron: &egui::Response, state: &mut AppState) {
                 let amend = state.ui.amend;
                 state.run_commit_across(&message, amend);
                 state.ui.commit_message.clear();
-                state.ui.selected.clear();
                 state.save_durable_ui();
                 menu.close();
             }
@@ -2569,12 +2618,6 @@ fn commit_split_menu(chevron: &egui::Response, state: &mut AppState) {
 
 fn do_commit(state: &mut AppState, and_push: bool) {
     let root = state.selected_root.clone();
-    // Files whose index already diverges from HEAD carry a — possibly
-    // granular — staged selection (spec R2); re-staging them whole would
-    // blow it away (ADR-0013). They commit as-is from the index; untouched
-    // files keep the stage-then-commit flow.
-    let (untouched, partial): (Vec<Change>, Vec<Change>) =
-        selected_changes(state).into_iter().partition(|c| !c.staged);
     let msg = state.ui.commit_message.clone();
     let amend = state.ui.amend;
     // Record the recent message before `msg` moves into the 'static closure
@@ -2584,13 +2627,12 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         state.ui.recent_messages.truncate(12);
     }
     if let Some(root) = root {
-        state.dispatch(shell_writes::commit::commit(
-            &root, &msg, &untouched, &partial, amend,
-        ));
+        state.dispatch(shell_writes::commit::commit(&root, &msg, amend));
     }
-    // Reset fields (the recent message was recorded above).
+    // Only the message well resets. The selection is "the files I am looking
+    // at", and a commit says nothing about what the developer is looking at —
+    // clearing it would throw away their place in the list after every commit.
     state.ui.commit_message.clear();
-    state.ui.selected.clear();
     state.save_durable_ui();
     if and_push {
         state.ui.dialog = Some(Dialog::Push);
@@ -2602,25 +2644,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_color_maps_the_redesign_letters_to_their_tokens() {
-        // Issue 05 (design doc §4): the status letter and filename take the
-        // status colour — M modified blue, A added green, U unversioned
-        // olive; every remaining state maps onto a real semantic hue so no
-        // row can ever paint a fallback.
-        assert_eq!(
-            status_color(ChangeStatus::Modified),
-            Palette::STATUS_MODIFIED
-        );
-        assert_eq!(status_color(ChangeStatus::Added), Palette::STATUS_ADDED);
-        assert_eq!(
-            status_color(ChangeStatus::Unversioned),
-            Palette::STATUS_UNVERSIONED
-        );
-        assert_eq!(status_color(ChangeStatus::Deleted), Palette::STATE_ERROR);
-        assert_eq!(status_color(ChangeStatus::Renamed), Palette::BRAND);
-        assert_eq!(status_color(ChangeStatus::Copied), Palette::STATUS_ADDED);
-        assert_eq!(status_color(ChangeStatus::Ignored), Palette::INK_3);
-        assert_eq!(status_color(ChangeStatus::Conflicted), Palette::STATE_ERROR);
+    fn stage_state_is_derived_from_the_staged_and_unstaged_pair() {
+        let of = |staged, unstaged| {
+            StageState::of(&Change {
+                path: PathBuf::from("a.txt"),
+                status: ChangeStatus::Modified,
+                chunks: vec![],
+                staged,
+                unstaged,
+                orig_path: None,
+            })
+        };
+        assert_eq!(of(true, false), StageState::All);
+        assert_eq!(of(true, true), StageState::Partial);
+        assert_eq!(of(false, true), StageState::None);
+        assert_eq!(of(false, false), StageState::None);
     }
 
     #[test]

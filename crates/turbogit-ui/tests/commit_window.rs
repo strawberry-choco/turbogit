@@ -6,8 +6,7 @@
 //! badges, M/A/C file-row badges) and public `AppState` transitions only.
 //!
 //! Issue #18 extends this suite to the Commit window's sub-tab strip:
-//! Local Changes / Unversioned Files carry active data, Shelf / Stash are
-//! real Shelf and Stash panes (they superseded ADR-0008's placeholders), and
+//! Shelf / Stash are real Shelf and Stash panes (they superseded ADR-0008's placeholders), and
 //! the "Advanced options..."
 //! control is visible but inert (ADR-0010).
 //!
@@ -363,17 +362,14 @@ fn canonical_groups_count_badges_and_status_rows_paint() {
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // Issue 07: the staging section headers are gone — file rows paint
-    // directly under the repo group; only the `Merge conflicts` group keeps
-    // its count-badged header. Row badges still match the file states.
+    // Staging state is said by the checkbox and the badge letter, not by a
+    // heading: every changed file paints as a row of the one flat list, and
+    // only the `Merge conflicts` group keeps its count-badged header.
     h.get_by_label("base.txt");
     h.get_by_label("added.txt");
+    h.get_by_label("untracked.txt");
     h.get_by_label("Merge conflicts (1)");
     h.get_by_label("C conf.txt");
-
-    // Untracked rows live in the bottom group of the same tree.
-    h.get_by_label("Unversioned Files (1)");
-    h.get_by_label("untracked.txt");
 
     // Single-root project: no root sub-groups / select-all checkboxes.
     assert!(
@@ -383,69 +379,61 @@ fn canonical_groups_count_badges_and_status_rows_paint() {
 }
 
 #[test]
-fn file_row_checkbox_toggles_commit_inclusion() {
+fn the_file_row_checkbox_stages_and_unstages_the_whole_file() {
+    // The box is a control over git's index, so the answer is read back out of
+    // git — never out of the window's own state, which is the thing under test.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "toggle-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    let p = repo.path.join("base.txt");
-
-    assert!(!h.state().ui.selected.contains(&p));
-
-    h.get_by_label("Select base.txt").click();
-    h.run();
     assert!(
-        h.state().ui.selected.contains(&p),
-        "checking a row includes the change"
+        !staged_contains(&repo.path, "base.txt"),
+        "nothing is staged yet"
     );
 
-    h.get_by_label("Select base.txt").click();
+    h.get_by_label("Stage base.txt (unstaged)").click();
     h.run();
     assert!(
-        !h.state().ui.selected.contains(&p),
-        "unchecking excludes the change again"
-    );
-}
-
-#[test]
-fn commit_stays_disabled_without_message_or_selection_and_enables_with_both() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "gate-repo");
-    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
-
-    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-
-    // Empty message AND empty selection → disabled.
-    assert!(commit_button_is_disabled(&h));
-
-    // Message set but selection still empty → still disabled (asserted).
-    h.state_mut().ui.commit_message = "has message".into();
-    h.run();
-    assert!(
-        commit_button_is_disabled(&h),
-        "Commit must stay disabled while no change is included"
+        wait_until(15_000, || staged_contains(&repo.path, "base.txt")),
+        "ticking the box stages the whole file"
     );
 
-    // Selection made but message cleared → still disabled (asserted).
-    h.state_mut().ui.commit_message.clear();
-    h.get_by_label("base.txt").click();
+    h.run();
+    h.get_by_label("Unstage base.txt (staged)").click();
     h.run();
     assert!(
-        commit_button_is_disabled(&h),
-        "Commit must stay disabled while the message is empty"
-    );
-
-    // Both present → enabled.
-    h.state_mut().ui.commit_message = "ready".into();
-    h.run();
-    assert!(
-        !commit_button_is_disabled(&h),
-        "Commit must enable with a non-empty message and at least one included change"
+        wait_until(15_000, || !staged_contains(&repo.path, "base.txt")),
+        "ticking it again un-stages the whole file"
     );
 }
 
-// --- ticket 21b: `Commit All when Nothing Is Staged` --------------------------
+/// Whether git reports `needle` among the repository's staged paths.
+fn staged_contains(repo: &Path, needle: &str) -> bool {
+    git(repo, &["diff", "--cached", "--name-only"]).contains(needle)
+}
+
+/// The accessible label of an unstaged file's checkbox — the query handle every
+/// geometry and staging assertion in this suite addresses a row's box by. The
+/// label carries the state, so a suite that wants the *ticked* box says so.
+fn stage_label_of(name: &str) -> String {
+    format!("Stage {name} (unstaged)")
+}
+
+/// Stage `name` through its row checkbox and wait for git to agree. The route
+/// every commit in this suite takes now that Commit reads the index.
+#[track_caller]
+fn stage_through_checkbox(h: &mut Harness<'_, AppState>, repo: &Path, name: &str) {
+    h.get_by_label(&stage_label_of(name)).click();
+    h.run();
+    assert!(
+        wait_until(15_000, || staged_contains(repo, name)),
+        "the checkbox must have staged {name}"
+    );
+    h.run();
+}
+
+// --- the index is the commit's only input -------------------------------------
 
 /// The sentence the card adds when the empty selection is forgivable. Asserted
 /// as a fragment so the wording can be edited without rewriting the test.
@@ -467,35 +455,32 @@ fn accent_halves(h: &Harness<'_, AppState>) -> Vec<egui::Rect> {
         .collect()
 }
 
-/// The setting is the *only* thing that makes an empty selection committable,
-/// and the card says what will be committed when it is on.
+/// **Commit is gated on the index, not on what the file list has selected.**
 ///
-/// Both directions are load-bearing. A change that makes the empty case
-/// always-committable fails the first half — that is the mis-click-turned-into-
-/// a-whole-index-commit this setting exists to keep opt-in. A change that adds
-/// the setting but never consults it fails the second.
+/// Both directions are load-bearing. A gate that reads the selection lets a
+/// developer press Commit over a file they merely clicked, and a file they
+/// never staged enters the commit; a gate that reads nothing leaves the
+/// control promising a commit it cannot make. The empty-index case also has to
+/// stay visibly refused rather than falling back to `git commit -a`, which is
+/// the whole-tree sweep this removed.
 #[test]
-fn commit_all_when_nothing_is_staged_opens_the_empty_selection_and_says_so() {
+fn commit_is_disabled_until_the_index_holds_something_and_then_enables() {
     let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "commit-all-repo");
+    let repo = temp_repo(parent.path(), "index-gate-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    // A message, but nothing included — the exact state the forgiveness path is
-    // for.
+
+    // A message but an empty index: refused, and the card promises nothing.
     h.state_mut().ui.commit_message = "commit everything".into();
     h.run();
-
-    // Off (the default): still refused, and the card explains nothing, because
-    // there is nothing forgivable to explain.
     assert!(
         commit_button_is_disabled(&h),
-        "an empty selection must stay refused while the opt-in is off"
+        "an unstaged working tree must not be committable"
     );
     assert!(
         !painted_text(&h).iter().any(|t| t.contains(COMMIT_ALL_NOTE)),
-        "the card must not promise a whole-index commit while the setting is off; \
-         painted text: {:?}",
+        "the card must not promise a whole-index commit; painted text: {:?}",
         painted_text(&h)
     );
     assert_eq!(
@@ -505,18 +490,23 @@ fn commit_all_when_nothing_is_staged_opens_the_empty_selection_and_says_so() {
          different colour by design"
     );
 
-    // On: the same empty selection commits, and the card states what it will
-    // include.
-    h.state_mut().settings.commit_all_when_nothing_staged = true;
+    // Stage the file through its checkbox — the control that owns the index —
+    // and the gate opens.
+    h.get_by_label("Stage base.txt (unstaged)").click();
+    h.run();
+    assert!(
+        wait_until(15_000, || !git(
+            &repo.path,
+            &["diff", "--cached", "--name-only"]
+        )
+        .trim()
+        .is_empty()),
+        "the checkbox must have staged the file"
+    );
     h.run();
     assert!(
         !commit_button_is_disabled(&h),
-        "the setting is what makes the empty selection committable"
-    );
-    assert!(
-        painted_text(&h).iter().any(|t| t.contains(COMMIT_ALL_NOTE)),
-        "the card must state what an empty selection commits; painted text: {:?}",
-        painted_text(&h)
+        "the index now holds a file, so Commit is committable"
     );
     assert_eq!(
         accent_halves(&h).len(),
@@ -525,22 +515,62 @@ fn commit_all_when_nothing_is_staged_opens_the_empty_selection_and_says_so() {
     );
 }
 
-/// The message gate is independent of the selection gate: the setting forgives
-/// an empty *selection*, never an empty *message*. A change that ORs the two
-/// conditions instead of ANDing them lets a message-less commit through, which
-/// is the more dangerous half of the ticket.
+/// Clicking a row is a preview, so it cannot open the gate: a developer who
+/// only browsed the list has staged nothing and still cannot commit.
 #[test]
-fn an_empty_message_still_refuses_with_commit_all_on() {
+fn browsing_the_file_list_never_makes_a_commit_possible() {
     let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "commit-all-message-repo");
+    let repo = temp_repo(parent.path(), "browse-gate-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.state_mut().settings.commit_all_when_nothing_staged = true;
+    h.state_mut().ui.commit_message = "browsing only".into();
+    h.run();
+
+    h.get_by_label("base.txt").click();
+    h.run();
+
+    assert!(
+        !h.state().ui.selected.is_empty(),
+        "the click selected the row"
+    );
+    assert!(
+        git(&repo.path, &["diff", "--cached", "--name-only"])
+            .trim()
+            .is_empty(),
+        "and staged nothing: git's own index is the answer"
+    );
+    assert!(
+        commit_button_is_disabled(&h),
+        "Commit stays gated on the index, not on the selection"
+    );
+}
+
+/// The message gate is independent of the index gate: an empty *message* is
+/// never committable however much is staged. A change that ORs the two
+/// conditions instead of ANDing them lets a message-less commit through.
+#[test]
+fn an_empty_message_still_refuses_with_a_full_index() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "index-message-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("Stage base.txt (unstaged)").click();
+    h.run();
+    assert!(
+        wait_until(15_000, || !git(
+            &repo.path,
+            &["diff", "--cached", "--name-only"]
+        )
+        .trim()
+        .is_empty()),
+        "the file reached the index"
+    );
     h.run();
     assert!(
         commit_button_is_disabled(&h),
-        "an empty message must stay refused even with the setting on"
+        "an empty message must stay refused whatever the index holds"
     );
 
     h.state_mut().ui.commit_message = "now it may commit".into();
@@ -578,7 +608,7 @@ fn commit_executes_for_valid_input() {
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("base.txt").click();
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
     h.state_mut().ui.commit_message = "issue11: real commit".into();
     h.run();
     commit_action_button(&h).click();
@@ -610,8 +640,7 @@ fn amend_commits_with_amend_flag() {
     // One click per frame: kittest delivers queued events only at the next
     // run, so two clicks without an intervening run would land together and
     // only the release target would register.
-    h.get_by_label("base.txt").click();
-    h.run();
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
     h.get_by_label("Amend").click();
     h.run();
     assert!(h.state().ui.amend, "the Amend checkbox must toggle");
@@ -638,7 +667,7 @@ fn commit_and_push_chains_commit_then_opens_push_dialog() {
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("base.txt").click();
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
     h.state_mut().ui.commit_message = "push chain subject".into();
     h.run();
     // Issue 07: "Commit and Push..." lives inside the split button's
@@ -897,12 +926,14 @@ fn staging_section_headers_and_stage_all_actions_are_removed() {
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // File rows (and the unversioned group) still paint…
+    // File rows still paint…
     h.get_by_label("base.txt");
     h.get_by_label("added.txt");
     h.get_by_label("untracked.txt");
 
-    // …but no per-repo staging section headers or stage-all actions anywhere.
+    // …but no per-repo staging section headers or stage-all actions anywhere,
+    // and no separate group for the untracked files either: one list, one
+    // place.
     let text = painted_text(&h).join("\n");
     assert!(
         !text.contains("UNSTAGED") && !text.contains("STAGED"),
@@ -911,6 +942,10 @@ fn staging_section_headers_and_stage_all_actions_are_removed() {
     assert!(
         !text.contains("Stage all") && !text.contains("Unstage all"),
         "stage-all / unstage-all actions must be removed, got:\n{text}"
+    );
+    assert!(
+        !text.contains("Unversioned Files"),
+        "untracked files share the one list; their group is gone, got:\n{text}"
     );
 }
 
@@ -941,7 +976,7 @@ fn single_primary_commit_split_button_with_grey_shelve_stash() {
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("base.txt").click();
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
     h.state_mut().ui.commit_message = "split subject".into();
     h.run();
 
@@ -949,7 +984,7 @@ fn single_primary_commit_split_button_with_grey_shelve_stash() {
     let commit = commit_action_button(&h);
     assert!(
         !commit.accesskit_node().is_disabled(),
-        "the primary Commit action must be enabled with a message and selection"
+        "the primary Commit action must be enabled with a message and a non-empty index"
     );
 
     // `Commit and Push...` is NOT a sibling button anymore — the alternatives
@@ -987,13 +1022,14 @@ fn commit_split_dropdown_offers_commit_and_push_only_in_single_repo_scope() {
     seed_tracked(&b.path, "b.txt");
 
     let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
-    // Select the focused repo's file via its checkbox, then arm the message
-    // (one click per frame — see the Amend test note).
-    h.get_by_label("Select a.txt").click();
+    // Stage the focused repo's file through its checkbox, then arm the message
+    // (one click per frame — see the Amend test note). The dropdown only opens
+    // from an enabled Commit control, so the index has to hold something.
+    h.get_by_label("Stage a.txt (unstaged)").click();
     h.run();
     assert!(
-        !h.state().ui.selected.is_empty(),
-        "the clicked row must be in the commit selection"
+        wait_until(15_000, || staged_contains(&a.path, "a.txt")),
+        "the checkbox staged the file"
     );
     h.state_mut().ui.commit_message = "dd subject".into();
     h.run();
@@ -1185,7 +1221,7 @@ fn shelf_and_stash_replace_the_placeholder_with_their_own_panes() {
 }
 
 #[test]
-fn unversioned_group_lists_untracked_in_one_tree_includable_in_commit() {
+fn untracked_files_join_the_one_flat_list_and_their_box_commits_them() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "untracked-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -1194,17 +1230,25 @@ fn unversioned_group_lists_untracked_in_one_tree_includable_in_commit() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     assert_eq!(h.state().ui.commit_subtab, CommitSubTab::LocalChanges);
 
-    // Issue 04: untracked files stop appearing under the repo's sections and
-    // render only in the `Unversioned Files` group at the bottom of the same
-    // tree (issue 07 removed the section headers entirely). The modified
-    // tracked file and the untracked one paint on the same surface now.
+    // Untracked files are ordinary rows now — a checkbox beside them like any
+    // other file, and no group of their own to look in.
     h.get_by_label("base.txt");
-    h.get_by_label("Unversioned Files (1)");
     h.get_by_label("untracked.txt");
+    h.get_by_label(&stage_label_of("untracked.txt"));
+    assert!(
+        h.query_by_label("Unversioned Files (1)").is_none(),
+        "the separate untracked group is gone; its files are in the one list"
+    );
 
-    // …and checking one includes it in the next commit.
-    h.get_by_label("untracked.txt").click();
-    h.state_mut().ui.commit_message = "issue18: include untracked".into();
+    // Ticking the box puts the file in the index, and only the ticked file
+    // lands in the commit.
+    h.get_by_label(&stage_label_of("untracked.txt")).click();
+    h.run();
+    assert!(
+        wait_until(15_000, || staged_contains(&repo.path, "untracked.txt")),
+        "the checkbox staged the untracked file"
+    );
+    h.state_mut().ui.commit_message = "include untracked".into();
     h.run();
     commit_action_button(&h).click();
     h.run();
@@ -1212,7 +1256,7 @@ fn unversioned_group_lists_untracked_in_one_tree_includable_in_commit() {
     assert!(
         wait_until(15_000, || repo
             .subjects()
-            .contains(&"issue18: include untracked".to_string())),
+            .contains(&"include untracked".to_string())),
         "commit should land in the temp repository, got {:?}",
         repo.subjects()
     );
@@ -1223,31 +1267,8 @@ fn unversioned_group_lists_untracked_in_one_tree_includable_in_commit() {
     );
     assert!(
         !last_files.lines().any(|l| l == "base.txt"),
-        "unchecked modifications must stay out of the commit, got {last_files:?}"
+        "the unstaged modification must stay out of the commit, got {last_files:?}"
     );
-}
-
-#[test]
-fn unversioned_group_collapses_and_expands_via_header() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "uv-toggle-repo");
-    std::fs::write(repo.path.join("untracked.txt"), "untracked\n").unwrap();
-
-    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("untracked.txt");
-
-    // Collapse the bottom group: its rows hide…
-    h.get_by_label("Unversioned Files (1)").click();
-    h.run();
-    assert!(
-        h.query_by_label("untracked.txt").is_none(),
-        "collapsed Unversioned Files hides its rows"
-    );
-
-    // …and expanding brings them back.
-    h.get_by_label("Unversioned Files (1)").click();
-    h.run();
-    h.get_by_label("untracked.txt");
 }
 
 // ------------------------------------------- issue 04 tree toolbar row --
@@ -1276,10 +1297,11 @@ fn file_rows_paint_checkbox_letter_coloured_name_and_dim_location() {
     h.get_by_label("base.txt");
     h.get_by_label("app.rs");
     h.get_by_label("untracked.txt");
-    // Each row carries a checkbox for per-file staging.
-    h.get_by_label("Select base.txt");
-    h.get_by_label("Select app.rs");
-    h.get_by_label("Select untracked.txt");
+    // Each row carries a checkbox whose label carries its state, so three
+    // unstaged rows are three addressable boxes.
+    h.get_by_label("Stage base.txt (unstaged)");
+    h.get_by_label("Stage src/app.rs (unstaged)");
+    h.get_by_label("Stage untracked.txt (unstaged)");
 
     // Status letters paint as their own colour-coded elements and the dim
     // location renders after the filename.
@@ -1296,11 +1318,11 @@ fn file_rows_paint_checkbox_letter_coloured_name_and_dim_location() {
 }
 
 #[test]
-fn row_selection_unifies_commit_inclusion_preview_and_selection_fill() {
-    // Issue 05 (design doc §4): selecting a row checks its checkbox AND
-    // previews the diff — "what I'm committing and what I'm looking at are
-    // the same thing" — and the selected row paints the solid #2E436E
-    // selection background.
+fn clicking_a_row_selects_and_previews_it_and_leaves_the_checkbox_alone() {
+    // **Browsing is not an edit.** A clicked row selects the file for the diff
+    // preview and paints the selection background — and stages nothing, so the
+    // checkbox stays empty and git's index stays untouched. This is the whole
+    // point of separating the two gestures.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "select-row");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -1310,46 +1332,70 @@ fn row_selection_unifies_commit_inclusion_preview_and_selection_fill() {
     let p = repo.path.join("base.txt");
     assert!(!h.state().ui.selected.contains(&p));
 
-    // Clicking the row selects it for the commit AND previews its diff.
     h.get_by_label("base.txt").click();
     h.run();
     assert!(
         h.state().ui.selected.contains(&p),
-        "a clicked row must be in the commit selection"
+        "a clicked row is selected"
     );
     assert_eq!(
         h.state().ui.preview_change,
         Some(PathBuf::from("base.txt")),
-        "a clicked row must drive the diff preview"
+        "a clicked row drives the diff preview"
     );
 
-    // The selected row paints the solid design-blue selection background.
+    // The selected row paints the selection background…
     let row_origin = galley_origin(&h, "base.txt").expect("row paints its filename");
     assert!(
         filled_rects(&h)
             .iter()
             .any(|(r, c)| *c == Palette::ROW_SELECTED && r.contains(row_origin)),
-        "the selected row must paint the list-row selection fill (ticket 03)"
+        "the selected row must paint the list-row selection fill"
     );
 
-    // Unchecking via the checkbox removes it from the commit…
-    h.get_by_label("Select base.txt").click();
+    // …and the highlight does not extend to the checkbox, which is still empty
+    // because nothing was staged.
+    h.get_by_label("Stage base.txt (unstaged)");
+    assert!(
+        !staged_contains(&repo.path, "base.txt"),
+        "a row click must not stage: `git diff --cached` is the answer"
+    );
+}
+
+/// The checkbox and the row highlight are two independent facts, so a box can
+/// be ticked without the row becoming the selection, and vice versa.
+#[test]
+fn the_checkbox_toggles_the_index_without_moving_the_selection() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "checkbox-vs-select");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+    std::fs::write(repo.path.join("other.txt"), "edit\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    let p = repo.path.join("base.txt");
+
+    // Preview a *different* row, then tick the first one's box.
+    h.get_by_label("other.txt").click();
     h.run();
-    assert!(
-        !h.state().ui.selected.contains(&p),
-        "the checkbox must toggle commit inclusion"
-    );
-    assert!(
-        !filled_rects(&h)
-            .iter()
-            .any(|(r, c)| *c == Palette::ROW_SELECTED && r.contains(row_origin)),
-        "an unchecked row must lose the selection background"
-    );
-    // …without moving the preview.
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("base.txt")),
-        "the checkbox must not change what is previewed"
+        Some(PathBuf::from("other.txt"))
+    );
+
+    h.get_by_label("Stage base.txt (unstaged)").click();
+    h.run();
+    assert!(
+        wait_until(15_000, || staged_contains(&repo.path, "base.txt")),
+        "the box staged its own file"
+    );
+    assert!(
+        !h.state().ui.selected.contains(&p),
+        "the checkbox must not select the row it belongs to"
+    );
+    assert_eq!(
+        h.state().ui.preview_change,
+        Some(PathBuf::from("other.txt")),
+        "the checkbox must not move the preview either"
     );
 }
 
@@ -1798,7 +1844,7 @@ fn long_file_names_wrap_onto_a_continuation_line_and_grow_the_row() {
 
     // Selecting the row shows the grown row: the selection fill is taller
     // than the single-line file-row height.
-    h.get_by_label(&format!("Select {long}")).click();
+    h.get_by_label(long).click();
     h.run();
     let height = selected_row_height(&h, name_pos);
     assert!(
@@ -1853,7 +1899,7 @@ fn short_file_names_keep_the_single_line_row_height() {
     let (origin, _, lines) = galley_metrics(&h, "base.txt");
     assert_eq!(lines, 1, "a short name must stay on one line");
 
-    h.get_by_label("Select base.txt").click();
+    h.get_by_label("base.txt").click();
     h.run();
     assert_eq!(
         selected_row_height(&h, origin),
@@ -2198,7 +2244,7 @@ fn expanded_repo_group_paints_one_indent_guide_over_its_file_block() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "guide-repo");
     // Both tracked then edited, so both land in the focused repo group's one
-    // row block — an untracked file would sit in the Unversioned group instead.
+    // row block.
     seed_tracked(&repo.path, "base.txt");
     seed_tracked(&repo.path, "other.txt");
 
@@ -2229,7 +2275,7 @@ fn expanded_repo_group_paints_one_indent_guide_over_its_file_block() {
 
     // Clear of the checkbox column, and not so far right it cuts the name.
     for name in ["base.txt", "other.txt"] {
-        let checkbox = h.get_by_label(&format!("Select {name}")).rect();
+        let checkbox = h.get_by_label(&stage_label_of(name)).rect();
         assert!(
             guide.center().x >= checkbox.right() && guide.center().x <= checkbox.right() + 8.0,
             "the guide must sit in the gutter after `{name}`'s checkbox \
@@ -2546,7 +2592,9 @@ fn file_row_inks(
     name: &str,
     card: egui::Rect,
 ) -> Vec<(String, [u8; 4])> {
-    let checkbox = h.get_by_label(&format!("Select {name}")).rect();
+    // `name` is the repo-relative path, which is what the checkbox's accessible
+    // label carries — not the row's bare file name.
+    let checkbox = h.get_by_label(&stage_label_of(name)).rect();
     let grow = (turbogit_ui::theme::FILE_ROW_HEIGHT - checkbox.height()) / 2.0;
     let row = egui::Rect::from_min_max(
         egui::pos2(checkbox.left() - 24.0, checkbox.top() - grow),
@@ -2585,7 +2633,7 @@ fn selecting_a_file_row_changes_no_ink_in_it() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     let card = changes_card(&h);
-    let before = file_row_inks(&h, "app.rs", card);
+    let before = file_row_inks(&h, "src/app.rs", card);
     assert!(
         before.iter().any(|(text, _)| text == "app.rs"),
         "the row paints its name before selection, got {before:?}"
@@ -2594,7 +2642,7 @@ fn selecting_a_file_row_changes_no_ink_in_it() {
     h.get_by_label("app.rs").click();
     h.run();
 
-    let after = file_row_inks(&h, "app.rs", card);
+    let after = file_row_inks(&h, "src/app.rs", card);
     assert_eq!(
         before, after,
         "selecting a row must not re-ink any of its text: the row is the \
@@ -2670,8 +2718,8 @@ fn a_long_file_name_grows_its_galley_and_its_row() {
 
     // Both rows selected, so both bands are painted and each is located by the
     // name it carries rather than by paint order.
-    h.get_by_label(&format!("Select {long}")).click();
-    h.get_by_label("Select short.rs").click();
+    h.get_by_label(long).click();
+    h.get_by_label("short.rs").click();
     h.run();
 
     let card = changes_card(&h);
@@ -2697,11 +2745,11 @@ fn a_long_file_name_grows_its_galley_and_its_row() {
 
 /// **Group headers sit on the section band, and no group is a nested card.**
 ///
-/// Three headers at once — the repo group, the `Merge conflicts` group and the
-/// `Unversioned Files` group — because the claim is about the *shared* header
-/// row, and a view that conforms in one place and not the other has three
-/// headers rather than one.
-///
+/// Two headers at once — the repo group and the `Merge conflicts` group —
+/// because the claim is about the *shared* header row, and a view that
+/// conforms in one place and not the other has two headers rather than one.
+/// The flat file list deliberately paints none, so two is all the tree has.
+//////
 /// Each band is the section band at the shared group-row height, at
 /// [`CornerRadius::ZERO`] — square, so a group reads as scaffolding on the
 /// card rather than as a smaller card inside it — and spans its own header row.
@@ -2725,11 +2773,7 @@ fn group_headers_sit_on_the_section_band_with_no_nested_card() {
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
     let card = changes_card(&h);
 
-    for label in [
-        format!("Toggle {name}"),
-        "Merge conflicts (1)".to_owned(),
-        "Unversioned Files (1)".to_owned(),
-    ] {
+    for label in [format!("Toggle {name}"), "Merge conflicts (1)".to_owned()] {
         let header = h.get_by_label(&label).rect();
         let bands: Vec<egui::Rect> = filled_rects(&h)
             .into_iter()
@@ -2867,11 +2911,6 @@ fn the_changes_list_reads_on_the_ink_ramp_and_never_the_dim_step() {
         Some(Palette::INK),
         "a file name reads at the primary ink — the status letter beside it \
          carries the state, so the name does not have to"
-    );
-    assert_eq!(
-        ink_of("Unversioned Files"),
-        Some(Palette::INK),
-        "the bottom group's name answers at the same step as every other group"
     );
     assert_eq!(
         ink_of("src/"),
@@ -3448,7 +3487,7 @@ fn the_alternatives_menu_still_opens_from_the_chevron_half() {
     let before = repo.commit_count();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("base.txt").click();
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
     h.state_mut().ui.commit_message = "menu subject".into();
     h.run();
 
@@ -3622,7 +3661,7 @@ fn the_commit_control_is_the_only_brand_filled_control_on_the_card() {
     seed_changes(&repo.path);
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("base.txt").click();
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
     h.state_mut().ui.commit_message = "brand subject".into();
     h.run();
 
@@ -3672,8 +3711,7 @@ fn a_typed_message_is_editable_counted_and_commits() {
     let before = repo.commit_count();
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("base.txt").click();
-    h.run();
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
 
     // The well is a text field, and it takes the typing.
     h.get_by_label("Commit message").focus();

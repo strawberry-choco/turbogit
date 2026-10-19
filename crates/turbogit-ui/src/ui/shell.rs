@@ -337,6 +337,19 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
             }
         }
     }
+
+    // Space toggles the staging checkbox of the file being previewed — the
+    // keyboard route to the same whole-file stage/un-stage a checkbox click
+    // performs. Gated exactly like `/` above, because both are keys that type
+    // into whatever text field holds the keyboard.
+    let space = ui.input(|i| i.key_pressed(Key::Space) && !i.modifiers.any());
+    if space
+        && state.ui.tab == Tab::Commit
+        && !state.show_welcome()
+        && ui.ctx().memory(|m| m.focused().is_none())
+    {
+        super::commit_window::toggle_previewed_row_checkbox(state);
+    }
 }
 
 /// Apply one F7/Shift+F7 press (spec R7): decide via the pure

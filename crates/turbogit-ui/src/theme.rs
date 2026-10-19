@@ -370,19 +370,18 @@ impl Palette {
     /// why this is one new *name* over a value the palette already holds rather than
     /// three new colours.
     ///
-    /// It needed its own name because the app's only other rendering of a deleted
-    /// file is the commit tree's [`Self::STATE_ERROR`], and that red is a **staging
-    /// severity** — work the developer has to answer for — not this grammar's
-    /// "the base side has this path and this side does not". Reading a compare
-    /// window's absent file in error red would say the file is a problem; in grey it
-    /// says the file is not on this side, which is the whole fact. Aliasing
-    /// [`Self::T_MUTED`] adds no value to the palette and inherits the ink ramp's
-    /// legality: 4.7:1 on the content surface, and a caller that puts it on a raised
-    /// or selected fill steps up to `INK_2` like every other muted rung.
+    /// It needed its own name because the app's other renderings of a deleted
+    /// file are staging-severity reds — work the developer has to answer for —
+    /// not this grammar's "the base side has this path and this side does not".
+    /// Reading a compare window's absent file, or the Commit window's `D` badge,
+    /// in error red would say the file is a problem; in grey it says the file is
+    /// not on this side, which is the whole fact. Aliasing [`Self::T_MUTED`]
+    /// adds no value to the palette and inherits the ink ramp's legality: 4.7:1
+    /// on the content surface, and a caller that puts it on a raised or selected
+    /// fill steps up to `INK_2` like every other muted rung.
     ///
-    /// Consumer: `ui::get_from_branch`'s rung list. The commit tree's
-    /// red `D` stays as it is — changing it is a visual decision with its own
-    /// callers, not this grammar's business.
+    /// Consumers: `ui::get_from_branch`'s rung list and the Commit window's file
+    /// rows, where `D` sits beside the green `N` and the blue `M`.
     pub const STATUS_DELETED: Color32 = Self::T_MUTED;
 
     // Diff colors.

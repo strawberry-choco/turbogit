@@ -7,9 +7,10 @@
 //! inputs make the op a silent no-op; both call sites (the diff viewer's
 //! gutter controls and the command palette's Stage/Unstage Hunk verbs)
 //! depend on that. The module also owns completion settlement ([`settle`])
-//! and the selection-lifetime rules ([`on_diff_changed`],
-//! [`toggle_line_selection`], [`prune_on_refresh`]); the maps themselves stay
-//! physically in [`crate::state::UiState`].
+//! and the refresh-scoped lifetimes ([`on_diff_changed`],
+//! [`toggle_line_selection`], [`prune_on_refresh`],
+//! [`prune_selection_on_refresh`]); the maps themselves stay physically in
+//! [`crate::state::UiState`].
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -479,4 +480,22 @@ pub(crate) fn prune_on_refresh(state: &mut AppState) {
         .cloned()
         .collect();
     state.ui.granularly_completed = still_fully_staged;
+}
+
+/// Selection-lifetime rule (refresh scope): `ui.selected` means "the files I
+/// am looking at", so a path the rebuilt list no longer holds is not one
+/// anymore.
+///
+/// Called *after* the snapshots are re-registered, which is the only point
+/// where "no longer holds" is true — pruning against the outgoing scan would
+/// leave every path a commit had just removed sitting in the set for one more
+/// refresh.
+pub(crate) fn prune_selection_on_refresh(state: &mut AppState) {
+    let live: HashSet<PathBuf> = state
+        .multi
+        .roots
+        .iter()
+        .flat_map(|r| r.status.changes.iter().map(|c| r.canonical_key(c)))
+        .collect();
+    state.ui.selected.retain(|key| live.contains(key));
 }

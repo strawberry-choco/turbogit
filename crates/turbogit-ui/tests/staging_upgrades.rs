@@ -30,9 +30,7 @@ struct Repo {
 ///
 /// Kept local, NOT `git_seed::repo_with_one_commit`: the seeded file's NAME is
 /// load-bearing. `file_list_paints_flat_rows_without_section_headers_or_hunk_counts`
-/// asserts the untracked group reads "Unversioned Files (1)" — the recipe seeds
-/// `README.md`, so `base.txt` would arrive as a second untracked file and the count
-/// would read "(2)".
+/// asserts on `base.txt` by name.
 fn temp_repo(parent: &Path, name: &str) -> Repo {
     let path = parent.join(name);
     std::fs::create_dir_all(&path).unwrap();
@@ -91,9 +89,8 @@ fn file_list_paints_flat_rows_without_section_headers_or_hunk_counts() {
 
     let h = harness(std::slice::from_ref(&repo.path));
 
-    // Issue 07: the per-repo staging section headers are gone — rows paint
-    // flat under the repo group (issue 20's hunk-rail still counts staged
-    // hunks separately). Untracked files live in the bottom group (issue 04).
+    // The per-repo staging section headers are gone — every changed file is
+    // one row of the repo's one flat, path-sorted list, untracked included.
     let text = painted_text(&h).join("\n");
     assert!(
         !text.contains("UNSTAGED") && !text.contains("STAGED"),
@@ -102,7 +99,10 @@ fn file_list_paints_flat_rows_without_section_headers_or_hunk_counts() {
     for row in ["base.txt", "other.txt", "untracked.txt"] {
         h.get_by_label(row);
     }
-    h.get_by_label("Unversioned Files (1)");
+    assert!(
+        !text.contains("Unversioned Files"),
+        "untracked files share the flat list; their own group is gone"
+    );
 
     // Issue 05: hunk counts moved out of file rows into the diff header —
     // the old per-row badges ("1 hunk" galley, staged "1/1" ratio) no longer

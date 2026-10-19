@@ -16,7 +16,7 @@ use turbogit_app::shell_writes::{
     stash as stash_writes, tag as tag_writes,
 };
 use turbogit_app::state::{AppState, RewriteUndoVerb};
-use turbogit_domain::model::{Change, TagSpec};
+use turbogit_domain::model::TagSpec;
 
 fn state_for(work: &Path) -> AppState {
     let roots = [work.to_path_buf()];
@@ -25,11 +25,6 @@ fn state_for(work: &Path) -> AppState {
 
 fn git_out(dir: &Path, args: &[&str]) -> String {
     git(dir, args).trim().to_string()
-}
-
-fn changes_of(state: &AppState) -> Vec<Change> {
-    let id = state.selected_root.clone().unwrap();
-    state.multi.by_id(&id).unwrap().status.changes.clone()
 }
 
 #[test]
@@ -191,15 +186,27 @@ fn commit_window_stash_entries_apply_and_pop_by_index() {
 }
 
 #[test]
-fn commit_entry_writes_the_commit_and_amend_entry_rewrites_the_last_one() {
+fn commit_entry_commits_the_index_and_the_amend_entry_rewrites_the_last_one() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_origin(tmp.path(), "work");
     std::fs::write(work.join("new.txt"), "new\n").unwrap();
     let mut state = state_for(&work);
     let root = state.selected_root.clone().unwrap();
-    let changes = changes_of(&state);
 
-    let op = commit_writes::commit(&root, "add a file", &changes, &[], false);
+    // The commit entry takes no file list: what lands is the index. The new
+    // file has to reach the index first, through the staging entry — which is
+    // the whole contract the two entries now share.
+    let op = commit_writes::set_staged(&root, Path::new("new.txt"), true);
+    assert_eq!(op.label(), "Stage new.txt");
+    state.dispatch(op);
+    state.drain_events();
+    assert_eq!(
+        git_out(&work, &["diff", "--cached", "--name-only"]).trim(),
+        "new.txt",
+        "the stage entry put the file in the index"
+    );
+
+    let op = commit_writes::commit(&root, "add a file", false);
     assert_eq!(op.label(), "Commit");
     state.dispatch(op);
     state.drain_events();
@@ -209,7 +216,7 @@ fn commit_entry_writes_the_commit_and_amend_entry_rewrites_the_last_one() {
         "the commit landed"
     );
 
-    let op = commit_writes::commit(&root, "add a file, amended", &[], &[], true);
+    let op = commit_writes::commit(&root, "add a file, amended", true);
     assert_eq!(op.label(), "Commit");
     state.dispatch(op);
     state.drain_events();
@@ -222,6 +229,41 @@ fn commit_entry_writes_the_commit_and_amend_entry_rewrites_the_last_one() {
         git_out(&work, &["rev-list", "--count", "HEAD"]),
         "2",
         "and it did not add a commit"
+    );
+}
+
+/// **The commit entry stages nothing.** The observable fact is *which files
+/// land*: a tracked file the developer deliberately left out of the index must
+/// stay out of the commit, and stay dirty afterwards. The absence of a stage
+/// call is pinned at the services seam, against the recording executor —
+/// from here it would only be visible through this same git answer.
+#[test]
+fn committing_takes_the_index_and_leaves_an_unstaged_file_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = repo_with_origin(tmp.path(), "work");
+    std::fs::write(work.join("staged.txt"), "staged\n").unwrap();
+    std::fs::write(work.join("kept.txt"), "kept out\n").unwrap();
+    git_out(&work, &["add", "staged.txt", "kept.txt"]);
+    git_out(&work, &["commit", "-q", "-m", "track both"]);
+    std::fs::write(work.join("staged.txt"), "staged and edited\n").unwrap();
+    std::fs::write(work.join("kept.txt"), "edited but unstaged\n").unwrap();
+    git_out(&work, &["add", "staged.txt"]);
+    let mut state = state_for(&work);
+    let root = state.selected_root.clone().unwrap();
+
+    let op = commit_writes::commit(&root, "index only", false);
+    state.dispatch(op);
+    state.drain_events();
+
+    assert_eq!(
+        git_out(&work, &["show", "--name-only", "--pretty=", "HEAD"]),
+        "staged.txt",
+        "the commit is exactly what the index held — the unstaged edit must \
+         not be swept in"
+    );
+    assert!(
+        git_out(&work, &["status", "--porcelain"]).contains("kept.txt"),
+        "and the file left out of the index is still uncommitted and dirty"
     );
 }
 

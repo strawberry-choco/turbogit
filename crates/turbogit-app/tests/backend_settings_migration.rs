@@ -137,3 +137,44 @@ fn a_saved_cli_spelling_is_not_swept_into_the_survivor() {
     let loaded = persistence::load_settings(project).unwrap();
     assert_eq!(loaded.backend, GitBackend::Cli);
 }
+
+/// **A `state.ron` written before `commit_all_when_nothing_staged` existed
+/// still loads.** Removing a persisted field is a serialization migration, not
+/// just a UI deletion: every project on disk has the key, and if the loader
+/// rejected unknown keys the user would come back to a reset settings block —
+/// which the next settings apply would then save back over their own file.
+///
+/// The sentinel is the point: it proves the file *parsed* rather than a parse
+/// failure falling back to defaults, which is the failure this test exists for.
+#[test]
+fn a_saved_commit_all_setting_still_loads_and_the_rest_of_the_file_with_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path();
+    let settings = VcsSettings {
+        commit_template: "/sentinel/commit-template".to_string(),
+        ..VcsSettings::default()
+    };
+    persistence::save_settings(project, &settings).expect("settings saved");
+
+    // Re-insert the retired key exactly as an older build wrote it.
+    let path = persistence::state_path(project);
+    let text = fs::read_to_string(&path).expect("state.ron readable");
+    let patched = text.replace(
+        "restore_workspace: false",
+        "restore_workspace: false,\n    commit_all_when_nothing_staged: true",
+    );
+    assert!(
+        patched != text,
+        "the serialized settings name `restore_workspace` on their own line: {text}"
+    );
+    fs::write(&path, patched).expect("state.ron rewritten");
+
+    let loaded = persistence::load_settings(project).expect(
+        "a settings file naming a retired field must still load — the loader \
+         ignores fields it no longer has",
+    );
+    assert_eq!(
+        loaded.commit_template, "/sentinel/commit-template",
+        "the file parsed: this is the settings on disk, not a default"
+    );
+}
