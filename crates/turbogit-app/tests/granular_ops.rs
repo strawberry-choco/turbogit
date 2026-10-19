@@ -17,7 +17,7 @@ use test_support::{RecordedCall, RecordingExecutor};
 
 use turbogit_app::granular::{self, HunkTarget};
 use turbogit_app::keyed_read::{DiffTarget, Read};
-use turbogit_app::state::{AppState, CharSelection, DiffComparison, Granularity};
+use turbogit_app::state::{AppState, CharSelection, DiffComparison};
 use turbogit_domain::model::VcsSettings;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::{ApplyDirection, GitExecutor};
@@ -281,43 +281,6 @@ fn granular_dispatch_stages_exactly_the_selected_character_range() {
 }
 
 #[test]
-fn switching_granularity_clears_accumulated_selections() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "granularity");
-    seed_two_hunk_change(&repo);
-
-    let (mut state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    // Defaults preserve the pre-existing protocol: Line granularity, with
-    // sub-hunk line toggling and a char drag both live.
-    assert_eq!(state.ui.diff_granularity, Granularity::Line);
-    state.ui.line_selections.insert(
-        PathBuf::from("words.txt"),
-        [(0usize, BTreeSet::from([1usize]))].into_iter().collect(),
-    );
-    state.ui.char_selection = Some(CharSelection {
-        path: PathBuf::from("words.txt"),
-        hunk: 0,
-        ord: 1,
-        start: 2,
-        end: 5,
-    });
-
-    granular::set_granularity(&mut state, Granularity::Hunk);
-
-    assert_eq!(state.ui.diff_granularity, Granularity::Hunk);
-    assert!(
-        state.ui.line_selections.is_empty(),
-        "line selections refer to Line-mode semantics and must not survive \
-         the switch"
-    );
-    assert!(
-        state.ui.char_selection.is_none(),
-        "a char selection must not survive the granularity switch"
-    );
-}
-
-#[test]
 fn escape_clears_the_active_char_selection() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "esc-clear");
@@ -391,38 +354,7 @@ fn enter_stages_the_active_char_selection_and_consumes_it() {
 }
 
 #[test]
-fn file_granularity_dispatch_stages_every_hunk_of_the_diff() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "file-granularity");
-    seed_two_hunk_change(&repo);
-
-    let (mut state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    seed_preview_cache(&mut state, &repo.path, "words.txt", false);
-    state.ui.diff_granularity = Granularity::File;
-
-    granular::dispatch(
-        &mut state,
-        PathBuf::from("words.txt"),
-        HunkTarget::File,
-        true,
-    );
-    state.drain_events();
-
-    let staged = git(&repo.path, &["diff", "--cached", "--", "words.txt"]);
-    assert!(
-        staged.contains("+BRAVO") && staged.contains("+QUEBEC"),
-        "File granularity must stage the whole file's diff:\n{staged}"
-    );
-    assert_eq!(
-        porcelain_code(&repo.path, "words.txt"),
-        "M ",
-        "the file leaves no unstaged remainder behind"
-    );
-}
-
-#[test]
-fn selection_readout_reports_lines_chars_and_granularity() {
+fn selection_readout_reports_lines_and_chars() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "readout");
     seed_two_hunk_change(&repo);
@@ -434,7 +366,7 @@ fn selection_readout_reports_lines_chars_and_granularity() {
     // Nothing selected → no readout.
     assert!(granular::selection_readout(&state).is_none());
 
-    // Two accumulated line ords → count + granularity, no char hints.
+    // Two accumulated line ords → count, no char hints.
     state.ui.line_selections.insert(
         PathBuf::from("words.txt"),
         [(0usize, BTreeSet::from([1usize, 2usize]))]
@@ -442,10 +374,7 @@ fn selection_readout_reports_lines_chars_and_granularity() {
             .collect(),
     );
     let readout = granular::selection_readout(&state).unwrap();
-    assert!(
-        readout.starts_with("2 line selections · granularity: line"),
-        "line-only readout must report count and granularity, got: {readout}"
-    );
+    assert_eq!(readout, "2 line selections");
     assert!(
         !readout.contains("chars"),
         "no chars without a char selection"
@@ -463,7 +392,7 @@ fn selection_readout_reports_lines_chars_and_granularity() {
     let readout = granular::selection_readout(&state).unwrap();
     assert_eq!(
         readout,
-        "3 line selections · 16 chars · granularity: line · ↵ stage · Esc clear"
+        "3 line selections · 16 chars · ↵ stage · Esc clear"
     );
 
     // Singular wording for exactly one selected line.

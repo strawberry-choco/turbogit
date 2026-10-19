@@ -22,10 +22,9 @@
 //! describe) is asserted **by geometry**, never by which helper painted what —
 //! a test that fails because a helper was renamed says nothing about the design:
 //!
-//! - the comparison axis and the granularity axis each read as ONE grouped
-//!   control: contiguous segment rects inside one outer boundary each, with the
-//!   two boundaries of different kinds so the groups read as different groups
-//! - a hidden granularity axis leaves no empty group behind
+//! - the comparison axis reads as ONE grouped control: contiguous segment rects
+//!   inside one outer boundary
+//! - a hidden comparison axis leaves no empty group behind
 //! - the add/remove counts and the whitespace toggle paint on the file row, and
 //!   the toolbar paints neither
 //! - the file row's band height and its label origin are the row shell's
@@ -46,7 +45,7 @@ use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
 use test_support::git_seed::git;
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_text,
-    shell_harness_over, stroked_rects, widget_harness,
+    shell_harness_over, widget_harness,
 };
 use turbogit_app::events::AppEvent;
 use turbogit_app::keyed_read::{DiffTarget, Keyed};
@@ -147,7 +146,7 @@ fn repo_two_hunks() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// Two commits, so a commit-to-commit target (`HEAD~1` ↔ `HEAD`) has real
-/// content to render. Working-tree-only controls (the granularity axis) have
+/// content to render. Working-tree-only controls (the comparison axis) have
 /// nothing to say about such a comparison.
 fn repo_two_commits() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
@@ -853,65 +852,42 @@ fn assert_contiguous(what: &str, segments: &[Rect]) -> Rect {
     )
 }
 
-/// One axis, read straight off the painted output: where its segments are, and
-/// which kind of boundary is drawn around them.
-#[derive(Debug)]
-struct Axis {
-    segments: Rect,
-    /// The frame: `true` when the group is bounded by a laid-down fill, `false`
-    /// when it is bounded by a drawn hairline. Two groups with the same answer
-    /// here are two groups that do not read as different groups.
-    bounded_by_fill: bool,
-    frame: Rect,
-}
-
 /// Measure one axis of the toolbar: its three segments' rects (through their
-/// accessibility labels, which are the labels the controls already carried) and
-/// the ONE boundary painted around them.
+/// accessibility labels, which are the labels the controls already carried).
 ///
-/// The frame is the painted shape at the segments' horizontal extent that is
+/// Returns the rect the segments occupy, having asserted both claims that make
+/// them one control rather than a row of siblings: the segments are edge to
+/// edge, and exactly one raised band is laid behind them.
+///
+/// The band is the painted shape at the segments' horizontal extent that is
 /// TALLER than the segments — a group's boundary is never coincident with a
 /// segment's own fill, so exactly one shape can answer.
-fn read_axis(harness: &Harness<'_, AppState>, what: &str, labels: [&str; 3]) -> Axis {
+fn read_axis(harness: &Harness<'_, AppState>, what: &str, labels: [&str; 3]) -> Rect {
     let segments: Vec<Rect> = labels
         .iter()
         .map(|l| harness.get_by_label(l).rect())
         .collect();
     let union = assert_contiguous(what, &segments);
-    let at_extent = |r: Rect| {
-        (r.left() - union.left()).abs() <= EPS && (r.right() - union.right()).abs() <= EPS
-    };
 
-    let fills: Vec<Rect> = filled_rects(harness)
+    // One outer boundary: exactly one raised band at the segments' extent.
+    let frames: Vec<Rect> = filled_rects(harness)
         .into_iter()
         .filter(|(_, c)| *c == Palette::SURFACE_2)
         .map(|(r, _)| r)
-        .filter(|r| at_extent(*r) && r.height() > union.height() + EPS)
+        .filter(|r| {
+            (r.left() - union.left()).abs() <= EPS
+                && (r.right() - union.right()).abs() <= EPS
+                && r.height() > union.height() + EPS
+        })
         .collect();
-    let strokes: Vec<Rect> = stroked_rects(harness)
-        .into_iter()
-        .filter(|(_, c, _)| *c == Palette::LINE)
-        .map(|(r, _, _)| r)
-        .filter(|r| at_extent(*r) && r.height() > union.height() + EPS)
-        .collect();
-
-    // One outer boundary: exactly one shape, in exactly one of the two kinds.
-    match (fills.len(), strokes.len()) {
-        (1, 0) => Axis {
-            segments: union,
-            bounded_by_fill: true,
-            frame: fills[0],
-        },
-        (0, 1) => Axis {
-            segments: union,
-            bounded_by_fill: false,
-            frame: strokes[0],
-        },
-        (n_f, n_s) => panic!(
+    if frames.len() != 1 {
+        panic!(
             "{what}: an axis must be bounded by exactly ONE outer boundary; \
-             painted {n_f} raised fills and {n_s} hairlines around {union:?}"
-        ),
+             painted {} raised bands around {union:?}",
+            frames.len()
+        );
     }
+    union
 }
 
 /// The toolbar's open span — between the view-mode control and the hunk
@@ -934,16 +910,16 @@ fn axis_span(harness: &Harness<'_, AppState>) -> Rect {
     )
 }
 
-/// The axis **group frames** in the toolbar's open span, as `(rect, is_fill)`.
+/// The axis **group frames** in the toolbar's open span.
 ///
 /// Two filters, and both matter. The horizontal one is strict: the view-mode
 /// control's own track ends exactly where the span begins, and an inclusive test
-/// would count that track as a third group. The height one is what makes this
+/// would count that track as a second group. The height one is what makes this
 /// "how many GROUPS are here" rather than "how many shapes are here": a group's
 /// frame stands taller than the toolbar row, while the segments it groups are
 /// row-height. An empty frame is a frame with nothing in it, so this count
 /// answers the question the missing-axis case asks.
-fn axis_groups(harness: &Harness<'_, AppState>) -> Vec<(Rect, bool)> {
+fn axis_groups(harness: &Harness<'_, AppState>) -> Vec<Rect> {
     let span = axis_span(harness);
     let row_h = filled_rects(harness)
         .into_iter()
@@ -952,25 +928,16 @@ fn axis_groups(harness: &Harness<'_, AppState>) -> Vec<(Rect, bool)> {
         })
         .map(|(r, _)| r.height())
         .expect("the view-mode control's track");
-    let inside = |r: Rect| {
-        r.left() > span.left() + EPS && r.right() < span.right() - EPS && r.height() > row_h + EPS
-    };
-    let mut out: Vec<(Rect, bool)> = filled_rects(harness)
+    filled_rects(harness)
         .into_iter()
         .filter(|(_, c)| *c == Palette::SURFACE_2)
         .map(|(r, _)| r)
-        .filter(|r| inside(*r))
-        .map(|r| (r, true))
-        .collect();
-    out.extend(
-        stroked_rects(harness)
-            .into_iter()
-            .filter(|(_, c, _)| *c == Palette::LINE)
-            .map(|(r, _, _)| r)
-            .filter(|r| inside(*r))
-            .map(|r| (r, false)),
-    );
-    out
+        .filter(|r| {
+            r.left() > span.left() + EPS
+                && r.right() < span.right() - EPS
+                && r.height() > row_h + EPS
+        })
+        .collect()
 }
 
 /// Harness rendering ONLY the diff pane, over a commit-to-commit target — the
@@ -999,82 +966,62 @@ fn commit_diff_harness(repo: &Path) -> Harness<'static, AppState> {
     harness
 }
 
-/// Contract: the two axes of scope each read as ONE grouped control, and the
-/// two groups are told apart by their boundary rather than by their labels.
+/// Contract: the comparison axis reads as ONE grouped control, and the hunk
+/// navigator follows it rather than splitting the toolbar.
 ///
-/// Proven by geometry, in the four parts the claim actually has:
-/// 1. each axis's three segments are edge to edge (no gaps — the "loose
-///    buttons" reading is gone),
-/// 2. each axis has exactly one outer boundary,
-/// 3. the two boundaries are of different kinds, so the two groups do not
-///    read as two copies of the same control,
-/// 4. the order is mode → comparison → granularity → navigator, so the
-///    navigator does not sit between the two axes.
+/// Proven by geometry, in the three parts the claim actually has:
+/// 1. the axis's three segments are edge to edge (no gaps — the "loose buttons"
+///    reading is gone),
+/// 2. the axis has exactly one outer boundary,
+/// 3. the order is mode → comparison → navigator.
 #[test]
-fn the_two_scope_axes_each_read_as_one_grouped_control() {
+fn the_comparison_axis_reads_as_one_grouped_control() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo.join("file.txt"));
 
+    // read_axis asserts 1 and 2 — contiguity, then the single boundary.
     let comparison = read_axis(&h, "the comparison axis", ["Repo", "Staged", "Local"]);
-    let granularity = read_axis(&h, "the granularity axis", ["File", "Hunk", "Line"]);
 
-    // 3: two neighbours are different kinds of group. Same silhouette, different
-    // boundary — a filled pad beside a hairline outline.
-    assert_ne!(
-        comparison.bounded_by_fill, granularity.bounded_by_fill,
-        "the two axes of scope must not be bounded the same way, or they read as \
-         two copies of one control: {comparison:?} vs {granularity:?}"
-    );
-    assert!(
-        (comparison.frame.height() - granularity.frame.height()).abs() <= EPS,
-        "the two groups are the same size so the difference between them is the \
-         boundary, not the size: {comparison:?} vs {granularity:?}"
-    );
-    assert!(
-        comparison.segments.right() <= granularity.segments.left() + EPS,
-        "the two axes must not overlap: {comparison:?} vs {granularity:?}"
-    );
-
-    // 4: the navigator follows the pair rather than splitting it.
+    // 3: the navigator follows the axis rather than splitting it.
     let nav = h.get_by_label("Previous hunk").rect();
     assert!(
-        granularity.segments.right() <= nav.left() + EPS,
-        "the hunk navigator must come after both axes, not between them: \
-         {granularity:?} then {nav:?}"
+        comparison.right() <= nav.left() + EPS,
+        "the hunk navigator must come after the comparison axis: \
+         {comparison:?} then {nav:?}"
     );
 }
 
-/// Contract: the granularity axis is a working-tree-only axis, and when it is
-/// hidden it leaves nothing behind. A grouping that assumed both axes always
-/// exist would paint an empty frame here, and this is the assertion that says
+/// Contract: the comparison axis is a working-tree-only axis, and when it is
+/// hidden it leaves nothing behind. A grouping that assumed the axis always
+/// exists would paint an empty frame here, and this is the assertion that says
 /// it does not.
 #[test]
-fn a_hidden_granularity_axis_leaves_no_empty_group_behind() {
-    // --- the working tree: BOTH axes are present, as two groups -----------
+fn a_hidden_comparison_axis_leaves_no_empty_group_behind() {
+    // --- the working tree: the axis is present, as one group ---------------
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo.join("file.txt"));
     assert!(
-        h.query_by_label("Line").is_some() && h.query_by_label("Repo").is_some(),
-        "a working-tree comparison shows both axes"
+        h.query_by_label("Repo").is_some(),
+        "a working-tree comparison shows the comparison axis"
     );
     let working_tree_groups = axis_groups(&h);
     assert_eq!(
         working_tree_groups.len(),
-        2,
-        "the working-tree toolbar frames exactly two groups: the comparison pad \
-         (a fill) and the granularity outline (a hairline) — got {working_tree_groups:?}"
+        1,
+        "the working-tree toolbar frames exactly one group: the comparison pad — \
+         got {working_tree_groups:?}"
     );
 
-    // --- a commit pair: NEITHER axis applies, so nothing is framed ---------
+    // --- a commit pair: the axis does not apply, so nothing is framed ------
     let (_tmp, commits) = repo_two_commits();
     let mut c = commit_diff_harness(&commits);
     settle(&mut c);
     assert_painted(&c, "SECOND");
-    for label in ["Repo", "Staged", "Local", "File", "Hunk", "Line"] {
+    for label in ["Repo", "Staged", "Local"] {
         assert!(
             c.query_by_label(label).is_none(),
             "a commit-to-commit comparison has no revision axis and no index to \
@@ -1084,7 +1031,7 @@ fn a_hidden_granularity_axis_leaves_no_empty_group_behind() {
     assert_eq!(
         axis_groups(&c),
         Vec::new(),
-        "the hidden axes must leave no empty group behind: no frame, no outline, \
+        "the hidden axis must leave no empty group behind: no frame, no outline, \
          nothing but the view-mode control and the hunk navigator"
     );
 }

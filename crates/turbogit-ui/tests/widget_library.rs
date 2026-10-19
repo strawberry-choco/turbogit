@@ -2836,7 +2836,7 @@ fn a_tool_pane_paints_at_most_one_brand_fill_and_it_is_its_primary_action() {
 /// A `Stroke` used as a **line** — an `hline`, a dash inside a checkbox, an icon
 /// glyph, a dot ring — is not an outline and is deliberately out of scope here:
 /// those are marks and glyphs, the same category as the rail.
-const STROKE_SITES: [(&str, usize, &str); 8] = [
+const STROKE_SITES: [(&str, usize, &str); 7] = [
     // floating surface
     (
         "widgets/containers.rs",
@@ -2867,12 +2867,6 @@ const STROKE_SITES: [(&str, usize, &str); 8] = [
          ring, and the commit/rollback divider rule",
     ),
     ("sidebar.rs", 1, "the tri-state checkbox's own border"),
-    (
-        "diff/actions.rs",
-        1,
-        "the granularity axis's outer boundary, which separates one grouped \
-         control from the one beside it",
-    ),
     (
         "kit/conflict_pane.rs",
         1,

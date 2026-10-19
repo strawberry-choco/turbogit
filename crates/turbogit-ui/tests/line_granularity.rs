@@ -3,9 +3,8 @@
 //! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` over a
 //! temporary repository with a [`RecordingExecutor`] injected at the
 //! executor boundary (the `partial_dispatch.rs` pattern). Covers the issue's
-//! harness layer: the File|Hunk|Line granularity toggle, Line-mode-only line
-//! toggling, drag-selected character ranges, Enter/Esc, the selection
-//! readout, and the status-bar granularity readout.
+//! harness layer: line toggling on changed rows, drag-selected character
+//! ranges, Enter/Esc, and the selection readout.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -137,7 +136,7 @@ fn drag_calculated_value(h: &mut Harness<'_, AppState>) {
 // ------------------------------------------------------------------ tests --
 
 #[test]
-fn granularity_toggle_switches_selection_semantics() {
+fn changed_rows_are_line_toggles() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "toggle");
     seed_single_line_edit(&repo);
@@ -147,11 +146,8 @@ fn granularity_toggle_switches_selection_semantics() {
     let mut h = harness(state);
     open_preview(&mut h);
 
-    // Line is the default: clicking a changed row toggles it.
-    assert_eq!(
-        h.state().ui.diff_granularity,
-        turbogit_app::state::Granularity::Line
-    );
+    // Clicking a changed row toggles it: the diff surface stages at line
+    // granularity, and both rows are click targets.
     h.get_by_label(DEL_ROW).click();
     h.run();
     assert!(
@@ -159,33 +155,7 @@ fn granularity_toggle_switches_selection_semantics() {
             .ui
             .line_selections
             .contains_key(Path::new("code.rs")),
-        "in Line mode a row click toggles the line selection"
-    );
-
-    // Switching to Hunk granularity clears the line selection…
-    h.get_by_label("Hunk").click();
-    h.run();
-    assert_eq!(
-        h.state().ui.diff_granularity,
-        turbogit_app::state::Granularity::Hunk
-    );
-    assert!(
-        h.state().ui.line_selections.is_empty(),
-        "the granularity switch must clear accumulated line selections"
-    );
-    // …and changed rows stop being interactive at all: no click target,
-    // no toggle (the whole hunk is the unit now).
-    assert!(
-        h.query_by_label(ADD_ROW).is_none(),
-        "in Hunk mode changed rows must not be click targets"
-    );
-
-    // Back to Line: rows return and toggling works again.
-    h.get_by_label("Line").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || h.query_by_label(ADD_ROW).is_some()),
-        "switching back to Line restores the row click targets"
+        "a row click toggles the line selection"
     );
     h.get_by_label(ADD_ROW).click();
     h.run();
@@ -193,13 +163,14 @@ fn granularity_toggle_switches_selection_semantics() {
         h.state()
             .ui
             .line_selections
-            .contains_key(Path::new("code.rs")),
-        "switching back to Line restores the line-selection protocol"
+            .get(Path::new("code.rs"))
+            .is_some_and(|hunks| hunks.values().any(|ords| ords.contains(&1))),
+        "the addition row toggles too"
     );
 }
 
 #[test]
-fn selection_readout_paints_lines_chars_and_granularity() {
+fn selection_readout_paints_lines_and_chars() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "readout");
     seed_single_line_edit(&repo);
@@ -214,8 +185,8 @@ fn selection_readout_paints_lines_chars_and_granularity() {
     h.run();
     let text = painted_text(&h).join("\n");
     assert!(
-        text.contains("1 line selection") && text.contains("granularity: line"),
-        "readout must report the selected lines and granularity, got:\n{text}"
+        text.contains("1 line selection"),
+        "readout must report the selected lines, got:\n{text}"
     );
 
     // An armed char range adds the char count and the Enter/Esc hints.
@@ -330,7 +301,7 @@ fn escape_clears_the_armed_character_range() {
 }
 
 #[test]
-fn status_bar_shows_granularity_and_repos_in_scope() {
+fn status_bar_shows_repos_in_scope() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "status-bar");
     seed_single_line_edit(&repo);
@@ -342,10 +313,6 @@ fn status_bar_shows_granularity_and_repos_in_scope() {
     open_preview(&mut h);
 
     let text = painted_text(&h).join("\n");
-    assert!(
-        text.contains("granularity: line"),
-        "the status bar must show the active granularity, got:\n{text}"
-    );
     assert!(
         text.contains("1 repo in scope"),
         "the status bar must show the repos in scope, got:\n{text}"

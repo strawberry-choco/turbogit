@@ -7,38 +7,17 @@ use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
-    Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, RichText, Sense, Stroke,
-    StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, RichText, Sense, Ui, UiBuilder,
+    Vec2, WidgetInfo, WidgetType,
 };
 use std::collections::BTreeSet;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::DiffTarget;
 use turbogit_app::root_caches::StatsView;
-use turbogit_app::state::{AppState, DiffComparison, Granularity};
+use turbogit_app::state::{AppState, DiffComparison};
 use turbogit_domain::model::ChangeStatus;
 
 // --- partial staging (spec R2) ----------------------------------------------
-
-/// Staging granularity toggle (issue 19, screen 06): File | Hunk | Line —
-/// what one selection actuation on the diff surface addresses. Switching
-/// clears accumulated selections ([`granular::set_granularity`] lifetime
-/// rule), so a same-value re-click is filtered out. The push_id scope keeps
-/// the segmented control's inner widget ids distinct from the mode toggle's
-/// (same `("segment", i)` salts otherwise collide).
-pub(super) fn granularity_toggle(ui: &mut Ui, state: &mut AppState) {
-    const MODES: [Granularity; 3] = [Granularity::File, Granularity::Hunk, Granularity::Line];
-    ui.push_id("granularity", |ui| {
-        let selected = MODES
-            .iter()
-            .position(|m| *m == state.ui.diff_granularity)
-            .unwrap_or(2);
-        if let Some(idx) = widgets::segmented_control(ui, &["File", "Hunk", "Line"], selected)
-            && MODES[idx] != state.ui.diff_granularity
-        {
-            granular::set_granularity(state, MODES[idx]);
-        }
-    });
-}
 
 /// Hunk count of the diff the Commit window's preview would render right
 /// now — 0 while nothing is selected, still loading, errored, or the text
@@ -216,31 +195,10 @@ fn dispatch_hunk_action(
     };
     granular::dispatch(state, path, target, stage);
 }
-// --- the two axes of scope ----------------------------------------------------
+// --- the scope axis -----------------------------------------------------------
 
-/// One axis of scope, and the frame that makes its segments read as **one**
-/// control rather than a run of loose buttons (spec story 22).
-///
-/// The two axes sit side by side and both answer "which?", so the frame — not
-/// the labels — is what tells them apart. They take the two different kinds of
-/// frame the palette already has, and a test can see the difference because one
-/// boundary is laid down as a fill and the other is drawn as a stroke:
-///
-/// - [`Axis::Comparison`] — what is being compared (`Repo | Staged | Local`).
-///   A **filled pad**: the three chips sit *inside* a raised band, so the group
-///   is something the chips are contained by.
-/// - [`Axis::Granularity`] — what one action addresses
-///   (`File | Hunk | Line`). An **outlined track**: the boundary is drawn around
-///   the segments rather than laid down under them, which is a visibly
-///   different shape next to the comparison pad.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Axis {
-    Comparison,
-    Granularity,
-}
-
-/// Vertical breathing room between an axis's segments and its frame. Without it
-/// the frame's rect is exactly its segments' rect, and a frame that is
+/// Vertical breathing room between a group's segments and its frame. Without
+/// it the frame's rect is exactly its segments' rect, and a frame that is
 /// indistinguishable from what it frames is not a frame — which is also what
 /// would let the track's own fill pose as a second boundary.
 ///
@@ -248,23 +206,23 @@ pub(super) enum Axis {
 /// own edge — rather than a new number.
 const AXIS_PAD_Y: f32 = crate::theme::BUTTON_PADDING.y / 2.0;
 
-/// Frame one axis of scope's segments as a single grouped control, and return
-/// the group's rect.
+/// Frame the comparison chips as a single grouped control: the three sit
+/// *inside* a raised band, so the group is something the chips are contained
+/// by rather than a run of loose buttons (spec story 22).
 ///
 /// Two things make it a group rather than a row of siblings, and both are
-/// geometric, so a test can read them off painted output without knowing which
-/// helper drew what:
+/// geometric, so a test can read them off painted output:
 ///
-/// 1. **Contiguity** — the segments are laid out edge to edge, with the axis's
-///    own item spacing zeroed. A gap between two segments of one axis is
-///    exactly the "loose buttons" reading this exists to remove. (The spacing is
-///    set on the scope's child `Ui`, whose style is clone-on-write, so it cannot
+/// 1. **Contiguity** — the segments are laid out edge to edge, with the
+///    group's own item spacing zeroed. A gap between two segments is exactly
+///    the "loose buttons" reading this exists to remove. (The spacing is set
+///    on the scope's child `Ui`, whose style is clone-on-write, so it cannot
 ///    leak to the toolbar around it.)
-/// 2. **One outer boundary** — the axis paints exactly one frame rect, in the
-///    shape [`Axis`] asks for, behind its segments and derived from the same
-///    rect they were laid out in. The frame cannot drift away from the segments
-///    it groups, because it *is* their rect.
-pub(super) fn axis_group(ui: &mut Ui, axis: Axis, body: impl FnOnce(&mut Ui)) -> Rect {
+/// 2. **One outer boundary** — exactly one frame rect, laid behind the
+///    segments and derived from the same rect they were laid out in. The
+///    frame cannot drift away from the segments it groups, because it *is*
+///    their rect.
+pub(super) fn comparison_group(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     // Reserved before the body runs so the frame lands behind the segments
     // rather than over them.
     let slot = ui.painter().add(egui::Shape::Noop);
@@ -281,18 +239,14 @@ pub(super) fn axis_group(ui: &mut Ui, axis: Axis, body: impl FnOnce(&mut Ui)) ->
     // coincident with a segment's own fill (which is what would make "one outer
     // boundary" ambiguous to read back off the output).
     let frame = segments.expand2(Vec2::new(0.0, AXIS_PAD_Y));
-    let radius = CornerRadius::same(crate::theme::CONTROL_RADIUS);
-    let shape = match axis {
-        Axis::Comparison => egui::Shape::rect_filled(frame, radius, Palette::SURFACE_2),
-        Axis::Granularity => egui::Shape::rect_stroke(
+    ui.painter().set(
+        slot,
+        egui::Shape::rect_filled(
             frame,
-            radius,
-            Stroke::new(1.0, Palette::LINE),
-            StrokeKind::Inside,
+            CornerRadius::same(crate::theme::CONTROL_RADIUS),
+            Palette::SURFACE_2,
         ),
-    };
-    ui.painter().set(slot, shape);
-    segments
+    );
 }
 
 // --- toolbar widgets ---------------------------------------------------------

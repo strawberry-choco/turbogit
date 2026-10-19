@@ -259,7 +259,7 @@ fn partially_staged_hunk_gets_a_part_chip() {
     h.get_by_label("code.rs").click();
     open_preview(&mut h);
 
-    // Select one changed line (Line granularity is the default) and stage it.
+    // Select one changed line (the diff stages at line granularity) and stage it.
     h.get_by_label("    let alpha = 1;").click();
     h.run();
     eprintln!("selections={:?}", h.state().ui.line_selections);

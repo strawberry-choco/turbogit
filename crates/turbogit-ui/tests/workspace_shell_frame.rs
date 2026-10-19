@@ -15,7 +15,7 @@
 //! - Status bar (24px): the version / git / indexed-repo line that came
 //!   here with the topbar's deletion (so it paints on Welcome too), then
 //!   aggregated workspace state (diverged · conflicts · unpulled ·
-//!   archived · dirty · total) plus granularity and repo scope. The
+//!   archived · dirty · total) plus repo scope. The
 //!   far-right metadata column was removed (redesign 03); its
 //!   Path/Branch/Upstream info lives in the sidebar tree, the Branches
 //!   popup, and the status-bar aggregates.
@@ -589,14 +589,14 @@ fn status_bar_shows_diverged_count_when_root_is_ahead_of_upstream() {
     assert_painted(&h, "1 diverged");
 }
 
-// -- Cycle E -- unpulled + dirty counts, granularity, repo scope (issue 02)
+// -- Cycle E -- unpulled + dirty counts, repo scope (issue 02)
 
 #[test]
-fn status_bar_paints_unpulled_dirty_granularity_and_scope_from_real_data() {
+fn status_bar_paints_unpulled_dirty_and_scope_from_real_data() {
     // Two roots: `dirty` carries an untracked file; `behind` has one
     // remote-only commit fetched in — so the status bar aggregates
     // `1 unpulled` and `1 dirty` from the real sync/status data, plus the
-    // granularity setting and the repo-scope count (issue 02 checkbox 1).
+    // repo-scope count (issue 02 checkbox 1).
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -642,9 +642,8 @@ fn status_bar_paints_unpulled_dirty_granularity_and_scope_from_real_data() {
     // non-zero.
     assert_painted(&h, "1 unpulled");
     assert_painted(&h, "1 dirty");
-    // Granularity readout (the app default: line) and the repo-scope count
-    // (no explicit multi-repo selection → the focused single root).
-    assert_painted(&h, "granularity: line");
+    // The repo-scope count (no explicit multi-repo selection → the focused
+    // single root).
     assert_painted(&h, "1 repo in scope");
     assert_painted(&h, "2 total");
 }
@@ -659,7 +658,7 @@ fn status_bar_paints_unpulled_dirty_granularity_and_scope_from_real_data() {
 
 /// A two-root workspace with a dirty root and a behind root, so every status
 /// bar line paints: the version line, the `·` separators, the two aggregated
-/// counters, the granularity and scope readouts, and the total.
+/// counters, the scope readout, and the total.
 fn busy_status_bar(tag: &str) -> (Harness<'static, AppState>, PathBuf) {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -748,7 +747,7 @@ fn the_status_bar_sits_one_step_up_the_ink_ramp_on_its_raised_band() {
         "the fixture must exercise the whole bar, not one line: {inks:#?}"
     );
     for (text, ink) in &inks {
-        // The version line, the separators, the granularity/scope readouts and
+        // The version line, the separators, the scope readout and
         // the total are all quiet text and all take the step-up. The two
         // aggregated counters are state-coloured and are checked separately,
         // below, against the one state map.

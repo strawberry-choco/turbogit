@@ -24,7 +24,7 @@ use super::icons::{self, Icon};
 use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::root_caches::{Affected, LogRead};
-use turbogit_app::state::{AppState, Dialog, Granularity, Tab};
+use turbogit_app::state::{AppState, Dialog, Tab};
 // --- Spec metrics (§4.2 fixed heights) --------------------------------------
 /// Tab strip height (`.tg-tabs`). The strip is the content area's topmost
 /// chrome since the repo header was deleted, so this band now sits flush
@@ -819,10 +819,10 @@ fn version_line(ui: &mut Ui, state: &AppState) {
 /// line added later inherits the step-up instead of re-deciding it.
 const STATUS_BAR_INK: Color32 = Palette::INK_2;
 
-/// Staging-granularity readout (issue 19, screen 06): the armed line
-/// selection, the active granularity, and how many repos granular ops
-/// reach. Only over an open project — the welcome page has nothing in
-/// scope. An empty multi-repo selection means the focused single root.
+/// Granular-staging readout (issue 19, screen 06): the armed line selection and
+/// how many repos granular ops reach. Only over an open project — the welcome
+/// page has nothing in scope. An empty multi-repo selection means the focused
+/// single root.
 fn granular_status_chips(ui: &mut Ui, state: &AppState) {
     if state.show_welcome() {
         return;
@@ -842,12 +842,6 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
             "1 line-selection active".to_owned(),
         );
     }
-    let granularity = match state.ui.diff_granularity {
-        Granularity::File => "file",
-        Granularity::Hunk => "hunk",
-        Granularity::Line => "line",
-    };
-    chip(ui, STATUS_BAR_INK, format!("granularity: {granularity}"));
     let scope = if state.ui.repo_selection.is_empty() {
         1
     } else {

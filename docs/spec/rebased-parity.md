@@ -753,7 +753,7 @@ intentionally not pursued.
 | Staging area (staged/unstaged buckets) | `UNSTAGED` / `STAGED` / `Merge conflicts` / `Unversioned` | **has** |
 | Changelists + `Staging Area`/`Changelists` mode switch | — | **absent** — deliberate; see §8 |
 | Per-file checkbox + status + colour | `paint_checkbox`, status letter, partial dot | **has** |
-| Chunk-level and line-level commit inclusion | `Granularity::{File,Hunk,Line}` default Line + char-range | **has** — different mechanism, same reach |
+| Chunk-level and line-level commit inclusion | hunk gutter stage buttons + per-line toggles + char-range drag; whole-file via the Commit window's file checkbox | **has** — different mechanism, same reach |
 | `Compare HEAD, Staged and Local Versions` (edit the staged version) | — | **missing** — the one staging route with no equivalent |
 | Amend (`⌥M` toggle) + choose the commit | `ui.amend` checkbox, `AMEND_LABEL` | **partial** — the commit chooser not evidenced |
 | `Commit ▾` split → Commit and Push / Commit and Rebase | `commit_split_menu` → "Commit and Push…" | **has** |

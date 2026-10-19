@@ -583,8 +583,8 @@ dispatch, or editor state into a generic branch-kit primitive is outside the
 component boundary.
 
 `ui::diff` is a specialized diff feature component whose model, panes, actions and
-rendering own diff-specific meaning: added/removed lines, file/hunk/line
-granularity, side-by-side/unified view, and diff selection. Its internal modules
+rendering own diff-specific meaning: added/removed lines, sub-hunk line
+selection, side-by-side/unified view, and diff selection. Its internal modules
 are not a second general widget API. Shared chips, rows, buttons and icons may be
 used where the semantic roles match; diff rows and diff actions remain diff roles.
 
@@ -610,7 +610,7 @@ deprecation, or a breaking import change.
 | `card`, `card_header` | **supported general** | Used by the Commit tool window's local, staged, and changes regions. These are general containment roles, not aliases for branch detail panels or feature rows. |
 | `note` | **supported general** | Used by rebase previews/results and multiple dialog summaries and warnings. Optional severity emphasis does not turn it into `alert_box`. |
 | `alert_box` | **specialized** | The contained warning surface it defines. Its commit-details guardrail consumer went with ADR-0024 along with the buttons it explained, and it has no production caller today; a future surface that needs a warning with a visible boundary is what it is for. It is not the general `note`, inline-error, banner, or toast role. |
-| `segmented_control` | **supported general** | Used for settings choices, diff side-by-side/unified mode, and file/hunk/line granularity. Each caller still owns its option list and state transition. |
+| `segmented_control` | **supported general** | Used for settings choices and the diff side-by-side/unified mode. Each caller still owns its option list and state transition. |
 | `hash_chip`, `avatar_initials`, `churn_bar` | **specialized** | Retained as named commit-detail primitives used by the Log commit-details surface. `hash_chip` is a non-interactive reference chip (see *Chip roles*); the other two are the identity and statistics roles they have always been. They are not promoted to generic reference, identity, or statistics widgets. |
 
 The only final dispositions are **supported general** and **specialized**. Branch

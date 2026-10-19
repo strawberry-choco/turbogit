@@ -1309,23 +1309,10 @@ impl DiffPane {
     }
 }
 
-/// Staging granularity (issue 19, screen 06): what one selection actuation
-/// on the diff surface addresses. `File` — the whole file's diff is the
-/// unit; `Hunk` — whole hunks (the pre-existing whole-hunk protocol);
-/// `Line` — individual changed lines plus drag-selected character ranges.
-/// The default preserves the historical protocol (sub-hunk line toggling).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum Granularity {
-    File,
-    Hunk,
-    #[default]
-    Line,
-}
-
 /// The active character-range selection (issue 19): one drag inside one
 /// changed line of the previewed diff. `ord`/`start`/`end` follow
 /// `HunkSelection::Chars` semantics. Enter stages it; Esc clears it; it
-/// dies with the granularity switch and with the path's diff cache entry.
+/// dies with the path's diff cache entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CharSelection {
     pub path: PathBuf,
@@ -1775,10 +1762,6 @@ pub struct UiState {
     /// changes — which also covers every successful granular op, since ops
     /// invalidate the cache and force a reload.
     pub line_selections: HashMap<PathBuf, BTreeMap<usize, BTreeSet<usize>>>,
-    /// Staging granularity of the diff surface (issue 19): File | Hunk |
-    /// Line. Governs what line clicks select and what the granular verbs
-    /// address; switching it clears accumulated selections.
-    pub diff_granularity: Granularity,
     /// The active drag-selected character range (issue 19): at most one,
     /// inside one changed line of the previewed diff. Enter stages it, Esc
     /// clears it.

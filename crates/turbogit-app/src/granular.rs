@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use crate::keyed_read::DiffTarget;
 use crate::operation::Operation;
 use crate::root_caches::Affected;
-use crate::state::{AppState, CharSelection, DiffComparison, Granularity};
+use crate::state::{AppState, CharSelection, DiffComparison};
 use turbogit_domain::model::{ChangeStatus, Patch};
 use turbogit_services::partial::{self, HunkSelection, Selection};
 
@@ -47,12 +47,11 @@ fn cached_preview_patch(state: &AppState, path: &std::path::Path) -> Option<Patc
 
 // --- dispatch ----------------------------------------------------------------
 
-/// What part of the diff a granular op addresses: the whole file, one whole
-/// hunk, an accumulated sub-hunk line selection (story 3), or one line's
-/// character range (issue 19) — `(hunk, ord, start, end)` with the
+/// What part of the diff a granular op addresses: one whole hunk, an
+/// accumulated sub-hunk line selection (story 3), or one line's character
+/// range (issue 19) — `(hunk, ord, start, end)` with the
 /// [`turbogit_services::partial::HunkSelection::Chars`] semantics.
 pub enum HunkTarget {
-    File,
     Whole(usize),
     Lines(usize, BTreeSet<usize>),
     Chars(usize, usize, usize, usize),
@@ -73,7 +72,7 @@ pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: 
     // The selection is resolved against the same patch value the viewer drew its
     // hunks from, so a hunk the user can see is exactly a hunk that can be
     // staged (`ADR-0022`).
-    let selection = selection_for(&target, &patch);
+    let selection = selection_for(&target);
     let label = if stage { "Stage hunk" } else { "Unstage hunk" };
     // Only staging reroutes for untracked files (intent-to-add + forward
     // apply using the repo-relative path — the only form git accepts there);
@@ -108,9 +107,8 @@ pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: 
     ));
 }
 
-fn selection_for(target: &HunkTarget, patch: &turbogit_domain::model::Patch) -> Selection {
+fn selection_for(target: &HunkTarget) -> Selection {
     match target {
-        HunkTarget::File => file_selection(patch),
         HunkTarget::Whole(hunk) => Selection {
             hunks: [(*hunk, HunkSelection::Whole)].into_iter().collect(),
         },
@@ -131,18 +129,6 @@ fn selection_for(target: &HunkTarget, patch: &turbogit_domain::model::Patch) -> 
             .into_iter()
             .collect(),
         },
-    }
-}
-
-/// Every hunk of the patch, whole (File granularity): the selection that stages
-/// the file's entire cached diff through the same pipeline as every other
-/// granular op. A hunk count is the value's own, not a substring tally of
-/// header lines over the cached text.
-fn file_selection(patch: &turbogit_domain::model::Patch) -> Selection {
-    Selection {
-        hunks: (0..patch.hunk_count())
-            .map(|h| (h, HunkSelection::Whole))
-            .collect(),
     }
 }
 
@@ -293,16 +279,6 @@ pub fn on_diff_changed(state: &mut AppState, path: Option<&Path>) {
     }
 }
 
-/// Switch the staging granularity (issue 19): accumulated line and char
-/// selections refer to the outgoing semantics' content, so both die with
-/// the switch — the same lifetime rule as a diff-cache change.
-pub fn set_granularity(state: &mut AppState, granularity: Granularity) {
-    state.ui.diff_granularity = granularity;
-    state.ui.line_selections.clear();
-    state.ui.char_selection = None;
-    state.ui.char_drag_anchor = None;
-}
-
 /// Esc (issue 19): the drag-selected character range clears without staging,
 /// along with any in-flight drag draft.
 pub fn clear_char_selection(state: &mut AppState) {
@@ -406,9 +382,9 @@ pub fn end_char_selection(state: &mut AppState, path: &Option<PathBuf>, hunk: us
     }
 }
 
-/// The selection readout (issue 19): how many lines and chars are selected
-/// and at what granularity, plus the Enter/Esc hints while a char range is
-/// armed. None while nothing is selected.
+/// The selection readout (issue 19): how many lines and chars are selected,
+/// plus the Enter/Esc hints while a char range is armed. None while nothing
+/// is selected.
 pub fn selection_readout(state: &AppState) -> Option<String> {
     let path = state.ui.preview_change.as_ref()?;
     let mut lines = state
@@ -426,11 +402,6 @@ pub fn selection_readout(state: &AppState) -> Option<String> {
     if lines == 0 {
         return None;
     }
-    let granularity = match state.ui.diff_granularity {
-        Granularity::File => "file",
-        Granularity::Hunk => "hunk",
-        Granularity::Line => "line",
-    };
     let mut out = if lines == 1 {
         "1 line selection".to_owned()
     } else {
@@ -439,7 +410,6 @@ pub fn selection_readout(state: &AppState) -> Option<String> {
     if let Some(c) = chars {
         out.push_str(&format!(" · {c} chars"));
     }
-    out.push_str(&format!(" · granularity: {granularity}"));
     if chars.is_some() {
         out.push_str(" · ↵ stage · Esc clear");
     }

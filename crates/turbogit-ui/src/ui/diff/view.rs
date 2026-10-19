@@ -1,7 +1,7 @@
 //! Diff rendering: the virtualized entry point plus the unified and
 //! side-by-side row painters (spec §8.4, ADR-0014).
 use super::actions::{
-    Axis, axis_group, commit_current_hunk, comparison_chips, diff_options_menu, granularity_toggle,
+    commit_current_hunk, comparison_chips, comparison_group, diff_options_menu,
     hunk_gutter_actions, hunk_header_extras, hunk_nav, line_selected, paint_selection_bar,
     viewer_hunk_staged_state,
 };
@@ -19,7 +19,7 @@ use egui::{
 use std::ops::Range;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
-use turbogit_app::state::{AppState, DiffComparison, DiffPane, Granularity};
+use turbogit_app::state::{AppState, DiffComparison, DiffPane};
 use turbogit_domain::model::{ChangeStatus, DisplayName};
 
 // --- entry point -------------------------------------------------------------
@@ -72,17 +72,11 @@ pub fn render_diff(
             state.ui.diff_side_by_side = idx == 0;
         }
         if working_tree {
-            // The two axes of scope (spec story 22), each grouped as one
-            // control and each a visibly different kind of group, with nothing
-            // between them: the hunk navigator follows the pair. The whole
-            // block is conditional on the working tree, so the hidden axis
-            // leaves no empty group behind.
+            // The comparison axis (spec story 22), grouped as one control.
+            // Only over working-tree comparisons — commit-to-commit diffs
+            // have no index to stage into, so nothing follows it.
             ui.add_space(gap);
-            axis_group(ui, Axis::Comparison, |ui| comparison_chips(ui, state));
-            ui.add_space(gap);
-            // Staging granularity (issue 19): only over working-tree
-            // comparisons — commit-to-commit diffs have no index to stage into.
-            axis_group(ui, Axis::Granularity, |ui| granularity_toggle(ui, state));
+            comparison_group(ui, |ui| comparison_chips(ui, state));
         }
         ui.add_space(gap);
         hunk_nav(ui, state, total_hunks);
@@ -847,11 +841,10 @@ fn unified_row(
     frame_hover: &mut Option<usize>,
     rows_rect: &mut Option<Rect>,
 ) {
-    // Changed lines are clickable toggles in Line granularity (spec R2
-    // story 3, issue 19); additions additionally take char-range drags.
-    // Everything else stays hover-only.
-    let line_mode = state.ui.diff_granularity == Granularity::Line;
-    let toggleable = line_mode && matches!(row.kind, RowKind::Del | RowKind::Add);
+    // Changed lines are clickable toggles (spec R2 story 3, issue 19);
+    // additions additionally take char-range drags. Everything else stays
+    // hover-only.
+    let toggleable = matches!(row.kind, RowKind::Del | RowKind::Add);
     let draggable = toggleable && row.kind == RowKind::Add;
     let (rect, resp) = ui.allocate_exact_size(
         Vec2::new(width, ROW_H),
@@ -1125,10 +1118,9 @@ fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &
     );
 }
 /// One side-by-side cell: the highlight the policy chose for it, a muted gutter
-/// number, sign marker, and code text. Changed cells are clickable line
-/// toggles (Line granularity, spec R2 story 3); additions also take char-range
-/// drags. `selected` paints the BRAND edge bar and
-/// `caret` the pane's caret bar.
+/// number, sign marker, and code text. A changed cell is a clickable line
+/// toggle (spec R2 story 3); the addition cell also takes a char-range drag.
+/// `selected` paints the BRAND edge bar and `caret` the pane's caret bar.
 /// Returns the cell's response so the row loop can track hover and
 /// toggle clicks.
 #[allow(clippy::too_many_arguments)]
@@ -1295,7 +1287,6 @@ fn render_side_by_side(
             },
             DisplayRow::Pair(d, a) => {
                 let hunk = d.as_ref().map(|r| r.hunk).or(a.as_ref().map(|r| r.hunk));
-                let line_mode = state.ui.diff_granularity == Granularity::Line;
                 let caret_row = plan.caret == Some(di);
                 ui.horizontal(|ui| {
                     let del_cell = if let Some(d) = d {
@@ -1312,7 +1303,7 @@ fn render_side_by_side(
                             Palette::DIFF_DEL_TEXT,
                             &painter,
                             &font,
-                            line_mode,
+                            true,
                             false,
                             selected,
                         );
@@ -1352,14 +1343,12 @@ fn render_side_by_side(
                             Palette::DIFF_ADD_TEXT,
                             &painter,
                             &font,
-                            line_mode,
-                            line_mode,
+                            true,
+                            true,
                             selected,
                         );
                         let text_origin = cell.rect.left() + NUM_W + 20.0;
-                        if line_mode {
-                            handle_char_drag(ui, state, &cell, text_origin, a, path);
-                        }
+                        handle_char_drag(ui, state, &cell, text_origin, a, path);
                         if cell.clicked() {
                             granular::toggle_line_selection(state, path, a.hunk, a.line_ord);
                         }

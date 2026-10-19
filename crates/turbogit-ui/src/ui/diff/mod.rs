@@ -14,14 +14,14 @@
 //!   run per frame, and hunk navigation scrolls by row index so unrealized
 //!   rows stay reachable.
 //! - **Segmented control** toggles Side-by-Side | Unified rendering.
-//! - **Two axes of scope** (spec story 22), each framed as ONE grouped control
-//!   and each a visibly different kind of group: `Repo | Staged | Local` select
-//!   the working-tree comparison pair (Repo = HEAD↔worktree, Staged = HEAD↔index,
-//!   Local = index↔worktree) in a filled pad, `File | Hunk | Line` choose what one
-//!   staging action addresses in an outlined track. The second is working-tree
-//!   only — commit-to-commit diffs have no index to stage into — and hides
-//!   without leaving an empty frame behind. Explicit commit-to-commit targets
-//!   (Git Log) keep their fixed pair and show neither.
+//! - **One axis of scope** (spec story 22), framed as ONE grouped control:
+//!   `Repo | Staged | Local` select the working-tree comparison pair
+//!   (Repo = HEAD↔worktree, Staged = HEAD↔index, Local = index↔worktree) in a
+//!   filled pad. It is working-tree only — commit-to-commit diffs have no index
+//!   to stage into — and hides without leaving an empty frame behind. Explicit
+//!   commit-to-commit targets (Git Log) keep their fixed pair and show it not.
+//!   Staging granularity is not a second axis: a changed row is always a line
+//!   toggle and an addition always takes a char-range drag.
 //! - **Hunk navigation** ‹ n/N › steps between parsed hunks.
 //! - **The file row carries its own statistics** (spec story 23): a file
 //!   section's `+N −M` change counts, and the **Diff options** menu (`⌃⇧D`) holding
