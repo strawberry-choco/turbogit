@@ -86,6 +86,16 @@ fn parse_reflog_checkouts(out: &str) -> Vec<RecentCheckout> {
 }
 
 impl CliExecutor {
+    /// Whether `root` has a commit for HEAD to resolve to. `--quiet` is what
+    /// makes this a question rather than a guess: it exits 1 with **both**
+    /// streams empty on an unborn branch, so the empty result is the whole
+    /// answer and no caller has to pattern-match one of git's several
+    /// "no commits yet" phrasings.
+    fn has_head(&self, root: &Path) -> bool {
+        self.run(root, &["rev-parse", "--verify", "--quiet", "HEAD"])
+            .is_ok()
+    }
+
     /// `git show :<stage>:<path>`. Index stages are this adapter's own
     /// spelling: the port's file-content reads take a commit-ish, and the only
     /// reader that means a stage is `conflict_versions`.
@@ -1752,6 +1762,32 @@ impl GitExecutor for CliExecutor {
     }
 
     fn unstage(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
+        // `restore --staged` resets an index entry to its HEAD version, so it
+        // needs a HEAD. On an unborn branch there is none and git refuses the
+        // whole call ("fatal: could not resolve 'HEAD'") — which is why the
+        // per-file checkbox could not un-stage in a repository nobody has
+        // committed in yet. With no HEAD there is also nothing to reset
+        // *against*: the index holds only additions, so dropping the entries is
+        // the same act, and it returns a newly added file to untracked instead
+        // of making it vanish.
+        if !self.has_head(root) {
+            let mut a: Vec<String> = vec![
+                "rm".to_string(),
+                "--cached".to_string(),
+                "-r".to_string(),
+                "-q".to_string(),
+            ];
+            if paths.is_empty() {
+                a.push(".".to_string());
+            } else {
+                for p in paths {
+                    a.push(p.to_string_lossy().to_string());
+                }
+            }
+            let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
+            self.run(root, &args)?;
+            return Ok(());
+        }
         if paths.is_empty() {
             let args = ["restore", "--staged", "."];
             self.run(root, &args)?;

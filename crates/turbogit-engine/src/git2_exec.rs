@@ -1136,10 +1136,6 @@ impl GitExecutor for Git2Executor {
 
     fn unstage(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
         let repo = self.open(root)?;
-        // `restore --staged` resets against HEAD; on an unborn branch both
-        // git and libgit2 fail to resolve HEAD, which propagates here.
-        let head_commit = repo.head().map_err(err)?.peel_to_commit().map_err(err)?;
-        let head = head_commit.as_object();
         let specs: Vec<String> = if paths.is_empty() {
             // CLI maps empty to `restore --staged .` (everything). libgit2's
             // reset_default rejects an empty pathspec (count > 0 assert), so
@@ -1157,7 +1153,26 @@ impl GitExecutor for Git2Executor {
         } else {
             paths.iter().map(|p| rel(p)).collect()
         };
-        repo.reset_default(Some(head), specs.iter().map(String::as_str))
+        // `restore --staged` resets against HEAD, which an unborn branch does
+        // not have — git and libgit2 both fail to resolve it there, so the
+        // error used to escape. With no HEAD there is also no baseline to diff
+        // against: the index holds only additions, so dropping the named
+        // entries is the same act git performs, and it is what returns a newly
+        // added file to untracked rather than making it vanish.
+        let head = match repo.head() {
+            Ok(head) => head,
+            Err(e) if e.code() == ErrorCode::UnbornBranch => {
+                let mut index = repo.index().map_err(err)?;
+                for spec in &specs {
+                    index.remove_path(Path::new(spec)).map_err(err)?;
+                }
+                index.write().map_err(err)?;
+                return Ok(());
+            }
+            Err(e) => return Err(err(e)),
+        };
+        let head = head.peel_to_commit().map_err(err)?;
+        repo.reset_default(Some(head.as_object()), specs.iter().map(String::as_str))
             .map_err(err)?;
         Ok(())
     }

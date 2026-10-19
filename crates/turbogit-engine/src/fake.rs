@@ -18,6 +18,9 @@ use turbogit_engine_api::patch::parse_patch;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Call {
     Add(Vec<PathBuf>),
+    /// A whole-file unstage, recorded with its paths: the per-file checkbox
+    /// writes the index in both directions, and a suite can only see one.
+    Unstage(Vec<PathBuf>),
     CommitAll,
     CommitIndex,
     Push {
@@ -516,7 +519,11 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
-    fn unstage(&self, _root: &Path, _paths: &[PathBuf]) -> TgResult<()> {
+    fn unstage(&self, _root: &Path, paths: &[PathBuf]) -> TgResult<()> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(Call::Unstage(paths.to_vec()));
         Ok(())
     }
 

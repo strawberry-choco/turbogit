@@ -77,6 +77,10 @@ pub enum RecordedCall {
     ApplyPatchToWorktree,
     AddIntentToAdd(Vec<PathBuf>),
     Add(Vec<PathBuf>),
+    /// A whole-file unstage — the per-file checkbox's way back out of the
+    /// index. Recorded because a suite asserting the checkbox's effect on the
+    /// index can only observe it through the recorder or through real git.
+    Unstage(Vec<PathBuf>),
     CommitAll,
     CommitIndex,
     /// A remote fetch (`root`, remote name or `None` for all remotes)
@@ -673,6 +677,10 @@ impl GitExecutor for RecordingExecutor {
     }
 
     fn unstage(&self, root: &Path, paths: &[PathBuf]) -> TgResult<()> {
+        self.calls
+            .lock()
+            .expect("calls mutex")
+            .push(RecordedCall::Unstage(paths.to_vec()));
         self.inner.unstage(root, paths)
     }
 
