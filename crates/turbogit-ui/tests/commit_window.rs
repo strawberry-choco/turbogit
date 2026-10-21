@@ -1523,7 +1523,6 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
 
     // The old text buttons are gone (issue 05 removes them; issue 04 ships
     // the icon-only row).
-    assert_not_painted(&h, "Stage selected");
     assert_not_painted(&h, "Unstage selected");
 }
 

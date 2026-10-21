@@ -42,6 +42,18 @@ pub enum TgError {
         consequence: &'static str,
     },
 
+    /// A read that names `HEAD` in a repository nobody has committed in yet.
+    /// This is a variant and not `Other` holding a sentence because a consumer
+    /// must be able to tell "this root has no commits" from every other failed
+    /// read without re-reading prose: the keyed read's per-key failure store
+    /// shows the text, and a later surface that wants to offer a first commit
+    /// instead of a dead sentence has to match the condition, not quote it.
+    /// `consequence` names the refused read, so each producer owns its own
+    /// clause while the refusal stays one matchable fact, exactly as
+    /// [`Self::ProtectedBranch`] does.
+    #[error("this repository has no commits yet: {consequence}")]
+    NoCommitsYet { consequence: &'static str },
+
     /// Anything else.
     #[error("{0}")]
     Other(String),
@@ -72,6 +84,7 @@ impl Clone for TgError {
                 branch: branch.clone(),
                 consequence,
             },
+            TgError::NoCommitsYet { consequence } => TgError::NoCommitsYet { consequence },
             TgError::Other(s) => TgError::Other(s.clone()),
         }
     }
@@ -102,6 +115,21 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "'main' is a protected branch — rebasing it is not allowed"
+        );
+    }
+
+    /// The no-commits refusal displays the producer's own clause after the
+    /// condition, and the condition part is fixed text so a surface can build
+    /// on it without holding the variant.
+    #[test]
+    fn no_commits_yet_variant_displays_the_refused_read() {
+        let err = TgError::NoCommitsYet {
+            consequence: "the changes cannot be compared against a first commit",
+        };
+        assert_eq!(
+            err.to_string(),
+            "this repository has no commits yet: the changes cannot be compared \
+             against a first commit"
         );
     }
 }

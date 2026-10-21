@@ -13,12 +13,18 @@ use std::path::{Path, PathBuf};
 use egui_kittest::{Harness, kittest::Queryable};
 use test_support::git_seed::git;
 use test_support::harness::{
-    assert_painted, galley_origin, painted_text, shell_harness_over_unstyled,
+    assert_painted, galley_origin, painted_galleys, painted_text, shell_harness_over_unstyled,
 };
 use test_support::wait_until;
 use turbogit_app::state::AppState;
 
 // ---------------------------------------------------------------- helpers --
+
+/// A changed diff row's accessibility label, spelled the way the pane spells it:
+/// the row's text, then the state the per-line oracle answers for it.
+fn row(text: &str, staged: bool) -> String {
+    format!("{text} ({})", if staged { "staged" } else { "unstaged" })
+}
 
 struct Repo {
     path: PathBuf,
@@ -184,10 +190,10 @@ fn hunks_collapse_and_expand_on_demand() {
     assert_painted(&h, ALPHA_ADD);
 }
 
-// -------------------------------- staged state + staged-hunk chip rail -----
+// ---------------------------------------- staged-hunk chip rail -------------
 
 #[test]
-fn hunk_headers_show_staged_state_and_rail_counts_staged_hunks() {
+fn the_rail_counts_staged_hunks_and_the_headers_name_their_state() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "hunk-state");
     seed_two_hunk_edit(&repo);
@@ -196,22 +202,12 @@ fn hunk_headers_show_staged_state_and_rail_counts_staged_hunks() {
     h.get_by_label("code.rs").click();
     open_preview(&mut h);
 
-    // The staged-state annotation lives on the Repo comparison (HEAD↔worktree),
-    // where staged and unstaged hunks coexist.
-    h.get_by_label("Repo").click();
-    h.run();
-    assert!(
-        painted_text(&h).join("\n").contains("not staged"),
-        "both hunks start unstaged"
-    );
-
     // Stage hunk 1 through its gutter control.
     h.get_by_label("Stage hunk 1").click();
     h.run();
     assert!(
         wait_until(15_000, || staged_contains(&repo, "code.rs")),
-        "the hunk stage must reach the index, comparison={:?} toast={:?} busy={} staged={:?} text=\n{}",
-        h.state().ui.diff_comparison,
+        "the hunk stage must reach the index, toast={:?} busy={} staged={:?} text=\n{}",
         h.state().ui.toast,
         h.state().ui.busy,
         git(&repo.path, &["diff", "--cached", "--name-only"]),
@@ -222,19 +218,58 @@ fn hunk_headers_show_staged_state_and_rail_counts_staged_hunks() {
         "the rail must count the staged hunk"
     );
 
-    // Back on the Repo comparison, the staged hunk's header says so and the
-    // unstaged one still reads "not staged".
-    h.get_by_label("Repo").click();
-    h.run();
     let text = painted_text(&h).join("\n");
-    assert!(
-        text.contains("staged") && text.contains("not staged"),
-        "hunk headers must show their per-hunk staged state, got:\n{text}"
-    );
     assert!(
         text.contains("code.rs @@1") && !text.contains("(part)"),
         "the rail must chip the fully staged hunk without a part marker, got:\n{text}"
     );
+    // The header's own staged readout is back, and it is aggregated from the
+    // per-line oracle rather than from span overlap. Which hunk says what is
+    // matched by row, not by count: the galleys are the painted order, so the
+    // upper `@@` band is the hunk the gutter staged and the lower one is the hunk
+    // nobody touched.
+    let rows: Vec<(f32, String)> = {
+        let mut out: Vec<(f32, String)> = painted_galleys(&h)
+            .into_iter()
+            .filter(|g| g.text.starts_with("@@"))
+            .map(|g| (g.pos.y, g.text))
+            .collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    };
+    assert_eq!(
+        rows.len(),
+        2,
+        "the fixture's premise: two hunk headers to name, got {rows:?}"
+    );
+    let named_at = |y: f32| {
+        painted_galleys(&h)
+            .into_iter()
+            .find(|g| g.text.starts_with("· ") && (g.pos.y - y).abs() < 8.0)
+            .map(|g| g.text)
+    };
+    assert_eq!(
+        named_at(rows[0].0).as_deref(),
+        Some("· staged"),
+        "the hunk staged through its gutter control answers every one of its rows \
+         staged, got {:?}",
+        named_at(rows[0].0)
+    );
+    assert_eq!(
+        named_at(rows[1].0).as_deref(),
+        Some("· not staged"),
+        "and the untouched hunk answers none of them staged, got {:?}",
+        named_at(rows[1].0)
+    );
+    // A hunk header classifies staged-ness only, so no wording that names a
+    // comparison axis may appear on it.
+    for stale in ["· local", "· index", "· staged / local"] {
+        assert!(
+            !text.contains(stale),
+            "a hunk header must not classify itself against a comparison that no \
+             longer exists, got:\n{text}"
+        );
+    }
 }
 
 #[test]
@@ -259,19 +294,43 @@ fn partially_staged_hunk_gets_a_part_chip() {
     h.get_by_label("code.rs").click();
     open_preview(&mut h);
 
-    // Select one changed line (the diff stages at line granularity) and stage it.
-    h.get_by_label("    let alpha = 1;").click();
-    h.run();
-    eprintln!("selections={:?}", h.state().ui.line_selections);
-    h.get_by_label("Stage hunk 1").click();
+    // Two real clicks stage the whole alpha line change: its deletion row,
+    // then its addition row off the refreshed preview. The gamma edit in the
+    // same hunk stays unstaged, which is what makes it partial.
+    h.get_by_label(&row("    let alpha = 1;", false)).click();
     h.run();
     assert!(
         wait_until(15_000, || staged_contains(&repo, "code.rs")),
-        "the line stage must reach the index, selections={:?} comparison={:?} toast={:?} text=\n{}",
-        h.state().ui.line_selections,
-        h.state().ui.diff_comparison,
+        "the line stage must reach the index, toast={:?} text=\n{}",
         h.state().ui.toast,
         painted_text(&h).join("\n")
+    );
+    // The clicked row stays on screen, beside its pair: the combined read is
+    // byte-stable under a stage, so the second click is the same row the reader
+    // has been looking at all along, and its address is translated against the
+    // freshly re-derived retained sections rather than a stale ordinal.
+    //
+    // And only the clicked row's word changed. One half of a replacement pair went
+    // into the index, so it reads `staged` and its partner still reads `unstaged`,
+    // which is the pair's own story rather than one the label invents.
+    assert!(
+        wait_until(15_000, || {
+            h.run();
+            h.query_by_label(&row("    let alpha = 1;", true)).is_some()
+                && h.query_by_label(&row("    let ALPHA = 1;", false))
+                    .is_some()
+        }),
+        "both rows of the staged line are still in the preview, the clicked one \
+         named staged and its partner not"
+    );
+    h.get_by_label(&row("    let ALPHA = 1;", false)).click();
+    h.run();
+    assert!(
+        wait_until(15_000, || {
+            git(&repo.path, &["diff", "--cached", "--", "code.rs"]).contains("+    let ALPHA = 1;")
+        }),
+        "both clicked lines must be staged, got:\n{}",
+        git(&repo.path, &["diff", "--cached", "--", "code.rs"])
     );
     assert!(
         wait_until_painted(&mut h, 15_000, "1 hunk staged"),
@@ -281,5 +340,27 @@ fn partially_staged_hunk_gets_a_part_chip() {
     assert!(
         text.contains("code.rs @@1 (part)"),
         "a hunk with an unstaged remainder must carry the part marker, got:\n{text}"
+    );
+
+    // **Two `part` strings, two controls.** The ` (part)` above belongs to the
+    // staged-hunk chip rail in the commit window; the `· part` below belongs to the
+    // hunk header band in the preview pane. This frame has both, and neither may
+    // borrow the other's wording.
+    //
+    // The header's `part` is the reason the text exists at all: muting cannot show
+    // a mixed hunk. A hunk holding both states looks like a hunk holding some quiet
+    // rows, and nobody can count those at a glance, so the rows go quiet and the
+    // header says what the paint cannot.
+    let mut suffixes: Vec<String> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| g.text.starts_with("· "))
+        .map(|g| g.text)
+        .collect();
+    suffixes.sort();
+    assert_eq!(
+        suffixes,
+        vec!["· part".to_owned()],
+        "the one hunk on screen holds both states, so it names itself part and \
+         nothing else does"
     );
 }

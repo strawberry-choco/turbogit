@@ -322,22 +322,6 @@ fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
         }
     }
 
-    // Char-range staging (issue 19): Enter stages the armed selection, Esc
-    // clears it. Plain keys only, and never while a text field (commit
-    // message, filter) owns the keyboard — then they type into it.
-    if state.ui.char_selection.is_some() {
-        let text_focus = ui.ctx().memory(|m| m.focused().is_some());
-        let enter = ui.input(|i| i.key_pressed(Key::Enter) && !i.modifiers.any());
-        let esc = ui.input(|i| i.key_pressed(Key::Escape));
-        if !text_focus {
-            if enter {
-                turbogit_app::granular::stage_char_selection(state);
-            } else if esc {
-                turbogit_app::granular::clear_char_selection(state);
-            }
-        }
-    }
-
     // Space toggles the staging checkbox of the file being previewed — the
     // keyboard route to the same whole-file stage/un-stage a checkbox click
     // performs. Gated exactly like `/` above, because both are keys that type
@@ -819,8 +803,8 @@ fn version_line(ui: &mut Ui, state: &AppState) {
 /// line added later inherits the step-up instead of re-deciding it.
 const STATUS_BAR_INK: Color32 = Palette::INK_2;
 
-/// Granular-staging readout (issue 19, screen 06): the armed line selection and
-/// how many repos granular ops reach. Only over an open project — the welcome
+/// Granular-staging status bar (issue 19, screen 06): how many repos granular
+/// ops reach. Only over an open project — the welcome
 /// page has nothing in scope. An empty multi-repo selection means the focused
 /// single root.
 fn granular_status_chips(ui: &mut Ui, state: &AppState) {
@@ -835,13 +819,6 @@ fn granular_status_chips(ui: &mut Ui, state: &AppState) {
         );
         ui.colored_label(color, text);
     };
-    if state.ui.char_selection.is_some() {
-        chip(
-            ui,
-            Palette::ACCENT_TEXT,
-            "1 line-selection active".to_owned(),
-        );
-    }
     let scope = if state.ui.repo_selection.is_empty() {
         1
     } else {

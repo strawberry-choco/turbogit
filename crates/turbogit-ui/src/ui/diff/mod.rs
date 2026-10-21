@@ -14,14 +14,19 @@
 //!   run per frame, and hunk navigation scrolls by row index so unrealized
 //!   rows stay reachable.
 //! - **Segmented control** toggles Side-by-Side | Unified rendering.
-//! - **One axis of scope** (spec story 22), framed as ONE grouped control:
-//!   `Repo | Staged | Local` select the working-tree comparison pair
-//!   (Repo = HEAD↔worktree, Staged = HEAD↔index, Local = index↔worktree) in a
-//!   filled pad. It is working-tree only — commit-to-commit diffs have no index
-//!   to stage into — and hides without leaving an empty frame behind. Explicit
-//!   commit-to-commit targets (Git Log) keep their fixed pair and show it not.
-//!   Staging granularity is not a second axis: a changed row is always a line
-//!   toggle and an addition always takes a char-range drag.
+//! - **No scope axis.** A `Repo | Staged | Local` chip group once selected the
+//!   working-tree comparison pair (HEAD↔worktree, HEAD↔index, index↔worktree).
+//!   It is deliberately removed: three places wrote that value and two of them
+//!   were the app overriding the user, and one control the app overrode twice
+//!   is not a control. The working-tree read is pinned to one pair,
+//!   **HEAD ↔ worktree**, so every changed line of a file is on screen whether or
+//!   not it is staged, and the view is stable under the only action it offers
+//!   because staging a line cannot change `git diff HEAD`. Staged-ness is a
+//!   per-line derived fact rather than a second view (ADR-0029). The pane header
+//!   names the sides the read actually takes, so a commit-to-commit diff prints
+//!   its own revisions. Staging granularity is not a second axis either: a
+//!   changed row is always a line toggle and an addition always takes a
+//!   char-range drag.
 //! - **Hunk navigation** ‹ n/N › steps between parsed hunks.
 //! - **The file row carries its own statistics** (spec story 23): a file
 //!   section's `+N −M` change counts, and the **Diff options** menu (`⌃⇧D`) holding
@@ -37,9 +42,11 @@
 //!   SURFACE (spec §2.3). None of the diff pair, the added/removed accent pair
 //!   or the row fills is touched by any of the above.
 //! - **Gutter staging (spec R2)**: every hunk-header band carries compact
-//!   "+" / "−" controls that stage / unstage that whole hunk by composing a
-//!   patch from the cached raw diff (ADR-0013) and applying it through the
-//!   async op seam. Conflicted files keep the controls visible but inert.
+//!   "+" / "−" controls that stage / unstage that whole hunk, and a changed row
+//!   toggles one line. Neither composes from the bytes on screen: each operation
+//!   is composed from the retained index-facing section its direction names and
+//!   applied through the async op seam (ADR-0029). Conflicted files keep the
+//!   controls visible but inert.
 //! - **Non-text diffs (spec R8, ADR-0015)**: per-file section metadata is
 //!   scanned beside the rows; rename metadata renders as a leading header
 //!   row (a pure 100% rename shows "No content changes." instead of an
@@ -47,7 +54,8 @@
 //!   dimension/size captions, and a lone binary change renders as a
 //!   one-line description with byte sizes. Non-text bytes fetch off the
 //!   frame path through the same async-event seam as diffs and cache
-//!   decoded results beside them.
+//!   decoded results beside them. A binary or pure-rename section holds no
+//!   line rows, so it offers no toggle and the oracle holds no answer for it.
 
 mod actions;
 mod model;

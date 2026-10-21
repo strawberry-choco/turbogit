@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use turbogit_domain::error::TgResult;
-use turbogit_domain::model::{BlameLine, DiffOpts, DiffPolicies, Patch};
+use turbogit_domain::model::{BlameLine, ChangeStatus, DiffOpts, DiffPolicies, Patch, RootId};
 use turbogit_services::diff_engine;
 
 use crate::diff_data::{PaneEntry, PaneSide};
@@ -28,7 +28,8 @@ use crate::diff_load::{PaneSideRequest, SideSpec};
 use crate::diff_model::{DiffValue, FileMeta};
 use crate::events::{AppEvent, FetchedBlob};
 use crate::granular;
-use crate::state::{AppState, BlameTarget, DiffComparison, UiState};
+use crate::root_caches::StatsView;
+use crate::state::{AppState, BlameTarget, UiState};
 
 /// What one read answered.
 ///
@@ -289,8 +290,6 @@ pub struct DiffTarget {
     /// a working-tree comparison.
     pub left: Option<String>,
     pub right: Option<String>,
-    /// The chip the working-tree comparisons read their sides from.
-    pub comparison: DiffComparison,
     /// The viewer's two view policies. Part of what the read is keyed on: they
     /// change the model, and a model built under another policy must never be
     /// served for this target.
@@ -300,12 +299,10 @@ pub struct DiffTarget {
 }
 
 impl DiffTarget {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         root: PathBuf,
         left: Option<String>,
         right: Option<String>,
-        comparison: DiffComparison,
         policies: DiffPolicies,
         path: Option<PathBuf>,
     ) -> Self {
@@ -313,59 +310,99 @@ impl DiffTarget {
             root,
             left,
             right,
-            comparison,
             policies,
             path,
         }
     }
 
-    /// The sides this comparison actually diffs: the revision chips only apply
-    /// to working-tree comparisons (spec §8.4), and an explicit commit pair
-    /// passes through untouched.
-    fn sides(&self) -> (Option<String>, Option<String>, bool) {
-        if self.left.is_none() && self.right.is_none() {
-            match self.comparison {
-                DiffComparison::Repo => (Some("HEAD".to_owned()), None, false),
-                DiffComparison::Staged => (None, None, true),
-                DiffComparison::Local => (None, None, false),
-            }
-        } else {
-            (self.left.clone(), self.right.clone(), false)
+    /// The commit preview's one fixed comparison: `HEAD ↔ worktree`.
+    ///
+    /// Which constructor a call site uses is how a reader tells the two kinds of
+    /// target apart, and it is the whole of the pin. This one is the working-tree
+    /// preview: it shows every changed line of the file, staged or not, and it is
+    /// byte-stable under the only action the pane offers, because staging a line
+    /// cannot change what the worktree differs from HEAD by. `new` is an explicit
+    /// revision pair — a history-window diff, a commit-to-commit comparison — and
+    /// those keep the revisions their caller named; a commit diff must not claim
+    /// `HEAD` as its left side.
+    ///
+    /// In a repository nobody has committed in, this target has no answer and is
+    /// not given one. The engine refuses a `HEAD` read on a root with no HEAD
+    /// (`cli.rs`, `guard_unborn_head`, with the reason), and `read` hands the
+    /// pane `Read::Failed` with that sentence. The alternative, diffing against
+    /// the empty tree in HEAD's place, was built and then removed: it reports
+    /// every staged line as an addition relative to a baseline the repository
+    /// never had, which is a false answer about someone's first files.
+    pub fn working_tree(root: PathBuf, policies: DiffPolicies, path: Option<PathBuf>) -> Self {
+        Self::new(root, Some("HEAD".to_owned()), None, policies, path)
+    }
+
+    /// The sides this read actually diffs, exactly the pair the caller named.
+    /// `pane_sides` and `key` both read the pair here, so the patch bytes and
+    /// the pane's two sides can never be derived from different assumptions
+    /// about what the working tree is.
+    ///
+    /// The pin is NOT here: it is [`DiffTarget::working_tree`], because a
+    /// working-tree target and an explicit pair are different call sites, not
+    /// different shapes of one value, and a mapping in this function would also
+    /// rewrite commit-to-commit reads. A target with neither side named is still
+    /// expressible through `new`, and it still means plain `git diff`,
+    /// `index ↔ worktree`.
+    fn sides(&self) -> (Option<String>, Option<String>) {
+        (self.left.clone(), self.right.clone())
+    }
+
+    /// Which root-wide [`StatsView`] this target displays, when a root-wide
+    /// read backs it at all.
+    ///
+    /// The three root views are exactly three pairs of sides, and a target is
+    /// one pair: `HEAD ↔ worktree` is the pinned preview (the `Repo` view), a
+    /// pair that names nothing is plain `git diff` (the `Local` view), and a
+    /// commit-to-commit pair names its own revisions, for which no root read
+    /// ever answered. That reports `None`, and a failed root read says
+    /// nothing about it. The `Staged` view is not displayable through a target
+    /// at all: `git diff --cached` is not a pair of named sides, and the chip
+    /// rail that shows it reads the record per view itself.
+    pub fn root_view(&self) -> Option<StatsView> {
+        match (self.left.as_deref(), self.right.as_deref()) {
+            (Some("HEAD"), None) => Some(StatsView::Repo),
+            (None, None) => Some(StatsView::Local),
+            _ => None,
         }
     }
 
     /// The two byte sources for one of this target's file sections, deriving
     /// which side is a rev, which is the worktree, and which is missing:
     ///
-    /// | comparison       | old side   | new side     |
+    /// | sides            | old side   | new side     |
     /// |------------------|------------|--------------|
-    /// | Repo (HEAD↔wt)   | `HEAD`     | worktree fs  |
-    /// | Staged (HEAD↔ix) | `HEAD`     | index `:0`   |
-    /// | Local (ix↔wt)    | index `:0` | worktree fs  |
+    /// | no rev named     | index `:0` | worktree fs  |
     /// | explicit l..r    | `<left>`   | `<right>`    |
+    /// | half-explicit l  | `<left>`   | worktree fs  |
+    ///
+    /// The pinned preview takes the third row, because
+    /// [`DiffTarget::working_tree`] names `HEAD` and nothing else.
     ///
     /// Index revs use git's stage syntax (`:<n>:<path>`), the same style the
     /// conflict reader uses for `:1`/`:2`/`:3`. New files have no old side;
     /// deleted files no new side. Paths are repo-relative and slash-separated,
     /// because that is the form `git show` takes.
     fn pane_sides(&self, meta: &FileMeta) -> (PaneSideRequest, PaneSideRequest) {
-        let (left, right, staged) = self.sides();
+        let (left, right) = self.sides();
         let rel = |p: &Option<String>| p.clone().unwrap_or_default();
         let old = if meta.new_file {
             SideSpec::Missing
         } else {
-            match &left {
-                Some(l) => SideSpec::Rev(l.clone()),
-                None if staged => SideSpec::Rev("HEAD".to_owned()),
+            match left {
+                Some(l) => SideSpec::Rev(l),
                 None => SideSpec::Index,
             }
         };
         let new = if meta.deleted_file {
             SideSpec::Missing
         } else {
-            match &right {
-                Some(r) => SideSpec::Rev(r.clone()),
-                None if staged => SideSpec::Index,
+            match right {
+                Some(r) => SideSpec::Rev(r),
                 None => SideSpec::Worktree,
             }
         };
@@ -392,9 +429,9 @@ impl Keyed for DiffTarget {
     const KIND: Kind = Kind::Diff;
 
     fn key(&self) -> String {
-        let (left, right, staged) = self.sides();
+        let (left, right) = self.sides();
         format!(
-            "{:?}|{:?}|{:?}|staged={staged}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             self.root, left, right, self.policies.whitespace, self.policies.highlighting, self.path
         )
     }
@@ -429,10 +466,6 @@ impl Keyed for DiffTarget {
         // Collapse state (issue 20) describes the outgoing diff's hunks; it
         // dies with them, like the hunk navigation cursor above.
         state.ui.diff_collapsed.clear();
-        // The sub-hunk line selections refer to the outgoing content; the
-        // granular module drops them with the rest of the per-diff
-        // navigation state (spec R2, story 3).
-        granular::on_diff_changed(state, self.path.as_deref());
 
         if let Some(rel) = self.path.as_ref()
             && granular::preview_status(state, Some(rel.as_path()))
@@ -444,12 +477,11 @@ impl Keyed for DiffTarget {
         }
 
         state.reads.slot(Self::KIND).take(&key);
-        let (left, right, staged) = self.sides();
+        let (left, right) = self.sides();
         // The engine is asked for the plain diff: the viewer's policies are view
         // decisions folded into the model, never flags that change which bytes git
         // answers with, because those bytes are what partial staging composes.
         let opts = DiffOpts {
-            staged,
             left,
             right,
             path: self.path.clone(),
@@ -646,6 +678,36 @@ impl AppState {
         target.answer(self, &target.key())
     }
 
+    /// The product rule for a failed root-wide diff read: when the view this
+    /// target displays is recorded as failed for its root, the **whole file
+    /// counts as failed to read**. The pane shows the recorded message and
+    /// shows no content, no rows, and no control a click could not honour.
+    /// This is what closes the window where the per-path read answers while the
+    /// root read died: the composition path already declines by name when a
+    /// retained section is absent, and a fully rendered diff whose every row
+    /// click does nothing is the defect the record exists to prevent.
+    ///
+    /// Three clauses, each load-bearing. (1) Only a target that displays one
+    /// of the three root views is a candidate ([`DiffTarget::root_view`]): a
+    /// commit-to-commit diff names its own revisions. (2) An unversioned path
+    /// is exempt: its pane never asked git the question that failed (its
+    /// answer is synthesized from the file's bytes) and its staging route
+    /// composes from that same value, so no control it paints is silently
+    /// inert, and the refusal recorded against the root is a refusal of the
+    /// `HEAD` comparison that file was never in. (3) The lookup is per view,
+    /// never per pane or per root, because that is the key the fill failed
+    /// under `RootCaches::diff_failed`.
+    pub fn failed_view_message(&self, target: &DiffTarget) -> Option<String> {
+        let view = target.root_view()?;
+        if granular::preview_status(self, target.path.as_deref()) == ChangeStatus::Unversioned {
+            return None;
+        }
+        let root = RootId(target.root.clone().into());
+        self.caches
+            .diff_view_failure(&root, view)
+            .map(str::to_owned)
+    }
+
     /// Whether a pane's bytes are still in the store, asked of the store's
     /// owner. The UI layer holds the tags it keys GPU textures by (see
     /// [`PaneTarget::texture_tag`]) and prunes the ones nobody caches any
@@ -660,60 +722,46 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::diff_load::SideSpec;
-    fn target(left: Option<&str>, right: Option<&str>, comparison: DiffComparison) -> DiffTarget {
+    fn target(left: Option<&str>, right: Option<&str>) -> DiffTarget {
         DiffTarget::new(
             PathBuf::from("/repo"),
             left.map(str::to_owned),
             right.map(str::to_owned),
-            comparison,
             turbogit_domain::model::DiffPolicies::default(),
             None,
         )
     }
 
-    fn sides(
-        left: Option<&str>,
-        right: Option<&str>,
-        comparison: DiffComparison,
-        meta: &FileMeta,
-    ) -> (SideSpec, SideSpec) {
-        let (old, new) = target(left, right, comparison).pane_sides(meta);
+    fn sides(left: Option<&str>, right: Option<&str>, meta: &FileMeta) -> (SideSpec, SideSpec) {
+        let (old, new) = target(left, right).pane_sides(meta);
         (old.spec, new.spec)
     }
 
     /// The pane reads the same pair the patch text describes, which is what
     /// makes the side table the read's business rather than the painter's.
     #[test]
-    fn each_chip_addresses_its_own_two_sides() {
+    fn the_working_tree_addresses_index_and_worktree() {
         let plain = FileMeta::default();
-        // Repo chip (HEAD↔worktree): `git diff HEAD`.
+        // A target naming neither side is plain `git diff`, index↔worktree. It is
+        // not the pinned preview, which names `HEAD`; this row is what `pane_sides`
+        // still answers for it.
         assert_eq!(
-            sides(None, None, DiffComparison::Repo, &plain),
-            (SideSpec::Rev("HEAD".to_owned()), SideSpec::Worktree)
-        );
-        // Staged chip (HEAD↔index): `git diff --cached`, the index side named.
-        assert_eq!(
-            sides(None, None, DiffComparison::Staged, &plain),
-            (SideSpec::Rev("HEAD".to_owned()), SideSpec::Index)
-        );
-        // Local chip (index↔worktree): plain `git diff`.
-        assert_eq!(
-            sides(None, None, DiffComparison::Local, &plain),
+            sides(None, None, &plain),
             (SideSpec::Index, SideSpec::Worktree)
         );
-        // Explicit commit-to-commit targets pass their revs through, whatever
-        // chip the surface happens to be showing.
+        // Explicit commit-to-commit targets pass their revs through.
         assert_eq!(
-            sides(
-                Some("abc123"),
-                Some("def456"),
-                DiffComparison::Staged,
-                &plain
-            ),
+            sides(Some("abc123"), Some("def456"), &plain),
             (
                 SideSpec::Rev("abc123".to_owned()),
                 SideSpec::Rev("def456".to_owned())
             )
+        );
+        // One rev named against the worktree is `git diff <rev>`, so only the
+        // side it names stops being the index.
+        assert_eq!(
+            sides(Some("HEAD"), None, &plain),
+            (SideSpec::Rev("HEAD".to_owned()), SideSpec::Worktree)
         );
     }
 
@@ -727,14 +775,8 @@ mod tests {
             deleted_file: true,
             ..FileMeta::default()
         };
-        assert_eq!(
-            sides(None, None, DiffComparison::Repo, &added).0,
-            SideSpec::Missing
-        );
-        assert_eq!(
-            sides(None, None, DiffComparison::Repo, &deleted).1,
-            SideSpec::Missing
-        );
+        assert_eq!(sides(None, None, &added).0, SideSpec::Missing);
+        assert_eq!(sides(None, None, &deleted).1, SideSpec::Missing);
     }
 
     /// Paths arrive repo-relative and slash-separated because the patch value
@@ -751,22 +793,27 @@ mod tests {
         .into_iter()
         .next()
         .expect("one renamed section");
-        let (old, new) = target(None, None, DiffComparison::Repo).pane_sides(&renamed);
+        let (old, new) = target(None, None).pane_sides(&renamed);
         assert_eq!(
             (old.path.as_str(), new.path.as_str()),
             ("old/dir/Art.png", "new/dir/Art.png")
         );
     }
 
-    /// Each pane flavour addresses its own entry, and a different comparison is
-    /// a different entry — the target is the only thing either side of the
+    /// Each pane flavour addresses its own entry, and a different pair of sides
+    /// is a different entry — the target is the only thing either side of the
     /// interface gets to address by.
     #[test]
-    fn a_pane_is_addressed_per_flavour_and_per_comparison() {
+    fn a_pane_is_addressed_per_flavour_and_per_pair_of_sides() {
         let file = FileMeta::default();
-        let repo = target(None, None, DiffComparison::Repo);
-        let binary = PaneTarget::new(repo.clone(), PaneFlavour::Binary, file.clone(), false);
-        let image = PaneTarget::new(repo.clone(), PaneFlavour::Image, file.clone(), true);
+        let working_tree = target(None, None);
+        let binary = PaneTarget::new(
+            working_tree.clone(),
+            PaneFlavour::Binary,
+            file.clone(),
+            false,
+        );
+        let image = PaneTarget::new(working_tree.clone(), PaneFlavour::Image, file.clone(), true);
         assert_eq!(
             binary.key(),
             binary.texture_tag(),
@@ -774,12 +821,38 @@ mod tests {
         );
         assert_eq!(image.key(), image.texture_tag());
         assert_ne!(binary.key(), image.key());
-        let staged = target(None, None, DiffComparison::Staged);
+        let commit_pair = target(Some("HEAD~1"), Some("HEAD"));
         assert_ne!(
             binary.key(),
-            PaneTarget::new(staged, PaneFlavour::Binary, file, false).key(),
-            "another comparison under the same file is another entry"
+            PaneTarget::new(commit_pair, PaneFlavour::Binary, file, false).key(),
+            "another pair of sides under the same file is another entry"
         );
+    }
+
+    /// The axis is gone from the key, so one file under one policy has exactly
+    /// one working-tree key: nothing a viewer can do to a file without changing
+    /// it can produce a second entry for it.
+    #[test]
+    fn the_working_tree_key_names_no_axis() {
+        let working_tree = target(None, None);
+        assert!(
+            !working_tree.key().contains("staged"),
+            "the removed axis component must not survive in the key: {}",
+            working_tree.key()
+        );
+        assert_eq!(working_tree.key(), target(None, None).key());
+        assert_ne!(
+            working_tree.key(),
+            target(Some("HEAD~1"), Some("HEAD")).key()
+        );
+        let other_file = DiffTarget::new(
+            PathBuf::from("/repo"),
+            None,
+            None,
+            turbogit_domain::model::DiffPolicies::default(),
+            Some(PathBuf::from("other.txt")),
+        );
+        assert_ne!(working_tree.key(), other_file.key());
     }
 
     // --- lateness, at the internal scripted seam (ADR-0021) -------------------
@@ -825,7 +898,6 @@ mod tests {
             root.to_path_buf(),
             None,
             None,
-            DiffComparison::Repo,
             turbogit_domain::model::DiffPolicies::default(),
             Some(PathBuf::from(name)),
         );
@@ -917,35 +989,37 @@ mod tests {
         let mut state = held_state(dir.path(), &[]);
         state.hold_reads();
 
-        let repo = DiffTarget::new(
+        let working_tree = DiffTarget::new(
             dir.path().to_path_buf(),
             None,
             None,
-            DiffComparison::Repo,
             turbogit_domain::model::DiffPolicies::default(),
             Some(PathBuf::from("art.png")),
         );
-        let staged = DiffTarget::new(
+        let commit_pair = DiffTarget::new(
             dir.path().to_path_buf(),
-            None,
-            None,
-            DiffComparison::Staged,
+            Some("HEAD~1".to_owned()),
+            Some("HEAD".to_owned()),
             turbogit_domain::model::DiffPolicies::default(),
             Some(PathBuf::from("art.png")),
         );
-        assert_ne!(repo.key(), staged.key(), "two targets, one slot");
+        assert_ne!(
+            working_tree.key(),
+            commit_pair.key(),
+            "two targets, one slot"
+        );
 
-        assert!(matches!(state.read(repo.clone()), Read::Waiting));
+        assert!(matches!(state.read(working_tree.clone()), Read::Waiting));
         state.release_held_read(0);
         state.drain_events();
-        assert!(matches!(state.read(repo.clone()), Read::Empty));
+        assert!(matches!(state.read(working_tree.clone()), Read::Empty));
 
-        assert!(matches!(state.read(staged.clone()), Read::Waiting));
+        assert!(matches!(state.read(commit_pair.clone()), Read::Waiting));
         state.release_held_read(0);
         state.drain_events();
-        assert!(matches!(state.read(staged.clone()), Read::Empty));
+        assert!(matches!(state.read(commit_pair.clone()), Read::Empty));
         assert!(
-            matches!(state.read(repo), Read::Waiting),
+            matches!(state.read(working_tree), Read::Waiting),
             "the map would still answer the first; a single entry does not"
         );
     }

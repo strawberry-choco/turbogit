@@ -754,7 +754,7 @@ intentionally not pursued.
 | Changelists + `Staging Area`/`Changelists` mode switch | — | **absent** — deliberate; see §8 |
 | Per-file checkbox + status + colour | `paint_checkbox`, status letter, partial dot | **has** |
 | Chunk-level and line-level commit inclusion | hunk gutter stage buttons + per-line toggles + char-range drag; whole-file via the Commit window's file checkbox | **has** — different mechanism, same reach |
-| `Compare HEAD, Staged and Local Versions` (edit the staged version) | — | **missing** — the one staging route with no equivalent |
+| `Compare HEAD, Staged and Local Versions` (edit the staged version) | — | **divergent by decision** (2026-10-20, tickets 02 and 05; `docs/adr/0029-working-tree-preview-reads-head-and-a-click-applies-the-index-facing-patch.md`). The chip group was removed because three sites wrote `diff_comparison` and two of them were the app overriding the user's choice on every row click. The preview now pins one comparison, `HEAD ↔ worktree`, so a file's staged and unstaged lines are on screen together and the view is stable under the row toggle it offers, because staging a line cannot change `git diff HEAD`. Staged-ness is a **per-line derived fact** painted on the row, not a view the user switches into, so the capability the reference's three-way switch reached is answered without a switch. Declined, never a gap |
 | Amend (`⌥M` toggle) + choose the commit | `ui.amend` checkbox, `AMEND_LABEL` | **partial** — the commit chooser not evidenced |
 | `Commit ▾` split → Commit and Push / Commit and Rebase | `commit_split_menu` → "Commit and Push…" | **has** |
 | Commit options behind `⌃O`, three groups | — | **missing** — the IDE-only checks are absent, but the *structure* is not present either |

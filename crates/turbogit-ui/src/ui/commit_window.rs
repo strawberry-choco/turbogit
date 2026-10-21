@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use turbogit_app::granular;
 use turbogit_app::root_caches::{Affected, StatsView};
 use turbogit_app::shell_writes;
-use turbogit_app::state::{AppState, CommitSubTab, Dialog, DiffComparison, PendingConfirm, Toast};
+use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use turbogit_domain::model::{Change, ChangeStatus, DisplayName, Root, RootId};
 
 /// Fixed width of the Commit panel (redesign 03, screen 01): the Commit
@@ -198,26 +198,6 @@ fn set_file_staged(state: &mut AppState, root: &RootId, path: &Path) {
     };
     let stage = StageState::of(change) != StageState::All;
     state.dispatch(shell_writes::commit::set_staged(root, path, stage));
-    follow_the_staging_decision(state, path, stage);
-}
-
-/// Move the diff preview to what the click just staged, or back to the working
-/// version. Only the file already being previewed moves: re-pointing the whole
-/// pane at a file the developer did not click would make a staging action
-/// change what they are reading.
-///
-/// The un-tick direction lands on `Repo` (HEAD↔worktree) rather than on another
-/// staged view, so a file that no longer has staged content can never be left
-/// showing an empty one.
-fn follow_the_staging_decision(state: &mut AppState, path: &Path, stage: bool) {
-    if state.ui.preview_change.as_deref() != Some(path) {
-        return;
-    }
-    state.ui.diff_comparison = if stage {
-        DiffComparison::Staged
-    } else {
-        DiffComparison::Repo
-    };
 }
 
 /// Space: toggle the staging checkbox of the row being previewed. The

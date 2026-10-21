@@ -407,6 +407,70 @@ impl Palette {
     /// Removed-line accent (`#F75464`).
     pub const DIFF_DEL_ACCENT: Color32 = Color32::from_rgb(0xf7, 0x54, 0x64);
 
+    // --- Diff row staged-ness roles ----------------------------------------
+    // The combined preview reads `HEAD ↔ worktree`, so a staged row and an
+    // unstaged one are on screen together and have to look different. Which
+    // tokens each state may wear is decided here, once, and not at the four
+    // places that paint a diff row. The rule: a **staged** row wears the full
+    // add and delete pair above, `DIFF_ADD_BG` with `DIFF_ADD_TEXT` and
+    // `DIFF_DEL_BG` with `DIFF_DEL_TEXT`, and an **unstaged** row wears the
+    // quieter pair named below. The pair above is *not* redefined or renamed:
+    // the staged roles are those four tokens, because what is about to be
+    // committed is the vivid thing and it already had the vivid paint.
+    //
+    // Muting cannot be an ink change alone, and the arithmetic is why. A diff
+    // row's block fill is its line background, so the running text of an added
+    // row measures 6.01:1 on `DIFF_ADD_BG` and a removed one 4.92:1 on
+    // `DIFF_DEL_BG`. Every hue-preserving step down from either ink lands under
+    // the 4.5:1 AA floor for running text: the palette's only quieter green,
+    // `DIFF_ADD_ACCENT`, measures 3.42:1 on the added band. So the band has to
+    // come down with the ink, and the pair clears AA again because the surface
+    // it lands on is darker rather than because the text is brighter. Both
+    // numbers of each pair are pinned by a computation over the tokens in
+    // `tests/design_tokens.rs`, so a future edit that breaks one fails a gate
+    // instead of shipping a comment that stopped being true.
+    //
+    // No new hue, and no second name for a value the palette already holds.
+    // Each unstaged band is its own staged band at 60% toward `CONTENT_BG`, the
+    // surface the diff pane's rows hang on: the same green and the same red with
+    // less of them (1.71:1 and 1.54:1 against that surface become 1.22:1 and
+    // 1.16:1, so the row still reads as a band, just a quiet one). The muted
+    // added ink *is* `DIFF_ADD_ACCENT`, one green in two roles the same way
+    // `STATUS_ADDED` is already the same green. Only the muted removed ink is a
+    // new value, and the reason it could not alias its own accent is on it.
+    //
+    // These are the row's *state* roles. Nothing here is a selection role: R4's
+    // composite (`ROW_SELECTED` plus the 2px `BRAND` rail at a row's leading
+    // edge) still means "this row is chosen", and a diff row's staged-ness never
+    // borrows the rail. See `docs/design-system-roles.md`.
+
+    /// Unstaged added row band: `DIFF_ADD_BG` at 60% toward `CONTENT_BG`. Its
+    /// step from the content surface is 1.22:1 where the staged band's is 1.71:1.
+    pub const DIFF_ADD_UNSTAGED_BG: Color32 = Color32::from_rgb(0x2a, 0x36, 0x31);
+    /// Unstaged added row ink: the added accent, `#6FAE75`, which measures
+    /// **4.78:1** on [`Self::DIFF_ADD_UNSTAGED_BG`] and reads 1.76:1 dimmer than
+    /// the [`Self::DIFF_ADD_TEXT`] it replaces.
+    pub const DIFF_ADD_UNSTAGED_TEXT: Color32 = Self::DIFF_ADD_ACCENT;
+    /// Unstaged removed row band: `DIFF_DEL_BG` at 60% toward `CONTENT_BG`,
+    /// 1.16:1 against the content surface where the staged band's is 1.54:1.
+    pub const DIFF_DEL_UNSTAGED_BG: Color32 = Color32::from_rgb(0x39, 0x2d, 0x30);
+    /// Unstaged removed row ink: `DIFF_DEL_TEXT` at 85%, `#D98383`, **4.73:1** on
+    /// [`Self::DIFF_DEL_UNSTAGED_BG`] and 1.37:1 dimmer than the
+    /// [`Self::DIFF_DEL_TEXT`] it replaces.
+    ///
+    /// The one genuinely new value in the block above, against the rule that
+    /// prefers an existing token: the removed side's own accent cannot stand in
+    /// for it the way the added side's can, because `DIFF_DEL_ACCENT` measures
+    /// 4.02:1 on this band, under AA for running text. This is the smallest step
+    /// down from the staged ink that still clears the floor.
+    ///
+    /// The asymmetry is measured, not a taste: the added row's two inks are
+    /// 1.76:1 apart and the removed row's only 1.37:1, because the staged removed
+    /// ink starts at 4.92:1 on its band while the added one starts at 6.01:1. The
+    /// removed side has less headroom to spend, so its quiet half of the pair is
+    /// carried as much by the darker band as by the dimmer ink.
+    pub const DIFF_DEL_UNSTAGED_TEXT: Color32 = Color32::from_rgb(0xd9, 0x83, 0x83);
+
     /// Selected-row fill: BRAND at ~25% premultiplied alpha over BG.
     pub fn selection_bg() -> Color32 {
         Color32::from_rgba_premultiplied(0x0d, 0x1d, 0x3c, 0x40)

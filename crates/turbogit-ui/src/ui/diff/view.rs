@@ -1,9 +1,7 @@
 //! Diff rendering: the virtualized entry point plus the unified and
 //! side-by-side row painters (spec §8.4, ADR-0014).
 use super::actions::{
-    commit_current_hunk, comparison_chips, comparison_group, diff_options_menu,
-    hunk_gutter_actions, hunk_header_extras, hunk_nav, line_selected, paint_selection_bar,
-    viewer_hunk_staged_state,
+    commit_current_hunk, diff_options_menu, hunk_gutter_actions, hunk_header_extras, hunk_nav,
 };
 use super::model::{
     DiffModel, DisplayRow, Highlight, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W,
@@ -19,8 +17,178 @@ use egui::{
 use std::ops::Range;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
-use turbogit_app::state::{AppState, DiffComparison, DiffPane};
+use turbogit_app::staged_lines::{self, FileLineSets};
+use turbogit_app::state::{AppState, DiffPane};
 use turbogit_domain::model::{ChangeStatus, DisplayName};
+
+// --- staged-ness: the one per-line answer the painters read --------------------
+
+/// The per-line oracle, resolved for the file this pane is previewing.
+///
+/// Every colour and every word about a row's staged-ness comes from here, and
+/// nothing comes from the patch the rows were built from. That is the hazard the
+/// whole pane turns on: for an unmerged path `git diff HEAD` prints an ordinary
+/// two-sided diff whose added lines **are** the conflict markers, so a treatment
+/// read off the displayed patch would paint a conflicted file's own markers as
+/// staged additions. The oracle answers `None` for that path instead.
+///
+/// It is resolved once per frame, at the top of the walk that already reads every
+/// row, because answering it per row would re-resolve the changelist entry per
+/// painted line.
+struct StagedRows<'a> {
+    path: &'a std::path::Path,
+    sets: &'a [FileLineSets],
+}
+
+impl<'a> StagedRows<'a> {
+    /// The selected root's changelist entry for `path`, and the line sets keyed on
+    /// git's own spelling of it.
+    ///
+    /// The pane hands an **absolute** path (its entry points take the previewed
+    /// change as the shell knows it) while the caches key on the repo-relative `b/`
+    /// side, so the changelist lookup is the one place the two spellings meet. A
+    /// root with no `hunk_stats` entry yet answers nothing at all, which is `None`
+    /// per row rather than a guess.
+    fn resolve(state: &'a AppState, path: &Option<std::path::PathBuf>) -> Option<Self> {
+        let root = state
+            .selected_root
+            .as_ref()
+            .and_then(|id| state.multi.by_id(id))?;
+        let change = root.resolve_change(path.as_deref()?)?;
+        let stats = state.caches.hunk_stats(&root.id)?;
+        Some(Self {
+            path: &change.path,
+            sets: &stats.line_sets,
+        })
+    }
+
+    /// Whether this row's line is in the index, or has nothing to say about it.
+    fn answer(&self, kind: RowKind, old_no: usize, new_no: usize) -> Option<bool> {
+        staged_lines::line_is_staged(self.sets, self.path, kind, old_no, new_no)
+    }
+}
+
+/// The oracle's answers for the two halves of one display row.
+#[derive(Clone, Copy, Default)]
+struct PairStaging {
+    del: Option<bool>,
+    add: Option<bool>,
+}
+
+impl PairStaging {
+    fn for_kind(self, kind: RowKind) -> Option<bool> {
+        match kind {
+            RowKind::Add => self.add,
+            RowKind::Del => self.del,
+            _ => None,
+        }
+    }
+}
+
+/// What the per-line answers say about one hunk as a whole.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HunkStaging {
+    /// Every answered row is staged.
+    Staged,
+    /// Every answered row is unstaged.
+    Unstaged,
+    /// The hunk holds both states.
+    Mixed,
+    /// No row of it was answered: a conflicted path, or a hunk with nothing in it
+    /// that a stage can reach.
+    NoAnswer,
+}
+
+impl HunkStaging {
+    /// Take one more row's answer. A `None` contributes nothing, which is safe
+    /// rather than generous: an unanswered *changed* row means the whole path went
+    /// unanswered (a conflict, or a file absent from both appliable patches), and
+    /// there is no shape where one row of a hunk is answered and its neighbour is
+    /// not.
+    fn fold(self, answer: Option<bool>) -> Self {
+        match (self, answer) {
+            (s, None) => s,
+            (Self::NoAnswer, Some(true)) => Self::Staged,
+            (Self::NoAnswer, Some(false)) => Self::Unstaged,
+            (Self::Staged, Some(false)) | (Self::Unstaged, Some(true)) => Self::Mixed,
+            (s, _) => s,
+        }
+    }
+
+    /// The hunk header's suffix, and no suffix at all where the oracle said nothing.
+    ///
+    /// This text exists because muting cannot show a mixed hunk: a hunk holding
+    /// both states looks like a hunk holding some quiet rows, and nobody can count
+    /// those at a glance. Spelled `· part`, and it is **not** the staged-hunk chip's
+    /// ` (part)` in `commit_window.rs`. That one labels a chip in the commit
+    /// window's index list, this one labels a hunk header on the diff screen: two
+    /// controls with two wordings, so one shared constant cannot serve both
+    /// without renaming the label the other shows.
+    fn suffix(self) -> Option<&'static str> {
+        match self {
+            Self::Staged => Some("· staged"),
+            Self::Mixed => Some("· part"),
+            Self::Unstaged => Some("· not staged"),
+            Self::NoAnswer => None,
+        }
+    }
+}
+
+/// The band and ink one changed row wears, from the oracle's answer.
+///
+/// Staged is the foreground, so a row the oracle cannot answer keeps the full
+/// treatment as well: muting it would report it unstaged, which is a claim about
+/// the index nothing made. Only `Some(false)` quiets.
+fn row_treatment(kind: RowKind, staged: Option<bool>) -> (Color32, Color32) {
+    let (band, ink) = match (kind, staged) {
+        (RowKind::Add, Some(false)) => (
+            Palette::DIFF_ADD_UNSTAGED_BG,
+            Palette::DIFF_ADD_UNSTAGED_TEXT,
+        ),
+        (RowKind::Add, _) => (Palette::DIFF_ADD_BG, Palette::DIFF_ADD_TEXT),
+        (RowKind::Del, Some(false)) => (
+            Palette::DIFF_DEL_UNSTAGED_BG,
+            Palette::DIFF_DEL_UNSTAGED_TEXT,
+        ),
+        (RowKind::Del, _) => (Palette::DIFF_DEL_BG, Palette::DIFF_DEL_TEXT),
+        _ => return (Palette::DIFF_ADD_BG, Palette::DIFF_ADD_TEXT),
+    };
+    (band, ink)
+}
+
+/// A changed row's accessibility label: its content, then its staged-ness.
+///
+/// The **state**, and not the consequence of the click, on purpose. The two
+/// diverge in both directions: an unstage moves a replacement *pair* together,
+/// because a `-` and the `+` under it are one change, while a row on a file git has
+/// never had a version of reaches the whole *file*, because git refuses a partial
+/// reverse there. A label that named the consequence would promise per-row control
+/// the click does not always carry, which is a misleading mark of a new kind. The
+/// state is true in every shape, and the parenthetical is the whole-file
+/// checkbox's own vocabulary (`stage_label` in `commit_window.rs`), so the row and
+/// the box beside it cannot disagree.
+fn row_label(text: &str, staged: Option<bool>) -> String {
+    match staged {
+        Some(true) => format!("{text} (staged)"),
+        Some(false) => format!("{text} (unstaged)"),
+        None => format!("{text} (staged-ness unknown)"),
+    }
+}
+
+/// The ink of a changed row's line numbers, which is where the pointer answers.
+///
+/// Not a fill: the app's hover rung is `SURFACE_2`, and against a muted band that
+/// measures 1.01:1, i.e. an interaction fill laid over a muted row is invisible on
+/// exactly the rows that most need it. The row's band and ink are now spent on
+/// staged-ness, so the pointer's answer lives in the gutter column, which carries
+/// no git state at all and steps one rung up the ink ramp for both states.
+fn gutter_ink(hovered: bool) -> Color32 {
+    if hovered {
+        Palette::INK_2
+    } else {
+        Palette::INK_3
+    }
+}
 
 // --- entry point -------------------------------------------------------------
 
@@ -39,28 +207,40 @@ pub fn render_diff(
         }
     };
 
-    // Working-tree comparisons expose the revision chips (spec §8.4);
-    // explicit commit-to-commit targets keep their fixed revision pair.
-    let working_tree = left.is_none() && right.is_none();
-    let comparison = state.ui.diff_comparison;
-    let target = DiffTarget::new(
-        root,
-        left.clone(),
-        right.clone(),
-        state.ui.diff_comparison,
-        state.ui.diff_policies,
-        path.clone(),
-    );
+    // The two kinds of diff target, told apart by which constructor they ask
+    // for: no revision named means the working-tree preview, and the working
+    // tree is read as `HEAD ↔ worktree`. A caller that names both sides gets
+    // exactly the pair it asked for.
+    let target = match (left, right) {
+        (None, None) => DiffTarget::working_tree(root, state.ui.diff_policies, path.clone()),
+        _ => DiffTarget::new(
+            root,
+            left.clone(),
+            right.clone(),
+            state.ui.diff_policies,
+            path.clone(),
+        ),
+    };
     // One ask, one verdict: the read answers from the cache, or starts the
     // load and says it is waiting. The widget-state salt below is derived from
     // the target, never from the cache key, which the caller cannot name.
     let verdict = state.read(target.clone());
+    // A root-wide read of the view this pane displays failed: the whole file
+    // counts as failed to read, content and all. Consulted on a `Fresh` or
+    // `Empty` verdict because every other verdict already stops the rows, and
+    // an `(no differences)` answer from the per-path read is a claim the dead
+    // root read just took away. The rule and its exemptions live in
+    // [`AppState::failed_view_message`].
+    let view_failure = match &verdict {
+        Read::Fresh(_) | Read::Empty => state.failed_view_message(&target),
+        _ => None,
+    };
     let total_hunks = match &verdict {
-        Read::Fresh(diff) => diff.model.hunk_count(),
+        Read::Fresh(diff) if view_failure.is_none() => diff.model.hunk_count(),
         _ => 0,
     };
 
-    // Toolbar chrome (spec §8.4): view mode · the two axes of scope · hunk nav.
+    // Toolbar chrome (spec §8.4): view mode · hunk nav.
     // Wrapped so narrow panes (commit preview) push a control to a second row
     // instead of clipping it out of reach.
     ui.horizontal_wrapped(|ui| {
@@ -71,31 +251,9 @@ pub fn render_diff(
         if let Some(idx) = widgets::segmented_control(ui, &["Side-by-Side", "Unified"], selected) {
             state.ui.diff_side_by_side = idx == 0;
         }
-        if working_tree {
-            // The comparison axis (spec story 22), grouped as one control.
-            // Only over working-tree comparisons — commit-to-commit diffs
-            // have no index to stage into, so nothing follows it.
-            ui.add_space(gap);
-            comparison_group(ui, |ui| comparison_chips(ui, state));
-        }
         ui.add_space(gap);
         hunk_nav(ui, state, total_hunks);
     });
-
-    // Selection readout (issue 19, screen 06): armed lines/chars, active
-    // granularity, and the Enter/Esc hints while a char range is armed.
-    if let Some(readout) = granular::selection_readout(state) {
-        ui.horizontal(|ui| {
-            let (dot, _) = ui.allocate_exact_size(Vec2::new(8.0, 12.0), Sense::hover());
-            ui.painter()
-                .circle_filled(dot.center(), 2.5, Palette::BRAND);
-            ui.label(
-                RichText::new(readout)
-                    .font(crate::theme::chrome_font(crate::theme::TYPE_CONTROL))
-                    .color(Palette::INK_2),
-            );
-        });
-    }
 
     // The verdict is the whole paint contract: which of these four the
     // surface shows is answered by the read, so there is no loading flag left
@@ -106,6 +264,14 @@ pub fn render_diff(
     // file row is where the pane's comparison toggle lives: a comparison that
     // came back empty, is still computing, or failed must not take the control
     // that produces it off screen along with the rows it would apply to.
+    if let Some(message) = &view_failure {
+        file_header(ui, state, path.as_deref());
+        widgets::keyed_read_presentation(
+            ui,
+            widgets::KeyedReadPresentation::Failed(message.as_str()),
+        );
+        return;
+    }
     let diff = match verdict {
         Read::Fresh(diff) => diff,
         Read::Empty => {
@@ -183,7 +349,7 @@ pub fn render_diff(
     // indices; unified slots are (display index, member) with a Pair member
     // flattened into one slot per underlying row (ADR-0014 paging, now over
     // the filtered stream).
-    let plan = paint_plan(state, model);
+    let plan = paint_plan(state, model, path);
     let total_rows = if side_by_side {
         plan.sbs.len()
     } else {
@@ -198,7 +364,7 @@ pub fn render_diff(
         let width = ui.available_width();
         let gap = ui.style().spacing.item_spacing.x;
         let half = ((width - gap * 2.0) / 2.0).max(120.0);
-        let (left_label, right_label) = pane_labels(comparison);
+        let (left_label, right_label) = pane_labels(&target);
         ui.horizontal(|ui| {
             header_band(ui, half, &format!("Before {left_label}"));
             header_band(ui, half, &format!("After {right_label}"));
@@ -312,6 +478,14 @@ struct PaintPlan {
     /// current hunk **on the pane that holds the caret**, so `⌃⇧⇥` visibly moves
     /// it and `F4` can name the line it is standing on.
     caret: Option<usize>,
+    /// Per display row: the per-line oracle's answer for each half of a pair, so a
+    /// row's colour, its accessibility label and the header's suffix all come from
+    /// one resolution of the changelist entry rather than from four lookups per
+    /// painted line.
+    staging: Vec<PairStaging>,
+    /// Per hunk: those answers aggregated, which is what names the header's
+    /// `· staged` / `· part` / `· not staged` suffix.
+    hunk_staging: Vec<HunkStaging>,
 }
 
 impl PaintPlan {
@@ -323,16 +497,32 @@ impl PaintPlan {
             .find(|f| f.display == display)
             .map_or((0, 0), |f| (f.added, f.removed))
     }
+
+    /// The oracle's answer for one row of the display model.
+    fn staged(&self, display: usize, kind: RowKind) -> Option<bool> {
+        self.staging
+            .get(display)
+            .and_then(|entry| entry.for_kind(kind))
+    }
+
+    /// The suffix this hunk's header names, or nothing where the oracle has no
+    /// answer for any of its rows.
+    fn hunk_suffix(&self, hunk: usize) -> Option<&'static str> {
+        self.hunk_staging.get(hunk).and_then(|s| s.suffix())
+    }
 }
 
 /// Walk the display model once, filtering collapsed hunks' bodies out of
 /// both slot streams (issue 20). Meta rows between sections stay visible —
 /// they belong to no hunk body. The same walk totals each file section's
 /// changed lines for the file row, which is why the counts are carried here
-/// rather than recomputed per row (ticket 12).
-fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
+/// rather than recomputed per row (ticket 12), and the same walk asks the
+/// per-line oracle about every changed row once, which is why staged-ness is
+/// painted from a resolved frame rather than a lookup per painted line.
+fn paint_plan(state: &AppState, model: &DiffModel, path: &Option<std::path::PathBuf>) -> PaintPlan {
     let hunk_count = model.hunk_count();
     let want_add = matches!(state.ui.diff_pane, DiffPane::New);
+    let oracle = StagedRows::resolve(state, path);
     let mut caret: Option<usize> = None;
     let mut plan = PaintPlan {
         sbs: Vec::with_capacity(model.display.len()),
@@ -342,6 +532,8 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
         hunk_lines: vec![0; hunk_count],
         file_rows: Vec::new(),
         caret: None,
+        staging: vec![PairStaging::default(); model.display.len()],
+        hunk_staging: vec![HunkStaging::NoAnswer; hunk_count],
     };
     // The section currently being totalled, and the counts of the one before
     // it — a file row opens its section, so the section's totals are only
@@ -424,6 +616,23 @@ fn paint_plan(state: &AppState, model: &DiffModel) -> PaintPlan {
                     }
                 }
                 plan.hunk_lines[hunk] += rows.count();
+                // Staged-ness is answered per row here, once, and both the row's
+                // paint and the header's suffix read the result. Collapsed or not,
+                // a hunk's state describes the hunk.
+                let entry = PairStaging {
+                    del: d.as_ref().and_then(|r| {
+                        oracle
+                            .as_ref()
+                            .and_then(|o| o.answer(r.kind, r.old_no, r.new_no))
+                    }),
+                    add: a.as_ref().and_then(|r| {
+                        oracle
+                            .as_ref()
+                            .and_then(|o| o.answer(r.kind, r.old_no, r.new_no))
+                    }),
+                };
+                plan.staging[di] = entry;
+                plan.hunk_staging[hunk] = plan.hunk_staging[hunk].fold(entry.del).fold(entry.add);
                 // Collapsed or not, a file's statistics describe the file.
                 if let Some(section) = open.as_mut() {
                     if d.is_some() {
@@ -476,13 +685,19 @@ fn text_end(painter: &egui::Painter, text_origin_x: f32, text: &str, font: &Font
             .x
 }
 
-/// Pane-header labels documenting the active pair (spec §8.4).
-fn pane_labels(comparison: DiffComparison) -> (&'static str, &'static str) {
-    match comparison {
-        DiffComparison::Repo => ("HEAD", "Working tree"),
-        DiffComparison::Staged => ("HEAD", "Index"),
-        DiffComparison::Local => ("Index", "Working tree"),
-    }
+/// Pane-header labels naming the two sides this read actually diffs.
+///
+/// A side names itself when the target named it, and falls back to the pinned
+/// working-tree pair's own side otherwise, so a commit-to-commit diff prints
+/// its own revisions rather than HEAD/Index/Working tree.
+fn pane_labels(target: &DiffTarget) -> (String, String) {
+    let label = |rev: &Option<String>, working_tree_side: &str| {
+        rev.clone().unwrap_or_else(|| working_tree_side.to_owned())
+    };
+    (
+        label(&target.left, "Index"),
+        label(&target.right, "Working tree"),
+    )
 }
 
 /// One vertically-centered text cell painted at absolute x inside `rect`.
@@ -514,9 +729,15 @@ fn char_at_x(ui: &Ui, text: &str, x: f32) -> usize {
 }
 
 /// The char-range drag protocol on an addition row (issue 19): the press
-/// anchors the range, in-row pointer movement widens it around the anchor,
-/// release arms it for Enter. A collapsed range was a plain click — the
-/// line toggle below handles that and the range clears.
+/// anchors the range, in-row pointer movement widens it around the anchor, and
+/// release stages it. A range that never moved was a plain click, so nothing
+/// happens here and the row's own line toggle runs instead.
+///
+/// The return value is whether this response staged anything. `clicked()` and
+/// `drag_stopped()` both come off one `Sense::click_and_drag` response, and a
+/// finished drag reports both, so the caller must skip its click when the drag
+/// already staged — otherwise one drag would stage the range *and* the whole
+/// line.
 fn handle_char_drag(
     ui: &mut Ui,
     state: &mut AppState,
@@ -524,12 +745,12 @@ fn handle_char_drag(
     text_origin_x: f32,
     row: &Row,
     path: &Option<std::path::PathBuf>,
-) {
+) -> bool {
     if resp.drag_started()
         && let Some(pos) = ui.input(|i| i.pointer.press_origin())
     {
         let anchor = char_at_x(ui, &row.text, pos.x - text_origin_x);
-        granular::begin_char_selection(state, path, row.hunk, row.line_ord, anchor);
+        granular::begin_char_drag(state, path, row.hunk, row.line_ord, row.new_no, anchor);
     }
     // Not an else: the drag's first frame counts as both started and
     // dragged, and the pointer is already at its moved position there.
@@ -537,16 +758,17 @@ fn handle_char_drag(
         && let Some(pos) = resp.interact_pointer_pos()
     {
         let cur = char_at_x(ui, &row.text, pos.x - text_origin_x);
-        granular::update_char_selection(state, path, row.hunk, row.line_ord, cur);
+        granular::extend_char_drag(state, path, row.hunk, row.line_ord, cur);
     }
     if resp.drag_stopped() {
-        granular::end_char_selection(state, path, row.hunk, row.line_ord);
+        return granular::finish_char_drag(state, path, row.hunk, row.line_ord);
     }
+    false
 }
 
-/// Translucent BRAND band over the armed char range of one addition row
-/// (issue 19, screen 06): the drag-selection highlight. No-op unless the
-/// active selection is this exact row.
+/// Translucent BRAND band over the character range under the pointer
+/// (issue 19, screen 06): the live drag, and nothing after it. No-op unless the
+/// draft is this exact row.
 fn paint_char_highlight(
     painter: &egui::Painter,
     state: &AppState,
@@ -558,20 +780,25 @@ fn paint_char_highlight(
     let Some(p) = path else {
         return;
     };
-    let Some(sel) =
-        state.ui.char_selection.clone().filter(|s| {
-            s.path == *p && s.hunk == row.hunk && s.ord == row.line_ord && s.start < s.end
-        })
+    let Some(draft) = state
+        .ui
+        .char_drag
+        .clone()
+        .filter(|d| d.path == *p && d.hunk == row.hunk && d.ord == row.line_ord)
     else {
         return;
     };
+    let (start, end) = draft.range();
+    if start >= end {
+        return;
+    }
     let galley = painter.layout_no_wrap(row.text.clone(), mono_font(), Color32::WHITE);
     let Some(galley_row) = galley.rows.first() else {
         return;
     };
     let len = row.text.chars().count();
-    let x0 = text_origin_x + galley_row.x_offset(egui::epaint::text::CharIndex(sel.start.min(len)));
-    let x1 = text_origin_x + galley_row.x_offset(egui::epaint::text::CharIndex(sel.end.min(len)));
+    let x0 = text_origin_x + galley_row.x_offset(egui::epaint::text::CharIndex(start.min(len)));
+    let x1 = text_origin_x + galley_row.x_offset(egui::epaint::text::CharIndex(end.min(len)));
     painter.rect_filled(
         Rect::from_min_max(
             Pos2::new(x0, rect.top()),
@@ -643,23 +870,25 @@ fn paint_caret(painter: &egui::Painter, rect: &Rect, x: f32) {
     );
 }
 
-/// Unified-mode sign + line-number gutter cells (muted INK_3 numbers).
+/// Unified-mode sign + line-number gutter cells. The sign wears the row's own
+/// ink, which is now the staged-ness role's, and the number wears the gutter's.
 fn paint_gutter(
     painter: &egui::Painter,
     rect: &Rect,
     sign: &str,
     num: usize,
     sign_color: Color32,
+    num_color: Color32,
     font: &FontId,
 ) {
     paint_cell(painter, rect.left() + 4.0, rect, sign, sign_color, font);
     let num_text = num.to_string();
-    let galley = painter.layout_no_wrap(num_text, font.clone(), Palette::INK_3);
+    let galley = painter.layout_no_wrap(num_text, font.clone(), num_color);
     let x = rect.left() + SIGN_W + NUM_W - galley.size().x - 6.0;
     painter.galley(
         Pos2::new(x, rect.center().y - galley.size().y / 2.0),
         galley,
-        Palette::INK_3,
+        num_color,
     );
 }
 /// Unified mode (spec §8.4): one full-width band per underlying row, paging
@@ -795,16 +1024,29 @@ fn paint_full_width_row(
         RowKind::RenameHeader => paint_rename_header(painter, rect, &row.text, font),
         RowKind::Hunk => {
             painter.rect_filled(*rect, CornerRadius::ZERO, Palette::SURFACE);
-            paint_cell(
-                painter,
-                rect.left() + TEXT_X,
-                rect,
-                &row.text,
+            // The header is the `@@` line git itself printed, painted as its own
+            // galley, and the staged-ness suffix is a **second** galley beside it.
+            // Two rather than one string because the suite that aims a hunk compares
+            // the painted header against `git diff`'s own line: fold the suffix in
+            // and the pane claims git printed words it did not.
+            let header = painter.layout_no_wrap(row.text.clone(), font.clone(), Palette::INK_3);
+            let header_x = rect.left() + TEXT_X;
+            painter.galley(
+                Pos2::new(header_x, rect.center().y - header.size().y / 2.0),
+                header.clone(),
                 Palette::INK_3,
-                font,
             );
+            if let Some(suffix) = plan.hunk_suffix(row.hunk) {
+                paint_cell(
+                    painter,
+                    header_x + header.size().x + 8.0,
+                    rect,
+                    suffix,
+                    Palette::INK_3,
+                    font,
+                );
+            }
             hunk_gutter_actions(ui, state, *rect, paint, row.hunk, status, path);
-            let staged_state = viewer_hunk_staged_state(state, path, row.span);
             hunk_header_extras(
                 ui,
                 state,
@@ -814,7 +1056,6 @@ fn paint_full_width_row(
                 plan.hunk_lines.get(row.hunk).copied().unwrap_or(0),
                 state.ui.diff_collapsed.contains(&row.hunk),
                 plan.hunk_hidden.get(row.hunk).copied().unwrap_or(0),
-                staged_state,
             );
         }
         RowKind::Context | RowKind::Del | RowKind::Add => return false,
@@ -864,14 +1105,18 @@ fn unified_row(
         *frame_hover = Some(row.hunk);
     }
     if toggleable {
-        // Accessibility: the row is labeled by its content text so
-        // tooling can target individual changed lines.
-        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, row.text.as_str()));
-        if draggable {
-            handle_char_drag(ui, state, &resp, rect.left() + TEXT_X, row, path);
-        }
-        if resp.clicked() {
-            granular::toggle_line_selection(state, path, row.hunk, row.line_ord);
+        // Accessibility: the row is labeled by its content text so tooling can
+        // target individual changed lines, and by the state the paint is showing so
+        // the colour has a word beside it.
+        let label = row_label(&row.text, plan.staged(display, row.kind));
+        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));
+        let drag_staged = if draggable {
+            handle_char_drag(ui, state, &resp, rect.left() + TEXT_X, row, path)
+        } else {
+            false
+        };
+        if resp.clicked() && !drag_staged {
+            granular::toggle_row(state, path, row);
         }
     }
     if paint_full_width_row(
@@ -892,7 +1137,15 @@ fn unified_row(
     }
     match row.kind {
         RowKind::Context => {
-            paint_gutter(painter, &rect, " ", row.new_no, Palette::INK_3, font);
+            paint_gutter(
+                painter,
+                &rect,
+                " ",
+                row.new_no,
+                Palette::INK_3,
+                Palette::INK_3,
+                font,
+            );
             paint_cell(
                 painter,
                 rect.left() + TEXT_X,
@@ -904,35 +1157,27 @@ fn unified_row(
         }
         RowKind::Del => {
             let caret = holds_caret(state, plan, display, RowKind::Del);
+            let (band, ink) = row_treatment(RowKind::Del, plan.staged(display, RowKind::Del));
             paint_highlight(
                 painter,
                 &rect,
                 &row.text,
                 rect.left() + TEXT_X,
                 &row.highlight,
-                Palette::DIFF_DEL_BG,
+                band,
                 font,
             );
-            if line_selected(state, path, row.hunk, row.line_ord) {
-                paint_selection_bar(painter, &rect);
-            }
             paint_gutter(
                 painter,
                 &rect,
                 "-",
                 row.old_no,
-                Palette::DIFF_DEL_TEXT,
+                ink,
+                gutter_ink(resp.hovered()),
                 font,
             );
             let text_origin = rect.left() + TEXT_X;
-            paint_cell(
-                painter,
-                text_origin,
-                &rect,
-                &row.text,
-                Palette::DIFF_DEL_TEXT,
-                font,
-            );
+            paint_cell(painter, text_origin, &rect, &row.text, ink, font);
             if caret {
                 paint_caret(
                     painter,
@@ -943,35 +1188,27 @@ fn unified_row(
         }
         RowKind::Add => {
             let caret = holds_caret(state, plan, display, RowKind::Add);
+            let (band, ink) = row_treatment(RowKind::Add, plan.staged(display, RowKind::Add));
             paint_highlight(
                 painter,
                 &rect,
                 &row.text,
                 rect.left() + TEXT_X,
                 &row.highlight,
-                Palette::DIFF_ADD_BG,
+                band,
                 font,
             );
-            if line_selected(state, path, row.hunk, row.line_ord) {
-                paint_selection_bar(painter, &rect);
-            }
             paint_gutter(
                 painter,
                 &rect,
                 "+",
                 row.new_no,
-                Palette::DIFF_ADD_TEXT,
+                ink,
+                gutter_ink(resp.hovered()),
                 font,
             );
             let text_origin = rect.left() + TEXT_X;
-            paint_cell(
-                painter,
-                text_origin,
-                &rect,
-                &row.text,
-                Palette::DIFF_ADD_TEXT,
-                font,
-            );
+            paint_cell(painter, text_origin, &rect, &row.text, ink, font);
             paint_char_highlight(painter, state, &rect, text_origin, row, path);
             if caret {
                 paint_caret(
@@ -1117,12 +1354,13 @@ fn paint_rename_header(painter: &egui::Painter, rect: &Rect, text: &str, font: &
         font,
     );
 }
-/// One side-by-side cell: the highlight the policy chose for it, a muted gutter
-/// number, sign marker, and code text. A changed cell is a clickable line
-/// toggle (spec R2 story 3); the addition cell also takes a char-range drag.
-/// `selected` paints the BRAND edge bar and `caret` the pane's caret bar.
-/// Returns the cell's response so the row loop can track hover and
-/// toggle clicks.
+/// One side-by-side cell: the highlight the policy chose for it, a gutter number,
+/// sign marker, and code text. A changed cell is a clickable line toggle (spec R2
+/// story 3); the addition cell also takes a char-range drag. `selected` paints the
+/// BRAND edge bar and `caret` the pane's caret bar. `bg` and `text_color` are the
+/// cell's own staged-ness role, chosen by the caller, and `staged` is the oracle's
+/// answer the accessibility label states. Returns the cell's response so the row
+/// loop can track hover and toggle clicks.
 #[allow(clippy::too_many_arguments)]
 fn cell_band(
     ui: &mut Ui,
@@ -1134,11 +1372,11 @@ fn cell_band(
     sign: char,
     text: &str,
     text_color: Color32,
+    staged: Option<bool>,
     painter: &egui::Painter,
     font: &FontId,
     toggleable: bool,
     draggable: bool,
-    selected: bool,
 ) -> Response {
     let (rect, resp) = ui.allocate_exact_size(
         Vec2::new(width, ROW_H),
@@ -1152,21 +1390,24 @@ fn cell_band(
     );
     let text_origin = rect.left() + NUM_W + 20.0;
     paint_highlight(painter, &rect, text, text_origin, highlight, bg, font);
-    if selected {
-        paint_selection_bar(painter, &rect);
-    }
     if toggleable {
-        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, text));
+        let label = row_label(text, staged);
+        resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));
     }
     if num > 0 {
-        let galley = painter.layout_no_wrap(num.to_string(), font.clone(), Palette::INK_3);
+        let num_color = if toggleable {
+            gutter_ink(resp.hovered())
+        } else {
+            Palette::INK_3
+        };
+        let galley = painter.layout_no_wrap(num.to_string(), font.clone(), num_color);
         painter.galley(
             Pos2::new(
                 rect.left() + NUM_W - galley.size().x - 6.0,
                 rect.center().y - galley.size().y / 2.0,
             ),
             galley,
-            Palette::INK_3,
+            num_color,
         );
     }
     paint_cell(
@@ -1255,9 +1496,9 @@ fn render_side_by_side(
                             ' ',
                             &row.text,
                             Palette::INK,
+                            None,
                             &painter,
                             &font,
-                            false,
                             false,
                             false,
                         );
@@ -1271,9 +1512,9 @@ fn render_side_by_side(
                             ' ',
                             &row.text,
                             Palette::INK,
+                            None,
                             &painter,
                             &font,
-                            false,
                             false,
                             false,
                         );
@@ -1288,27 +1529,37 @@ fn render_side_by_side(
             DisplayRow::Pair(d, a) => {
                 let hunk = d.as_ref().map(|r| r.hunk).or(a.as_ref().map(|r| r.hunk));
                 let caret_row = plan.caret == Some(di);
+                // **Both cells answer for themselves.** A side-by-side pair is one
+                // line's two halves, and in a combined view a replacement can be
+                // staged on one side of the index and not the other (a staged
+                // modification re-edited in the worktree answers its addition
+                // unstaged and its deletion the other way). So each of the two cells
+                // wears the treatment its own answer names, and neither borrows its
+                // neighbour's.
+                let del_staged = plan.staged(di, RowKind::Del);
+                let add_staged = plan.staged(di, RowKind::Add);
+                let (del_band, del_ink) = row_treatment(RowKind::Del, del_staged);
+                let (add_band, add_ink) = row_treatment(RowKind::Add, add_staged);
                 ui.horizontal(|ui| {
                     let del_cell = if let Some(d) = d {
-                        let selected = line_selected(state, path, d.hunk, d.line_ord);
                         let cell = cell_band(
                             ui,
                             half,
                             &d.highlight,
-                            Palette::DIFF_DEL_BG,
+                            del_band,
                             caret_row && matches!(state.ui.diff_pane, DiffPane::Old),
                             d.old_no,
                             '-',
                             &d.text,
-                            Palette::DIFF_DEL_TEXT,
+                            del_ink,
+                            del_staged,
                             &painter,
                             &font,
                             true,
                             false,
-                            selected,
                         );
                         if cell.clicked() {
-                            granular::toggle_line_selection(state, path, d.hunk, d.line_ord);
+                            granular::toggle_row(state, path, d);
                         }
                         cell
                     } else {
@@ -1322,35 +1573,34 @@ fn render_side_by_side(
                             ' ',
                             "",
                             Palette::INK,
+                            None,
                             &painter,
                             &font,
-                            false,
                             false,
                             false,
                         )
                     };
                     let add_cell = if let Some(a) = a {
-                        let selected = line_selected(state, path, a.hunk, a.line_ord);
                         let cell = cell_band(
                             ui,
                             half,
                             &a.highlight,
-                            Palette::DIFF_ADD_BG,
+                            add_band,
                             caret_row && matches!(state.ui.diff_pane, DiffPane::New),
                             a.new_no,
                             '+',
                             &a.text,
-                            Palette::DIFF_ADD_TEXT,
+                            add_ink,
+                            add_staged,
                             &painter,
                             &font,
                             true,
                             true,
-                            selected,
                         );
                         let text_origin = cell.rect.left() + NUM_W + 20.0;
-                        handle_char_drag(ui, state, &cell, text_origin, a, path);
-                        if cell.clicked() {
-                            granular::toggle_line_selection(state, path, a.hunk, a.line_ord);
+                        let drag_staged = handle_char_drag(ui, state, &cell, text_origin, a, path);
+                        if cell.clicked() && !drag_staged {
+                            granular::toggle_row(state, path, a);
                         }
                         paint_char_highlight(&painter, state, &cell.rect, text_origin, a, path);
                         cell
@@ -1365,9 +1615,9 @@ fn render_side_by_side(
                             ' ',
                             "",
                             Palette::INK,
+                            None,
                             &painter,
                             &font,
-                            false,
                             false,
                             false,
                         )

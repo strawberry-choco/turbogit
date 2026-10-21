@@ -2,9 +2,9 @@
 //!
 //! Drives the real `turbogit_ui::ui::render()` through `egui_kittest` over a
 //! temporary repository with a [`RecordingExecutor`] injected at the
-//! executor boundary (the `partial_dispatch.rs` pattern). Covers the issue's
-//! harness layer: line toggling on changed rows, drag-selected character
-//! ranges, Enter/Esc, and the selection readout.
+//! executor boundary (the `partial_dispatch.rs` pattern). Covers the harness
+//! layer: row clicks staging their line in git, drag-released character
+//! ranges, and the status bar's scope chip.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -57,10 +57,20 @@ fn seed_single_line_edit(repo: &Repo) {
     .unwrap();
 }
 
-/// The worktree text of the edited line — the addition row's accessibility
-/// label (rows are labeled by their content text).
+/// The worktree text of the edited line. A diff row's accessibility label is this
+/// text followed by the state the per-line oracle answers for it, so the two are
+/// one string only through [`row`].
 const ADD_ROW: &str = "    let calculated_value = compute(x);";
 const DEL_ROW: &str = "    let x = 1;";
+
+/// A changed row's accessibility label, spelled the way the pane spells it.
+///
+/// Every fixture in this suite starts with the whole edit in the worktree, so
+/// `false` is a row's resting state and the `true` calls are the flip this suite
+/// is asserting, read off the accessibility tree rather than off an internal.
+fn row(text: &str, staged: bool) -> String {
+    format!("{text} ({})", if staged { "staged" } else { "unstaged" })
+}
 
 /// [`AppState`] with an injected recording engine — the swap happens AFTER
 /// synchronous registration, so setup reads never reach the recorder.
@@ -122,7 +132,7 @@ const TEXT_X: f32 = 16.0 + 40.0 + 12.0;
 /// Drag from char 8 to char 24 of the addition row — the
 /// `calculated_value` slice (four leading spaces precede it).
 fn drag_calculated_value(h: &mut Harness<'_, AppState>) {
-    let rect = h.get_by_label(ADD_ROW).rect();
+    let rect = h.get_by_label(&row(ADD_ROW, false)).rect();
     let origin = rect.left() + TEXT_X;
     let y = rect.center().y;
     h.drag_at(egui::pos2(origin + char_x(h, 8), y));
@@ -136,7 +146,7 @@ fn drag_calculated_value(h: &mut Harness<'_, AppState>) {
 // ------------------------------------------------------------------ tests --
 
 #[test]
-fn changed_rows_are_line_toggles() {
+fn row_click_stages_the_line_in_git() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "toggle");
     seed_single_line_edit(&repo);
@@ -146,69 +156,53 @@ fn changed_rows_are_line_toggles() {
     let mut h = harness(state);
     open_preview(&mut h);
 
-    // Clicking a changed row toggles it: the diff surface stages at line
-    // granularity, and both rows are click targets.
-    h.get_by_label(DEL_ROW).click();
+    // A changed-row click IS the stage: git answers for itself, first the
+    // deletion row, then the addition row of the same edit.
+    h.get_by_label(&row(DEL_ROW, false)).click();
     h.run();
     assert!(
-        h.state()
-            .ui
-            .line_selections
-            .contains_key(Path::new("code.rs")),
-        "a row click toggles the line selection"
+        wait_until(15_000, || git(
+            &repo.path,
+            &["diff", "--cached", "--", "code.rs"]
+        )
+        .contains("-    let x = 1;")),
+        "the clicked deletion must land in the index, got:\n{}",
+        git(&repo.path, &["diff", "--cached", "--", "code.rs"])
     );
-    h.get_by_label(ADD_ROW).click();
-    h.run();
+    // The next click comes off the same preview: the combined read is
+    // byte-stable under a stage, so the row that just went into the index is
+    // still on screen beside its pair, and the addition row keeps its own
+    // address. Nothing stale is dispatched, because the row's gutter numbers are
+    // translated against the freshly re-derived retained sections.
+    //
+    // Both halves of the pair stay addressable, and each one's accessibility label
+    // now names its own state: the clicked row flipped to staged, its partner did
+    // not. A pane that moved the label with the paint would report a toggle here
+    // that git had not made, and a pane that left it alone would hide one it had.
     assert!(
-        h.state()
-            .ui
-            .line_selections
-            .get(Path::new("code.rs"))
-            .is_some_and(|hunks| hunks.values().any(|ords| ords.contains(&1))),
-        "the addition row toggles too"
+        wait_until(15_000, || {
+            h.run();
+            h.query_by_label(&row(DEL_ROW, true)).is_some()
+                && h.query_by_label(&row(ADD_ROW, false)).is_some()
+        }),
+        "both rows of the edit stay in the preview after one of them is staged, and \
+         only the clicked one says `staged`"
     );
-}
-
-#[test]
-fn selection_readout_paints_lines_and_chars() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "readout");
-    seed_single_line_edit(&repo);
-
-    let (state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-    open_preview(&mut h);
-
-    // A line selection arms the readout.
-    h.get_by_label(DEL_ROW).click();
+    h.get_by_label(&row(ADD_ROW, false)).click();
     h.run();
-    let text = painted_text(&h).join("\n");
     assert!(
-        text.contains("1 line selection"),
-        "readout must report the selected lines, got:\n{text}"
-    );
-
-    // An armed char range adds the char count and the Enter/Esc hints.
-    h.state_mut().ui.char_selection = Some(turbogit_app::state::CharSelection {
-        path: PathBuf::from("code.rs"),
-        hunk: 0,
-        ord: 1,
-        start: 8,
-        end: 24,
-    });
-    h.run();
-    let text = painted_text(&h).join("\n");
-    assert!(
-        text.contains("2 line selections · 16 chars")
-            && text.contains("↵ stage")
-            && text.contains("Esc clear"),
-        "readout must report chars selected and the stage/clear hints, got:\n{text}"
+        wait_until(15_000, || git(
+            &repo.path,
+            &["diff", "--cached", "--", "code.rs"]
+        )
+        .contains("+    let calculated_value = compute(x);")),
+        "the clicked addition must land in the index, got:\n{}",
+        git(&repo.path, &["diff", "--cached", "--", "code.rs"])
     );
 }
 
 #[test]
-fn drag_inside_a_line_arms_a_character_range_and_enter_stages_it() {
+fn drag_release_stages_the_character_range_and_nothing_else() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "drag-stage");
     seed_single_line_edit(&repo);
@@ -220,83 +214,40 @@ fn drag_inside_a_line_arms_a_character_range_and_enter_stages_it() {
 
     drag_calculated_value(&mut h);
 
-    let sel = h.state().ui.char_selection.clone().unwrap_or_else(|| {
-        panic!(
-            "the drag must arm a char selection, painted={:?}",
-            painted_text(&h)
-        )
-    });
-    assert_eq!(sel.hunk, 0);
-    assert_eq!(sel.ord, 1, "the addition is changed-line ordinal 1");
-    assert_eq!(
-        (sel.start, sel.end),
-        (8, 24),
-        "chars 8..24 = calculated_value"
-    );
-
-    // The readout reflects the live drag: 1 line selection · 16 chars.
-    let text = painted_text(&h).join("\n");
-    assert!(
-        text.contains("1 line selection · 16 chars"),
-        "readout must show the char range, got:\n{text}"
-    );
-
-    // Enter stages exactly the selected bytes through the engine.
-    h.key_press(egui::Key::Enter);
+    // One `Sense::click_and_drag` response reports a finished drag and a
+    // click, and both routes now stage, so exactly one forward apply may
+    // reach the engine: the drag released, and the row click was suppressed.
+    std::thread::sleep(Duration::from_millis(300));
     h.run();
-    assert!(
-        wait_until(15_000, || recorder.recorded().contains(
-            &RecordedCall::ApplyPatch {
-                direction: ApplyDirection::Forward
-            }
-        )),
-        "Enter must dispatch the char-range stage, recorded={:?}",
+    let forwards = recorder
+        .recorded()
+        .iter()
+        .filter(|call| {
+            matches!(
+                call,
+                RecordedCall::ApplyPatch {
+                    direction: ApplyDirection::Forward
+                }
+            )
+        })
+        .count();
+    assert_eq!(
+        forwards,
+        1,
+        "the release must stage exactly once, recorded={:?}",
         recorder.recorded()
+    );
+    assert!(
+        h.state().ui.char_drag.is_none(),
+        "the draft dies with the release"
     );
     assert!(
         wait_until(15_000, || {
             let staged = git(&repo.path, &["diff", "--cached"]);
             staged.contains("+calculated_value\n") && !staged.contains("compute")
         }),
-        "the index must gain exactly the selected bytes:\n{}",
+        "the index must gain exactly the dragged bytes, not the whole line:\n{}",
         git(&repo.path, &["diff", "--cached"])
-    );
-}
-
-#[test]
-fn escape_clears_the_armed_character_range() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "esc");
-    seed_single_line_edit(&repo);
-
-    let (state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-    open_preview(&mut h);
-
-    drag_calculated_value(&mut h);
-    assert!(h.state().ui.char_selection.is_some());
-
-    h.key_press(egui::Key::Escape);
-    h.run();
-    assert!(
-        h.state().ui.char_selection.is_none(),
-        "Esc must clear the armed char selection"
-    );
-    assert!(
-        !painted_text(&h).join("\n").contains("↵ stage"),
-        "the readout must disappear with the selection"
-    );
-
-    // And Enter afterwards must be inert: nothing reaches the engine.
-    h.key_press(egui::Key::Enter);
-    h.run();
-    std::thread::sleep(Duration::from_millis(300));
-    h.run();
-    assert!(
-        recorder.recorded().is_empty(),
-        "Enter without a selection must not dispatch, recorded={:?}",
-        recorder.recorded()
     );
 }
 

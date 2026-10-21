@@ -1,134 +1,471 @@
 //! The granular staging protocol (spec R2 stories 3/8/9) as one deep module.
 //!
-//! Callers pass pure intent — a file path plus a [`HunkTarget`] and a
-//! direction — and [`dispatch`] resolves every remaining input itself: the
-//! selected root, the change status, the cached raw diff text (ADR-0013),
-//! untracked routing, the op label, and the [`Affected`] scope. Missing
-//! inputs make the op a silent no-op; both call sites (the diff viewer's
-//! gutter controls and the command palette's Stage/Unstage Hunk verbs)
-//! depend on that. The module also owns completion settlement ([`settle`])
-//! and the refresh-scoped lifetimes ([`on_diff_changed`],
-//! [`toggle_line_selection`], [`prune_on_refresh`],
-//! [`prune_selection_on_refresh`]); the maps themselves stay physically in
-//! [`crate::state::UiState`].
+//! Callers pass pure intent — a file path plus a [`HunkTarget`] — and
+//! [`dispatch`] resolves every remaining input itself: the selected root, the
+//! change status, the appliable patch the operation is composed from, untracked
+//! routing, the op label, and the [`Affected`] scope. Missing inputs make the op
+//! a silent no-op; both call sites (the diff viewer's gutter controls and the
+//! command palette's Stage/Unstage Hunk verbs) depend on that. The module also
+//! owns completion settlement ([`settle`]), the char-range drag draft, and the
+//! refresh-scoped lifetimes ([`prune_on_refresh`], [`prune_selection_on_refresh`]);
+//! the draft itself stays physically in [`crate::state::UiState`].
+//!
+//! # What an operation is composed from, and what the user read
+//!
+//! Not the same value, and deliberately so. The pane renders `HEAD ↔ worktree`,
+//! which shows a file's staged and unstaged lines side by side and is
+//! byte-identical before and after a click, because staging cannot change what
+//! the worktree differs from HEAD by. That stability is what makes a click
+//! immediate instead of armed.
+//!
+//! A `git diff HEAD` patch is never appliable to the index, though: its context
+//! describes the worktree, and `git apply --cached` matches context against the
+//! **index**, so a subset cut out of the displayed patch reaches git as
+//! `error: patch failed`. That is why ADR-0013's surviving rule, restated by
+//! ADR-0022, is read here as *the value the operation is composed from* rather
+//! than the value the pane drew. So every operation composes from one of the two
+//! index-facing sections [`crate::staged_lines`] retains per file, chosen by
+//! direction:
+//!
+//! - a **stage** forward-applies the `index ↔ worktree` section, whose pre-image
+//!   *is* the index;
+//! - an **unstage** reverse-applies the `HEAD ↔ index` section, whose post-image
+//!   *is* the index.
+//!
+//! [`crate::staged_lines::line_source`] turns the row the reader clicked, which
+//! carries a HEAD or a worktree line number, into the `(hunk, ordinal)` of the
+//! section the direction names. Nothing outside that module pairs a line of one
+//! patch with a line of another.
+//!
+//! # What the smallest accepted selection turned out to be
+//!
+//! A located ordinal is an address, and which address git takes depends on the
+//! direction the composed patch applies. Measured against real git over nine hunk
+//! shapes (adjacent distinct additions, adjacent deletions, one replacement pair,
+//! a pair plus a separate addition, a pair plus a trailing addition run at EOF,
+//! two identical adjacent additions, a deletion pair plus a pair, two pairs in one
+//! hunk, additions at EOF), handed to `git apply --cached` in the direction a
+//! click would use it.
+//!
+//! - **Forward, out of the `local` section: every single ordinal is accepted.**
+//!   `filter_lines` keeps context, re-emits an unselected `-` as context, and
+//!   drops an unselected `+`, so it never removes a line from the pre-image git
+//!   matches the index against. Any subset of ordinals is therefore appliable and
+//!   a stage keeps row granularity: two identical adjacent lines stage one at a
+//!   time.
+//! - **Reverse, out of the `staged` section: the clicked line's change unit.**
+//!   This direction needs its own `filter_lines` branch, and applying the forward
+//!   one costs all of the granularity: it refuses every single ordinal across
+//!   the nine shapes measured here, so the only selection that ever lands is
+//!   `HunkSelection::Whole` for the located hunk. That is the filter, not git.
+//!   `git apply --cached --reverse` matches the patch's new side against the
+//!   index, so a staged change the user did not select must be described truly:
+//!   it stays in the patch as a context line carrying its **post-image** text (the
+//!   reverse branch of `filter_lines`), not dropped and not demoted to HEAD's old
+//!   text. With that branch, single changes reverse cleanly. What git will not
+//!   take is half of a replacement pair, because a lone `+` reverse-deletes a line
+//!   instead of restoring its old text and a lone `-` leaves both texts in the
+//!   index. So an unstage composes the clicked line's replacement pair if it has
+//!   one (see [`staged_lines::unstage_ords`]) and nothing wider: a same-kind run
+//!   like two identical adjacent additions reverse-applies one line at a time, so
+//!   it stays per-row, and the widening never reaches into a neighbouring change.
+//!
+//! The rule widens in one direction and must not widen in the other. Widening a
+//! stage would cost the per-row control git never restricted; a stage is one
+//! ordinal. An unstage widens only to the change unit git requires, and keeps
+//! every other change in the hunk individually reversible.
+//!
+//! # Cold inputs are a decision, not an accident
+//!
+//! Composition reads [`crate::root_caches::RootCaches::hunk_stats`], a peek at
+//! what a root's cold fill already cost: no entry, no operation. A granular verb
+//! therefore never spawns git to discover what it would have composed. That is
+//! the same contract the palette verbs had while they leaned on the display
+//! cache, now with a named source, and
+//! `granular_dispatch_without_cached_diff_is_a_silent_no_op` pins it.
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::diff_model::{Row, RowKind};
 use crate::keyed_read::DiffTarget;
 use crate::operation::Operation;
-use crate::root_caches::Affected;
-use crate::state::{AppState, CharSelection, DiffComparison};
+use crate::root_caches::{Affected, StatsView};
+use crate::staged_lines::{self, Displayed, Ordinal, RowSource, Side, Source, Toggle};
+use crate::state::{AppState, CharDrag};
 use turbogit_domain::model::{ChangeStatus, Patch};
 use turbogit_services::partial::{self, HunkSelection, Selection};
 
-// --- diff-cache addressing ---------------------------------------------------
-
-/// Raw unified-diff text the viewer currently renders for `path` (the
-/// commit window's preview target), or None when nothing is cached. Granular
-/// ops compose their patches from exactly these bytes (ADR-0013).
-///
-/// A `peek`, not a `read`: a granular verb fired against a cold slot returns
-/// nothing and spends no git work doing it — asking the read to fetch would
-/// turn today's deliberate silent no-op into a background diff per palette
-/// verb (ADR-0021).
-fn cached_preview_patch(state: &AppState, path: &std::path::Path) -> Option<Patch> {
-    let root = state.selected_path()?;
-    let target = DiffTarget::new(
-        root,
-        None,
-        None,
-        state.ui.diff_comparison,
-        state.ui.diff_policies,
-        Some(path.to_path_buf()),
-    );
-    state.peek(target).map(|value| value.patch.clone())
-}
-
 // --- dispatch ----------------------------------------------------------------
 
-/// What part of the diff a granular op addresses: one whole hunk, an
-/// accumulated sub-hunk line selection (story 3), or one line's character
-/// range (issue 19) — `(hunk, ord, start, end)` with the
-/// [`turbogit_services::partial::HunkSelection::Chars`] semantics.
-pub enum HunkTarget {
-    Whole(usize),
-    Lines(usize, BTreeSet<usize>),
-    Chars(usize, usize, usize, usize),
+/// Which way a whole-hunk verb moves the index.
+///
+/// A row click names no direction, and that is the ticket's whole change: the
+/// direction is the oracle's answer for that row, so [`HunkTarget::Row`] carries
+/// none and a caller cannot ask a staged row to be staged again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Stage,
+    Unstage,
 }
 
-/// Dispatch one granular stage/unstage op (spec R2): resolve the diff into a
-/// patch value, read the change status, decide untracked routing, the op label
-/// and the [`Affected`] scope here, then apply the composed patch through the
-/// async op seam. Missing inputs → silent no-op (the palette verbs' contract).
-pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget, stage: bool) {
+impl Direction {
+    /// Which appliable section this direction composes from.
+    fn source(self) -> Source {
+        match self {
+            Direction::Stage => Source::Local,
+            Direction::Unstage => Source::Staged,
+        }
+    }
+
+    fn stages(self) -> bool {
+        matches!(self, Direction::Stage)
+    }
+}
+
+/// What part of the diff a granular op addresses.
+///
+/// `Whole` is addressed the way the pane numbered its hunks; `Row` and `Chars`
+/// are addressed by the numbers a row carries, because those are the only part of
+/// a row that survives translation into another patch.
+pub enum HunkTarget {
+    /// One displayed hunk, whole, moved in the direction the button names.
+    Whole(usize, Direction),
+    /// One displayed row: its kind, its old gutter, its new gutter. Toggled.
+    Row(RowKind, usize, usize),
+    /// A character range inside one displayed addition row:
+    /// `(new gutter, start, end)`. Always a stage.
+    Chars(usize, usize, usize),
+}
+
+/// One composed operation waiting to be dispatched.
+struct Planned {
+    patch: Patch,
+    selection: Selection,
+    label: &'static str,
+    /// Forward or reverse apply.
+    stage: bool,
+    /// Intent-to-add first, which is the only form git accepts for a path the
+    /// index does not hold yet.
+    untracked: bool,
+}
+
+/// Resolve a target into the operations it means, or into nothing at all.
+///
+/// Every `None` on this path is the silent no-op a cold cache or an
+/// unanswerable row is supposed to produce, not an error: a conflicted, untracked,
+/// binary, rename-section or context row simply has no operation to make.
+fn plan(state: &AppState, path: &Path, target: &HunkTarget) -> Vec<Planned> {
+    let root = match state.selected_root.as_ref() {
+        Some(root) => root.clone(),
+        None => return Vec::new(),
+    };
+    let (status, keyed) = match change_of(state, path) {
+        Some(pair) => pair,
+        // An unlisted path keeps the fallback the status resolver gives the
+        // controls, and its own spelling for the caches to miss on.
+        None => (ChangeStatus::Modified, path.to_path_buf()),
+    };
+    if status == ChangeStatus::Unversioned && target_is_a_stage(target) {
+        return plan_untracked(state, path, target);
+    }
+    let Some(stats) = state.caches.hunk_stats(&root) else {
+        return Vec::new();
+    };
+    // The retained sections are keyed by git's `b/` side, repo-relative with
+    // forward slashes, while the caller's path can be either spelling: the
+    // changelist hands repo-relative paths and `ui::diff`'s own entry points hand
+    // absolute ones. Asking the caches with the absolute spelling would answer
+    // `PathAbsent` and turn every click in that pane into a silent no-op, so the
+    // resolution above is what the lookup is keyed on, not `path`.
+    let path = keyed.as_path();
+    let Some(file) = staged_lines::find(&stats.line_sets, path) else {
+        return Vec::new();
+    };
+    let sets = stats.line_sets.as_slice();
+    match target {
+        HunkTarget::Row(kind, old_no, new_no) => {
+            let staged = match staged_lines::line_is_staged(sets, path, *kind, *old_no, *new_no) {
+                Some(staged) => staged,
+                None => return Vec::new(),
+            };
+            let toggle = if staged {
+                Toggle::Unstage
+            } else {
+                Toggle::Stage
+            };
+            let located = staged_lines::line_source(
+                sets,
+                path,
+                *kind,
+                *old_no,
+                *new_no,
+                Displayed::HeadVsWorktree,
+                toggle,
+            );
+            let RowSource::Located { source, hunk, ord } = located else {
+                return Vec::new();
+            };
+            // The selection each direction composes. A stage takes the single
+            // located ordinal: git forward-applies any subset of the `local`
+            // section, so a stage keeps row granularity. An unstage takes the
+            // clicked line's replacement pair (a lone `-` or `+` where it has no
+            // partner), and the reverse filter then keeps every *other* staged
+            // change of the located hunk as post-image context, so the neighbours
+            // stay staged. One shape still widens to the whole hunk: a pure
+            // creation section, whose partial reverse git refuses, and an
+            // ordinal the located section cannot name is no operation at all.
+            // See the module doc and [`staged_lines::unstage_ords`] for what git
+            // measures.
+            let selection = match toggle {
+                Toggle::Stage => select(hunk, HunkSelection::Lines(BTreeSet::from([ord]))),
+                Toggle::Unstage if staged_lines::section_hunk_is_creation(file, source, hunk) => {
+                    select(hunk, HunkSelection::Whole)
+                }
+                Toggle::Unstage => {
+                    let Some(ords) = staged_lines::unstage_ords(file, source, hunk, ord) else {
+                        return Vec::new();
+                    };
+                    select(hunk, HunkSelection::Lines(ords))
+                }
+            };
+            one(
+                file,
+                source,
+                selection,
+                toggle == Toggle::Stage,
+                if toggle == Toggle::Stage {
+                    "Stage line"
+                } else {
+                    "Unstage line"
+                },
+            )
+        }
+        HunkTarget::Chars(new_no, start, end) => {
+            // A character range is a stage of part of one addition. A row whose
+            // text the index already holds has nothing left to stage, and the
+            // lookup declines it instead of the caller guessing.
+            let located = staged_lines::line_source(
+                sets,
+                path,
+                RowKind::Add,
+                0,
+                *new_no,
+                Displayed::HeadVsWorktree,
+                Toggle::Stage,
+            );
+            let RowSource::Located { source, hunk, ord } = located else {
+                return Vec::new();
+            };
+            one(
+                file,
+                source,
+                select(
+                    hunk,
+                    HunkSelection::Chars {
+                        ord,
+                        start: *start,
+                        end: *end,
+                    },
+                ),
+                true,
+                // A character range is not a line, and the op list is where a
+                // user reads what happened.
+                "Stage characters",
+            )
+        }
+        HunkTarget::Whole(hunk, dir) => {
+            // The hunk the reader pointed at is the pane's, and a `+` or `−` on it
+            // means every row of it that this direction can move. Those rows live
+            // in one appliable section each, and `covered_hunks` is the one place
+            // that says which section hunks the displayed range reaches.
+            let Some(anchor) = stats
+                .file(StatsView::Repo, path)
+                .and_then(|f| f.hunks.get(*hunk))
+                .copied()
+            else {
+                return Vec::new();
+            };
+            let covered = staged_lines::covered_hunks(sets, path, dir.source(), &anchor);
+            if covered.is_empty() {
+                return Vec::new();
+            }
+            one(
+                file,
+                dir.source(),
+                Selection {
+                    hunks: covered
+                        .into_iter()
+                        .map(|index| (index, HunkSelection::Whole))
+                        .collect(),
+                },
+                dir.stages(),
+                if dir.stages() {
+                    "Stage hunk"
+                } else {
+                    "Unstage hunk"
+                },
+            )
+        }
+    }
+}
+
+fn target_is_a_stage(target: &HunkTarget) -> bool {
+    match target {
+        HunkTarget::Whole(_, dir) => dir.stages(),
+        HunkTarget::Row(..) | HunkTarget::Chars(..) => true,
+    }
+}
+
+/// The one case that composes from the **displayed** value.
+///
+/// Not an exception to the invariant but an instance of it: an untracked path is
+/// in neither index-facing patch, so the pane's synthesized creation diff is at
+/// once the value the reader selected from and the only value that can be applied
+/// to that path. Its rows are all `+`, so the ordinal is read out of the same
+/// section by [`locate_line`], and staging it goes through intent-to-add exactly
+/// as it did before the preview was pinned.
+fn plan_untracked(state: &AppState, path: &Path, target: &HunkTarget) -> Vec<Planned> {
+    let Some(root) = state.selected_path() else {
+        return Vec::new();
+    };
+    let Some(patch) = state
+        .peek(DiffTarget::working_tree(
+            root,
+            state.ui.diff_policies,
+            Some(path.to_path_buf()),
+        ))
+        .map(|value| value.patch.clone())
+    else {
+        return Vec::new();
+    };
+    let Some(section) = patch.files.first() else {
+        return Vec::new();
+    };
+    let selection = match target {
+        HunkTarget::Whole(hunk, _) => select(*hunk, HunkSelection::Whole),
+        HunkTarget::Row(RowKind::Add, _, new_no) => {
+            match staged_lines::locate_line(section, Side::Post, *new_no) {
+                Ordinal::At { hunk, ord } => {
+                    select(hunk, HunkSelection::Lines(BTreeSet::from([ord])))
+                }
+                _ => return Vec::new(),
+            }
+        }
+        HunkTarget::Chars(new_no, start, end) => {
+            match staged_lines::locate_line(section, Side::Post, *new_no) {
+                Ordinal::At { hunk, ord } => select(
+                    hunk,
+                    HunkSelection::Chars {
+                        ord,
+                        start: *start,
+                        end: *end,
+                    },
+                ),
+                _ => return Vec::new(),
+            }
+        }
+        // A deletion row of a file the index does not hold removes nothing.
+        HunkTarget::Row(..) => return Vec::new(),
+    };
+    vec![Planned {
+        patch,
+        selection,
+        label: "Stage line",
+        stage: true,
+        untracked: true,
+    }]
+}
+
+/// Assemble one operation from a retained section, or nothing when that patch has
+/// no section for this path.
+fn one(
+    file: &staged_lines::FileLineSets,
+    source: Source,
+    selection: Selection,
+    stage: bool,
+    label: &'static str,
+) -> Vec<Planned> {
+    let patch = staged_lines::section_as_patch(file, source);
+    match patch {
+        Some(patch) => vec![Planned {
+            patch,
+            selection,
+            label,
+            stage,
+            untracked: false,
+        }],
+        None => Vec::new(),
+    }
+}
+
+fn select(hunk: usize, body: HunkSelection) -> Selection {
+    Selection {
+        hunks: [(hunk, body)].into_iter().collect(),
+    }
+}
+
+/// Dispatch every operation one target resolves into (spec R2).
+///
+/// A target resolves to one today. `Whole` could resolve to more if one button
+/// meant both directions, and the shape is a list for that reason; the
+/// alternative, widening `GitExecutor::apply_patch_to_index` to take a list of
+/// patches, is refused by ADR-0022's one writer and one patch shape. Cost,
+/// measured by ticket 01 and not assumed: one `git apply --cached` round trip is
+/// 14.5 ms median over 30 reps, six line operations 87.1 ms against 12.8 ms
+/// batched (6.8x), subprocess-spawn dominated and so linear in operations,
+/// rising to 95.7 ms for six with a `git status` churner holding the index lock.
+/// `retry_on_transient_lock` absorbs the collision; a second operation in one
+/// click would cost one more 14.5 ms, which is what any two clicks already pay.
+///
+/// Missing inputs make the verb a silent no-op, which is the palette contract.
+pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget) {
+    let ops = plan(state, &path, &target);
+    if ops.is_empty() {
+        return;
+    }
     let Some(root) = state.selected_root.clone() else {
         return;
     };
-    let Some(patch) = cached_preview_patch(state, &path) else {
-        return;
-    };
     let status = change_status(state, &path);
-    // The selection is resolved against the same patch value the viewer drew its
-    // hunks from, so a hunk the user can see is exactly a hunk that can be
-    // staged (`ADR-0022`).
-    let selection = selection_for(&target);
-    let label = if stage { "Stage hunk" } else { "Unstage hunk" };
-    // Only staging reroutes for untracked files (intent-to-add + forward
-    // apply using the repo-relative path — the only form git accepts there);
-    // unstage keeps the plain reverse-apply so both paths stay predictable.
-    let untracked = stage && status == ChangeStatus::Unversioned;
-    // Post-op the viewer settles on the remaining unstaged changes (story 8);
-    // called right before the dispatch, so no-op paths never move the mode.
-    settle_preview_on_unstaged(state);
     // Story 9: remember which file the op targeted so completion can decide
     // exclusions/focus with fresh status.
     state.ui.pending_granular = Some(path.clone());
-    state.dispatch(Operation::custom(
-        label,
-        Affected::Root(root.clone()),
-        move |v| {
-            let root = root.as_path();
-            if untracked {
-                partial::stage_untracked_selection(
-                    v,
-                    root,
-                    std::slice::from_ref(&path),
-                    &patch,
-                    &selection,
-                    status,
-                )
-            } else if stage {
-                partial::stage_selection(v, root, &patch, &selection, status)
-            } else {
-                partial::unstage_selection(v, root, &patch, &selection, status)
-            }
-        },
-    ));
-}
-
-fn selection_for(target: &HunkTarget) -> Selection {
-    match target {
-        HunkTarget::Whole(hunk) => Selection {
-            hunks: [(*hunk, HunkSelection::Whole)].into_iter().collect(),
-        },
-        HunkTarget::Lines(hunk, lines) => Selection {
-            hunks: [(*hunk, HunkSelection::Lines(lines.clone()))]
-                .into_iter()
-                .collect(),
-        },
-        HunkTarget::Chars(hunk, ord, start, end) => Selection {
-            hunks: [(
-                *hunk,
-                HunkSelection::Chars {
-                    ord: *ord,
-                    start: *start,
-                    end: *end,
-                },
-            )]
-            .into_iter()
-            .collect(),
-        },
+    for op in ops {
+        let Planned {
+            patch,
+            selection,
+            label,
+            stage,
+            untracked,
+        } = op;
+        let root = root.clone();
+        let path = path.clone();
+        state.dispatch(Operation::custom(
+            label,
+            Affected::Root(root.clone()),
+            move |v| {
+                let root = root.as_path();
+                // Only staging reroutes for untracked files (intent-to-add, then
+                // a forward apply using the repo-relative path, which is the only
+                // form git accepts there); unstage keeps the plain reverse-apply
+                // so both paths stay predictable.
+                if untracked {
+                    partial::stage_untracked_selection(
+                        v,
+                        root,
+                        std::slice::from_ref(&path),
+                        &patch,
+                        &selection,
+                        status,
+                    )
+                } else if stage {
+                    partial::stage_selection(v, root, &patch, &selection, status)
+                } else {
+                    partial::unstage_selection(v, root, &patch, &selection, status)
+                }
+            },
+        ));
     }
 }
 
@@ -146,35 +483,43 @@ pub fn preview_status(state: &AppState, path: Option<&Path>) -> ChangeStatus {
 /// fall back to [`ChangeStatus::Modified`] (same rule as the viewer's
 /// resolution).
 fn change_status(state: &AppState, path: &Path) -> ChangeStatus {
-    state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .and_then(|root| root.resolve_change(path))
-        .map(|c| c.status)
+    change_of(state, path)
+        .map(|(status, _)| status)
         .unwrap_or(ChangeStatus::Modified)
 }
 
-/// IntelliJ-style post-op preview focus (spec R2 story 8): after a granular
-/// stage/unstage the viewer lands on the remaining UNSTAGED changes — the
-/// Local (index↔worktree) comparison.
-fn settle_preview_on_unstaged(state: &mut AppState) {
-    state.ui.diff_comparison = DiffComparison::Local;
+/// The path's status and its repo-relative spelling, as the selected root's
+/// change entry reports them.
+///
+/// The second half is what the caches are keyed on: a caller may hand an absolute
+/// path (the diff pane's own `ui::diff` entry points) or a repo-relative one (the
+/// changelist), and only one of those matches git's `b/` side.
+fn change_of(state: &AppState, path: &Path) -> Option<(ChangeStatus, PathBuf)> {
+    let root = state
+        .selected_root
+        .as_ref()
+        .and_then(|id| state.multi.by_id(id))?;
+    let change = root.resolve_change(path)?;
+    Some((change.status, change.path.clone()))
 }
 
 // --- completion settlement (spec R2 story 9) ----------------------------------
 
-/// Story 9 completion: called by `drain_events` AFTER `refresh` — the pending
-/// granular op's file just got its post-op status, and only the refreshed
-/// snapshot can say whether anything unstaged remains. When nothing unstaged
-/// remains, the file leaves the changelist: its exclusion is stored under the
-/// absolute bucket-key form the bucket builders compare (root join), whatever
-/// form `path` arrived in. The follow-up preview is computed BEFORE inserting
-/// the exclusion — the search already skips `key` itself via its
-/// `just_finished` comparisons, so the ordering is equivalent and `key` can
-/// then move. If the finished file was being previewed, focus advances to the
-/// next changed file in display order (Default → Unversioned → Conflicts,
-/// skipping exclusions) or clears.
+/// Story 9 completion: called by `drain_events` AFTER `refresh`, so the op's file
+/// has its post-op status and only the refreshed snapshot can say whether the
+/// file is still one the reader has work left in.
+///
+/// "Leaves the changelist" is a **file-list** question, not a preview question:
+/// the combined preview never empties, because a row click cannot change
+/// `git diff HEAD`, so nothing about the pane tells the app the file is finished.
+/// [`is_fully_staged`] asks git's status instead, which is what the flat list's
+/// buckets are keyed on, and the exclusion is stored under the absolute
+/// bucket-key form the builders compare (root join), whatever form `path` arrived
+/// in. The follow-up preview is computed BEFORE inserting the exclusion — the
+/// search already skips `key` itself via its `just_finished` comparisons, so the
+/// ordering is equivalent and `key` can then move. If the finished file was being
+/// previewed, focus advances to the next changed file in display order
+/// (Default → Unversioned → Conflicts, skipping exclusions) or clears.
 pub(crate) fn settle(state: &mut AppState) {
     let Some(path) = state.ui.pending_granular.take() else {
         return;
@@ -257,185 +602,101 @@ fn next_preview_candidate(state: &AppState, just_finished: &Path) -> Option<Path
     None
 }
 
-// --- selection lifetimes (spec R2 stories 3/8) ---------------------------------
-
-/// Selection-lifetime rule: the diff cache changed, so the per-diff
-/// selections describing the outgoing content die with it — the accumulated
-/// sub-hunk line selections refer to content no longer shown. The current
-/// hunk itself is the viewer's own fresh-load reset, which the diff read's
-/// admit step performs on the same path
-/// ([`crate::keyed_read::Keyed::fetch`]).
-pub fn on_diff_changed(state: &mut AppState, path: Option<&Path>) {
-    if let Some(p) = path {
-        state.ui.line_selections.remove(p);
-        if state
-            .ui
-            .char_selection
-            .as_ref()
-            .is_some_and(|s| s.path == p)
-        {
-            state.ui.char_selection = None;
-        }
-    }
-}
-
-/// Esc (issue 19): the drag-selected character range clears without staging,
-/// along with any in-flight drag draft.
-pub fn clear_char_selection(state: &mut AppState) {
-    state.ui.char_selection = None;
-    state.ui.char_drag_anchor = None;
-}
-
-/// Enter (issue 19): stage the active char selection through the granular
-/// pipeline. A silent no-op without one. The selection is consumed before
-/// dispatch — the diff it referred to is about to be replaced by the post-op
-/// reload.
-pub fn stage_char_selection(state: &mut AppState) {
-    let Some(sel) = state.ui.char_selection.take() else {
-        return;
-    };
-    dispatch(
-        state,
-        sel.path,
-        HunkTarget::Chars(sel.hunk, sel.ord, sel.start, sel.end),
-        true,
-    );
-}
-
 // --- char-range drag protocol (issue 19) --------------------------------------
 
+/// Toggle one displayed row (spec R2 story 3): a row click's whole meaning.
+///
+/// The row is addressed by its kind and its two gutters, which is what
+/// [`crate::staged_lines`] translates into whichever appliable section its
+/// staged-ness names. A silent no-op without a previewed path, or for a row the
+/// oracle cannot answer.
+pub fn toggle_row(state: &mut AppState, path: &Option<PathBuf>, row: &Row) {
+    let Some(p) = path.clone() else {
+        return;
+    };
+    dispatch(state, p, HunkTarget::Row(row.kind, row.old_no, row.new_no));
+}
+
 /// Arm a fresh char-range drag on one changed line (UI computes the anchor
-/// char index from the pointer). The selection starts collapsed at the
-/// anchor; a collapsed selection at drag end is a click, not a range.
-pub fn begin_char_selection(
+/// char index from the pointer). The draft starts collapsed at the anchor; a
+/// draft still collapsed at release is a click, not a range.
+///
+/// The draft keys itself on the pane's `(hunk, ord)` because those identify the
+/// row the pointer is on, and carries the row's worktree gutter because that is
+/// the number the operation is addressed by.
+pub fn begin_char_drag(
     state: &mut AppState,
     path: &Option<PathBuf>,
     hunk: usize,
     ord: usize,
+    new_no: usize,
     anchor: usize,
 ) {
     let Some(p) = path else {
         return;
     };
-    state.ui.char_drag_anchor = Some((p.clone(), hunk, ord, anchor));
-    state.ui.char_selection = Some(CharSelection {
+    state.ui.char_drag = Some(CharDrag {
         path: p.clone(),
         hunk,
         ord,
-        start: anchor,
-        end: anchor,
+        new_no,
+        anchor,
+        cursor: anchor,
     });
 }
 
-/// Extend the active drag with the pointer's current char index: the range
-/// normalizes around the anchor so dragging either way widens it. Drag
-/// events that left the anchor row are ignored (the UI only forwards
-/// in-row positions).
-pub fn update_char_selection(
+/// Move the draft's cursor to the pointer's current char index; the range
+/// normalizes around the anchor when read, so dragging either way widens it.
+/// Drags that left the anchor row are ignored (the UI only forwards in-row
+/// positions).
+pub fn extend_char_drag(
     state: &mut AppState,
     path: &Option<PathBuf>,
     hunk: usize,
     ord: usize,
     cur: usize,
 ) {
-    let Some(p) = path else {
-        return;
-    };
-    let Some(anchor) = state
-        .ui
-        .char_drag_anchor
-        .clone()
-        .filter(|a| a.0 == *p && a.1 == hunk && a.2 == ord)
-        .map(|a| a.3)
-    else {
-        return;
-    };
-    let sel = CharSelection {
-        path: p.clone(),
-        hunk,
-        ord,
-        start: anchor.min(cur),
-        end: anchor.max(cur),
-    };
-    state.ui.char_selection = Some(sel);
-}
-
-/// Close the drag: a collapsed range was a plain click (the line toggle
-/// handles that), so it clears; a real range stays armed for Enter. The
-/// anchor draft dies either way.
-pub fn end_char_selection(state: &mut AppState, path: &Option<PathBuf>, hunk: usize, ord: usize) {
-    let Some(p) = path else {
-        return;
-    };
-    if !matches!(state.ui.char_drag_anchor, Some((ref a, ah, ao, _)) if *a == *p && ah == hunk && ao == ord)
+    if let Some(draft) = state.ui.char_drag.as_mut()
+        && Some(&draft.path) == path.as_ref()
+        && draft.hunk == hunk
+        && draft.ord == ord
     {
-        return;
-    }
-    state.ui.char_drag_anchor = None;
-    if state
-        .ui
-        .char_selection
-        .as_ref()
-        .is_some_and(|s| s.start >= s.end)
-    {
-        state.ui.char_selection = None;
+        draft.cursor = cur;
     }
 }
 
-/// The selection readout (issue 19): how many lines and chars are selected,
-/// plus the Enter/Esc hints while a char range is armed. None while nothing
-/// is selected.
-pub fn selection_readout(state: &AppState) -> Option<String> {
-    let path = state.ui.preview_change.as_ref()?;
-    let mut lines = state
-        .ui
-        .line_selections
-        .get(path)
-        .map_or(0, |hunks| hunks.values().map(|s| s.len()).sum());
-    let mut chars = None;
-    if let Some(sel) = &state.ui.char_selection
-        && &sel.path == path
-    {
-        lines += 1;
-        chars = Some(sel.end.saturating_sub(sel.start));
-    }
-    if lines == 0 {
-        return None;
-    }
-    let mut out = if lines == 1 {
-        "1 line selection".to_owned()
-    } else {
-        format!("{lines} line selections")
-    };
-    if let Some(c) = chars {
-        out.push_str(&format!(" · {c} chars"));
-    }
-    if chars.is_some() {
-        out.push_str(" · ↵ stage · Esc clear");
-    }
-    Some(out)
-}
-
-/// Toggle one changed line's membership in the accumulated sub-hunk
-/// selection (story 3). Empty sets are pruned so a fully deselected hunk
-/// falls back to whole-hunk semantics.
-pub fn toggle_line_selection(
+/// Close the drag. A range that moved stages through the granular pipeline; a
+/// collapsed one was a plain click, which the row's own toggle handles, and the
+/// draft dies either way.
+///
+/// The return value is the whole point: one `Sense::click_and_drag` response
+/// reports a finished drag and a click on the same frame, and both routes stage,
+/// so the caller must know which one ran or a char drag also stages its line.
+pub fn finish_char_drag(
     state: &mut AppState,
-    path: &Option<std::path::PathBuf>,
+    path: &Option<PathBuf>,
     hunk: usize,
     ord: usize,
-) {
-    let Some(p) = path else {
-        return;
+) -> bool {
+    let Some(draft) = state
+        .ui
+        .char_drag
+        .clone()
+        .filter(|d| Some(&d.path) == path.as_ref() && d.hunk == hunk && d.ord == ord)
+    else {
+        return false;
     };
-    let hunks = state.ui.line_selections.entry(p.clone()).or_default();
-    let lines = hunks.entry(hunk).or_default();
-    if !lines.insert(ord) {
-        lines.remove(&ord);
+    state.ui.char_drag = None;
+    let (start, end) = draft.range();
+    if start >= end {
+        return false;
     }
-    if lines.is_empty() {
-        hunks.remove(&hunk);
-    }
+    dispatch(
+        state,
+        draft.path,
+        HunkTarget::Chars(draft.new_no, start, end),
+    );
+    true
 }
 
 /// Selection-lifetime rule (refresh scope): exclusions only hold while the

@@ -728,34 +728,21 @@ fn the_raised_ladder_is_strictly_ordered_and_each_rung_steps_up_from_its_own_hos
     assert_ne!(RAISED_LADDER[1].2, Palette::SURFACE);
 }
 
-/// Every accent rail in the tree, and where its width is written *today*.
+/// Every accent rail in the tree, and where its painter lives.
 ///
 /// The width is one dimension — [`theme::RAIL_WIDTH`]. This table is the list
-/// of painters that paint a rail, and every one of them now reaches the width
+/// of painters that paint a rail, and every one of them reaches the width
 /// through the **one** rail painter, `ui::components::paint_rail`. That is what
 /// makes "every rail is 2 px" checkable instead of assumed, and it is what
-/// forces a *fourth* rail to be declared here rather than appearing quietly with
+/// forces a *new* rail to be declared here rather than appearing quietly with
 /// its own literal: a new entry that did not route through the one painter fails
 /// on the delegation check, and a painter that grows a 2px brand stroke of its
 /// own fails on the enumeration of every such stroke below.
-///
-/// This table previously held each painter's **literal** width expression. The
-/// two pre-existing rails it listed (the sidebar's `paint_active_band` and the
-/// diff's `paint_selection_bar`) are the ones ticket 07's one rail painter
-/// absorbs, and both now delegate — so the width column is gone and the
-/// delegation is the claim.
-const RAIL_PAINTERS: [(&str, &str, &str); 2] = [
-    (
-        "ui/sidebar.rs",
-        include_str!("../src/ui/sidebar.rs"),
-        "paint_active_band",
-    ),
-    (
-        "ui/diff/actions.rs",
-        include_str!("../src/ui/diff/actions.rs"),
-        "paint_selection_bar",
-    ),
-];
+const RAIL_PAINTERS: [(&str, &str, &str); 1] = [(
+    "ui/sidebar.rs",
+    include_str!("../src/ui/sidebar.rs"),
+    "paint_active_band",
+)];
 
 /// The one painter that turns a row's rect into a rail. The width lives here and
 /// nowhere else, which is the whole content of "defined exactly once".
@@ -2293,6 +2280,10 @@ const TOKEN_INVENTORY: &[&str] = &[
     "DIFF_DEL_TEXT",
     "DIFF_ADD_ACCENT",
     "DIFF_DEL_ACCENT",
+    "DIFF_ADD_UNSTAGED_BG",
+    "DIFF_ADD_UNSTAGED_TEXT",
+    "DIFF_DEL_UNSTAGED_BG",
+    "DIFF_DEL_UNSTAGED_TEXT",
     // --- Palette: the left rail's own surface
     "SIDEBAR",
     // --- Module-level: tint fractions
@@ -2572,11 +2563,16 @@ fn settle_diff_shell(harness: &mut egui_kittest::Harness<'static, turbogit_app::
 ///    another name for the added-file accent, which this file already pins;
 /// 2. both text-on-band pairs clear AA, so "the diff's palette is unchanged" is
 ///    also "the diff's palette is still readable";
-/// 3. the pane **paints** those tokens: the added line's band is
-///    `DIFF_ADD_BG`, the removed line's is `DIFF_DEL_BG`, and the inks are
-///    `DIFF_ADD_TEXT` / `DIFF_DEL_TEXT`. A token that exists and is never painted
-///    is a token nothing is reading, and the third claim is what turns the first
-///    two from a description into a contract.
+/// 3. the pane **paints** those tokens: a staged added line's band is
+///    `DIFF_ADD_BG` with `DIFF_ADD_TEXT` ink, a staged removed line's is
+///    `DIFF_DEL_BG` with `DIFF_DEL_TEXT`, and the unstaged pair wears the quieter
+///    roles beside them. A token that exists and is never painted is a token
+///    nothing is reading, and the third claim is what turns the first two from a
+///    description into a contract.
+///
+/// The fixture is the program's own story: `beta`→`BETA` staged, `gamma`→`GAMMA`
+/// left in the worktree. So one frame carries both row treatments, and this is
+/// where the test reads them off painted output instead of off a helper's return.
 ///
 /// The contrast maths is the one helper at the top of this file, over the token
 /// values — never over painted pixels, because rendering shifts a colour by a
@@ -2614,8 +2610,10 @@ fn the_diff_colour_pair_is_untouched() {
     assert_ne!(Palette::DIFF_ADD_ACCENT, Palette::DIFF_ADD_BG);
     assert_ne!(Palette::DIFF_DEL_ACCENT, Palette::DIFF_DEL_BG);
 
-    // And the pane paints exactly those: the add/remove rows' bands and text
-    // inks are the tokens above, not a neighbour of them.
+    // And the pane paints exactly those, split by what the per-line oracle says
+    // about each row: the staged pair keeps the full treatment, the unstaged pair
+    // wears the muted roles, and the four treatments are two distinguishable
+    // shapes on screen rather than one.
     use test_support::harness::{filled_rects, painted_galleys, painted_ink};
     let (_tmp, repo) = diff_fixture_repo();
     let mut harness = diff_shell(&repo);
@@ -2638,30 +2636,245 @@ fn the_diff_colour_pair_is_untouched() {
                 )
             })
     };
-    let added = origin_of("GAMMA");
-    let removed = origin_of("gamma");
-    for (band, at, who) in [
-        (Palette::DIFF_ADD_BG, added, "added"),
-        (Palette::DIFF_DEL_BG, removed, "removed"),
+    let band_under = |at: egui::Pos2| {
+        filled_rects(&harness)
+            .into_iter()
+            .filter(|(rect, _)| rect.contains(at))
+            .map(|(_, fill)| fill)
+            .collect::<Vec<_>>()
+    };
+    for (who, band, ink) in [
+        // Staged: `beta` to `BETA` went into the index, so both rows keep the
+        // full add and delete treatment.
+        ("BETA", Palette::DIFF_ADD_BG, Palette::DIFF_ADD_TEXT),
+        ("beta", Palette::DIFF_DEL_BG, Palette::DIFF_DEL_TEXT),
+        // Unstaged: `gamma` to `GAMMA` is still only in the worktree, so both
+        // rows are drawn against the same background with less of it.
+        (
+            "GAMMA",
+            Palette::DIFF_ADD_UNSTAGED_BG,
+            Palette::DIFF_ADD_UNSTAGED_TEXT,
+        ),
+        (
+            "gamma",
+            Palette::DIFF_DEL_UNSTAGED_BG,
+            Palette::DIFF_DEL_UNSTAGED_TEXT,
+        ),
     ] {
+        let at = origin_of(who);
+        let painted = band_under(at);
         assert!(
-            filled_rects(&harness)
-                .iter()
-                .any(|(rect, fill)| *fill == band && rect.contains(at)),
-            "the {who} line paints the {band:?} band behind it, so the token is a \
-             colour the pane really uses rather than one nothing reads"
+            painted.contains(&band),
+            "`{who}` is a row whose band is {band:?}, so the token is a colour the \
+             pane really uses rather than one nothing reads; painted {painted:?}"
+        );
+        assert_eq!(
+            painted_ink(&harness, who),
+            Some(ink),
+            "`{who}` is painted in {ink:?}: the staged rows take the full pair and \
+             the unstaged rows take the muted one"
         );
     }
-    assert_eq!(
+
+    // The two treatments are distinguishable on the screen, not only in the
+    // tokens: the staged and unstaged added rows share a hue and differ in both
+    // halves of their pair, so the frame paints two different colours for two
+    // different git states.
+    let staged_add = origin_of("BETA");
+    let unstaged_add = origin_of("GAMMA");
+    assert_ne!(
+        band_under(staged_add),
+        band_under(unstaged_add),
+        "a staged row and an unstaged row of the same kind must not paint the same \
+         bands, or the pane still cannot tell the user they toggled a line"
+    );
+    assert_ne!(
+        painted_ink(&harness, "BETA"),
         painted_ink(&harness, "GAMMA"),
-        Some(Palette::DIFF_ADD_TEXT),
-        "the added line's ink is the diff's added-text token"
+        "and their inks differ too, which is the half a screenshot at a glance reads"
+    );
+}
+
+// --- The diff row's staged-ness roles (ticket 06) ----------------------------
+
+/// Every band-and-ink pair one diff row can wear, by the state the per-line
+/// oracle answers. Staged is the foreground: it wears the pair the diff has
+/// always had, and unstaged wears the quieter pair the token layer names. The
+/// table is the census of the rule the theme block describes, so a call site
+/// that reaches for a neighbour of one of these values has nothing to reach for.
+const DIFF_ROW_ROLES: [(&str, Color32, Color32); 4] = [
+    ("staged added", Palette::DIFF_ADD_BG, Palette::DIFF_ADD_TEXT),
+    (
+        "staged removed",
+        Palette::DIFF_DEL_BG,
+        Palette::DIFF_DEL_TEXT,
+    ),
+    (
+        "unstaged added",
+        Palette::DIFF_ADD_UNSTAGED_BG,
+        Palette::DIFF_ADD_UNSTAGED_TEXT,
+    ),
+    (
+        "unstaged removed",
+        Palette::DIFF_DEL_UNSTAGED_BG,
+        Palette::DIFF_DEL_UNSTAGED_TEXT,
+    ),
+];
+
+/// **The muted row's text clears AA for running text, measured from the tokens.**
+///
+/// This is the assertion the theme block's published numbers exist to be checked
+/// against: a comment states 4.78:1 and 4.73:1, and only arithmetic notices when
+/// one of them stops being true. The foreground is the unstaged row's ink, the
+/// background is the unstaged row's *own* band (60% of the staged band toward
+/// `CONTENT_BG`), and the standard is the 4.5:1 AA floor for running text at the
+/// diff's 12 px monospace. The combination measured is therefore muted-ink-on-
+/// muted-band, not muted-on-content-surface and not muted-on-`ROW_SELECTED`: a
+/// diff row never wears a selection fill, and the band is what the text is really
+/// sitting on.
+///
+/// The rest of the test is the same claim from the other side: the staged arms
+/// are the existing pair and clear AA too, the two states differ in *both*
+/// halves of the pair, the muted band stays a visible step from the surface it
+/// hangs on, and the two marks that share a row with the muting (the caret and
+/// the hover step) stay legible on the quieter band rather than being swallowed
+/// by it.
+#[test]
+fn the_unstaged_row_pair_clears_aa_and_the_staged_pair_keeps_the_full_treatment() {
+    // The values, pinned by hex so a silent edit of one is a decision and not a
+    // drift. The two new bands and the one new ink are the only non-alias values
+    // in the block; `DIFF_ADD_UNSTAGED_TEXT` is declared as the added accent and
+    // that identity is part of the contract.
+    assert_eq!(
+        Palette::DIFF_ADD_UNSTAGED_BG,
+        Color32::from_rgb(0x2a, 0x36, 0x31)
     );
     assert_eq!(
-        painted_ink(&harness, "gamma"),
-        Some(Palette::DIFF_DEL_TEXT),
-        "and the removed line's is the removed-text token"
+        Palette::DIFF_DEL_UNSTAGED_BG,
+        Color32::from_rgb(0x39, 0x2d, 0x30)
     );
+    assert_eq!(
+        Palette::DIFF_DEL_UNSTAGED_TEXT,
+        Color32::from_rgb(0xd9, 0x83, 0x83)
+    );
+    assert_eq!(
+        Palette::DIFF_ADD_UNSTAGED_TEXT,
+        Palette::DIFF_ADD_ACCENT,
+        "the muted added row's ink is the added accent used in a second role, the \
+         same one-green-two-names identity `STATUS_ADDED` already carries"
+    );
+    // And the staged half of the rule is the pair the diff already had.
+    assert_eq!(Palette::DIFF_ADD_BG, Color32::from_rgb(0x34, 0x4f, 0x3e));
+    assert_eq!(Palette::DIFF_DEL_BG, Color32::from_rgb(0x5a, 0x3a, 0x3a));
+
+    // AA for running text, all four pairs, computed rather than transcribed.
+    for (who, band, ink) in DIFF_ROW_ROLES {
+        let ratio = contrast(ink, band);
+        println!("{who}: {ratio:.2}:1");
+        assert!(
+            ratio >= 4.5,
+            "{who} row ink on its own band must clear AA for running text: {ratio:.2}:1"
+        );
+    }
+
+    // The two states differ in both halves of the pair, and by enough to see.
+    for (side, staged_band, staged_ink, muted_band, muted_ink) in [
+        (
+            "added",
+            Palette::DIFF_ADD_BG,
+            Palette::DIFF_ADD_TEXT,
+            Palette::DIFF_ADD_UNSTAGED_BG,
+            Palette::DIFF_ADD_UNSTAGED_TEXT,
+        ),
+        (
+            "removed",
+            Palette::DIFF_DEL_BG,
+            Palette::DIFF_DEL_TEXT,
+            Palette::DIFF_DEL_UNSTAGED_BG,
+            Palette::DIFF_DEL_UNSTAGED_TEXT,
+        ),
+    ] {
+        assert_ne!(staged_band, muted_band, "the {side} band quiets");
+        assert_ne!(staged_ink, muted_ink, "the {side} ink quiets");
+        // The two steps are deliberately not the same size, and the floor here is
+        // the smaller of the two measured values: the staged removed ink starts at
+        // 4.92:1 on its band where the added one starts at 6.01:1, so the removed
+        // side has less headroom to spend on going quiet before it leaves AA. A
+        // future edit that dims one of them further has to fail, and a future reader
+        // who expects symmetry should read the number, not assume a bug.
+        assert!(
+            contrast(staged_ink, muted_ink) >= 1.3,
+            "the {side} row's two inks must read as two steps, not as rounding: \
+             {:.2}:1 apart",
+            contrast(staged_ink, muted_ink)
+        );
+        // The muted band is the quieter one against the surface the rows hang on,
+        // and still a step rather than a merge into it.
+        let staged_step = contrast(staged_band, Palette::CONTENT_BG);
+        let muted_step = contrast(muted_band, Palette::CONTENT_BG);
+        assert!(
+            muted_step < staged_step && muted_step >= 1.1,
+            "the {side} row's muted band must sit between the content surface and \
+             its own staged band: {muted_step:.2}:1 against a staged {staged_step:.2}:1"
+        );
+    }
+
+    // The two marks that share a row with the muting stay legible on the quieter
+    // band. The caret's BRAND is the one thing on a row whose colour means
+    // "which pane holds the position" and must not move with staged-ness, and the
+    // gutter numbers' hover step is the pointer's answer, which has to be visible
+    // whether or not the row is muted.
+    for (who, band) in [
+        ("staged added", Palette::DIFF_ADD_BG),
+        ("unstaged added", Palette::DIFF_ADD_UNSTAGED_BG),
+        ("staged removed", Palette::DIFF_DEL_BG),
+        ("unstaged removed", Palette::DIFF_DEL_UNSTAGED_BG),
+    ] {
+        assert!(
+            contrast(Palette::ACCENT, band) >= contrast(Palette::ACCENT, Palette::DIFF_ADD_BG),
+            "the caret must not read weaker on {who} than it does on the vivid band"
+        );
+        assert!(
+            contrast(Palette::INK_2, band) / contrast(Palette::INK_3, band) >= 1.4,
+            "{who} carries the hover step from INK_3 to INK_2, so the two gutter \
+             inks have to be a visible step apart on this band too"
+        );
+    }
+
+    // The census of the negative: a value that is not a new role had better not
+    // be a second spelling of a value the palette already ships.
+    let already_shipped = [
+        Palette::BG,
+        Palette::SURFACE,
+        Palette::SURFACE_2,
+        Palette::SURFACE_3,
+        Palette::CONTENT_BG,
+        Palette::SECTION_BG,
+        Palette::ROW_SELECTED,
+        Palette::SELECTION,
+        Palette::LINE,
+        Palette::LINE_SUBTLE,
+        Palette::DIFF_ADD_BG,
+        Palette::DIFF_DEL_BG,
+        Palette::DIFF_ADD_TEXT,
+        Palette::DIFF_DEL_TEXT,
+        Palette::DIFF_DEL_ACCENT,
+        Palette::AHEAD,
+        Palette::STATE_SUCCESS,
+        Palette::T_MUTED,
+    ];
+    for fresh in [
+        ("DIFF_ADD_UNSTAGED_BG", Palette::DIFF_ADD_UNSTAGED_BG),
+        ("DIFF_DEL_UNSTAGED_BG", Palette::DIFF_DEL_UNSTAGED_BG),
+        ("DIFF_DEL_UNSTAGED_TEXT", Palette::DIFF_DEL_UNSTAGED_TEXT),
+    ] {
+        assert!(
+            !already_shipped.contains(&fresh.1),
+            "{} repeats a value the palette already ships, so it is a second name \
+             for it and not a role",
+            fresh.0
+        );
+    }
 }
 
 // --- R5: a raised control steps up from the surface it sits on ----------------

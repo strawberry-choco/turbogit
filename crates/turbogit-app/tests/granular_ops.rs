@@ -9,16 +9,16 @@
 //! **what reached the engine** (via [`test_support::RecordingExecutor`]) and the
 //! resulting repository state via real `git` commands.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use test_support::git_seed::{git, repo_with_one_commit};
 use test_support::{RecordedCall, RecordingExecutor};
 
-use turbogit_app::granular::{self, HunkTarget};
+use turbogit_app::diff_model::RowKind;
+use turbogit_app::granular::{self, Direction, HunkTarget};
 use turbogit_app::keyed_read::{DiffTarget, Read};
-use turbogit_app::state::{AppState, CharSelection, DiffComparison};
-use turbogit_domain::model::VcsSettings;
+use turbogit_app::state::AppState;
+use turbogit_domain::model::{RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::{ApplyDirection, GitExecutor};
 
@@ -103,26 +103,22 @@ fn app_state_with_recorder(
     (state, recorder)
 }
 
-/// Populate the viewer's raw-diff cache the way a rendered preview would have:
-/// pin the chip state, then ask the read for that target and settle its answer.
+/// Warm the two doors a granular op reads: the root's retained sections, which
+/// is what an operation composes from, and the pinned preview read, which is what
+/// an untracked path composes from.
 ///
 /// This used to spell the cache key out by hand so it could stuff a string into
 /// the field — which pinned the very coupling this branch exists to remove: a
 /// test that agrees with the module's key format by copying it proves nothing
 /// when the two drift. Driving `read` asks the module instead, and the patch
-/// text it answers with is the one `git diff` really produces for the fixture.
-fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str, staged: bool) {
-    state.ui.diff_comparison = if staged {
-        DiffComparison::Staged
-    } else {
-        DiffComparison::Local
-    };
+/// text it answers with is the one `git diff HEAD` really produces for the
+/// fixture.
+fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str) {
     state.ui.diff_policies = turbogit_domain::model::DiffPolicies::default();
-    let target = DiffTarget::new(
+    let root_id = RootId(root.to_path_buf().into());
+    state.ensure_hunk_stats(&root_id);
+    let target = DiffTarget::working_tree(
         root.to_path_buf(),
-        None,
-        None,
-        state.ui.diff_comparison,
         turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from(rel)),
     );
@@ -147,13 +143,12 @@ fn granular_dispatch_stages_whole_hunk_forward() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    seed_preview_cache(&mut state, &repo.path, "words.txt", false);
+    seed_preview_cache(&mut state, &repo.path, "words.txt");
 
     granular::dispatch(
         &mut state,
         PathBuf::from("words.txt"),
-        HunkTarget::Whole(0),
-        true,
+        HunkTarget::Whole(0, Direction::Stage),
     );
 
     assert_eq!(
@@ -179,27 +174,22 @@ fn granular_dispatch_stages_whole_hunk_forward() {
 }
 
 #[test]
-fn granular_dispatch_stages_only_the_selected_lines_of_a_hunk() {
+fn granular_dispatch_stages_a_single_line_target() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "line-stage");
     seed_two_hunk_change(&repo);
 
     let (mut state, _recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    seed_preview_cache(&mut state, &repo.path, "words.txt", false);
+    seed_preview_cache(&mut state, &repo.path, "words.txt");
 
-    // Story 3: sub-hunk selection — ordinal 1 of hunk 0 is the `+BRAVO`
-    // addition (ordinals count +/- lines in order).
-    state.ui.line_selections.insert(
-        PathBuf::from("words.txt"),
-        [(0usize, BTreeSet::from([1usize]))].into_iter().collect(),
-    );
-
+    // One row click's target: the `+BRAVO` addition, addressed by the worktree
+    // gutter the combined view numbers it with. Nothing names a direction,
+    // because the row's staged-ness is the direction.
     granular::dispatch(
         &mut state,
         PathBuf::from("words.txt"),
-        HunkTarget::Lines(0, BTreeSet::from([1])),
-        true,
+        HunkTarget::Row(RowKind::Add, 0, 2),
     );
 
     assert!(
@@ -247,13 +237,12 @@ fn granular_dispatch_stages_exactly_the_selected_character_range() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    seed_preview_cache(&mut state, &repo.path, "code.rs", false);
+    seed_preview_cache(&mut state, &repo.path, "code.rs");
 
     granular::dispatch(
         &mut state,
         PathBuf::from("code.rs"),
-        HunkTarget::Chars(0, 1, 8, 24),
-        true,
+        HunkTarget::Chars(2, 8, 24),
     );
     state.drain_events();
 
@@ -281,33 +270,9 @@ fn granular_dispatch_stages_exactly_the_selected_character_range() {
 }
 
 #[test]
-fn escape_clears_the_active_char_selection() {
+fn char_drag_release_stages_the_range_and_a_collapsed_drag_stages_nothing() {
     let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "esc-clear");
-    seed_two_hunk_change(&repo);
-
-    let (mut state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    state.ui.char_selection = Some(CharSelection {
-        path: PathBuf::from("words.txt"),
-        hunk: 0,
-        ord: 1,
-        start: 2,
-        end: 5,
-    });
-
-    granular::clear_char_selection(&mut state);
-
-    assert!(
-        state.ui.char_selection.is_none(),
-        "Esc clears the selection"
-    );
-}
-
-#[test]
-fn enter_stages_the_active_char_selection_and_consumes_it() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "enter-stage");
+    let repo = temp_repo(parent.path(), "drag-release");
     std::fs::write(
         repo.path.join("code.rs"),
         "fn main() {\n    let x = 1;\n}\n",
@@ -323,129 +288,50 @@ fn enter_stages_the_active_char_selection_and_consumes_it() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    seed_preview_cache(&mut state, &repo.path, "code.rs", false);
-    state.ui.char_selection = Some(CharSelection {
-        path: PathBuf::from("code.rs"),
-        hunk: 0,
-        ord: 1,
-        start: 8,
-        end: 24,
-    });
+    seed_preview_cache(&mut state, &repo.path, "code.rs");
+    let path = Some(PathBuf::from("code.rs"));
 
-    granular::stage_char_selection(&mut state);
+    // The gesture the viewer's drag forwards: anchor, move, release. The draft
+    // carries the row's worktree gutter, which is what the release addresses.
+    granular::begin_char_drag(&mut state, &path, 0, 1, 2, 8);
+    granular::extend_char_drag(&mut state, &path, 0, 1, 24);
+    assert!(
+        granular::finish_char_drag(&mut state, &path, 0, 1),
+        "a moved range stages at release"
+    );
+    assert!(
+        state.ui.char_drag.is_none(),
+        "the draft never outlives the gesture"
+    );
     state.drain_events();
 
     let staged = git(&repo.path, &["diff", "--cached"]);
     assert!(
         staged.contains("+calculated_value\n") && !staged.contains("compute"),
-        "Enter must stage exactly the selected bytes:\n{staged}"
-    );
-    assert!(
-        state.ui.char_selection.is_none(),
-        "staging consumes the char selection"
+        "the release must stage exactly the dragged bytes:\n{staged}"
     );
     assert!(
         recorder.recorded().contains(&RecordedCall::ApplyPatch {
             direction: ApplyDirection::Forward
         }),
-        "Enter routes through the same forward-apply seam, recorded={:?}",
+        "the release routes through the same forward-apply seam, recorded={:?}",
         recorder.recorded()
     );
-}
 
-#[test]
-fn selection_readout_reports_lines_and_chars() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "readout");
-    seed_two_hunk_change(&repo);
-
-    let (mut state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    state.ui.preview_change = Some(PathBuf::from("words.txt"));
-
-    // Nothing selected → no readout.
-    assert!(granular::selection_readout(&state).is_none());
-
-    // Two accumulated line ords → count, no char hints.
-    state.ui.line_selections.insert(
-        PathBuf::from("words.txt"),
-        [(0usize, BTreeSet::from([1usize, 2usize]))]
-            .into_iter()
-            .collect(),
-    );
-    let readout = granular::selection_readout(&state).unwrap();
-    assert_eq!(readout, "2 line selections");
+    // A drag that never moved is a click, and the click route owns the line:
+    // the release itself must stage nothing.
+    granular::begin_char_drag(&mut state, &path, 0, 0, 0, 4);
+    let staged_before = git(&repo.path, &["diff", "--cached"]);
     assert!(
-        !readout.contains("chars"),
-        "no chars without a char selection"
+        !granular::finish_char_drag(&mut state, &path, 0, 0),
+        "a collapsed range must report that it staged nothing"
     );
-
-    // One active char range of 16 chars → the dragged line joins the count,
-    // the char count and the Enter/Esc hints appear.
-    state.ui.char_selection = Some(CharSelection {
-        path: PathBuf::from("words.txt"),
-        hunk: 0,
-        ord: 0,
-        start: 8,
-        end: 24,
-    });
-    let readout = granular::selection_readout(&state).unwrap();
-    assert_eq!(
-        readout,
-        "3 line selections · 16 chars · ↵ stage · Esc clear"
-    );
-
-    // Singular wording for exactly one selected line.
-    state.ui.line_selections.clear();
-    let readout = granular::selection_readout(&state).unwrap();
-    assert!(
-        readout.starts_with("1 line selection · 16 chars"),
-        "singular wording for one line, got: {readout}"
-    );
-}
-
-#[test]
-fn granular_dispatch_unstages_hunk_via_reverse_apply() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "unstage");
-    seed_two_hunk_change(&repo);
-    // Fully stage the file first; the unstage op composes its patch from the
-    // HEAD↔index diff, so the viewer would be showing the Staged comparison.
-    git(&repo.path, &["add", "words.txt"]);
-
-    let (mut state, recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    seed_preview_cache(&mut state, &repo.path, "words.txt", true);
-
-    granular::dispatch(
-        &mut state,
-        PathBuf::from("words.txt"),
-        HunkTarget::Whole(0),
-        false,
-    );
-
-    assert!(
-        !git(&repo.path, &["diff", "--cached", "--", "words.txt"]).contains("BRAVO"),
-        "reverse-applying hunk 0 must remove it from the index"
-    );
+    assert!(state.ui.char_drag.is_none(), "the draft dies either way");
     state.drain_events();
-
-    assert!(
-        recorder.recorded().contains(&RecordedCall::ApplyPatch {
-            direction: ApplyDirection::Reverse
-        }),
-        "unstage must reverse-apply against the index, recorded={:?}",
-        recorder.recorded()
-    );
-    let staged = git(&repo.path, &["diff", "--cached", "--", "words.txt"]);
-    assert!(
-        staged.contains("+QUEBEC"),
-        "hunk 1 stays staged after unstaging hunk 0:\n{staged}"
-    );
     assert_eq!(
-        porcelain_code(&repo.path, "words.txt"),
-        "MM",
-        "index and worktree diverge again after the unstage"
+        git(&repo.path, &["diff", "--cached"]),
+        staged_before,
+        "a collapsed drag must not reach the index"
     );
 }
 
@@ -462,13 +348,12 @@ fn granular_dispatch_routes_untracked_stage_through_intent_to_add() {
     // creation diff itself, in the exact shape partial-staging proves
     // appliable (pinned by `diff_load`'s own tests), and spends no engine call
     // doing it — which is what keeps the two-call assertion below honest.
-    seed_preview_cache(&mut state, &repo.path, "new.txt", false);
+    seed_preview_cache(&mut state, &repo.path, "new.txt");
 
     granular::dispatch(
         &mut state,
         PathBuf::from("new.txt"),
-        HunkTarget::Whole(0),
-        true,
+        HunkTarget::Whole(0, Direction::Stage),
     );
 
     assert_eq!(
@@ -496,6 +381,53 @@ fn granular_dispatch_routes_untracked_stage_through_intent_to_add() {
     );
 }
 
+/// A row click on an untracked file, which is the one case where the operation
+/// still composes from the displayed value: an untracked path is in neither
+/// index-facing patch, so the pane's synthesized creation diff is simultaneously
+/// what the reader selected from and the only value git can take for that path.
+/// The combined read shows a never-added file's content because the preview
+/// synthesizes it, so there IS a row to click, and the row keeps its per-line
+/// granularity through intent-to-add.
+#[test]
+fn a_row_click_on_an_untracked_file_stages_that_line_through_intent_to_add() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "untracked-row");
+    std::fs::write(repo.path.join("new.txt"), "one\ntwo\nthree\n").unwrap();
+
+    let (mut state, recorder) =
+        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
+    seed_preview_cache(&mut state, &repo.path, "new.txt");
+
+    // Worktree line 2 is `two` in the synthesized one-hunk creation diff.
+    granular::dispatch(
+        &mut state,
+        PathBuf::from("new.txt"),
+        HunkTarget::Row(RowKind::Add, 0, 2),
+    );
+    state.drain_events();
+
+    assert_eq!(
+        recorder.recorded(),
+        vec![
+            RecordedCall::AddIntentToAdd(vec![PathBuf::from("new.txt")]),
+            RecordedCall::ApplyPatch {
+                direction: ApplyDirection::Forward
+            },
+        ],
+        "the row click intents to add and then forward-applies exactly that line"
+    );
+    let staged = git(&repo.path, &["diff", "--cached", "--", "new.txt"]);
+    assert!(
+        staged.contains("+two") && !staged.contains("+three") && !staged.contains("+one"),
+        "the clicked line alone reached the index:\n{staged}"
+    );
+    assert_eq!(
+        porcelain_code(&repo.path, "new.txt"),
+        "AM",
+        "intent-to-add plus one staged line leaves the rest still unstaged"
+    );
+}
+
 #[test]
 fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
     let parent = tempfile::tempdir().unwrap();
@@ -519,13 +451,12 @@ fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
         .ui
         .granularly_completed
         .insert(repo.path.join("gone.txt"));
-    seed_preview_cache(&mut state, &repo.path, "words.txt", false);
+    seed_preview_cache(&mut state, &repo.path, "words.txt");
 
     granular::dispatch(
         &mut state,
         PathBuf::from("words.txt"),
-        HunkTarget::Whole(0),
-        true,
+        HunkTarget::Whole(0, Direction::Stage),
     );
     state.drain_events();
 
@@ -546,11 +477,6 @@ fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
         Some(PathBuf::from("notes.txt")),
         "focus must advance past exclusions to the next candidate"
     );
-    assert_eq!(
-        state.ui.diff_comparison,
-        DiffComparison::Local,
-        "post-op the viewer settles on the remaining unstaged changes"
-    );
     assert!(
         recorder.recorded().contains(&RecordedCall::ApplyPatch {
             direction: ApplyDirection::Forward
@@ -569,13 +495,14 @@ fn granular_dispatch_without_cached_diff_is_a_silent_no_op() {
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
 
-    // No cache entry for the path (and never a render): every input the
-    // module resolves besides the root is missing → silent no-op.
+    // No `RootHunkStats` entry for the root, and no rendered preview: the
+    // retained sections a granular op composes from are missing, and that is the
+    // whole no-op. Fetching them would be a git spawn per palette verb, which is
+    // what this contract exists to forbid.
     granular::dispatch(
         &mut state,
         PathBuf::from("words.txt"),
-        HunkTarget::Whole(0),
-        true,
+        HunkTarget::Whole(0, Direction::Stage),
     );
 
     // The harness runs work inline, so a dispatched op would already have

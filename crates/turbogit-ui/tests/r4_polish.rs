@@ -428,7 +428,7 @@ const FOCUS_RINGS: &[FocusRing<'static>] = &[
             },
         ],
     },
-    // The inline diff preview's three toolbar controls.
+    // The inline diff preview's two toolbar controls.
     FocusRing {
         case: "diff_toolbar_controls_paint_brand_focus_rings",
         shell: Shell::SeededWithPreview { tab: Tab::Commit },
@@ -437,10 +437,6 @@ const FOCUS_RINGS: &[FocusRing<'static>] = &[
             Focus {
                 node: Node::Label("Unified"),
                 what: "focused diff control Unified",
-            },
-            Focus {
-                node: Node::Label("Repo"),
-                what: "focused diff control Repo",
             },
             Focus {
                 node: Node::Label("Next hunk"),

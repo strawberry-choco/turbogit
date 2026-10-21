@@ -58,7 +58,8 @@ _Avoid_: discovery service, scan helper, VCS manager
 
 **Root caches**:
 The in-memory cache layer keyed by repository root: commit logs, ref
-decorations, changed-file lists, path-scoped logs, and ahead/behind counts.
+decorations, changed-file lists, path-scoped logs, ahead/behind counts, and the
+per-root diff facts (hunk spans and per-line staged-ness).
 Invalidated as one unit through one interface — per root or all roots — never
 poked field-by-field by callers.
 _Avoid_: log cache / ref cache (as if separate concepts), cache clearing
@@ -66,7 +67,7 @@ _Avoid_: log cache / ref cache (as if separate concepts), cache clearing
 **Keyed read**:
 The one interface by which a surface reaches a cached Git value: a target goes in,
 a verdict and the value come back, and asking the question is also what starts
-getting the answer when it isn't there. Which comparison a diff is, which line a
+getting the answer when it isn't there. Which file a diff covers, which line a
 blame covers, which side of a pane is wanted — those are keys, and keys belong to
 the read, never to a caller. A Granular op reads through it without asking it to
 fetch anything.
@@ -274,6 +275,24 @@ behaviour on its label. The unit the granular module owns end-to-end: input
 resolution, dispatch ordering, and completion settlement (exclusions and
 preview focus).
 _Avoid_: hunk action, partial op
+
+**Per-line staged-ness**:
+The answer to "does the index hold the line this diff row reports?", derived per
+row from the two index-facing patch values the root's diff facts already carry.
+It is never stored on a row, a hunk, or the displayed patch, and it is recomputed
+from scratch after every operation. It decides which way a row click moves, what
+a hunk header's suffix says, and what a screen reader is told about the row. A
+conflicted path has no answer, which is why its controls are inert.
+_Avoid_: staged flag, staging state (as something the app holds), pending
+
+**Appliable source**:
+The patch value a Granular op composes from, chosen by direction: the unstaged
+working-tree diff for a stage, the staged diff for an unstage. It is not the
+comparison the pane displays, and the difference is deliberate, because the
+displayed comparison is the one that stays byte-identical when a line is staged.
+A selection is appliable because it was composed from a value whose positions
+address the index, never from the text on screen.
+_Avoid_: displayed patch, raw diff (as a source), the diff on screen
 
 **Display row**:
 One visual line of the diff view. In side-by-side mode a paired deletion and

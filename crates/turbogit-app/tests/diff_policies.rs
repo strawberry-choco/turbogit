@@ -16,7 +16,7 @@ use test_support::git_seed::repo_with_one_commit;
 use test_support::srcscan;
 use turbogit_app::diff_model::{DiffValue, DisplayRow, Highlight, RowKind, line_counts};
 use turbogit_app::keyed_read::{DiffTarget, Keyed, Read};
-use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_app::state::AppState;
 use turbogit_domain::model::{DiffHighlighting, DiffPolicies, DiffWhitespace};
 use turbogit_engine::fake::FakeExecutor;
 
@@ -56,7 +56,6 @@ fn rendered(work: &Path, text: &str, policies: DiffPolicies) -> Arc<DiffValue> {
         work.to_path_buf(),
         None,
         None,
-        DiffComparison::Repo,
         policies,
         Some(PathBuf::from("ws.txt")),
     );
@@ -324,7 +323,6 @@ fn a_policy_change_reparses_once_and_never_serves_the_other_policys_model() {
             work.to_path_buf(),
             None,
             None,
-            DiffComparison::Repo,
             DiffPolicies {
                 whitespace: ws,
                 ..DiffPolicies::default()

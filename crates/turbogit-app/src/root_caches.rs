@@ -15,8 +15,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use turbogit_domain::model::{
-    Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, RecentCheckout, RefState, RootId,
-    Stash, Submodule, Worktree, forward_slash_path,
+    Change, Commit, CommitId, CommitRef, DiffOpts, LogOpts, Patch, RecentCheckout, RefState,
+    RootId, Stash, Submodule, Worktree, forward_slash_path,
 };
 use turbogit_engine_api::GitExecutor;
 use turbogit_services::hunk_stats::{self, FileHunks};
@@ -154,6 +154,16 @@ pub struct RootCaches {
     /// A surface-wide flag instead would let one pane's crash black out
     /// another's — which is the collapse [`crate::log_states`] exists to stop.
     log_failed: HashMap<LogRead, String>,
+    /// The message each of a fill's three root-wide diff reads last failed
+    /// with, keyed by root and by which of the three views died. The rule is
+    /// the log's, copied deliberately: a failure is a fact about one read of
+    /// one key, forgotten when that same read answers or when the root it
+    /// belongs to is invalidated. A root-wide or surface-wide flag is refused
+    /// for the same reason the log refuses one. A repository nobody has
+    /// committed in fails only the `HEAD ↔ worktree` read while both
+    /// index-facing reads answer, and a single flag would black out the chip
+    /// rail and the per-line oracle to report one dead read.
+    diff_failed: HashMap<(RootId, StatsView), String>,
     /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
     ahead_behind: HashMap<RootId, (usize, usize)>,
     /// Linked worktrees per root (issue 14).
@@ -365,6 +375,18 @@ pub struct RootHunkStats {
     pub staged: Vec<FileHunks>,
     /// index↔worktree (`git diff`): the unstaged hunks.
     pub local: Vec<FileHunks>,
+    /// The changed line numbers of the two index-facing views above, in each
+    /// patch's own numbering space, and beside them the retained per-file
+    /// sections those numbers were counted out of: what
+    /// [`row_is_staged`](Self::row_is_staged) answers from, and what a
+    /// [`crate::staged_lines::row_source`] click composes its operation from
+    /// without spawning git. Held here rather
+    /// than beside the displayed diff because a line stage leaves
+    /// `git diff HEAD` byte-identical, so this entry's one-unit lifetime is the
+    /// only one that keeps the answer honest. See
+    /// [`crate::staged_lines`](crate::staged_lines) for the derivation, its
+    /// two-spaces rule, and what the retained sections cost.
+    pub line_sets: Vec<crate::staged_lines::FileLineSets>,
 }
 
 impl RootHunkStats {
@@ -377,6 +399,14 @@ impl RootHunkStats {
         };
         let want = forward_slash_path(path);
         view.iter().find(|f| f.path == want)
+    }
+
+    /// Whether the line `row` reports is in the index, or has no per-line
+    /// answer. The reasoning is all in [`crate::staged_lines`], which is the
+    /// only place in the app allowed to relate a line of one patch to a line of
+    /// another; this is the one door the pane and the staging path knock on.
+    pub fn row_is_staged(&self, path: &Path, row: &crate::diff_model::Row) -> Option<bool> {
+        crate::staged_lines::row_is_staged(&self.line_sets, path, row)
     }
 }
 
@@ -409,7 +439,10 @@ where
     settle
 }
 /// Which of the three working-tree diff views [`RootHunkStats::file` reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `Hash` is part of the contract because a view names half of a recorded
+/// read failure's key (`RootCaches::diff_failed`), and a key a caller can
+/// build by hand is a key a caller can build subtly differently wrong.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StatsView {
     Repo,
     Staged,
@@ -645,6 +678,38 @@ impl RootCaches {
     /// Forget one read's failure because the same read has now answered.
     pub fn clear_log_failure(&mut self, read: &LogRead) {
         self.log_failed.remove(read);
+    }
+
+    // --- Root-wide diff view read failures -----------------------------------
+
+    /// The message `(root, view)`'s read last failed with, if it failed and
+    /// nothing has since answered or forgotten it. A surface that displays
+    /// that view reads this before it displays any content.
+    pub fn diff_view_failure(&self, root: &RootId, view: StatsView) -> Option<&str> {
+        let key = (root.clone(), view);
+        self.diff_failed.get(&key).map(String::as_str)
+    }
+
+    /// Whether `(root, view)` is recorded as failed, for a caller that only
+    /// needs the yes.
+    pub fn has_diff_view_failure(&self, root: &RootId, view: StatsView) -> bool {
+        self.diff_failed.contains_key(&(root.clone(), view))
+    }
+
+    /// Record the message one root-wide diff read answered with on failure.
+    pub fn record_diff_view_failure(
+        &mut self,
+        root: &RootId,
+        view: StatsView,
+        message: impl Into<String>,
+    ) {
+        self.diff_failed
+            .insert((root.clone(), view), message.into());
+    }
+
+    /// Forget `(root, view)`'s failure because that same read has now answered.
+    pub fn clear_diff_view_failure(&mut self, root: &RootId, view: StatsView) {
+        self.diff_failed.remove(&(root.clone(), view));
     }
 
     /// Forget one log read's **answer and its failure together**, so the
@@ -886,39 +951,89 @@ impl RootCaches {
     /// Compute `root`'s hunk-span statistics through the engine seam on miss
     /// and cache them (issue 20). Three whole-root diffs per fill — the same
     /// compute-on-miss shape as [`RootCaches::ensure_files`].
+    ///
+    /// The per-line staged sets are derived here, from the patch values before
+    /// [`hunk_stats::file_hunks`] reduces them to a path and four `@@` numbers,
+    /// because that reduction is where every line of every hunk body is
+    /// discarded. `repo` is not an input: `git diff HEAD` prints an unmerged
+    /// path as an ordinary two-sided diff, so the only patch that can mark a
+    /// conflict is `local`, and the only patches that reach the index are
+    /// `staged` and `local`.
+    ///
+    /// **What a partially failed fill stores.** The entry is installed even
+    /// when one of the three reads died, and each view holds exactly what that
+    /// view's own read answered: a dead read contributes an empty list and a
+    /// recorded failure in `Self::diff_failed`, never an empty patch dressed
+    /// up as an answer. A repository nobody has committed in is this fill's
+    /// steady state, not a corner case: the `HEAD`-facing read refuses there
+    /// while both index-facing reads answer, so the badges, the staged-hunk
+    /// rail and the per-line oracle keep their real data and only the
+    /// HEAD-facing view is marked failed. Blanking the answered views for one
+    /// dead read is the surface-wide collapse the log rule above refuses, and
+    /// suppressing the entry entirely would make the honest-looking absence of
+    /// a badge indistinguishable from a measured zero. A surface that displays
+    /// a view consults the view's record before it displays anything built
+    /// from it ([`AppState::failed_view_message`](crate::state::AppState::failed_view_message));
+    /// a `staged` or `local` failure additionally means `line_sets` saw an
+    /// empty patch for that half, which is what the record is for there too.
     pub fn ensure_hunk_stats(&mut self, exec: &dyn GitExecutor, root: &RootId) {
         if self.hunk_stats.contains_key(root) {
             return;
         }
-        let repo = exec
-            .diff_patch(
-                &root.0,
-                &DiffOpts {
-                    left: Some("HEAD".to_owned()),
-                    ..DiffOpts::default()
-                },
-            )
-            .unwrap_or_default();
-        let staged = exec
-            .diff_patch(
-                &root.0,
-                &DiffOpts {
-                    staged: true,
-                    ..DiffOpts::default()
-                },
-            )
-            .unwrap_or_default();
-        let local = exec
-            .diff_patch(&root.0, &DiffOpts::default())
-            .unwrap_or_default();
+        let repo = self.read_diff_view(
+            exec,
+            root,
+            StatsView::Repo,
+            &DiffOpts {
+                left: Some("HEAD".to_owned()),
+                ..DiffOpts::default()
+            },
+        );
+        let staged = self.read_diff_view(
+            exec,
+            root,
+            StatsView::Staged,
+            &DiffOpts {
+                staged: true,
+                ..DiffOpts::default()
+            },
+        );
+        let local = self.read_diff_view(exec, root, StatsView::Local, &DiffOpts::default());
         self.hunk_stats.insert(
             root.clone(),
             RootHunkStats {
                 repo: hunk_stats::file_hunks(&repo),
                 staged: hunk_stats::file_hunks(&staged),
                 local: hunk_stats::file_hunks(&local),
+                line_sets: crate::staged_lines::derive_line_sets(staged, local),
             },
         );
+    }
+
+    /// One of a fill's three reads, under the log failure rule per view: an
+    /// answer installs git's patch and forgets any failure recorded for that
+    /// view; a failure records the message and hands back the empty patch so
+    /// the view contributes nothing. The early return in
+    /// [`Self::ensure_hunk_stats`] means a retry only happens on a fill the
+    /// root's invalidation allowed again, which is the same lifetime the
+    /// record has.
+    fn read_diff_view(
+        &mut self,
+        exec: &dyn GitExecutor,
+        root: &RootId,
+        view: StatsView,
+        opts: &DiffOpts,
+    ) -> Patch {
+        match exec.diff_patch(&root.0, opts) {
+            Ok(patch) => {
+                self.clear_diff_view_failure(root, view);
+                patch
+            }
+            Err(e) => {
+                self.record_diff_view_failure(root, view, e.to_string());
+                Patch::default()
+            }
+        }
     }
 
     /// Store a freshly loaded commit log for `root`, replacing whatever window
@@ -1074,8 +1189,11 @@ impl RootCaches {
                 self.hunk_stats.remove(root);
                 // A root's failures go with its windows: an operation that
                 // changed the repository must not leave a pane still reporting
-                // the read the operation made stale.
+                // the read the operation made stale. The diff view records go
+                // with the entry they describe, so a refill answers the same
+                // three reads again before any view is trusted.
                 self.log_failed.retain(|read, _| read.root() != root);
+                self.diff_failed.retain(|(r, _), _| r != root);
             }
         }
     }
@@ -1111,6 +1229,7 @@ impl RootCaches {
         self.recent_cache.clear();
         self.hunk_stats.clear();
         self.log_failed.clear();
+        self.diff_failed.clear();
     }
 
     /// True when every map is empty — the invalidation invariant's
@@ -1131,6 +1250,7 @@ impl RootCaches {
             && self.recent_cache.is_empty()
             && self.hunk_stats.is_empty()
             && self.log_failed.is_empty()
+            && self.diff_failed.is_empty()
     }
 }
 

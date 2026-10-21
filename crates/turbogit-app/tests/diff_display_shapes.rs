@@ -13,7 +13,7 @@ use std::sync::Arc;
 use test_support::git_seed::repo_with_one_commit;
 use turbogit_app::diff_model::{DisplayRow, RowKind};
 use turbogit_app::keyed_read::{DiffTarget, Read};
-use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_app::state::AppState;
 use turbogit_engine::fake::FakeExecutor;
 use turbogit_services::hunk_stats::HunkSpan;
 
@@ -61,7 +61,6 @@ fn settled_diff(work: &PathBuf) -> Arc<turbogit_app::diff_model::DiffValue> {
         work.to_path_buf(),
         None,
         None,
-        DiffComparison::Repo,
         turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("README.md")),
     );

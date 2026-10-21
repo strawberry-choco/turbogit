@@ -12,7 +12,7 @@ use crate::root_caches::{
     scoped_batch_plan,
 };
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use turbogit_domain::error::{TgError, TgResult};
@@ -1260,28 +1260,6 @@ pub struct BlameTarget {
     pub rev: String,
 }
 
-/// Which working-tree comparison the diff viewer shows (issue #13, spec §8.4
-/// revision chips). Each variant maps to one documented git pair:
-///
-/// | Chip    | Pair               | Engine call            |
-/// |---------|--------------------|------------------------|
-/// | `Repo`  | HEAD ↔ worktree    | `git diff HEAD`        |
-/// | `Staged`| HEAD ↔ index       | `git diff --cached`    |
-/// | `Local` | index ↔ worktree   | `git diff`             |
-///
-/// Only used when the viewer renders a working-tree comparison; explicit
-/// commit-to-commit targets (Git Log) keep their fixed revision pair.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
-pub enum DiffComparison {
-    /// HEAD ↔ worktree.
-    Repo,
-    /// HEAD ↔ index.
-    Staged,
-    /// index ↔ worktree.
-    #[default]
-    Local,
-}
-
 /// Which pane of the diff viewer holds the caret (`Diff.FocusOppositePane`).
 ///
 /// The panes are the two sides of the comparison, not two widgets: `Old` is the
@@ -1309,18 +1287,37 @@ impl DiffPane {
     }
 }
 
-/// The active character-range selection (issue 19): one drag inside one
-/// changed line of the previewed diff. `ord`/`start`/`end` follow
-/// `HunkSelection::Chars` semantics. Enter stages it; Esc clears it; it
-/// dies with the path's diff cache entry.
+/// The in-flight character-range drag (issue 19): one press inside one changed
+/// line of the previewed diff, with `anchor`/`cursor` as char offsets into that
+/// line's body (`turbogit_services::partial::HunkSelection::Chars` scheme). It
+/// is a draft, not a selection: the band it paints is the live drag, and the
+/// range is staged the moment the pointer is released. Nothing armed survives a
+/// release, so there is nothing for a key to clear.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CharSelection {
+pub struct CharDrag {
     pub path: PathBuf,
+    /// The pane's hunk index of the row the press landed on. Identity only: the
+    /// draft is matched against the row the pointer is still over.
     pub hunk: usize,
+    /// The row's changed-line ordinal within that hunk. Identity only, for the
+    /// same reason — the operation is addressed by [`CharDrag::new_no`].
     pub ord: usize,
-    /// Char offsets into the line body (end exclusive).
-    pub start: usize,
-    pub end: usize,
+    /// The row's worktree gutter, which is the number
+    /// [`crate::staged_lines`] translates into the appliable section.
+    pub new_no: usize,
+    /// Char offset the press landed on.
+    pub anchor: usize,
+    /// Char offset the pointer is at now.
+    pub cursor: usize,
+}
+
+impl CharDrag {
+    /// The dragged range, normalized around the anchor so dragging either way
+    /// widens it. A range that never moved is empty, and an empty range is a
+    /// line click, not a character stage.
+    pub fn range(&self) -> (usize, usize) {
+        (self.anchor.min(self.cursor), self.anchor.max(self.cursor))
+    }
 }
 
 /// Semantic category of a transient feedback message (issue #22). Drives the
@@ -1726,8 +1723,6 @@ pub struct UiState {
     /// "N hidden" band. Ephemeral: cleared whenever a fresh diff load
     /// starts, alongside [`Self::diff_current_hunk`].
     pub diff_collapsed: HashSet<usize>,
-    // diff viewer working-tree comparison chips + view policies
-    pub diff_comparison: DiffComparison,
     /// The viewer's two view policies: which whitespace differences count, and
     /// how finely a change is highlighted. They are part of what the diff read is
     /// keyed on, so a change re-folds the display model once instead of per frame.
@@ -1756,21 +1751,10 @@ pub struct UiState {
     /// Ephemeral by design — entries drop as soon as the path regains
     /// unstaged changes or disappears from status entirely.
     pub granularly_completed: HashSet<PathBuf>,
-    /// Sub-hunk line selections (spec R2 story 3): preview path → hunk index
-    /// → ordinals over that hunk's +/- lines (`HunkSelection::Lines`
-    /// semantics). Ephemeral: cleared whenever the path's diff cache entry
-    /// changes — which also covers every successful granular op, since ops
-    /// invalidate the cache and force a reload.
-    pub line_selections: HashMap<PathBuf, BTreeMap<usize, BTreeSet<usize>>>,
-    /// The active drag-selected character range (issue 19): at most one,
-    /// inside one changed line of the previewed diff. Enter stages it, Esc
-    /// clears it.
-    pub char_selection: Option<CharSelection>,
-    /// Transient drag draft (issue 19): the anchor of the in-flight char
-    /// drag — `(path, hunk, ord, anchor char)` — so the range can widen in
-    /// either direction while the pointer moves. Set on drag start, cleared
-    /// on drag end.
-    pub char_drag_anchor: Option<(PathBuf, usize, usize, usize)>,
+    /// The character-range drag in flight on the previewed diff, or `None`
+    /// whenever no pointer is down on a row. A release either stages its
+    /// range or leaves nothing at all, so this never outlives the gesture.
+    pub char_drag: Option<CharDrag>,
     // command palette (Epic F5)
     pub command_palette: bool,
     pub command_query: String,

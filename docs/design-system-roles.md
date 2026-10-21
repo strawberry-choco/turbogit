@@ -419,6 +419,53 @@ roles to the three that are real:
   them to a single boolean or infer that “selected” means the same thing in every
   list.
 
+### Diff row state roles (staged-ness)
+
+The combined preview reads `HEAD ↔ worktree`, so a staged row and an unstaged row
+are on screen in one view, and the row's *state* is the role that paint owns.
+
+- **Staged is the foreground.** A staged row wears the pair the diff has always
+  had: `DIFF_ADD_BG` with `DIFF_ADD_TEXT`, `DIFF_DEL_BG` with `DIFF_DEL_TEXT`. That
+  pair is not redefined, re-valued, or renamed.
+- **Unstaged is the muted pair**, named in `theme`: `DIFF_ADD_UNSTAGED_BG` with
+  `DIFF_ADD_UNSTAGED_TEXT`, `DIFF_DEL_UNSTAGED_BG` with `DIFF_DEL_UNSTAGED_TEXT`.
+  Each is a band and an ink together, because an ink change alone cannot clear AA
+  for running text on either band, and the theme block carries the measured numbers.
+  `DIFF_ADD_UNSTAGED_TEXT` is the added accent in a second role, the same one-green-
+  two-names identity `STATUS_ADDED` already holds.
+- **The rail is not a staged-ness mark, and no accent is either.** The 2px
+  `Palette::BRAND` leading edge stays R4's composite with `ROW_SELECTED`, meaning
+  "this row is chosen" and nothing else. A diff row's staged-ness never borrows it:
+  ticket 01 deleted this pane's rail painter because it marked a pending UI gesture
+  rather than a git state, and a staged mark painted at the leading edge would
+  rebuild it. `tests/design_tokens.rs`'s rail census enumerates the painters that
+  own the width and does not list the diff pane.
+- **Hover answers in the gutter, not in a fill.** A hovered changed row steps its
+  line-number ink from `INK_3` to `INK_2`. The shared hover fill is not usable on a
+  diff row: `SURFACE_2` against a muted band measures 1.01:1, and a hover that
+  brightened the row's ink instead would make an unstaged row look staged the moment
+  the pointer crossed it. R4 still governs a row that is *chosen*; this is a row that
+  is merely under the pointer.
+- **The caret keeps its own meaning.** The diff's text caret is the one mark that
+  says which pane holds the reader's position. It stays `Palette::ACCENT` at
+  `CARET_WIDTH` on both states' bands, and `CARET_WIDTH` stays a separate token from
+  `RAIL_WIDTH` for the reason already written on it.
+- **Two `part` strings, two controls.** The hunk header's `· staged` / `· part` /
+  `· not staged` suffix names one hunk's state in the preview pane, aggregated from
+  the per-line oracle. The commit window's staged-hunk chip ` (part)` is a different
+  control in a different surface and its wording is untouched. They are never merged
+  and neither is a spelling of the other.
+- **A row's accessibility label states its state, never the consequence of the
+  click.** The label is the row's text plus `(staged)`, `(unstaged)`, or
+  `(staged-ness unknown)`, in the parenthetical vocabulary the whole-file checkbox's
+  `stage_label` already uses. The consequence would be dishonest in two shapes at
+  once: unstage moves a replacement pair together, and a row on a file with no
+  previous version reaches the whole file. A state word is true in both.
+- **A row the oracle cannot answer is not "unstaged".** Conflicted, binary,
+  mode-only, pure-rename, context, and any row of a path absent from both appliable
+  patches answer `None`, keep the full treatment, take no header suffix, and label
+  themselves unknown. Muting them would report a state the index never claimed.
+
 ## Hairline roles
 
 A one-pixel line was once picked by whichever of the app's three line tokens was

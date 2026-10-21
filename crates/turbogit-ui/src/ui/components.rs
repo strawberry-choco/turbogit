@@ -226,12 +226,11 @@ pub fn row_fill(state: RowState) -> Color32 {
 /// padding shifts every row's content the moment it is selected, which is the
 /// drift `tests/branch_component_kit.rs` asserts against painted output.
 ///
-/// **Both pre-existing rail sites are absorbed here** (ticket 07), which is the
+/// **Every rail in the tree paints through here**, which is the
 /// whole point of having one painter: the sidebar's `paint_active_band` used to
 /// *stroke* a 2 px segment inset 1 px from the leading edge and now calls this
-/// (so the rail sits flush at the leading edge, where the diff pane's already
-/// was), and the diff pane's `paint_selection_bar` used to *fill* the same 2 px
-/// rect by hand. One painter means a row that grows a rail places it
+/// (so the rail sits flush at the leading edge, where a painted rail belongs).
+/// One painter means a row that grows a rail places it
 /// identically wherever it appears, and the width is read from the token layer
 /// rather than restated at either site.
 ///

@@ -36,8 +36,18 @@ pub enum HunkSelection {
 }
 
 /// Partial-staging selection for one file's diff, keyed by 0-based hunk index
-/// (same order as the diff row model's `Row.hunk`). An absent key means the
-/// hunk is not selected.
+/// **within the patch handed to [`compose`]**. An absent key means the hunk is
+/// not selected.
+///
+/// This is not the same numbering as the display model's `Row::hunk` for a
+/// multi-file patch, whatever the older comment claimed: `compose` enumerates
+/// `file.hunks` inside its per-file closure, so the index restarts at 0 for every
+/// section, while `diff_model::rows_from` declares its `hunk` counter outside the
+/// file loop and lets it run across every file of the patch. The two agree only
+/// when the patch has one file section, which is every path-scoped read and no
+/// whole-root read. The first caller to hand `compose` a multi-file patch and a
+/// `Row::hunk` would select the wrong hunk of the wrong file, silently, because
+/// both numbers are 0-based and both compile.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
     pub hunks: BTreeMap<usize, HunkSelection>,
@@ -49,8 +59,14 @@ pub struct Selection {
 /// not a prefix character to strip (`ADR-0022`, retiring `ADR-0013`'s
 /// raw-text composition).
 ///
+/// `direction` is which way the composed patch will be applied to the index,
+/// and it changes only how an *unselected* changed line survives: see
+/// `filter_lines`. A forward stage composes against the pre-image, a reverse
+/// unstage against the post-image, and the two need opposite treatment of the
+/// same dropped/demoted line.
+///
 /// Empty when nothing is selected; callers treat that as a no-op.
-pub fn compose(patch: &Patch, selection: &Selection) -> Patch {
+pub fn compose(patch: &Patch, selection: &Selection, direction: ApplyDirection) -> Patch {
     let files = patch
         .files
         .iter()
@@ -63,7 +79,7 @@ pub fn compose(patch: &Patch, selection: &Selection) -> Patch {
                     let kept = match selection.hunks.get(&idx)? {
                         HunkSelection::Whole => hunk.lines.clone(),
                         HunkSelection::Lines(lines) if !lines.is_empty() => {
-                            filter_lines(&hunk.lines, &Filter::Lines(lines))
+                            filter_lines(&hunk.lines, &Filter::Lines(lines), direction)
                         }
                         HunkSelection::Chars { ord, start, end } => filter_lines(
                             &hunk.lines,
@@ -72,6 +88,7 @@ pub fn compose(patch: &Patch, selection: &Selection) -> Patch {
                                 start: *start,
                                 end: *end,
                             },
+                            direction,
                         ),
                         HunkSelection::Lines(_) => return None,
                     };
@@ -113,9 +130,10 @@ fn composed_or_noop(
     patch: &Patch,
     selection: &Selection,
     status: ChangeStatus,
+    direction: ApplyDirection,
 ) -> TgResult<Option<Patch>> {
     ensure_granular_allowed(status)?;
-    let composed = compose(patch, selection);
+    let composed = compose(patch, selection, direction);
     if composed.is_empty() {
         return Ok(None);
     }
@@ -211,7 +229,7 @@ pub fn stage_selection(
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
-    match composed_or_noop(patch, selection, status)? {
+    match composed_or_noop(patch, selection, status, ApplyDirection::Forward)? {
         Some(composed) => apply_composed(vcs, root, &composed, ApplyDirection::Forward),
         None => Ok(()),
     }
@@ -230,7 +248,7 @@ pub fn unstage_selection(
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
-    match composed_or_noop(patch, selection, status)? {
+    match composed_or_noop(patch, selection, status, ApplyDirection::Reverse)? {
         Some(composed) => apply_composed(vcs, root, &composed, ApplyDirection::Reverse),
         None => Ok(()),
     }
@@ -249,7 +267,7 @@ pub fn stage_untracked_selection(
     selection: &Selection,
     status: ChangeStatus,
 ) -> TgResult<()> {
-    match composed_or_noop(patch, selection, status)? {
+    match composed_or_noop(patch, selection, status, ApplyDirection::Forward)? {
         Some(composed) => {
             // Both calls take the index lock (`add -N` writes the index too),
             // so each gets the transient-collision retry independently.
@@ -266,7 +284,9 @@ enum Filter<'a> {
     Lines(&'a BTreeSet<usize>),
     /// One line's char range (`Chars` selection): the selected slice of the
     /// addition becomes the staged line; every other changed line is
-    /// unselected (deletions turn context, additions drop).
+    /// unselected (deletions turn context, additions drop). A `Chars` selection
+    /// is only ever composed forward, so its treatment never branches on
+    /// direction.
     Chars {
         ord: usize,
         start: usize,
@@ -276,13 +296,38 @@ enum Filter<'a> {
 
 /// Keep context lines and the selected changed lines of one hunk body.
 ///
-/// An unselected addition is dropped entirely (it must not come into
-/// existence in the staged result), while an unselected deletion survives on
-/// both sides and is therefore re-emitted as a context line — removing it
-/// outright would misalign every later old-side line of the hunk. A
-/// `\ No newline at end of file` marker annotates the changed line above it,
-/// so it survives only when that line does.
-fn filter_lines(lines: &[PatchLine], filter: &Filter) -> Vec<PatchLine> {
+/// Which text an *unselected* changed line is written as is the whole hazard
+/// here, and it flips with `direction`, because `git apply --cached --reverse`
+/// never consults HEAD: it matches the patch's new side against the index and
+/// rewrites the file to the patch's old side. So the two directions want
+/// opposite treatment of the same line.
+///
+/// Forward (a stage), against `index <-> worktree`, whose pre-image *is* the
+/// index: git matches the pre-image, which is `context + every '-' line`. An
+/// unselected addition is dropped (it must not enter the index yet) and an
+/// unselected deletion is demoted to a context line carrying HEAD's old text.
+/// Neither move touches the pre-image git matches, so any subset is appliable.
+///
+/// Reverse (an unstage), against `HEAD <-> index`, whose post-image *is* the
+/// index: git matches the *new* side, so every staged line the user did not
+/// select must still be described truly. An unselected addition is a line the
+/// index holds, so it survives as a context line carrying its **post-image**
+/// text, and an unselected deletion is a line the index no longer holds, so it
+/// is dropped outright. Reusing the forward treatment for a reverse apply is the
+/// failure these two arms exist to prevent, and it is total: a demoted `-` claims
+/// HEAD's line where the index holds its replacement, and a dropped `+` erases an
+/// index line from the block git is searching for. Both self-inflict
+/// `error: patch failed` on every partial selection, and the only reverse patch
+/// that then lands is the whole hunk. A selected change
+/// keeps its `-`/`+` marks in either direction, so a replacement row staged or
+/// unstaged as one row still moves as its `-`/`+` pair.
+///
+/// The counts follow from the kept lines (`body_line_counts`), so the header
+/// agrees with whichever body this produces. A `\ No newline at end of file`
+/// marker annotates the changed line above it, so it survives only when that
+/// line does; a reverse-demoted addition keeps its own marker because the index
+/// line it stands for has exactly that trailing-newline state.
+fn filter_lines(lines: &[PatchLine], filter: &Filter, direction: ApplyDirection) -> Vec<PatchLine> {
     /// The selected slice of one addition body (char-indexed, clamped,
     /// end exclusive), or None when the range selects nothing.
     fn char_slice(text: &str, start: usize, end: usize) -> Option<String> {
@@ -291,6 +336,10 @@ fn filter_lines(lines: &[PatchLine], filter: &Filter) -> Vec<PatchLine> {
         let end = end.min(chars.len());
         (start < end).then(|| chars[start..end].iter().collect::<String>())
     }
+
+    // Only a `Lines` filter ever composes a reverse patch; a `Chars` selection
+    // and a `Whole` hunk never branch on direction.
+    let reverse_lines = direction == ApplyDirection::Reverse && matches!(filter, Filter::Lines(_));
 
     let mut out: Vec<PatchLine> = Vec::new();
     let mut changed = 0usize;
@@ -305,34 +354,60 @@ fn filter_lines(lines: &[PatchLine], filter: &Filter) -> Vec<PatchLine> {
                     Filter::Chars { .. } => false,
                 };
                 changed += 1;
-                out.push(PatchLine {
-                    kind: if keep {
-                        PatchLineKind::Removed
-                    } else {
-                        PatchLineKind::Context
-                    },
-                    text: line.text.clone(),
-                    no_newline: keep && line.no_newline,
-                });
-            }
-            PatchLineKind::Added => {
-                let kept = match filter {
-                    Filter::Lines(selected) => selected.contains(&changed).then(|| PatchLine {
-                        kind: PatchLineKind::Added,
+                if keep {
+                    out.push(PatchLine {
+                        kind: PatchLineKind::Removed,
                         text: line.text.clone(),
                         no_newline: line.no_newline,
-                    }),
-                    Filter::Chars { ord, start, end } => (changed == *ord)
-                        .then(|| char_slice(&line.text, *start, *end))
-                        .flatten()
-                        .map(|text| PatchLine {
-                            kind: PatchLineKind::Added,
-                            text,
-                            no_newline: line.no_newline,
-                        }),
-                };
-                changed += 1;
-                out.extend(kept);
+                    });
+                } else if reverse_lines {
+                    // Unselected deletion in a reverse apply: the index does not
+                    // hold HEAD's line, so the patch must not mention it at all.
+                } else {
+                    // Forward (or Chars): survive on both sides as context.
+                    out.push(PatchLine {
+                        kind: PatchLineKind::Context,
+                        text: line.text.clone(),
+                        no_newline: false,
+                    });
+                }
+            }
+            PatchLineKind::Added => {
+                match filter {
+                    Filter::Lines(selected) => {
+                        let keep = selected.contains(&changed);
+                        changed += 1;
+                        if keep {
+                            out.push(PatchLine {
+                                kind: PatchLineKind::Added,
+                                text: line.text.clone(),
+                                no_newline: line.no_newline,
+                            });
+                        } else if reverse_lines {
+                            // Unselected addition in a reverse apply: it is a
+                            // staged line the index holds, so carry its own text
+                            // as context and the block git searches stays whole.
+                            out.push(PatchLine {
+                                kind: PatchLineKind::Context,
+                                text: line.text.clone(),
+                                no_newline: line.no_newline,
+                            });
+                        }
+                        // Forward: drop; it must not come into the index yet.
+                    }
+                    Filter::Chars { ord, start, end } => {
+                        let kept = (changed == *ord)
+                            .then(|| char_slice(&line.text, *start, *end))
+                            .flatten()
+                            .map(|text| PatchLine {
+                                kind: PatchLineKind::Added,
+                                text,
+                                no_newline: line.no_newline,
+                            });
+                        changed += 1;
+                        out.extend(kept);
+                    }
+                }
             }
         }
     }
@@ -371,9 +446,24 @@ mod tests {
     }
 
     /// …and the composed value's *text* is the staging guarantee (ADR-0013 as
-    /// superseded by issue 11), so a test states what those bytes are.
+    /// superseded by issue 11), so a test states what those bytes are. These
+    /// helpers compose forward unless a test names the direction.
     fn compose_patch(text: &str, selection: &Selection) -> String {
-        compose(&patch(text), selection).to_string()
+        compose(
+            &patch(text),
+            selection,
+            turbogit_engine_api::ApplyDirection::Forward,
+        )
+        .to_string()
+    }
+
+    fn compose_reverse(text: &str, selection: &Selection) -> String {
+        compose(
+            &patch(text),
+            selection,
+            turbogit_engine_api::ApplyDirection::Reverse,
+        )
+        .to_string()
     }
 
     fn whole_hunk(idx: usize) -> Selection {
@@ -683,5 +773,138 @@ mod tests {
             stderr: "error: patch does not apply".into(),
         }));
         assert!(!is_transient_index_lock(&TgError::Other("boom".into())));
+    }
+
+    #[test]
+    fn forward_composition_is_byte_for_byte_what_it_was_before_the_reverse_rule() {
+        // The load-bearing guard on `filter_lines`' direction arms: the reverse
+        // demotion rule must not disturb one byte the forward path feeds git,
+        // because `stage_untracked_selection`, the whole-file checkbox and every
+        // palette verb compose from it. Each expected string below is one
+        // fixture's forward output, stored verbatim rather than recomputed here,
+        // over the whole fixture set (a pure addition run, a pure deletion run, a
+        // replacement pair, a mixed hunk, a trailing run at end of file, two
+        // identical adjacent additions, and an untracked file after
+        // intent-to-add). A forward drift therefore reddens this test instead of
+        // quietly moving the verbs that compose from it.
+        for (name, text, ords, expected) in forward_fixture_set() {
+            let selection = Selection {
+                hunks: [(0usize, HunkSelection::Lines(ords.iter().copied().collect()))]
+                    .into_iter()
+                    .collect(),
+            };
+            let composed = compose(&patch(text), &selection, ApplyDirection::Forward).to_string();
+            assert_eq!(
+                composed, expected,
+                "forward bytes drifted for fixture {name}"
+            );
+        }
+    }
+
+    /// `name, patch text, selected ordinals of hunk 0, forward composed bytes`.
+    ///
+    /// The literals are stored output, not values the code computes here.
+    fn forward_fixture_set() -> Vec<(&'static str, &'static str, Vec<usize>, String)> {
+        let cases: [(&str, &str, &[usize], &str); 7] = [
+            (
+                "PURE_ADD",
+                "diff --git a/p.txt b/p.txt\n--- a/p.txt\n+++ b/p.txt\n@@ -1,3 +1,5 @@\n one\n+new1\n+new2\n two\n",
+                &[0],
+                "diff --git a/p.txt b/p.txt\n--- a/p.txt\n+++ b/p.txt\n@@ -1,2 +1,3 @@\n one\n+new1\n two\n",
+            ),
+            (
+                "PURE_DEL",
+                "diff --git a/d.txt b/d.txt\n--- a/d.txt\n+++ b/d.txt\n@@ -1,4 +1,2 @@\n keep\n-x\n-y\n last\n",
+                &[0],
+                "diff --git a/d.txt b/d.txt\n--- a/d.txt\n+++ b/d.txt\n@@ -1,4 +1,3 @@\n keep\n-x\n y\n last\n",
+            ),
+            (
+                "REPLACE",
+                "diff --git a/r.txt b/r.txt\n--- a/r.txt\n+++ b/r.txt\n@@ -1,3 +1,3 @@\n lead\n-old\n+new\n trail\n",
+                &[1],
+                "diff --git a/r.txt b/r.txt\n--- a/r.txt\n+++ b/r.txt\n@@ -1,3 +1,4 @@\n lead\n old\n+new\n trail\n",
+            ),
+            (
+                "MIXED",
+                "diff --git a/m.txt b/m.txt\n--- a/m.txt\n+++ b/m.txt\n@@ -1,5 +1,6 @@\n a\n-b\n+B\n c\n+added\n d\n",
+                &[0, 1],
+                "diff --git a/m.txt b/m.txt\n--- a/m.txt\n+++ b/m.txt\n@@ -1,4 +1,4 @@\n a\n-b\n+B\n c\n d\n",
+            ),
+            (
+                "TRAIL_EOF",
+                "diff --git a/t.txt b/t.txt\n--- a/t.txt\n+++ b/t.txt\n@@ -1,2 +1,4 @@\n first\n second\n+tail1\n+tail2\n",
+                &[0],
+                "diff --git a/t.txt b/t.txt\n--- a/t.txt\n+++ b/t.txt\n@@ -1,2 +1,3 @@\n first\n second\n+tail1\n",
+            ),
+            (
+                "DUP_ADD",
+                "diff --git a/u.txt b/u.txt\n--- a/u.txt\n+++ b/u.txt\n@@ -1 +1,3 @@\n base\n+dup\n+dup\n",
+                &[0],
+                "diff --git a/u.txt b/u.txt\n--- a/u.txt\n+++ b/u.txt\n@@ -1 +1,2 @@\n base\n+dup\n",
+            ),
+            (
+                "UNTRACKED_IA",
+                "diff --git a/n.txt b/n.txt\nnew file mode 100644\n--- /dev/null\n+++ b/n.txt\n@@ -0,0 +1,3 @@\n+one\n+two\n+three\n",
+                &[1],
+                "diff --git a/n.txt b/n.txt\nnew file mode 100644\n--- /dev/null\n+++ b/n.txt\n@@ -0,0 +1 @@\n+two\n",
+            ),
+        ];
+        cases
+            .into_iter()
+            .map(|(name, text, ords, expected)| (name, text, ords.to_vec(), expected.to_string()))
+            .collect()
+    }
+
+    fn lines_sel(ords: &[usize]) -> Selection {
+        Selection {
+            hunks: [(0usize, HunkSelection::Lines(ords.iter().copied().collect()))]
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    /// The staged section for one hunk holding two modifications, `alpha` to
+    /// `ALPHA` and `beta` to `BETA`. This is the shape that decides whether an
+    /// unstage can be per row at all: two changes in one hunk, each individually
+    /// reversible. Ordinals: 0=`-alpha`, 1=`+ALPHA`, 2=`-beta`, 3=`+BETA`.
+    const TWO_STAGED_MODS: &str = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n-alpha\n+ALPHA\n-beta\n+BETA\n gamma\n";
+
+    #[test]
+    fn reverse_composition_keeps_an_unselected_modification_as_post_image_context() {
+        // Unstage only the `beta` modification. The forward filter would demote
+        // `-alpha` to context claiming HEAD's `alpha` is in the index (it is not;
+        // `ALPHA` is) and drop `+ALPHA` (erasing an index line). The reverse rule
+        // drops the unselected `-alpha` and keeps the unselected `+ALPHA` as
+        // context carrying its own text, so the new side matches the index and
+        // git reverse-applies one row. The expected text is exactly what
+        // `git apply --cached --reverse` takes against an index holding `ALPHA`,
+        // `BETA` and `gamma`.
+        let reverse = compose_reverse(TWO_STAGED_MODS, &lines_sel(&[2, 3]));
+        let expected = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n ALPHA\n-beta\n+BETA\n gamma\n";
+        assert_eq!(reverse, expected);
+    }
+
+    #[test]
+    fn reverse_composition_of_a_staged_modification_and_addition_unstages_only_the_pair() {
+        // A staged modification `two`->`TWO` and a staged
+        // addition `extra` share one hunk. Unstaging the modification (ords 0,1)
+        // must leave the addition staged, so `+extra` survives as post-image
+        // context rather than being dropped.
+        let staged = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,6 +1,7 @@\n one\n-two\n+TWO\n three\n four\n+extra\n five\n six\n";
+        let reverse = compose_reverse(staged, &lines_sel(&[0, 1]));
+        let expected = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,7 +1,7 @@\n one\n-two\n+TWO\n three\n four\n extra\n five\n six\n";
+        assert_eq!(reverse, expected);
+    }
+
+    #[test]
+    fn forward_filter_of_the_same_selection_is_unchanged_by_the_reverse_rule() {
+        // The mirror of the two reverse tests: a `Lines` selection composed
+        // forward still demotes the unselected deletion to old-text context and
+        // still drops the unselected addition, byte-for-byte as before.
+        let forward = compose_patch(TWO_STAGED_MODS, &lines_sel(&[2, 3]));
+        // `-alpha` (0) unselected demotes to context `alpha`; `+ALPHA` (1)
+        // unselected drops; `-beta`/`+BETA` (2,3) selected keep their marks.
+        let expected = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma\n";
+        assert_eq!(forward, expected);
     }
 }

@@ -1,10 +1,10 @@
 //! Hunk-span statistics over the **Git engine**'s patch value (issue 20,
 //! screen 06).
 //!
-//! Pure classification: which files a whole-root diff touches, the span of each
-//! hunk, and — by comparing the three working-tree views of one file
-//! (HEAD↔worktree, HEAD↔index, index↔worktree) — how much of each hunk is
-//! already staged. No engine access; callers read the patch value through the
+//! Pure classification: which files a whole-root diff touches, and the span of
+//! each hunk. Whether a staged hunk still has an unstaged remainder is decided
+//! by comparing two of the three working-tree views of one file (HEAD↔index and
+//! index↔worktree). No engine access; callers read the patch value through the
 //! [`crate::changes`] seam and cache the result per root.
 
 use turbogit_domain::model::Patch;
@@ -20,17 +20,6 @@ pub struct HunkSpan {
     pub new_start: usize,
     /// New-file line count (0 for pure deletions).
     pub new_lines: usize,
-}
-
-/// How much of a HEAD↔worktree hunk is already in the index.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StagedState {
-    /// Every changed line of the hunk is staged.
-    Staged,
-    /// Some but not all of the hunk's changed lines are staged.
-    Partial,
-    /// Nothing of the hunk is staged.
-    Unstaged,
 }
 
 /// Per-file hunk spans of one multi-file unified diff.
@@ -81,24 +70,6 @@ fn ranges_touch(start_a: usize, len_a: usize, start_b: usize, len_b: usize) -> b
         start_b + len_b - 1
     };
     start_a <= end_b && start_b <= end_a
-}
-
-/// Classify a HEAD↔worktree hunk against the HEAD↔index (staged) hunks of
-/// the same file. Both diffs share the HEAD old side, so old-line ranges
-/// compare directly: an equal span means fully staged, an overlapping one
-/// partially staged.
-pub fn hunk_staged_state(hunk: &HunkSpan, staged: &[HunkSpan]) -> StagedState {
-    for s in staged {
-        if s == hunk {
-            return StagedState::Staged;
-        }
-    }
-    for s in staged {
-        if ranges_touch(s.old_start, s.old_lines, hunk.old_start, hunk.old_lines) {
-            return StagedState::Partial;
-        }
-    }
-    StagedState::Unstaged
 }
 
 /// Whether a staged hunk still has an unstaged remainder: an index↔worktree
@@ -170,94 +141,6 @@ index 3333333..4444444 100644
         );
         assert_eq!(files[1].path, "src/b.rs");
         assert_eq!(files[1].hunks.len(), 1);
-    }
-
-    #[test]
-    fn staged_state_matches_equal_spans_and_flags_overlap() {
-        let hunk = HunkSpan {
-            old_start: 10,
-            old_lines: 4,
-            new_start: 10,
-            new_lines: 5,
-        };
-        // Hunk staged exactly: the staged diff carries the identical span.
-        let staged = vec![HunkSpan {
-            old_start: 10,
-            old_lines: 4,
-            new_start: 10,
-            new_lines: 5,
-        }];
-        assert_eq!(hunk_staged_state(&hunk, &staged), StagedState::Staged);
-
-        // Only part of the hunk staged: the staged hunk's old range is a
-        // subset (one of two deletions staged).
-        let partial = vec![HunkSpan {
-            old_start: 10,
-            old_lines: 2,
-            new_start: 10,
-            new_lines: 1,
-        }];
-        assert_eq!(hunk_staged_state(&hunk, &partial), StagedState::Partial);
-
-        // Extra unstaged work merged into the same hunk: same old range but
-        // a wider new side.
-        let extended = vec![HunkSpan {
-            old_start: 10,
-            old_lines: 4,
-            new_start: 10,
-            new_lines: 5,
-        }];
-        let grown = HunkSpan {
-            new_lines: 6,
-            ..hunk
-        };
-        assert_eq!(hunk_staged_state(&grown, &extended), StagedState::Partial);
-
-        // Nothing staged near the hunk.
-        let far = vec![HunkSpan {
-            old_start: 80,
-            old_lines: 3,
-            new_start: 81,
-            new_lines: 3,
-        }];
-        assert_eq!(hunk_staged_state(&hunk, &far), StagedState::Unstaged);
-        assert_eq!(hunk_staged_state(&hunk, &[]), StagedState::Unstaged);
-    }
-
-    #[test]
-    fn staged_state_handles_pure_insertion_spans() {
-        // A staged pure addition at the same insertion point is exact.
-        let hunk = HunkSpan {
-            old_start: 5,
-            old_lines: 0,
-            new_start: 6,
-            new_lines: 2,
-        };
-        assert_eq!(
-            hunk_staged_state(
-                &hunk,
-                &[HunkSpan {
-                    old_start: 5,
-                    old_lines: 0,
-                    new_start: 6,
-                    new_lines: 2,
-                }]
-            ),
-            StagedState::Staged
-        );
-        // A different insertion point does not match.
-        assert_eq!(
-            hunk_staged_state(
-                &hunk,
-                &[HunkSpan {
-                    old_start: 6,
-                    old_lines: 0,
-                    new_start: 7,
-                    new_lines: 2,
-                }]
-            ),
-            StagedState::Unstaged
-        );
     }
 
     #[test]

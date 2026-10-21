@@ -61,7 +61,12 @@ fn selected(hunk: usize, selection: HunkSelection) -> Selection {
 /// Compose from git's syntax and read the answer back as the bytes `git apply`
 /// will be fed — which is what `ADR-0013` guarantees about them.
 fn compose_from(text: &str, selection: &Selection) -> String {
-    compose(&parse_patch(text), selection).to_string()
+    compose(
+        &parse_patch(text),
+        selection,
+        turbogit_engine_api::ApplyDirection::Forward,
+    )
+    .to_string()
 }
 
 #[test]
@@ -116,7 +121,12 @@ fn a_binary_change_is_never_a_partial_staging_target() {
         selected(0, HunkSelection::Lines([0, 1].into_iter().collect())),
     ] {
         assert_eq!(
-            compose(&patch, &selection).to_string(),
+            compose(
+                &patch,
+                &selection,
+                turbogit_engine_api::ApplyDirection::Forward,
+            )
+            .to_string(),
             "",
             "a whole-**Binary change** file stages as a file, never as a hunk"
         );
@@ -126,7 +136,12 @@ fn a_binary_change_is_never_a_partial_staging_target() {
 #[test]
 fn an_empty_selection_composes_nothing_at_all() {
     assert_eq!(
-        compose(&parse_patch(ONE_HUNK_THREE_LINES), &Selection::default(),).to_string(),
+        compose(
+            &parse_patch(ONE_HUNK_THREE_LINES),
+            &Selection::default(),
+            turbogit_engine_api::ApplyDirection::Forward,
+        )
+        .to_string(),
         ""
     );
 }

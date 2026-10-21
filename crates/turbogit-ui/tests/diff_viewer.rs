@@ -1,4 +1,4 @@
-//! Issue #13 — diff viewer restyle: modes, comparison chips, tokens.
+//! Issue #13 — diff viewer restyle: modes, tokens.
 //!
 //! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] over real
 //! temp repositories (system `git`) seeded with staged/unstaged edits.
@@ -9,22 +9,20 @@
 //! - **State transitions** — public `AppState` fields after the frames.
 //!
 //! Covered (spec §8.4):
-//! - Repo/Staged/Local chips select HEAD↔worktree / HEAD↔index / index↔worktree
 //! - segmented control toggles side-by-side/unified rendering
 //! - hunk nav ‹ n/N › counts and steps correctly
 //! - hunk nav aims the hunk it names, from any scroll position, in both modes
 //! - The whitespace policy stops painting the line pair it calls equal
 //! - add/del rows paint token-exact backgrounds; gutters show muted numbers
+//! - the row's staged-ness reaches both render modes, both cells of a
+//!   side-by-side pair, and the gutter's hover step
+//! - a conflicted path claims no state in paint, in the header, or in words
+//! - a row's staged-ness label follows the click that moves the index, while the
+//!   patch on screen does not move at all
 //! - the diff's ghost icon buttons (nav pair, gutter pair) are two scale
 //!   settings of one shared primitive and keep their labels and enabled flags
-//!
-//! Ticket 12 (the scope axes and the statistics that sit with what they
-//! describe) is asserted **by geometry**, never by which helper painted what —
-//! a test that fails because a helper was renamed says nothing about the design:
-//!
-//! - the comparison axis reads as ONE grouped control: contiguous segment rects
-//!   inside one outer boundary
-//! - a hidden comparison axis leaves no empty group behind
+//! - no surface offers a comparison-axis chip group: the pane answers one fixed
+//!   read, so `Repo`, `Staged` and `Local` never appear as mode selectors
 //! - the add/remove counts and the whitespace toggle paint on the file row, and
 //!   the toolbar paints neither
 //! - the file row's band height and its label origin are the row shell's
@@ -40,16 +38,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use egui::{Pos2, Rect, Vec2};
+use egui::{Color32, Pos2, Rect, Vec2};
 use egui_kittest::{Harness, kittest::NodeT, kittest::Queryable};
 use test_support::git_seed::git;
 use test_support::harness::{
     assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_text,
     shell_harness_over, widget_harness,
 };
+use test_support::wait_until;
 use turbogit_app::events::AppEvent;
 use turbogit_app::keyed_read::{DiffTarget, Keyed};
-use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_app::state::AppState;
 use turbogit_domain::error::TgError;
 use turbogit_ui::theme::Palette;
 
@@ -74,12 +73,12 @@ fn init_repo() -> (tempfile::TempDir, PathBuf) {
 
 /// Repo where `file.txt` carries BOTH a staged edit (line 2 `beta`→`BETA`)
 /// and an unstaged edit (line 8 `gamma`→`GAMMA`). The edits sit far enough
-/// apart that each chip's diff shows its own change without the other's
-/// content leaking into surrounding context lines:
+/// apart that each of git's three diffs shows its own change without the
+/// other's content leaking into surrounding context lines:
 ///
-/// - Repo  (HEAD↔worktree): both `BETA` and `GAMMA`
-/// - Staged (HEAD↔index):   `BETA` only
-/// - Local (index↔worktree): `GAMMA` only
+/// - `git diff HEAD`    (HEAD↔worktree):  `BETA` and `GAMMA`, the pinned read
+/// - `git diff --cached` (HEAD↔index):     `BETA` only
+/// - `git diff`          (index↔worktree): `GAMMA` only
 fn repo_mixed() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(
@@ -105,8 +104,8 @@ fn repo_mixed() -> (tempfile::TempDir, PathBuf) {
     (tmp, repo)
 }
 
-/// Repo where `one.txt` is fully staged (no unstaged part): the Local chip
-/// must report "(no differences)" while Staged still shows the change.
+/// Repo where `one.txt` is fully staged (no unstaged part): the pinned read has
+/// nothing left to show for it.
 fn repo_staged_only() -> (tempfile::TempDir, PathBuf) {
     let (tmp, repo) = init_repo();
     write_file(&repo, "one.txt", "one\ntwo\n");
@@ -244,11 +243,8 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
     let mut harness = diff_harness(&repo);
     let path = repo.join("nav.txt");
     harness.state_mut().ui.preview_change = Some(path.clone());
-    let target = DiffTarget::new(
+    let target = DiffTarget::working_tree(
         repo.clone(),
-        None,
-        None,
-        DiffComparison::Local,
         turbogit_domain::model::DiffPolicies::default(),
         Some(path),
     );
@@ -298,37 +294,46 @@ fn open_preview(harness: &mut Harness<'_, AppState>, file: &Path) {
     settle(harness);
 }
 
-// --- Cycle 1: comparison chips ----------------------------------------------
+// --- Cycle 1: one pinned read, and no control that moves it -----------------
 
+/// Contract: the pane answers with `git diff HEAD` for a file carrying both a
+/// staged and an unstaged edit, and nothing on screen can put another pair of
+/// sides under it. `GAMMA` is the unstaged edit, `BETA` the staged one: the one
+/// fixed comparison shows both halves, which is the whole reason it replaced the
+/// chip group. The worktree's text and HEAD's text are on screen at the same time.
 #[test]
-fn chips_select_their_documented_comparison_pairs() {
+fn the_pane_answers_with_git_diff_head_and_shows_both_halves() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo.join("file.txt"));
 
-    // Default chip is Local (index↔worktree) — preserves pre-existing behavior.
-    assert_eq!(h.state().ui.diff_comparison, DiffComparison::Local);
     assert_painted(&h, "GAMMA");
-    assert_not_painted(&h, "BETA");
+    assert_painted(&h, "gamma");
+    for staged_side in ["beta", "BETA"] {
+        assert_painted(&h, staged_side);
+    }
 
-    // Staged (HEAD↔index): only the staged edit.
-    h.get_by_label("Staged").click();
-    settle(&mut h);
-    assert_eq!(h.state().ui.diff_comparison, DiffComparison::Staged);
-    assert_painted(&h, "BETA");
-    assert_not_painted(&h, "GAMMA");
-
-    // Repo (HEAD↔worktree): both edits.
-    h.get_by_label("Repo").click();
-    settle(&mut h);
-    assert_eq!(h.state().ui.diff_comparison, DiffComparison::Repo);
-    assert_painted(&h, "BETA");
-    assert_painted(&h, "GAMMA");
+    let combined = git(&repo, &["diff", "HEAD", "--", "file.txt"]);
+    let plain = git(&repo, &["diff", "--", "file.txt"]);
+    assert!(
+        combined.contains("-beta")
+            && combined.contains("+BETA")
+            && combined.contains("-gamma")
+            && combined.contains("+GAMMA"),
+        "the read the pane is pinned to carries all four rows:\n{combined}"
+    );
+    assert!(
+        plain.contains("+GAMMA") && !plain.contains("BETA"),
+        "git's unstaged diff is the narrower one, and the pane is not showing it:\n{plain}"
+    );
 }
 
+/// The pinned read reaches HEAD: the line only HEAD holds is on screen as a
+/// removal, whatever the index did with it afterwards. This runs the in-process
+/// producer and grades it against git's own `git diff HEAD`.
 #[test]
-fn relative_row_preview_uses_index_not_worktree_for_staged_changes() {
+fn the_pinned_read_reaches_head() {
     for original in ["", "HEAD ONLY\n"] {
         let (_tmp, repo) = init_repo();
         write_file(&repo, "file.txt", original);
@@ -355,27 +360,53 @@ fn relative_row_preview_uses_index_not_worktree_for_staged_changes() {
         h.get_by_label("file.txt").click();
         settle(&mut h);
         assert_eq!(h.state().ui.preview_change, Some(PathBuf::from("file.txt")));
-        h.get_by_label("Staged").click();
-        settle(&mut h);
 
-        assert_painted(&h, "INDEX ONLY");
-        assert_not_painted(&h, "WORKTREE ONLY");
-        assert_not_painted(&h, "(no differences)");
+        assert_painted(&h, "WORKTREE ONLY");
+        if original.is_empty() {
+            assert_not_painted(&h, "HEAD ONLY");
+        } else {
+            assert_painted(&h, "HEAD ONLY");
+        }
+        assert_no_comparison_chips(&h, "the in-process preview");
+        let combined = git(&repo, &["diff", "HEAD", "--", "file.txt"]);
+        if original.is_empty() {
+            assert!(
+                combined.contains("+WORKTREE ONLY") && !combined.contains("HEAD ONLY"),
+                "an empty HEAD leaves only the worktree's line:\n{combined}"
+            );
+        } else {
+            assert!(
+                combined.contains("-HEAD ONLY") && combined.contains("+WORKTREE ONLY"),
+                "git's own HEAD↔worktree answer for this fixture:\n{combined}"
+            );
+        }
     }
 }
 
+/// A file with nothing unstaged still has everything the combined read shows: its
+/// staged half is on screen, where an `index ↔ worktree` read would have answered
+/// `(no differences)`.
 #[test]
-fn local_chip_reports_no_differences_for_fully_staged_files() {
+fn a_fully_staged_file_still_answers_the_combined_read() {
     let (_tmp, repo) = repo_staged_only();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo.join("one.txt"));
 
-    assert_painted(&h, "(no differences)");
-
-    h.get_by_label("Staged").click();
-    settle(&mut h);
     assert_painted(&h, "TWO");
+    assert_painted(&h, "two");
+    assert!(
+        !painted_text(&h)
+            .iter()
+            .any(|t| t.contains("(no differences)")),
+        "the read that hides staged content is gone"
+    );
+    assert!(
+        git(&repo, &["diff", "--", "one.txt"]).is_empty(),
+        "the fixture leaves nothing for `git diff` to answer, and the pane shows \
+         the file anyway"
+    );
+    assert_no_comparison_chips(&h, "a fully staged file's preview");
 }
 
 // --- Cycle 2: segmented mode control -----------------------------------------
@@ -394,8 +425,8 @@ fn segmented_control_toggles_side_by_side_and_unified() {
     h.get_by_label("Side-by-Side").click();
     settle(&mut h);
     assert!(h.state().ui.diff_side_by_side);
-    // Pane headers document the active pair (Local chip: Index ↔ Working tree).
-    assert_painted(&h, "Before Index");
+    // Pane headers document the pinned pair (HEAD ↔ working tree).
+    assert_painted(&h, "Before HEAD");
     assert_painted(&h, "After Working tree");
 
     h.get_by_label("Unified").click();
@@ -489,22 +520,37 @@ fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
     settle(&mut h);
     open_preview(&mut h, &repo.join("file.txt"));
 
-    // The added line sits on the token add background…
+    // The staged pair sits on the token bands, and the unstaged pair sits on the
+    // muted roles beside them: four rows, two treatments, all painted in the same
+    // frame. `repo_mixed` stages `beta` to `BETA` and leaves `gamma` to `GAMMA` in
+    // the worktree, so the pane has no excuse for drawing them alike.
     let add_pos = galley_origin(&h, "GAMMA").expect("added line painted");
-    assert!(
-        filled_rects(&h)
-            .iter()
-            .any(|(r, c)| *c == Palette::DIFF_ADD_BG && r.contains(add_pos)),
-        "added line must be backed by DIFF_ADD_BG"
-    );
-    // …and the deleted line on the token del background.
+    let staged_add = galley_origin(&h, "BETA").expect("staged added line painted");
+    for (who, at, band) in [
+        ("unstaged added", add_pos, Palette::DIFF_ADD_UNSTAGED_BG),
+        ("staged added", staged_add, Palette::DIFF_ADD_BG),
+    ] {
+        assert!(
+            filled_rects(&h)
+                .iter()
+                .any(|(r, c)| *c == band && r.contains(at)),
+            "{who} line must be backed by {band:?}"
+        );
+    }
+    // …and the deleted lines on their own pair of bands.
     let del_pos = galley_origin(&h, "gamma").expect("deleted line painted");
-    assert!(
-        filled_rects(&h)
-            .iter()
-            .any(|(r, c)| *c == Palette::DIFF_DEL_BG && r.contains(del_pos)),
-        "deleted line must be backed by DIFF_DEL_BG"
-    );
+    let staged_del = galley_origin(&h, "beta").expect("staged deleted line painted");
+    for (who, at, band) in [
+        ("unstaged deleted", del_pos, Palette::DIFF_DEL_UNSTAGED_BG),
+        ("staged deleted", staged_del, Palette::DIFF_DEL_BG),
+    ] {
+        assert!(
+            filled_rects(&h)
+                .iter()
+                .any(|(r, c)| *c == band && r.contains(at)),
+            "{who} line must be backed by {band:?}"
+        );
+    }
 
     // Muted gutter numbers are painted alongside the changed lines
     // (new-file line number of the GAMMA/GAMMA hunk region).
@@ -814,82 +860,6 @@ fn hunk_navigation_aims_the_hunk_it_names_unified() {
 /// wrong question to ask about two rects that are meant to coincide.
 const EPS: f32 = 0.5;
 
-/// The rect an axis's segments occupy together — what "one group" means: the
-/// segments touch, so their union is a single run with no gaps in it.
-#[track_caller]
-fn assert_contiguous(what: &str, segments: &[Rect]) -> Rect {
-    for pair in segments.windows(2) {
-        assert!(
-            (pair[0].right() - pair[1].left()).abs() <= EPS,
-            "{what}: its segments are not edge to edge — {:?} then {:?} leave a gap",
-            pair[0],
-            pair[1]
-        );
-    }
-    let top = segments
-        .iter()
-        .map(|r| r.top())
-        .fold(f32::INFINITY, f32::min);
-    let bottom = segments
-        .iter()
-        .map(|r| r.bottom())
-        .fold(f32::NEG_INFINITY, f32::max);
-    Rect::from_min_max(
-        Pos2::new(
-            segments
-                .iter()
-                .map(|r| r.left())
-                .fold(f32::INFINITY, f32::min),
-            top,
-        ),
-        Pos2::new(
-            segments
-                .iter()
-                .map(|r| r.right())
-                .fold(f32::NEG_INFINITY, f32::max),
-            bottom,
-        ),
-    )
-}
-
-/// Measure one axis of the toolbar: its three segments' rects (through their
-/// accessibility labels, which are the labels the controls already carried).
-///
-/// Returns the rect the segments occupy, having asserted both claims that make
-/// them one control rather than a row of siblings: the segments are edge to
-/// edge, and exactly one raised band is laid behind them.
-///
-/// The band is the painted shape at the segments' horizontal extent that is
-/// TALLER than the segments — a group's boundary is never coincident with a
-/// segment's own fill, so exactly one shape can answer.
-fn read_axis(harness: &Harness<'_, AppState>, what: &str, labels: [&str; 3]) -> Rect {
-    let segments: Vec<Rect> = labels
-        .iter()
-        .map(|l| harness.get_by_label(l).rect())
-        .collect();
-    let union = assert_contiguous(what, &segments);
-
-    // One outer boundary: exactly one raised band at the segments' extent.
-    let frames: Vec<Rect> = filled_rects(harness)
-        .into_iter()
-        .filter(|(_, c)| *c == Palette::SURFACE_2)
-        .map(|(r, _)| r)
-        .filter(|r| {
-            (r.left() - union.left()).abs() <= EPS
-                && (r.right() - union.right()).abs() <= EPS
-                && r.height() > union.height() + EPS
-        })
-        .collect();
-    if frames.len() != 1 {
-        panic!(
-            "{what}: an axis must be bounded by exactly ONE outer boundary; \
-             painted {} raised bands around {union:?}",
-            frames.len()
-        );
-    }
-    union
-}
-
 /// The toolbar's open span — between the view-mode control and the hunk
 /// navigator — which is precisely where the axes of scope live. Boundaries
 /// found here belong to an axis; the view-mode control's own track is found and
@@ -966,74 +936,67 @@ fn commit_diff_harness(repo: &Path) -> Harness<'static, AppState> {
     harness
 }
 
-/// Contract: the comparison axis reads as ONE grouped control, and the hunk
-/// navigator follows it rather than splitting the toolbar.
-///
-/// Proven by geometry, in the three parts the claim actually has:
-/// 1. the axis's three segments are edge to edge (no gaps — the "loose buttons"
-///    reading is gone),
-/// 2. the axis has exactly one outer boundary,
-/// 3. the order is mode → comparison → navigator.
-#[test]
-fn the_comparison_axis_reads_as_one_grouped_control() {
-    let (_tmp, repo) = repo_mixed();
-    let mut h = diff_harness(&repo);
-    settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
-
-    // read_axis asserts 1 and 2 — contiguity, then the single boundary.
-    let comparison = read_axis(&h, "the comparison axis", ["Repo", "Staged", "Local"]);
-
-    // 3: the navigator follows the axis rather than splitting it.
-    let nav = h.get_by_label("Previous hunk").rect();
-    assert!(
-        comparison.right() <= nav.left() + EPS,
-        "the hunk navigator must come after the comparison axis: \
-         {comparison:?} then {nav:?}"
-    );
+/// The three arms of the deleted axis, asserted absent from one toolbar.
+#[track_caller]
+fn assert_no_comparison_chips(harness: &Harness<'_, AppState>, surface: &str) {
+    for label in ["Repo", "Staged", "Local"] {
+        assert!(
+            harness.query_by_label(label).is_none(),
+            "`{label}` was an arm of the deleted axis, so {surface} must not offer it"
+        );
+    }
 }
 
-/// Contract: the comparison axis is a working-tree-only axis, and when it is
-/// hidden it leaves nothing behind. A grouping that assumed the axis always
-/// exists would paint an empty frame here, and this is the assertion that says
-/// it does not.
+/// Contract: the deleted axis leaves nothing behind on either surface. A
+/// grouping that assumed a comparison pad still existed would paint an empty
+/// frame in the toolbar's open span, and this says neither the working tree nor
+/// a commit pair frames one, or offers a chip.
 #[test]
-fn a_hidden_comparison_axis_leaves_no_empty_group_behind() {
-    // --- the working tree: the axis is present, as one group ---------------
+fn the_removed_axis_leaves_no_group_anywhere() {
+    // --- the working tree ---------------------------------------------------
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo.join("file.txt"));
-    assert!(
-        h.query_by_label("Repo").is_some(),
-        "a working-tree comparison shows the comparison axis"
-    );
+    assert_painted(&h, "GAMMA");
     let working_tree_groups = axis_groups(&h);
+    assert_no_comparison_chips(&h, "the working-tree toolbar");
     assert_eq!(
-        working_tree_groups.len(),
-        1,
-        "the working-tree toolbar frames exactly one group: the comparison pad — \
-         got {working_tree_groups:?}"
+        working_tree_groups,
+        Vec::new(),
+        "the working-tree toolbar frames no group now that the axis is gone"
     );
 
-    // --- a commit pair: the axis does not apply, so nothing is framed ------
+    // --- a commit pair -------------------------------------------------------
     let (_tmp, commits) = repo_two_commits();
     let mut c = commit_diff_harness(&commits);
     settle(&mut c);
     assert_painted(&c, "SECOND");
-    for label in ["Repo", "Staged", "Local"] {
-        assert!(
-            c.query_by_label(label).is_none(),
-            "a commit-to-commit comparison has no revision axis and no index to \
-             stage into, so `{label}` must not be offered"
-        );
-    }
+    let commit_groups = axis_groups(&c);
+    assert_no_comparison_chips(&c, "a commit pair's toolbar");
     assert_eq!(
-        axis_groups(&c),
+        commit_groups,
         Vec::new(),
-        "the hidden axis must leave no empty group behind: no frame, no outline, \
-         nothing but the view-mode control and the hunk navigator"
+        "a commit-to-commit toolbar frames no group either"
     );
+}
+
+/// Contract: the side-by-side headers name the sides the read actually takes.
+/// A commit-to-commit diff prints its own two revisions. The axis hid this: the
+/// labels were chosen from the chip, and `render_diff`'s one production caller
+/// is the commit window's working-tree preview, so only a test reaches the
+/// commit pair at all.
+#[test]
+fn a_commit_pair_prints_its_own_revisions_in_the_pane_headers() {
+    let (_tmp, commits) = repo_two_commits();
+    let mut c = commit_diff_harness(&commits);
+    c.state_mut().ui.diff_side_by_side = true;
+    settle(&mut c);
+    assert_painted(&c, "Before HEAD~1");
+    assert_painted(&c, "After HEAD");
+    for working_tree_side in ["Before Index", "After Working tree"] {
+        assert_not_painted(&c, working_tree_side);
+    }
 }
 
 /// The file row is a row of the row shell's height and the row shell's text
@@ -1081,11 +1044,12 @@ fn the_file_row_carries_the_counts_and_the_diff_options_menu() {
     let (band, _) = hovered_file_row(&mut h);
     let toolbar = axis_span(&h);
 
-    // The counts: this file's one addition and one deletion, in the stats
-    // accents, inside the file row's band — and not in the toolbar.
+    // The counts: this file's two additions and two deletions — the staged half
+    // and the unstaged one, because the read is HEAD-based — in the stats accents,
+    // inside the file row's band, and not in the toolbar.
     for (text, ink) in [
-        ("+1", Palette::DIFF_ADD_ACCENT),
-        ("\u{2212}1", Palette::DIFF_DEL_ACCENT),
+        ("+2", Palette::DIFF_ADD_ACCENT),
+        ("\u{2212}2", Palette::DIFF_DEL_ACCENT),
     ] {
         let galleys: Vec<_> = painted_galleys(&h)
             .into_iter()
@@ -1147,7 +1111,10 @@ fn the_file_row_takes_its_geometry_from_the_row_shell() {
     open_preview(&mut h, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
-    let add_pos = galley_origin(&h, "GAMMA").expect("added line painted");
+    // The staged added row is the one that wears `DIFF_ADD_BG`; the unstaged row
+    // beside it wears the muted role, and this claim is about the row shell's
+    // geometry, which is the same for both.
+    let add_pos = galley_origin(&h, "BETA").expect("added line painted");
     let add_band = filled_rects(&h)
         .into_iter()
         .find(|(r, c)| *c == Palette::DIFF_ADD_BG && r.contains(add_pos))
@@ -1242,13 +1209,19 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     let toggle = h.get_by_label("Diff options").rect();
     let changed: Vec<Rect> = filled_rects(&h)
         .into_iter()
-        .filter(|(_, c)| *c == Palette::DIFF_ADD_BG || *c == Palette::DIFF_DEL_BG)
+        .filter(|(_, c)| {
+            *c == Palette::DIFF_ADD_BG
+                || *c == Palette::DIFF_DEL_BG
+                || *c == Palette::DIFF_ADD_UNSTAGED_BG
+                || *c == Palette::DIFF_DEL_UNSTAGED_BG
+        })
         .map(|(r, _)| r)
         .collect();
     assert_eq!(
         changed.len(),
-        2,
-        "one addition and one deletion are on screen"
+        4,
+        "the staged pair and the unstaged pair are all on screen, each on its own \
+         band: {changed:?}"
     );
     for row in &changed {
         assert!(
@@ -1264,20 +1237,19 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
         );
     }
 
-    // The row's own protocol still answers: a changed line is still a click
-    // target that arms its selection.
-    h.get_by_label("GAMMA").click();
-    h.run();
-    let previewed = h
-        .state()
-        .ui
-        .preview_change
-        .clone()
-        .expect("a file is previewed");
+    // The row's own protocol still answers: a changed-line click stages that
+    // line, and git says so. Stepped, not run: the staging op repaints, and
+    // this harness's run budget is kittest's default four. The row is addressed by
+    // the label a changed line carries, its text and the state the per-line oracle
+    // answers for it, which is `unstaged` right up until this click.
+    h.get_by_label("GAMMA (unstaged)").click();
     assert!(
-        h.state().ui.line_selections.contains_key(&previewed),
-        "a changed line must still toggle its selection: {:?}",
-        h.state().ui.line_selections
+        wait_until(15_000, || {
+            h.step();
+            git(&repo, &["diff", "--cached"]).contains("+GAMMA")
+        }),
+        "the clicked line must reach the index, got:\n{}",
+        git(&repo, &["diff", "--cached"])
     );
 }
 
@@ -1298,5 +1270,315 @@ fn the_diff_surface_declares_no_change_status_resolver_of_its_own() {
         "ui::diff::actions must not spell the change-status resolver: \
          turbogit_app::granular::preview_status owns it (lane 5, ticket 12), \
          and both diff frames call it"
+    );
+}
+
+// --- staged-ness: where the treatment reaches, and what it never claims -------
+
+/// Contract: the staged-ness treatment reaches **both cells** of a side-by-side
+/// row, and every cell answers for itself. A pair's two halves sit side by side and
+/// can be on opposite sides of the index (a staged modification re-edited in the
+/// worktree answers its deletion one way and its addition the other), so the left
+/// cell's band and the right cell's band come from two different answers. A pane
+/// that painted the pair as one state would draw a staged half beside an unstaged
+/// one and call them the same thing.
+#[test]
+fn side_by_side_paints_each_cells_own_staged_ness() {
+    let (_tmp, repo) = repo_mixed();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    h.state_mut().ui.diff_side_by_side = true;
+    open_preview(&mut h, &repo.join("file.txt"));
+
+    for (who, band, ink) in [
+        ("BETA", Palette::DIFF_ADD_BG, Palette::DIFF_ADD_TEXT),
+        ("beta", Palette::DIFF_DEL_BG, Palette::DIFF_DEL_TEXT),
+        (
+            "GAMMA",
+            Palette::DIFF_ADD_UNSTAGED_BG,
+            Palette::DIFF_ADD_UNSTAGED_TEXT,
+        ),
+        (
+            "gamma",
+            Palette::DIFF_DEL_UNSTAGED_BG,
+            Palette::DIFF_DEL_UNSTAGED_TEXT,
+        ),
+    ] {
+        let at = galley_origin(&h, who).unwrap_or_else(|| panic!("`{who}` painted"));
+        assert!(
+            filled_rects(&h)
+                .iter()
+                .any(|(r, c)| *c == band && r.contains(at)),
+            "the `{who}` cell must be backed by {band:?} in side-by-side mode too, \
+             got {:?}",
+            filled_rects(&h)
+                .iter()
+                .filter(|(r, _)| r.contains(at))
+                .map(|(_, c)| *c)
+                .collect::<Vec<_>>()
+        );
+        let ink_of = painted_galleys(&h)
+            .into_iter()
+            .find(|g| g.text == who)
+            .map(|g| g.color);
+        assert_eq!(
+            ink_of,
+            Some(ink),
+            "the `{who}` cell inks its text with {ink:?}, its own state's ink"
+        );
+    }
+
+    // And the two cells of one row are two different colours, because they are two
+    // different git states sitting beside each other on one line.
+    let del_band_of = |who: &str| {
+        let at = galley_origin(&h, who).expect("row painted");
+        filled_rects(&h)
+            .iter()
+            .find(|(r, c)| {
+                r.contains(at)
+                    && (*c == Palette::DIFF_DEL_BG || *c == Palette::DIFF_DEL_UNSTAGED_BG)
+            })
+            .map(|(_, c)| *c)
+    };
+    assert_ne!(
+        del_band_of("beta"),
+        del_band_of("gamma"),
+        "a staged deletion and an unstaged deletion are two bands, not one"
+    );
+}
+
+/// Contract: a muted row that is also hovered does not collapse into one
+/// indistinguishable state.
+///
+/// The pointer answers in the gutter's line number, stepping `INK_3` to `INK_2`,
+/// and the row's staged-ness keeps its own two colours underneath it. The app's
+/// hover fill could not carry this: `SURFACE_2` against a muted band measures
+/// 1.01:1, so an interaction fill laid over a muted row is invisible on exactly the
+/// rows that need it, and a hover that brightened the row's ink instead would make
+/// an unstaged row look staged the moment the pointer crossed it.
+#[test]
+fn hover_stays_visible_on_a_muted_row() {
+    let (_tmp, repo) = repo_mixed();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo.join("file.txt"));
+
+    // `GAMMA` is the worktree's line 8, and 8 is the number its gutter paints.
+    let gutter_ink = |h: &Harness<'_, AppState>, row: Rect| {
+        painted_galleys(h)
+            .into_iter()
+            .find(|g| g.text == "8" && row.contains(g.pos))
+            .map(|g| g.color)
+    };
+    let row_ink = |h: &Harness<'_, AppState>| {
+        painted_galleys(h)
+            .into_iter()
+            .find(|g| g.text == "GAMMA")
+            .map(|g| g.color)
+    };
+
+    let row = h.get_by_label("GAMMA (unstaged)").rect();
+    assert_eq!(
+        gutter_ink(&h, row),
+        Some(Palette::INK_3),
+        "at rest the muted row's gutter is the muted step, and its code text is the \
+         unstaged ink"
+    );
+    assert_eq!(
+        row_ink(&h),
+        Some(Palette::DIFF_ADD_UNSTAGED_TEXT),
+        "the row starts quiet"
+    );
+
+    h.hover_at(row.center());
+    h.step();
+    h.step();
+    let hovered = h.get_by_label("GAMMA (unstaged)").rect();
+    assert_eq!(
+        gutter_ink(&h, hovered),
+        Some(Palette::INK_2),
+        "hovered, the same row's gutter steps one ink rung, so muted-and-hovered is \
+         not muted-and-rest"
+    );
+    assert_eq!(
+        row_ink(&h),
+        Some(Palette::DIFF_ADD_UNSTAGED_TEXT),
+        "and the row is still muted under the pointer: hover answers where the \
+         pointer is, not what git holds"
+    );
+    assert_ne!(
+        row_ink(&h),
+        painted_galleys(&h)
+            .into_iter()
+            .find(|g| g.text == "BETA")
+            .map(|g| g.color),
+        "a hovered unstaged row must not read as the staged row beside it"
+    );
+}
+
+/// Contract: a conflicted path is **no answer**, and no answer neither claims a
+/// state nor says the words that would name one.
+///
+/// For an unmerged path `git diff HEAD` prints an ordinary two-sided diff whose
+/// added lines *are* the conflict markers, `git diff` prints `diff --cc`, and
+/// `git diff --cached` prints `* Unmerged path` with no section at all. So nothing
+/// derivable from the patch the rows were built from may drive staged-ness here: it
+/// would report a conflict's own `>>>>>>>` half as a staged addition. The per-line
+/// oracle answers `None`, and `None` keeps the row's full treatment (muting it would
+/// assert it is unstaged, which is the same lie in the other direction) while both
+/// sets of words refuse: no hunk suffix, and an accessibility label that says the
+/// state was not answered.
+#[test]
+fn a_conflicted_file_claims_no_staged_ness_anywhere() {
+    let (_tmp, repo) = repo_conflicted();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo.join("conf.txt"));
+
+    assert!(
+        painted_text(&h).iter().any(|t| t.starts_with("@@")),
+        "the fixture's premise: the pane is rendering the conflicted file's rows, \
+         got:\n{}",
+        painted_text(&h).join("\n")
+    );
+
+    let unknown: Vec<_> = h
+        .query_all_by_label_contains("(staged-ness unknown)")
+        .collect();
+    assert!(
+        !unknown.is_empty(),
+        "every changed row of a conflict says its state was not answered"
+    );
+    for claim in ["(staged)", "(unstaged)"] {
+        assert!(
+            h.query_all_by_label_contains(claim).next().is_none(),
+            "a conflict's rows must not be labelled {claim}: the pane would be \
+             guessing at the index from a patch that cannot support the guess"
+        );
+    }
+
+    let headers: Vec<String> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| g.text.starts_with("· "))
+        .map(|g| g.text)
+        .collect();
+    assert!(
+        headers.is_empty(),
+        "no hunk of a conflicted file may name itself staged, part or not staged, \
+         got {headers:?}"
+    );
+
+    let quiet: Vec<Color32> = filled_rects(&h)
+        .into_iter()
+        .map(|(_, c)| c)
+        .filter(|c| *c == Palette::DIFF_ADD_UNSTAGED_BG || *c == Palette::DIFF_DEL_UNSTAGED_BG)
+        .collect();
+    assert!(
+        quiet.is_empty(),
+        "and nothing in it is drawn muted either: no answer is not `unstaged`"
+    );
+}
+
+/// Contract: a row's accessibility label follows the index, and not the pixels.
+///
+/// The label is the only staged-ness channel that is not colour, so a stale one is
+/// the pane telling a screen reader something false about the index while telling a
+/// sighted user something true. This click moves the index and moves nothing the
+/// pane shows: the displayed `HEAD ↔ worktree` patch is byte-identical on both
+/// sides of it, and both halves of the clicked pair stay on screen. What moves is
+/// the oracle's answer, because every completed operation drops the root's
+/// `hunk_stats` entry, so the next frame re-resolves staged-ness against the index
+/// the click just wrote. A label that kept saying `unstaged` is invisible to every
+/// colour census in this suite, which is why it is asserted here as a word.
+#[test]
+fn a_rows_staged_ness_label_flips_after_the_click_that_moves_the_index() {
+    let (_tmp, repo) = repo_mixed();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo.join("file.txt"));
+
+    // The bytes the pane renders, taken from git's own answer for the one
+    // comparison the read is pinned to.
+    let displayed = git(&repo, &["diff", "HEAD", "--", "file.txt"]);
+    let words = |h: &Harness<'_, AppState>| -> Vec<String> {
+        h.query_all_by_label_contains("stag")
+            .filter_map(|n| n.accesskit_node().label())
+            .collect()
+    };
+    let suffixes = |h: &Harness<'_, AppState>| -> Vec<String> {
+        painted_galleys(h)
+            .into_iter()
+            .filter(|g| g.text.starts_with("· "))
+            .map(|g| g.text)
+            .collect()
+    };
+    assert!(
+        words(&h).contains(&"GAMMA (unstaged)".to_string()),
+        "the fixture's premise: the worktree's own line is labelled quiet, got {:?}",
+        words(&h)
+    );
+    assert_eq!(
+        suffixes(&h),
+        ["· part".to_string()],
+        "and the fixture's premise again: git's two edits sit inside one hunk's \
+         context, so its header already names the mixed case"
+    );
+
+    h.get_by_label("GAMMA (unstaged)").click();
+
+    assert!(
+        wait_until(15_000, || {
+            h.step();
+            words(&h).contains(&"GAMMA (staged)".to_string())
+        }),
+        "the clicked row's label must name the state the index now holds, got {:?}",
+        words(&h)
+    );
+    assert!(
+        !words(&h).contains(&"GAMMA (unstaged)".to_string()),
+        "and the quiet word is gone rather than shadowed by a second node, got {:?}",
+        words(&h)
+    );
+    // A stage is one ordinal, so the clicked addition's own deletion keeps the
+    // word it had: the label states the row's state and never the consequence of
+    // the click, which is the only wording that stays true when a row's click
+    // reaches a pair, a whole file, or one line.
+    assert!(
+        words(&h).contains(&"gamma (unstaged)".to_string()),
+        "the partner row of a staged line is still its own answer, got {:?}",
+        words(&h)
+    );
+    // And the header word tracks the same fold: one line staged out of a hunk
+    // holding four changed rows leaves the hunk mixed, so it must still say so
+    // rather than claim `staged` for a row the index never took.
+    assert_eq!(
+        suffixes(&h),
+        ["· part".to_string()],
+        "the clicked hunk still holds both states, and its header must name that"
+    );
+
+    // git, independently of the pane: the word flipped because the index moved.
+    assert!(
+        git(&repo, &["diff", "--cached", "--", "file.txt"]).contains("+GAMMA"),
+        "the label claims the line is staged, so git must say so too"
+    );
+    assert_eq!(
+        git(&repo, &["diff", "HEAD", "--", "file.txt"]),
+        displayed,
+        "while the patch the pane renders did not move by one byte: the click \
+         changed what is staged, never what is compared"
+    );
+    for row in ["GAMMA", "gamma"] {
+        assert_painted(&h, row);
+    }
+
+    // The word and the paint answer from one resolution, so they cannot disagree
+    // about which row the click reached.
+    let at = galley_origin(&h, "GAMMA").expect("the clicked row still paints");
+    assert!(
+        filled_rects(&h)
+            .iter()
+            .any(|(r, c)| *c == Palette::DIFF_ADD_BG && r.contains(at)),
+        "the row the label now calls staged wears the staged band under it"
     );
 }

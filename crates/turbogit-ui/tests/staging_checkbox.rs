@@ -575,13 +575,17 @@ fn space_toggles_the_focused_rows_checkbox() {
     );
 }
 
-// ------------------------------------------------- the diff preview jump ----
+// --------------------------------------------- the pinned preview -----------
 
-/// **Ticking switches the preview to the staged version; un-ticking falls back
-/// to the working version** — never to a staged view of a file with nothing
-/// staged in it.
+/// **Ticking never moves the preview.** The pane answers one fixed
+/// comparison, `git diff HEAD`, and that answer cannot change under a tick —
+/// staging a line moves the index, and the worktree's difference from HEAD is
+/// exactly what it was. So the same row is painted before the tick, after it, and
+/// after un-ticking it, with no `(no differences)` frame in between. An
+/// `index ↔ worktree` read would produce exactly that frame for a fully staged
+/// file, which is the failure this pins.
 #[test]
-fn the_preview_follows_the_checkbox_from_working_to_staged_and_back() {
+fn the_preview_stays_on_the_pinned_comparison_through_a_tick() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "preview-jump");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -590,25 +594,46 @@ fn the_preview_follows_the_checkbox_from_working_to_staged_and_back() {
     h.get_by_label("base.txt").click();
     h.run();
     h.run();
-
-    h.get_by_label(&stage_box("base.txt")).click();
-    h.run();
     assert!(
-        wait_until(15_000, || {
-            h.run();
-            h.state().ui.diff_comparison == turbogit_app::state::DiffComparison::Staged
-        }),
-        "ticking shows exactly what is about to be committed"
+        painted_text(&h).join("\n").contains("modified"),
+        "the unstaged edit is what the pinned read shows: {:?}",
+        painted_text(&h)
     );
 
-    h.get_by_label("Unstage base.txt (staged)").click();
-    h.run();
+    h.get_by_label(&stage_box("base.txt")).click();
+    assert!(
+        wait_for_staged(&mut h, &repo.path, "base.txt"),
+        "ticking stages the whole file"
+    );
+    assert!(
+        git(&repo.path, &["diff", "--", "base.txt"]).is_empty(),
+        "and `git diff` is left with nothing to answer"
+    );
     assert!(
         wait_until(15_000, || {
             h.run();
-            h.state().ui.diff_comparison == turbogit_app::state::DiffComparison::Repo
+            let text = painted_text(&h).join("\n");
+            text.contains("modified") && !text.contains("(no differences)")
         }),
-        "un-ticking falls back to the working version, not to an empty staged one"
+        "the pane stays on the one comparison rather than jumping to a staged \
+         view; painted=\n{}",
+        painted_text(&h).join("\n")
+    );
+    for chip in ["Repo", "Staged", "Local"] {
+        assert!(
+            h.query_by_label(chip).is_none(),
+            "`{chip}` was an arm of the deleted axis"
+        );
+    }
+
+    h.get_by_label(&unstage_box("base.txt")).click();
+    assert!(
+        wait_until(15_000, || {
+            h.run();
+            staged(&repo.path).is_empty() && painted_text(&h).join("\n").contains("modified")
+        }),
+        "un-ticking returns the pane to the same pinned answer, got:\n{}",
+        painted_text(&h).join("\n")
     );
 }
 

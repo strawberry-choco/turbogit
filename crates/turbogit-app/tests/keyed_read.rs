@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use turbogit_app::diff_model::FileMeta;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
-use turbogit_app::state::{AppState, BlameTarget, DiffComparison};
+use turbogit_app::state::{AppState, BlameTarget};
 use turbogit_domain::model::{Patch, PatchHeaderLine, PatchLineKind};
 
 /// Every body line the patch holds, whatever side it belongs to.
@@ -37,11 +37,13 @@ fn repo(dir: &Path, dirty: bool) -> PathBuf {
     work
 }
 
-/// A `README.md` with a staged edit *and* a further unstaged one on top, so
-/// the Staged and Repo comparisons have genuinely different answers to reach.
+/// A `README.md` with a staged edit *and* a further unstaged one on top, so the
+/// pinned read and the two pairs it replaced have genuinely different answers.
 ///
+/// HEAD holds `x`, the index holds `TWO`, the worktree holds `TWO` plus `three`.
 /// The staged edit is **staged, not committed**, and that is the whole
-/// precondition: committing it would make the Staged comparison answer `Empty`.
+/// precondition: committing it would put `TWO` in HEAD too and every pair would
+/// answer the same thing.
 fn repo_with_staged_and_unstaged(dir: &Path) -> PathBuf {
     let work = test_support::git_seed::repo_with_one_commit(dir, "both");
     std::fs::write(work.join("README.md"), "TWO\n").unwrap();
@@ -50,12 +52,14 @@ fn repo_with_staged_and_unstaged(dir: &Path) -> PathBuf {
     work
 }
 
-fn head_vs_worktree(work: &Path) -> DiffTarget {
+/// The neither-named working-tree shape: plain `git diff`, index ↔ worktree. The
+/// preview itself asks [`DiffTarget::working_tree`] and reads `HEAD` against the
+/// worktree; this target is kept because a key must distinguish the two.
+fn working_tree_read(work: &Path) -> DiffTarget {
     DiffTarget::new(
         work.to_path_buf(),
         None,
         None,
-        DiffComparison::Repo,
         turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("README.md")),
     )
@@ -78,12 +82,12 @@ fn a_cold_read_waits_and_the_next_one_answers_fresh() {
     settle_first(&mut state);
 
     assert!(
-        matches!(state.read(head_vs_worktree(&work)), Read::Waiting),
+        matches!(state.read(working_tree_read(&work)), Read::Waiting),
         "nothing is cached for the target yet, so the first ask waits"
     );
     state.drain_events();
 
-    let Read::Fresh(diff) = state.read(head_vs_worktree(&work)) else {
+    let Read::Fresh(diff) = state.read(working_tree_read(&work)) else {
         panic!("the settled answer must be the one the target asked for");
     };
     assert!(
@@ -104,7 +108,7 @@ fn one_frame_asks_for_a_diff_once() {
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&work));
     settle_first(&mut state);
 
-    let target = head_vs_worktree(&work);
+    let target = working_tree_read(&work);
     assert!(matches!(state.read(target.clone()), Read::Waiting));
     assert!(
         matches!(state.read(target.clone()), Read::Waiting),
@@ -125,10 +129,13 @@ fn a_settled_empty_comparison_answers_empty_not_waiting() {
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&work));
     settle_first(&mut state);
 
-    assert!(matches!(state.read(head_vs_worktree(&work)), Read::Waiting));
+    assert!(matches!(
+        state.read(working_tree_read(&work)),
+        Read::Waiting
+    ));
     state.drain_events();
     assert!(
-        matches!(state.read(head_vs_worktree(&work)), Read::Empty),
+        matches!(state.read(working_tree_read(&work)), Read::Empty),
         "a clean file has a settled answer of nothing to show"
     );
 
@@ -140,48 +147,81 @@ fn a_settled_empty_comparison_answers_empty_not_waiting() {
 }
 
 #[test]
-fn a_different_comparison_is_not_answered_by_the_cached_one() {
+fn the_pinned_read_answers_with_git_diffs_content() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_staged_and_unstaged(tmp.path());
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&work));
     settle_first(&mut state);
 
-    let repo_chip = head_vs_worktree(&work);
-    assert!(matches!(state.read(repo_chip.clone()), Read::Waiting));
+    assert!(matches!(
+        state.read(working_tree_read(&work)),
+        Read::Waiting
+    ));
     state.drain_events();
-    let Read::Fresh(diff) = state.read(repo_chip) else {
-        panic!("the worktree comparison settles");
+    let Read::Fresh(diff) = state.read(working_tree_read(&work)) else {
+        panic!("the pinned working-tree read settles");
     };
     assert!(
         body_lines(&diff.patch).any(|l| l.kind == PatchLineKind::Added && l.text == "three"),
-        "HEAD vs worktree reaches the unstaged edit too:\n{}",
+        "index vs worktree reaches the unstaged edit:\n{}",
+        diff.patch
+    );
+    // The two pairs the axis used to offer each hold a line this one cannot
+    // name: HEAD's `x` only ever appears in a HEAD-relative diff, and the staged
+    // `TWO` only ever appears as the *added* side of `git diff --cached`.
+    assert!(
+        body_lines(&diff.patch).all(|l| l.text != "x"),
+        "HEAD's line belongs to a HEAD-relative pair, so its absence is what says \
+         this read is not one:\n{}",
+        diff.patch
+    );
+    assert!(
+        body_lines(&diff.patch)
+            .filter(|l| l.kind == PatchLineKind::Added)
+            .all(|l| l.text != "TWO"),
+        "the staged edit is this read's old side, never its addition:\n{}",
         diff.patch
     );
 
-    // Switching chips is where a hand-written key comparison goes wrong: the
-    // Staged target has nothing cached, and must not be answered with the Repo
-    // comparison's value.
-    let staged = DiffTarget::new(
-        work.to_path_buf(),
-        None,
-        None,
-        DiffComparison::Staged,
-        turbogit_domain::model::DiffPolicies::default(),
-        Some(PathBuf::from("README.md")),
-    );
+    // And git itself says the same thing, which is the whole claim: the pane is
+    // `git diff` and nothing else.
+    let plain = git(&work, &["diff", "--", "README.md"]);
+    let staged = git(&work, &["diff", "--cached", "--", "README.md"]);
     assert!(
-        matches!(state.read(staged.clone()), Read::Waiting),
-        "the other comparison's value must not answer this one"
+        plain.contains("+three") && !staged.contains("+three"),
+        "the fixture must keep discriminating the two diffs, got:\n{plain}\n---\n{staged}"
     );
-    state.drain_events();
-    let Read::Fresh(diff) = state.read(staged) else {
-        panic!("the staged comparison has its own answer now");
-    };
-    assert!(
-        body_lines(&diff.patch).all(|l| !l.text.contains("three")),
-        "staged shows the index, not the worktree edit:\n{}",
-        diff.patch
+}
+
+/// The axis left the key, so nothing a viewer does to a file without changing
+/// it can produce a second entry for it: one read per file per refresh, where
+/// the chip path allowed three.
+#[test]
+fn one_read_per_file_while_nothing_about_it_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let work = repo_with_staged_and_unstaged(tmp.path());
+    let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&work));
+    settle_first(&mut state);
+
+    let target = working_tree_read(&work);
+    assert!(matches!(state.read(target.clone()), Read::Waiting));
+    assert_eq!(
+        state.drain_events(),
+        1,
+        "the first ask spent exactly one diff fetch"
     );
+
+    for _ in 0..3 {
+        assert!(
+            matches!(state.read(target.clone()), Read::Fresh(_)),
+            "the same key keeps answering, so no view change can be hiding behind it"
+        );
+        assert_eq!(
+            state.drain_events(),
+            0,
+            "and nothing about the file changed, so nothing was dispatched"
+        );
+    }
 }
 
 /// The third kind: one pane's bytes, from a real repository, answered with both
@@ -206,7 +246,6 @@ fn a_pane_answers_with_both_sides_and_keeps_them() {
         work.to_path_buf(),
         None,
         None,
-        DiffComparison::Repo,
         turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("art.png")),
     );
@@ -227,9 +266,13 @@ fn a_pane_answers_with_both_sides_and_keeps_them() {
     let Read::Fresh(entry) = state.read(art.clone()) else {
         panic!("both sides of the pane settle");
     };
-    let before = entry.old.as_ref().expect("HEAD side").byte_len;
+    let before = entry.old.as_ref().expect("index side").byte_len;
     let after = entry.new.as_ref().expect("worktree side").byte_len;
-    assert_eq!(before, png.len() as u64, "the rev side came from HEAD");
+    assert_eq!(
+        before,
+        png.len() as u64,
+        "the index side is what was staged"
+    );
     assert_eq!(after, png.len() as u64 + 64, "the worktree side grew");
 
     // A different pane of the same comparison is a different entry, and the
@@ -258,7 +301,7 @@ fn peek_answers_without_admitting() {
     let mut state = AppState::for_roots(tmp.path(), std::slice::from_ref(&work));
     settle_first(&mut state);
 
-    let target = head_vs_worktree(&work);
+    let target = working_tree_read(&work);
     assert!(
         state.peek(target.clone()).is_none(),
         "a cold slot answers nothing at all"
@@ -290,7 +333,6 @@ fn a_synthesized_answer_leaves_nothing_pending() {
         work.to_path_buf(),
         None,
         None,
-        DiffComparison::Local,
         turbogit_domain::model::DiffPolicies::default(),
         Some(PathBuf::from("brand-new.txt")),
     );

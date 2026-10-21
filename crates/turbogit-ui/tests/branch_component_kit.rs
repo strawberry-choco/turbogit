@@ -1564,7 +1564,7 @@ const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
     (
         "paint_rail",
         "ui/components.rs",
-        &["branch_tree_view", "diff", "sidebar"],
+        &["branch_tree_view", "sidebar"],
     ),
 ];
 
@@ -1583,7 +1583,7 @@ const ROW_PRIMITIVES: [(&str, &str, &[&str]); 2] = [
 /// hatch that lets a virtualised list adopt the vocabulary without a shell that
 /// re-measures per row. One caller of the railed variant is not a case for a
 /// shared primitive *yet* — the shell is where the two variants are defined, and
-/// the rail itself is a primitive with three screens behind it either way.
+/// the rail itself is a primitive with two screens behind it either way.
 const ROW_CONSTRUCTION_SITES: [&str; 1] = ["row_shell"];
 
 /// Every primitive the shared row module exports is used by at least two

@@ -1,5 +1,5 @@
 //! Diff actions and toolbar widgets: hunk/line staging dispatch,
-//! the mode/chips/nav toolbar, and the gutter stage buttons (spec R2).
+//! the mode and hunk-nav toolbar, and the gutter stage buttons (spec R2).
 
 use super::model::{DisplayRow, RowKind, line_counts, mono_font};
 use crate::theme::Palette;
@@ -7,14 +7,11 @@ use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
-    Align, Color32, CornerRadius, Layout, Pos2, Rect, Response, RichText, Sense, Ui, UiBuilder,
-    Vec2, WidgetInfo, WidgetType,
+    Color32, CornerRadius, Pos2, Rect, Response, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType,
 };
-use std::collections::BTreeSet;
 use turbogit_app::granular;
 use turbogit_app::keyed_read::DiffTarget;
-use turbogit_app::root_caches::StatsView;
-use turbogit_app::state::{AppState, DiffComparison};
+use turbogit_app::state::AppState;
 use turbogit_domain::model::ChangeStatus;
 
 // --- partial staging (spec R2) ----------------------------------------------
@@ -46,14 +43,11 @@ pub(crate) fn preview_line_counts(state: &AppState, path: &std::path::Path) -> (
         .map_or((0, 0), |diff| line_counts(&diff.model))
 }
 
-/// The commit window's preview target for `path`: the live chip and view policies
-/// decide its sides and its model, and a peek of it spends no git work (ADR-0021).
+/// The commit window's preview target for `path`: the viewer's policy pair
+/// decides its model, and a peek of it spends no git work (ADR-0021).
 fn preview_target(state: &AppState, path: std::path::PathBuf) -> DiffTarget {
-    DiffTarget::new(
+    DiffTarget::working_tree(
         state.selected_path().unwrap_or_default(),
-        None,
-        None,
-        state.ui.diff_comparison,
         state.ui.diff_policies,
         Some(path),
     )
@@ -135,136 +129,7 @@ pub(super) fn diff_options_menu(ui: &mut Ui, state: &mut AppState) -> bool {
     changed
 }
 
-/// Whether one changed line currently sits in the accumulated sub-hunk
-/// selection (spec R2 story 3).
-pub(super) fn line_selected(
-    state: &AppState,
-    path: &Option<std::path::PathBuf>,
-    hunk: usize,
-    ord: usize,
-) -> bool {
-    path.as_ref()
-        .and_then(|p| state.ui.line_selections.get(p))
-        .and_then(|m| m.get(&hunk))
-        .is_some_and(|s| s.contains(&ord))
-}
-
-/// Selected-line marker (spec R2 story 3): a BRAND edge bar on the row's
-/// left — the IDE-gutter convention, readable over both diff band tints.
-///
-/// Ticket 07: the bar is the one shared rail painter's, which absorbed this
-/// hand-rolled filled rect. The geometry is unchanged (it already sat flush at
-/// the leading edge); what it loses is the second definition of the width, which
-/// now comes from `theme::RAIL_WIDTH`, and the guarantee that a row elsewhere
-/// that grows a rail places it exactly here.
-pub(super) fn paint_selection_bar(painter: &egui::Painter, rect: &Rect) {
-    crate::ui::components::paint_rail(painter, *rect);
-}
-
-/// The accumulated line selection for one hunk, when any.
-fn line_selection_for(
-    state: &AppState,
-    path: &Option<std::path::PathBuf>,
-    hunk: usize,
-) -> Option<BTreeSet<usize>> {
-    let lines = path
-        .as_ref()
-        .and_then(|p| state.ui.line_selections.get(p))
-        .and_then(|m| m.get(&hunk))?;
-    (!lines.is_empty()).then(|| lines.clone())
-}
-
-/// Dispatch granular stage/unstage of one whole hunk or the accumulated
-/// sub-hunk line selection (spec R2): pure intent — the core granular module
-/// resolves the cached patch text (ADR-0013), status, routing, label, and
-/// scope.
-fn dispatch_hunk_action(
-    state: &mut AppState,
-    hunk: usize,
-    stage: bool,
-    path: &Option<std::path::PathBuf>,
-) {
-    let target = match line_selection_for(state, path, hunk) {
-        // Story 3: an accumulated sub-hunk selection narrows the patch to
-        // exactly the toggled lines; otherwise the whole hunk applies.
-        Some(lines) => granular::HunkTarget::Lines(hunk, lines),
-        None => granular::HunkTarget::Whole(hunk),
-    };
-    let Some(path) = path.clone() else {
-        return;
-    };
-    granular::dispatch(state, path, target, stage);
-}
-// --- the scope axis -----------------------------------------------------------
-
-/// Vertical breathing room between a group's segments and its frame. Without
-/// it the frame's rect is exactly its segments' rect, and a frame that is
-/// indistinguishable from what it frames is not a frame — which is also what
-/// would let the track's own fill pose as a second boundary.
-///
-/// Half the shared control padding — the space a control already keeps from its
-/// own edge — rather than a new number.
-const AXIS_PAD_Y: f32 = crate::theme::BUTTON_PADDING.y / 2.0;
-
-/// Frame the comparison chips as a single grouped control: the three sit
-/// *inside* a raised band, so the group is something the chips are contained
-/// by rather than a run of loose buttons (spec story 22).
-///
-/// Two things make it a group rather than a row of siblings, and both are
-/// geometric, so a test can read them off painted output:
-///
-/// 1. **Contiguity** — the segments are laid out edge to edge, with the
-///    group's own item spacing zeroed. A gap between two segments is exactly
-///    the "loose buttons" reading this exists to remove. (The spacing is set
-///    on the scope's child `Ui`, whose style is clone-on-write, so it cannot
-///    leak to the toolbar around it.)
-/// 2. **One outer boundary** — exactly one frame rect, laid behind the
-///    segments and derived from the same rect they were laid out in. The
-///    frame cannot drift away from the segments it groups, because it *is*
-///    their rect.
-pub(super) fn comparison_group(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
-    // Reserved before the body runs so the frame lands behind the segments
-    // rather than over them.
-    let slot = ui.painter().add(egui::Shape::Noop);
-    let inner = ui.scope_builder(
-        UiBuilder::new().layout(Layout::left_to_right(Align::Center)),
-        |ui| {
-            ui.spacing_mut().item_spacing.x = 0.0;
-            body(ui);
-        },
-    );
-    let segments = inner.response.rect;
-    // The frame is the same rect its segments were laid out in, grown by the
-    // pad: it can never drift away from what it groups, and it is never
-    // coincident with a segment's own fill (which is what would make "one outer
-    // boundary" ambiguous to read back off the output).
-    let frame = segments.expand2(Vec2::new(0.0, AXIS_PAD_Y));
-    ui.painter().set(
-        slot,
-        egui::Shape::rect_filled(
-            frame,
-            CornerRadius::same(crate::theme::CONTROL_RADIUS),
-            Palette::SURFACE_2,
-        ),
-    );
-}
-
 // --- toolbar widgets ---------------------------------------------------------
-
-/// Revision chips (spec §8.4): Repo/Staged/Local select the documented
-/// working-tree comparison pair.
-pub(super) fn comparison_chips(ui: &mut Ui, state: &mut AppState) {
-    for (cmp, label) in [
-        (DiffComparison::Repo, "Repo"),
-        (DiffComparison::Staged, "Staged"),
-        (DiffComparison::Local, "Local"),
-    ] {
-        let selected = state.ui.diff_comparison == cmp;
-        if chip_button(ui, label, selected).clicked() {
-            state.ui.diff_comparison = cmp;
-        }
-    }
-}
 
 /// Pill-shaped selectable chip: selected = solid BRAND with brand ink,
 /// unselected = SURFACE_3 with muted ink that brightens on hover. Also
@@ -425,47 +290,32 @@ pub(super) fn hunk_gutter_actions(
         enabled,
     );
 
-    if stage.clicked() {
-        dispatch_hunk_action(state, hunk, true, path);
+    // The gutter pair means exactly one thing per button: this hunk, whole. In a
+    // combined view a hunk can hold both staged and unstaged rows, so the button
+    // names the direction and `Whole` resolves which appliable section's hunks
+    // that direction reaches.
+    if stage.clicked()
+        && let Some(path) = path.clone()
+    {
+        granular::dispatch(
+            state,
+            path,
+            granular::HunkTarget::Whole(hunk, granular::Direction::Stage),
+        );
     }
-    if unstage.clicked() {
-        dispatch_hunk_action(state, hunk, false, path);
+    if unstage.clicked()
+        && let Some(path) = path.clone()
+    {
+        granular::dispatch(
+            state,
+            path,
+            granular::HunkTarget::Whole(hunk, granular::Direction::Unstage),
+        );
     }
 }
 
-/// Staged state of one viewer hunk (issue 20): the hunk's span, which the row
-/// already carries, classified against the selected root's cached staged
-/// (HEAD↔index) spans. Only the Repo comparison carries the information —
-/// staged and unstaged hunks coexist only there; `None` elsewhere or without
-/// stats. This is the paint path's only question about a hunk header, and it
-/// asks it of the row rather than of git's `@@` text.
-pub(super) fn viewer_hunk_staged_state(
-    state: &AppState,
-    path: &Option<std::path::PathBuf>,
-    span: Option<turbogit_app::hunk_stats::HunkSpan>,
-) -> Option<turbogit_app::hunk_stats::StagedState> {
-    use turbogit_app::hunk_stats;
-    let span = span?;
-    if state.ui.diff_comparison != DiffComparison::Repo {
-        return None;
-    }
-    let path = path.as_ref()?;
-    let root_id = state.selected_root.as_ref()?;
-    // A tracked file with nothing staged is absent from the staged view —
-    // exactly the "not staged" case, so absent entries classify against an
-    // empty span list.
-    let staged = state
-        .caches
-        .hunk_stats(root_id)?
-        .file(StatsView::Staged, path)
-        .map(|f| f.hunks.clone())
-        .unwrap_or_default();
-    Some(hunk_stats::hunk_staged_state(&span, &staged))
-}
-
-/// Hunk-header right side (issue 20, screen 06): the changed-line count with
-/// its staged-state annotation — "N hidden" while collapsed — plus a chevron
-/// toggle. Collapsing hides the hunk's body rows behind the count; expanding
+/// Hunk-header right side (issue 20, screen 06): the changed-line count, or
+/// "N hidden" while the hunk is collapsed, plus the collapse toggle.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn hunk_header_extras(
     ui: &mut Ui,
@@ -476,7 +326,6 @@ pub(super) fn hunk_header_extras(
     changed_lines: usize,
     collapsed: bool,
     hidden_rows: usize,
-    staged_state: Option<turbogit_app::hunk_stats::StagedState>,
 ) {
     const BTN: f32 = 18.0;
     const PAD_X: f32 = 6.0;
@@ -485,19 +334,7 @@ pub(super) fn hunk_header_extras(
     let count_text = if collapsed {
         format!("{hidden_rows} hidden")
     } else {
-        let lines = components::counted(changed_lines, "line", "lines");
-        match staged_state {
-            Some(turbogit_app::hunk_stats::StagedState::Staged) => {
-                format!("{lines} · staged")
-            }
-            Some(turbogit_app::hunk_stats::StagedState::Partial) => {
-                format!("{lines} · part")
-            }
-            Some(turbogit_app::hunk_stats::StagedState::Unstaged) => {
-                format!("{lines} · not staged")
-            }
-            None => lines,
-        }
+        components::counted(changed_lines, "line", "lines")
     };
     let (icon, label, tooltip) = if collapsed {
         (

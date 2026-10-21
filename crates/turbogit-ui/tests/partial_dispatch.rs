@@ -149,11 +149,53 @@ fn gutter_stage_button_dispatches_forward_patch_application() {
     );
 }
 
+/// Stage hunk 1 of `words.txt` (the `bravo` edit) with git itself, leaving hunk 2
+/// (`quebec`) as an unstaged worktree change.
+///
+/// The gutter `−` has nothing to reverse-apply unless something is staged, and
+/// the combined view makes that visible: the pane shows the staged row beside the
+/// unstaged one. So an unstage test needs a staged half, and this puts one there
+/// without going through the app's own stage path first.
+fn stage_first_hunk_by_hand(repo: &Repo, parent: &Path) {
+    let worktree = BASE.replace("bravo", "BRAVO").replace("quebec", "QUEBEC");
+    std::fs::write(repo.path.join("words.txt"), &worktree).unwrap();
+    let patch_path = parent.join("hunk-one.patch");
+    std::fs::write(
+        &patch_path,
+        concat!(
+            "diff --git a/words.txt b/words.txt\n",
+            "--- a/words.txt\n",
+            "+++ b/words.txt\n",
+            "@@ -1,5 +1,5 @@\n",
+            " alpha\n",
+            "-bravo\n",
+            "+BRAVO\n",
+            " charlie\n",
+            " delta\n",
+            " echo\n",
+        ),
+    )
+    .unwrap();
+    git(
+        &repo.path,
+        &[
+            "apply",
+            "--cached",
+            "--recount",
+            patch_path.to_str().unwrap(),
+        ],
+    );
+}
+
 #[test]
 fn gutter_unstage_button_dispatches_reverse_patch_application() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "gutter-unstage");
-    seed_two_hunk_change(&repo);
+    // Committed at BASE, then hunk 1 staged by hand and hunk 2 left unstaged.
+    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
+    git(&repo.path, &["add", "words.txt"]);
+    git(&repo.path, &["commit", "-q", "-m", "words"]);
+    stage_first_hunk_by_hand(&repo, parent.path());
 
     let (state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
@@ -169,7 +211,12 @@ fn gutter_unstage_button_dispatches_reverse_patch_application() {
     );
 
     h.get_by_label("Unstage hunk 1").click();
-    h.run();
+    // The op's completion lands over several frames: dispatch, the worker, the
+    // `OpCompleted` → refresh → settle route, and the harness only pumps them
+    // when asked.
+    for _ in 0..8 {
+        h.run();
+    }
 
     assert!(
         wait_until(15_000, || recorder.recorded().contains(
@@ -181,9 +228,42 @@ fn gutter_unstage_button_dispatches_reverse_patch_application() {
          composed patch against the index, recorded={:?}",
         recorder.recorded()
     );
+    // Graded on git's answer, not on the dispatch: before the preview was pinned
+    // this same click reached git as a reverse apply of an `index ↔ worktree`
+    // hunk, was refused with `error: patch failed`, and left the index alone.
+    // Here the staged hunk is the only staged content, so success is an index
+    // that matches HEAD again with the worktree still diverging.
+    assert!(
+        wait_until(15_000, || git(&repo.path, &["diff", "--cached"]).is_empty()
+            && git(&repo.path, &["status", "--porcelain"]).trim_end()
+                == " M words.txt"),
+        "the reverse apply must actually take the staged hunk out of the index, \
+         staged={:?} status={:?} toast={:?} recorded={:?}",
+        git(&repo.path, &["diff", "--cached"]),
+        git(&repo.path, &["status", "--porcelain"]),
+        h.state().ui.toast.clone(),
+        recorder.recorded()
+    );
+    assert!(
+        h.state()
+            .ui
+            .toast
+            .as_ref()
+            .is_none_or(|t| !matches!(t.kind, turbogit_app::state::ToastKind::Error)),
+        "git accepted it, so no error toast"
+    );
 }
 
 // ------------------------------------------------------- palette s/u verbs --
+
+/// A changed diff row's accessibility label, spelled the way the pane spells it:
+/// the row's text, then the state the per-line oracle answers for it. The state is
+/// what a click is *about*, and it is the only thing in the label that a click
+/// changes, so this is both the handle a test addresses a row by and the assertion
+/// that the row's own report moved.
+fn row(text: &str, staged: bool) -> String {
+    format!("{text} ({})", if staged { "staged" } else { "unstaged" })
+}
 
 /// Open the palette filtered to `query` and click `label` (the
 /// `feedback_chrome.rs` pattern: reachable through search + click).
@@ -266,7 +346,10 @@ fn palette_stage_verb_no_ops_without_a_previewed_file() {
 fn palette_unstage_verb_dispatches_reverse_apply_for_current_hunk() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "palette-unstage");
-    seed_two_hunk_change(&repo);
+    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
+    git(&repo.path, &["add", "words.txt"]);
+    git(&repo.path, &["commit", "-q", "-m", "words"]);
+    stage_first_hunk_by_hand(&repo, parent.path());
 
     let (state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
@@ -275,7 +358,7 @@ fn palette_unstage_verb_dispatches_reverse_apply_for_current_hunk() {
     h.get_by_label("words.txt").click();
     h.run();
     assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
+        wait_until(15_000, || h.query_by_label("Unstage hunk 1").is_some()),
         "diff preview should load"
     );
 
@@ -505,41 +588,12 @@ fn conflicted_file_gutter_controls_are_disabled_and_never_dispatch() {
 
 // ---------------------------------------------------- post-op diff refresh --
 
-#[test]
-fn preview_refreshes_after_granular_stage_to_show_remaining_unstaged_changes() {
-    let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "post-op-refresh");
-    seed_two_hunk_change(&repo);
-
-    let (state, _recorder) =
-        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    let mut h = harness(state);
-
-    h.get_by_label("words.txt").click();
-    h.run();
-    assert!(
-        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
-        "diff preview should load"
-    );
-
-    // Stage hunk 1 (the bravo edit); hunk 2 (quebec) stays unstaged.
-    h.get_by_label("Stage hunk 1").click();
-    h.run();
-
-    // IntelliJ-style refresh (spec R2): the preview must settle on the
-    // remaining UNSTAGED changes — quebec still differs, bravo no longer does.
-    assert!(
-        wait_until(15_000, || {
-            let text = painted_text(&h).join("\n");
-            text.contains("QUEBEC") && !text.contains("BRAVO")
-        }),
-        "after staging hunk 1 the preview must show only the remaining \
-         unstaged changes"
-    );
-}
-
-// ------------------------------------------------- fully staged exits list --
-
+/// Story 9's settlement is a file-list question now: a row click cannot empty the
+/// preview, because the preview reads `HEAD ↔ worktree` and staging does not change
+/// it. What "this file is finished" means is git's status for the file, which is
+/// what the flat list's buckets are keyed on. Fully staging `words.txt` therefore
+/// records its completion and advances preview focus, while the pane beside it
+/// keeps showing both hunks until the second one is clicked.
 #[test]
 fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
     let parent = tempfile::tempdir().unwrap();
@@ -559,19 +613,19 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
         "diff preview should load"
     );
 
-    // Stage every hunk of words.txt. After the first stage the post-op
-    // refresh settles on Local (index↔worktree), where the remaining hunk
-    // relabels to "Stage hunk 1".
+    // Stage every hunk of words.txt. After the first click the combined view
+    // neither relabels nor renumbers: hunk 2 is still "Stage hunk 2", because
+    // staging a line cannot change `git diff HEAD`.
     h.get_by_label("Stage hunk 1").click();
     h.run();
     assert!(
         wait_until(15_000, || {
             let text = painted_text(&h).join("\n");
-            text.contains("QUEBEC") && !text.contains("BRAVO")
+            text.contains("QUEBEC") && text.contains("BRAVO")
         }),
-        "post-op refresh should settle on the remaining unstaged hunk"
+        "the preview keeps showing both hunks after the first is staged"
     );
-    h.get_by_label("Stage hunk 1").click();
+    h.get_by_label("Stage hunk 2").click();
     h.run();
 
     // Story 9: with no unstaged changes left, words.txt is fully staged. The
@@ -698,10 +752,10 @@ fn staging_one_hunk_from_the_diff_viewer_makes_the_row_partially_staged() {
     );
 }
 
-// ----------------------------------------------------- line-level toggling --
+// ----------------------------------------------------- line-level staging --
 
 #[test]
-fn line_selection_stages_a_sub_hunk_patch_end_to_end() {
+fn per_line_clicks_stage_each_line_end_to_end() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "line-toggle");
     seed_two_hunk_change(&repo);
@@ -717,32 +771,198 @@ fn line_selection_stages_a_sub_hunk_patch_end_to_end() {
         "diff preview should load"
     );
 
-    // Toggle only the `-bravo` deletion inside hunk 1; the `+BRAVO`
-    // addition stays unselected.
-    h.get_by_label("bravo").click();
+    // Click the `-bravo` deletion row: the click IS the stage, one git
+    // operation, no second control. The row is addressed by the label the pane
+    // gives a changed line: its text and the state the per-line oracle answers.
+    h.get_by_label(&row("bravo", false)).click();
     h.run();
-
-    // Staging the hunk applies the accumulated line selection.
-    h.get_by_label("Stage hunk 1").click();
-    h.run();
-
-    // End-state verification through git itself (spec layer 3): exactly the
-    // selected line reached the index.
     assert!(
         wait_until(15_000, || {
             let staged = git(&repo.path, &["diff", "--cached"]);
             staged.contains("-bravo") && !staged.contains("+BRAVO") && !staged.contains("QUEBEC")
         }),
-        "only the selected deletion must be staged, got:\n{}",
+        "the clicked deletion alone must reach the index, got:\n{}",
         git(&repo.path, &["diff", "--cached"])
     );
 
-    // The dropped addition remains an unstaged local edit: the index
-    // already lacks `bravo` (that removal was staged), so relative to the
-    // index the worktree only ADDS `BRAVO`.
+    // The clicked row is still on screen, and so is its pair. A pinned
+    // `index ↔ worktree` preview would have lost the staged row to the next
+    // click, because a staged line is absent from that patch; the assertion here
+    // is that the combined view is byte-stable under the action the pane offers,
+    // which is what makes an immediate click survivable at all. The round trip
+    // back out of the index is graded in `combined_preview_toggle.rs`.
+    assert!(
+        wait_until(15_000, || {
+            h.run();
+            h.query_by_label(&row("bravo", true)).is_some()
+                && h.query_by_label(&row("BRAVO", false)).is_some()
+        }),
+        "the staged row stays in the preview beside its pair, and says so while it \
+         does: the click moved one line, not the row's own state report"
+    );
+
+    // Click the `-quebec` deletion row of the other hunk: one operation per
+    // line, and both deletions are now staged while both additions are not.
+    h.get_by_label(&row("quebec", false)).click();
+    h.run();
+    assert!(
+        wait_until(15_000, || {
+            let staged = git(&repo.path, &["diff", "--cached"]);
+            staged.contains("-bravo") && staged.contains("-quebec")
+        }),
+        "both clicked deletions must be staged, got:\n{}",
+        git(&repo.path, &["diff", "--cached"])
+    );
+
+    let staged = git(&repo.path, &["diff", "--cached"]);
+    assert!(
+        !staged.contains("BRAVO") && !staged.contains("QUEBEC"),
+        "the unclicked additions must stay out of the index:\n{staged}"
+    );
     let unstaged = git(&repo.path, &["diff"]);
     assert!(
-        unstaged.contains("+BRAVO") && !unstaged.contains("-bravo"),
-        "the unselected addition must stay unstaged:\n{unstaged}"
+        unstaged.contains("+BRAVO") && unstaged.contains("+QUEBEC"),
+        "the additions remain unstaged worktree change:\n{unstaged}"
+    );
+}
+
+/// An unstage of a hunk with nothing staged is no operation at all.
+///
+/// The defect this surface can produce, and the one the shape of the composed
+/// patch decides: a gutter `−` whose reverse apply is cut from the
+/// `index ↔ worktree` patch reaches git with a new side the index never held,
+/// because that patch's post-image is the worktree and a reverse apply matches
+/// new sides against the index. git refuses it with
+/// `error: patch failed: words.txt:1`, the pane surfaces an error toast, and the
+/// repository is untouched.
+///
+/// The preview reads `HEAD ↔ worktree` and the unstage composes from the retained
+/// `HEAD ↔ index` section, so the click is only dispatched when there is a staged
+/// line to take out. Nothing is staged on this fixture, so the honest answer is no
+/// operation at all: no engine call,
+/// no toast, no settlement armed. The half where git is actually asked and accepts
+/// is `gutter_unstage_button_dispatches_reverse_patch_application`, which stages a
+/// hunk first and grades the index afterwards.
+#[test]
+fn gutter_unstage_on_a_fully_unstaged_hunk_does_nothing_and_leaves_the_repo_untouched() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "unstage-noop");
+    seed_two_hunk_change(&repo);
+    let worktree_before = std::fs::read_to_string(repo.path.join("words.txt")).unwrap();
+
+    let (state, recorder) =
+        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
+    let mut h = harness(state);
+
+    h.get_by_label("words.txt").click();
+    h.run();
+    assert!(
+        wait_until(15_000, || h.query_by_label("Stage hunk 1").is_some()),
+        "diff preview should load"
+    );
+
+    h.get_by_label("Unstage hunk 1").click();
+    // The op's completion lands over several frames: dispatch, the worker, the
+    // `OpCompleted` → refresh → settle route, and the harness only pumps them
+    // when asked.
+    for _ in 0..8 {
+        h.run();
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    h.run();
+
+    assert!(
+        !recorder
+            .recorded()
+            .iter()
+            .any(|c| matches!(c, RecordedCall::ApplyPatch { .. })),
+        "a hunk with no staged row has nothing to reverse-apply, recorded={:?}",
+        recorder.recorded()
+    );
+    assert!(
+        !matches!(
+            h.state().ui.toast.as_ref().map(|t| t.kind),
+            Some(turbogit_app::state::ToastKind::Error)
+        ),
+        "the refused apply that used to surface as an error toast is gone: {:?}",
+        h.state().ui.toast
+    );
+    assert!(
+        h.state().ui.pending_granular.is_none(),
+        "a no-op must not arm completion settlement"
+    );
+
+    // And git itself untouched: nothing was staged before, nothing is staged
+    // after, and the worktree never moved.
+    assert!(
+        git(&repo.path, &["diff", "--cached"]).is_empty(),
+        "index moved"
+    );
+    assert_eq!(
+        git(&repo.path, &["status", "--porcelain"]).trim_end(),
+        " M words.txt",
+        "status moved"
+    );
+    assert_eq!(
+        std::fs::read_to_string(repo.path.join("words.txt")).unwrap(),
+        worktree_before,
+        "worktree moved"
+    );
+}
+
+/// The visible half of the pin, and the reason the pending set could be deleted:
+/// a row click leaves the combined view showing the whole file. Both rows of the
+/// edited line stay on screen after one of them is staged, so no row shifts,
+/// disappears or renumbers under the only action the pane offers.
+#[test]
+fn the_pinned_preview_keeps_the_staged_and_the_unstaged_row_both_visible() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "preview-stability");
+    std::fs::write(repo.path.join("words.txt"), BASE).unwrap();
+    git(&repo.path, &["add", "words.txt"]);
+    git(&repo.path, &["commit", "-q", "-m", "words"]);
+    stage_first_hunk_by_hand(&repo, parent.path());
+
+    let (state, _recorder) =
+        app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
+    let mut h = harness(state);
+
+    h.get_by_label("words.txt").click();
+    h.run();
+    assert!(
+        wait_until(15_000, || {
+            let text = painted_text(&h).join("\n");
+            text.contains("BRAVO") && text.contains("QUEBEC")
+        }),
+        "the combined view shows the staged half and the unstaged half at once"
+    );
+
+    // The pane header labels come from the target's own revisions, so the pinned
+    // read prints `HEAD` and `Working tree`; that half is the snapshot surface
+    // (`pane_labels` in `view.rs` is the code, and the side-by-side band it paints
+    // is not in this harness's default view mode).
+
+    // Toggle the STAGED row back out. The frames are pumped inside the poll,
+    // because the post-op refresh answers `Waiting` for a frame or two before the
+    // rows are painted again. Staging the *other* hunk instead would finish the
+    // file and let story 9's settlement move the preview, which is
+    // `fully_staged_file_leaves_changelist_and_focus_advances_to_next_change`.
+    //
+    // The label addresses it *because* it is staged: this row was put into the
+    // index by hand before the app started, so the pane calls it `staged` and no
+    // other row on screen carries that word.
+    let before = painted_text(&h).join("\n");
+    h.get_by_label(&row("BRAVO", true)).click();
+    assert!(
+        wait_until(15_000, || {
+            h.run();
+            let text = painted_text(&h).join("\n");
+            text.contains("BRAVO")
+                && text.contains("bravo")
+                && text.contains("QUEBEC")
+                && git(&repo.path, &["diff", "--cached"]).is_empty()
+        }),
+        "unstaging the line the reader clicked moved no row and hid no row; \
+         before={before}"
     );
 }

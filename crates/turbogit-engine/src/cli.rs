@@ -96,6 +96,32 @@ impl CliExecutor {
             .is_ok()
     }
 
+    /// Refuse a read that names `HEAD` on a root with no commit.
+    ///
+    /// An unborn branch has no commit behind `HEAD`. The alternative to
+    /// refusing is to put the empty tree in HEAD's place, and this refuses
+    /// because that synthesis tells someone who has just run `git init` that
+    /// every line of every staged file is an addition relative to something,
+    /// and invents the "something" in order to make a pane render. Git's own
+    /// text there (`fatal: bad revision 'HEAD'`) is not readable to that
+    /// person either, so the guard replaces both with one sentence and a
+    /// variant a consumer can match. `unstage` below does branch on
+    /// `has_head`, and that is a different case: there a missing HEAD has a
+    /// real alternative command rather than a missing baseline.
+    ///
+    /// Only the literal `HEAD` is refused: a caller naming a branch or a sha on
+    /// such a root gets git's own error, because that revision is a different
+    /// thing that genuinely does not exist. Cost is one extra `rev-parse`
+    /// spawn, and only for a read that names `HEAD`.
+    fn guard_unborn_head<'a>(&self, root: &Path, rev: &'a str) -> TgResult<&'a str> {
+        if rev != "HEAD" || self.has_head(root) {
+            return Ok(rev);
+        }
+        Err(TgError::NoCommitsYet {
+            consequence: "there is no first commit to compare your changes against",
+        })
+    }
+
     /// `git show :<stage>:<path>`. Index stages are this adapter's own
     /// spelling: the port's file-content reads take a commit-ish, and the only
     /// reader that means a stage is `conflict_versions`.
@@ -1991,11 +2017,13 @@ impl GitExecutor for CliExecutor {
             a.push("--stat".to_string());
         }
         if let (Some(l), Some(r)) = (&opts.left, &opts.right) {
-            a.push(format!("{}..{}", l, r));
+            a.push(format!("{}..{}", self.guard_unborn_head(root, l)?, r));
         } else if let Some(c) = &opts.commit {
             a.push(format!("{}^!", c));
         } else if let Some(l) = &opts.left {
-            a.push(l.clone());
+            // A named HEAD on a root with no commit is refused here; see
+            // `guard_unborn_head`.
+            a.push(self.guard_unborn_head(root, l)?.to_string());
         }
         if let Some(p) = &opts.path {
             a.push("--".to_string());
@@ -2022,7 +2050,12 @@ impl GitExecutor for CliExecutor {
             // a path it has never held — and the surface says so rather than
             // letting a created patch look complete.
             PatchOrigin::LocalChanges { paths } => {
-                a.push("HEAD".to_string());
+                // The same named refusal as the combined read, so an unborn
+                // branch is one sentence everywhere and not git's `fatal: bad
+                // revision 'HEAD'` text in this surface. `guard_unborn_head`
+                // only fires on the literal `HEAD`, which is what this arm
+                // always names.
+                a.push(self.guard_unborn_head(root, "HEAD")?.to_string());
                 paths
             }
             // `<commit>^!` is the commit against its first parent ONLY: every

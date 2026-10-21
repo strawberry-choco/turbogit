@@ -237,12 +237,16 @@ pub fn run_action(state: &mut AppState, action: Action) {
         // must exist, or the verb is a silent no-op; conflicted files are
         // blocked by the core op.
         Action::StageHunk | Action::UnstageHunk => {
-            let stage = action == Action::StageHunk;
+            let dir = if action == Action::StageHunk {
+                granular::Direction::Stage
+            } else {
+                granular::Direction::Unstage
+            };
             let Some(path) = state.ui.preview_change.clone() else {
                 return;
             };
             let hunk = state.ui.diff_current_hunk;
-            granular::dispatch(state, path, granular::HunkTarget::Whole(hunk), stage);
+            granular::dispatch(state, path, granular::HunkTarget::Whole(hunk, dir));
         }
         // File filter (spec R7): surface the Commit tool window and arm
         // next-frame focus of its inline filter input.
