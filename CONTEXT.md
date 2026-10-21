@@ -226,6 +226,26 @@ fully staged. Distinct from **Partial staging**, which is the diff viewer's
 per-hunk and per-line act.
 _Avoid_: include box, commit checkbox, tick
 
+**Changes selection**:
+The set of file rows a developer is looking at, and the only input the changes
+list's verbs read: Discard Changes, Shelve and Create Patch act on it, while
+Commit acts on the index. A row-body click is its only writer, and the modifier
+held at that click picks the rule: a plain click leaves just that row in the
+set, Command/Ctrl moves one row in or out of it, and Shift+Click replaces it
+with the contiguous run of painted rows from the **Range anchor**. Painted means
+visible, so the file filter and a collapsed repository group both bound a range
+without any further rule. A Merge conflicts row never joins the set, because no
+verb above refuses an unmerged path.
+_Avoid_: marked files, picked files, highlighted set
+
+**Range anchor**:
+The row a **Changes selection** ranges from: the last row clicked without a
+Shift, which may be a row that cannot be selected. A range click leaves it where
+it is, so repeated shift-clicks reshape one span instead of walking the
+selection down the list. An anchor the list no longer paints falls back to a
+plain click rather than selecting nothing.
+_Avoid_: selection origin, drag handle
+
 **Outgoing commits**:
 The commits a root is ahead of its upstream — what the Push dialog lists per
 root before pushing.

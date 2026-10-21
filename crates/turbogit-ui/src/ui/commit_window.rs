@@ -14,12 +14,18 @@
 //! **The checkbox is a view of the index, not a set of its own.** Its three
 //! states are derived per frame from the status read's staged/unstaged pair, and
 //! clicking it stages or un-stages the whole file through plain git. Clicking
-//! the row body selects the file for the diff preview and does nothing else —
-//! browsing is not an edit. `AppState::ui.selected` therefore means "the files
-//! I am looking at": it drives the row highlight, Create Patch from Local
-//! Changes, Discard Changes and the Shelve dialog, and the commit path does not
-//! read it at all. Commit commits the index and is disabled with a stated
-//! reason when the index is empty.
+//! the row body is a browse, never an edit, and the modifier held at the click
+//! picks the gesture out of [`changes_selection`]: a plain click selects that
+//! one file and clears the rest of the set, Command/Ctrl (Cmd on macOS, Ctrl on
+//! Windows and Linux) toggles one file in or out, and Shift+Click replaces the
+//! set with the contiguous painted range from the anchor. Every gesture previews
+//! the row it landed on, and a conflicted row is previewed like any other while
+//! staying out of the set — that set is the input to Discard Changes, Shelve and
+//! Create Patch, and none of the three guards an unmerged path.
+//! `AppState::ui.selected` therefore means "the files I am looking at": it drives
+//! the row highlight, Create Patch from Local Changes, Discard Changes and the
+//! Shelve dialog, and the commit path does not read it at all. Commit commits the
+//! index and is disabled with a stated reason when the index is empty.
 //!
 //! For multi-root projects each repository is its own collapsible group, which
 //! is the only way to tell which repository a file belongs to. Shelf and Stash
@@ -46,6 +52,7 @@
 //! column, not widening the column.
 
 use crate::theme::Palette;
+use crate::ui::changes_selection::{self, ClickKind, RowSlot};
 use crate::ui::column_table::{self, PaneTable};
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
@@ -125,11 +132,16 @@ enum RowAction {
     /// by root id. The focused repo is never the target — its group is
     /// always expanded ("focus = expand").
     ToggleGroup(turbogit_domain::model::RootId),
-    /// Select one file for the diff preview — the row click gesture. Keyed by
-    /// canonical root-scoped path because the selection is per-root.
-    Select { key: PathBuf, path: PathBuf },
-    /// Select a file for the diff preview pane.
-    Preview(PathBuf),
+    /// One row-body click: the gesture [`changes_selection`] applies to the
+    /// selection, the anchor and the diff preview. Keyed by the canonical
+    /// root-scoped path because the selection is per-root, and carrying the
+    /// [`ClickKind`] the held modifier picked at the click site, because which
+    /// gesture this is cannot be recovered after the frame.
+    Select {
+        key: PathBuf,
+        path: PathBuf,
+        kind: ClickKind,
+    },
 }
 
 /// One root's changes as two buckets: the flat file list, then the conflicts
@@ -165,15 +177,25 @@ fn change_buckets(state: &AppState) -> Vec<Bucket<'_>> {
 }
 
 /// Apply the row interactions collected during one pane's render pass.
-fn apply_actions(state: &mut AppState, actions: Vec<RowAction>) {
+///
+/// `order` is that same pass's paint order, so a range spans exactly the rows
+/// the developer could see.
+fn apply_actions(state: &mut AppState, actions: Vec<RowAction>, order: &[RowSlot]) {
     for action in actions {
         match action {
             RowAction::ToggleStage { root, path } => set_file_staged(state, &root, &path),
-            RowAction::Select { key, path } => {
-                state.ui.selected.insert(key);
+            RowAction::Select { key, path, kind } => {
+                changes_selection::apply(
+                    &mut state.ui.selected,
+                    &mut state.ui.selection_anchor,
+                    order,
+                    &key,
+                    kind,
+                );
+                // The preview follows every gesture, range and toggle included:
+                // the row the pointer landed on is the row to look at.
                 state.ui.preview_change = Some(path);
             }
-            RowAction::Preview(path) => state.ui.preview_change = Some(path),
             RowAction::ToggleGroup(id) => {
                 if state.ui.changes_expanded.contains(&id) {
                     state.ui.changes_expanded.remove(&id);
@@ -654,8 +676,9 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
             &no_match
         };
         let mut actions = Vec::new();
-        changes_tree(ui, state, &buckets, empty_text, &mut actions);
-        apply_actions(state, actions);
+        let mut order = Vec::new();
+        changes_tree(ui, state, &buckets, empty_text, &mut actions, &mut order);
+        apply_actions(state, actions, &order);
     });
 }
 
@@ -666,12 +689,15 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
 /// other group manually ([`AppState::ui`] `changes_expanded`). Each expanded
 /// group lists that repo's files flat and path-sorted, with the conflicts
 /// group below.
+///
+/// `order` collects one [`RowSlot`] per painted row, in this pass's paint order.
 fn changes_tree(
     ui: &mut Ui,
     state: &AppState,
     buckets: &[Bucket<'_>],
     empty_text: &str,
     actions: &mut Vec<RowAction>,
+    order: &mut Vec<RowSlot>,
 ) {
     // Height-capped: the tree is the last region inside its card, so it fills
     // the rest of the pane rather than growing the card past the window
@@ -693,7 +719,7 @@ fn changes_tree(
                     continue;
                 }
                 painted = true;
-                repo_group(ui, state, root, &root_buckets, actions);
+                repo_group(ui, state, root, &root_buckets, actions, order);
             }
             if !painted {
                 widgets::empty_state(ui, empty_text);
@@ -870,6 +896,7 @@ fn repo_group(
     root: &Root,
     buckets: &[&Bucket<'_>],
     actions: &mut Vec<RowAction>,
+    order: &mut Vec<RowSlot>,
 ) {
     let focused = state.selected_root.as_ref() == Some(&root.id);
     let expanded = focused || state.ui.changes_expanded.contains(&root.id);
@@ -901,7 +928,7 @@ fn repo_group(
     if expanded {
         ui.indent(ui.id().with(("repo_group_body", &root.id)), |ui| {
             for bucket in buckets {
-                group_section(ui, state, bucket, actions);
+                group_section(ui, state, bucket, actions, order);
             }
         });
     }
@@ -937,7 +964,13 @@ fn indent_guide(ui: &Ui, block: Rect) {
 /// review surface with no checkbox, so it stays visibly grouped — on the same
 /// shared band every other group header wears, not as a bare bold line. The
 /// flat list paints no heading of its own, which is the whole point of it.
-fn group_section(ui: &mut Ui, state: &AppState, bucket: &Bucket<'_>, actions: &mut Vec<RowAction>) {
+fn group_section(
+    ui: &mut Ui,
+    state: &AppState,
+    bucket: &Bucket<'_>,
+    actions: &mut Vec<RowAction>,
+    order: &mut Vec<RowSlot>,
+) {
     if bucket.name == MERGE_CONFLICTS {
         let count = bucket.changes.len();
         group_header_row(
@@ -962,7 +995,7 @@ fn group_section(ui: &mut Ui, state: &AppState, bucket: &Bucket<'_>, actions: &m
             .with(("group_section", &bucket.root.id, bucket.name)),
         |ui| {
             for c in &bucket.changes {
-                change_row(ui, state, bucket.root, c, actions);
+                change_row(ui, state, bucket.root, c, actions, order);
             }
         },
     );
@@ -1191,6 +1224,15 @@ const GROUP_EDGE: f32 = 12.0;
 /// chip is right-aligned into a zone rather than laid out after the name.
 const GROUP_COUNT_SLOT: f32 = 44.0;
 
+/// The gesture a row-body click is, from the modifier keys held while it
+/// happened. Read here rather than inside [`changes_selection`], because that
+/// module owns the rule and this is the one place egui is allowed to be part of
+/// it.
+fn row_click_kind(ui: &Ui) -> ClickKind {
+    let modifiers = ui.ctx().input(|i| i.modifiers);
+    changes_selection::click_kind(modifiers.shift, modifiers.command)
+}
+
 /// One file row (issue 05, design doc §4): `[checkbox] [status letter]
 /// [filename] … [dim location]` on the 24 px file-row height — or taller: a
 /// filename too long for its column **wraps onto continuation lines** and the
@@ -1207,10 +1249,14 @@ const GROUP_COUNT_SLOT: f32 = 44.0;
 /// The status letter says what happened to the file — N green / M blue / D
 /// grey — while the filename reads at [`Palette::INK`] and the parent directory
 /// renders dim at the pane edge. Clicking the checkbox stages or un-stages the
-/// whole file; clicking the row body selects it and previews its diff, and
-/// changes nothing else. Renames/copies keep a muted arrow plus the old path;
-/// conflicts render as one review row through [`conflict_row`]. Interactions
-/// are pushed onto `actions` and applied by the caller after rendering.
+/// whole file; clicking the row body previews its diff and runs the selection
+/// gesture, which [`changes_selection`] resolves from the modifier keys held at
+/// the click: a plain click picks one row, Command/Ctrl toggles one in or out,
+/// and Shift+Click replaces the set with the painted range from the anchor.
+/// Neither gesture edits the index. Renames/copies keep a muted arrow plus the old
+/// path; conflicts render as one review row through [`conflict_row`]. Interactions
+/// go onto `actions` and this row's place in the painted list onto `order`, and
+/// the caller reads both after rendering.
 #[allow(clippy::too_many_lines)]
 fn change_row(
     ui: &mut Ui,
@@ -1218,10 +1264,11 @@ fn change_row(
     root: &Root,
     c: &Change,
     actions: &mut Vec<RowAction>,
+    order: &mut Vec<RowSlot>,
 ) {
     let key = root.canonical_key(c);
     if c.status == ChangeStatus::Conflicted {
-        conflict_row(ui, state, c, &key, actions);
+        conflict_row(ui, state, c, &key, actions, order);
         return;
     }
 
@@ -1421,9 +1468,10 @@ fn change_row(
     }
 
     // Row body: one select gesture — the selection and the diff preview, and
-    // nothing else. Registered after the checkbox so the checkbox owns its own
-    // clicks. The body rect starts *past* the checkbox, so neither widget can
-    // steal the other's clicks and the register order is belt-and-braces.
+    // nothing else. Which gesture it is comes from the keys held at the click.
+    // Registered after the checkbox so the checkbox owns its own clicks. The body
+    // rect starts *past* the checkbox, so neither widget can steal the other's
+    // clicks and the register order is belt-and-braces.
     let body_rect = Rect::from_min_max(
         Pos2::new(row.left() + ROW_PAD_X + ROW_CHECKBOX + ROW_GAP, row.top()),
         row.max,
@@ -1434,10 +1482,15 @@ fn change_row(
         Sense::click(),
     );
     body.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name.clone()));
+    order.push(RowSlot {
+        key: key.clone(),
+        selectable: true,
+    });
     if body.clicked() {
         actions.push(RowAction::Select {
             key,
             path: c.path.clone(),
+            kind: row_click_kind(ui),
         });
     }
 }
@@ -1453,6 +1506,12 @@ fn change_row(
 /// carries the state, in the same semantic hue every other status letter
 /// wears.
 ///
+/// Clicking its body previews its diff like any other row and puts nothing in
+/// `AppState::ui.selected`. This is the row whose [`RowSlot`] reports itself
+/// unselectable: it holds a place in a shift range, so a drag that passes over
+/// the conflicts group still spans the files below it, and it never joins the set
+/// the destructive verbs read.
+///
 /// It used to be a `ui.horizontal` of a `selectable_label` and an icon: the
 /// stock selection fill plus a 1px brand stroke around one row in a list whose
 /// other rows were doing something else. That is the loud, off-vocabulary
@@ -1463,6 +1522,7 @@ fn conflict_row(
     c: &Change,
     key: &PathBuf,
     actions: &mut Vec<RowAction>,
+    order: &mut Vec<RowSlot>,
 ) {
     let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
     let (glyph, glyph_tint) = status_glyph(c.status);
@@ -1518,8 +1578,16 @@ fn conflict_row(
 
     let response = ui.interact(row, ui.auto_id_with(("conflict_row", key)), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.clone()));
+    order.push(RowSlot {
+        key: key.clone(),
+        selectable: false,
+    });
     if response.clicked() {
-        actions.push(RowAction::Preview(c.path.clone()));
+        actions.push(RowAction::Select {
+            key: key.clone(),
+            path: c.path.clone(),
+            kind: row_click_kind(ui),
+        });
     }
 }
 

@@ -20,8 +20,9 @@ use egui_kittest::{
 use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::{
-    assert_not_painted, assert_painted, filled_rects, galley_origin, painted_galleys, painted_ink,
-    painted_paths, painted_text, shell_harness_over_unstyled, stroked_rects,
+    assert_not_painted, assert_painted, click_with_modifiers, filled_rects, galley_origin,
+    painted_galleys, painted_ink, painted_paths, painted_text, shell_harness_over_unstyled,
+    stroked_rects,
 };
 use test_support::wait_until;
 use turbogit_app::state::{AppState, CommitSubTab, Dialog};
@@ -2716,10 +2717,10 @@ fn a_long_file_name_grows_its_galley_and_its_row() {
     );
 
     // Both rows selected, so both bands are painted and each is located by the
-    // name it carries rather than by paint order.
+    // name it carries rather than by paint order. The second click has to be a
+    // toggle: a plain one would clear the first row out of the set.
     h.get_by_label(long).click();
-    h.get_by_label("short.rs").click();
-    h.run();
+    click_with_modifiers(&mut h, "short.rs", egui::Modifiers::COMMAND);
 
     let card = changes_card(&h);
     let height_of = |name: &str| {

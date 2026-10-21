@@ -590,6 +590,25 @@ pub fn right_click_row<S>(harness: &mut Harness<'_, S>, needle: &str) {
     harness.step();
 }
 
+/// Primary-button click on the node labelled exactly `label`, with `modifiers`
+/// held, then a full run so the frame's state is readable when this returns.
+///
+/// The `modifiers` field of `egui::Event::PointerButton` is decoration: egui
+/// only ever sets `InputState::modifiers` from `ModifiersChanged` (or from
+/// kittest's own `RawInput::modifiers`), so a test that wants a widget to read
+/// a held key must go through `click_modifiers`, which presses the keys,
+/// clicks, and releases them as separate frames.
+#[track_caller]
+pub fn click_with_modifiers<S>(
+    harness: &mut Harness<'_, S>,
+    label: &str,
+    modifiers: egui::Modifiers,
+) {
+    use egui_kittest::kittest::Queryable as _;
+    harness.get_by_label(label).click_modifiers(modifiers);
+    harness.run();
+}
+
 /// Click one item of the context menu that is open.
 ///
 /// `sentinel` is a label unique to THAT menu, used to find its left edge: the

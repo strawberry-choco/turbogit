@@ -1433,7 +1433,20 @@ pub struct UiState {
     // Commit tab
     pub commit_message: String,
     pub amend: bool,
+    /// The Local Changes files the developer is looking at, keyed by
+    /// `Root::canonical_key`. A row-body click rebuilds it through the reducer in
+    /// `turbogit_ui::ui::changes_selection`: a plain click leaves one file in
+    /// it, a Command/Ctrl click moves one in or out, a Shift+Click replaces it
+    /// with a painted range. Discard Changes, Shelve and Create Patch read it,
+    /// and the commit path does not. No unmerged path is ever in it.
     pub selected: HashSet<PathBuf>,
+    /// The shift-range origin for that list: the last row clicked without a
+    /// range gesture, including a row that cannot be selected. A range click
+    /// deliberately leaves it alone, so repeated shift-clicks reshape one span
+    /// instead of walking the selection down the list. A stale anchor (the file
+    /// vanished, its group collapsed, the filter hid it) falls back to a plain
+    /// click rather than selecting nothing.
+    pub selection_anchor: Option<PathBuf>,
     pub recent_messages: Vec<String>,
     /// Active sub-tab inside the Commit tool window (issue #18).
     pub commit_subtab: CommitSubTab,

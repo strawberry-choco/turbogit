@@ -20,7 +20,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use test_support::git_seed::git;
 use test_support::harness::{
-    painted_galleys, painted_ink, painted_text, shell_harness_over_unstyled,
+    click_with_modifiers, painted_galleys, painted_ink, painted_text, shell_harness_over_unstyled,
 };
 use test_support::wait_until;
 use turbogit_app::state::AppState;
@@ -479,7 +479,8 @@ fn painted_name_x(h: &Harness<'_, AppState>, name: &str) -> f32 {
 
 /// **The selection survives a commit, and is pruned when a file leaves the
 /// list.** It means "the files I am looking at", so a commit says nothing about
-/// it and a vanishing path must not sit in it forever.
+/// it and a vanishing path must not sit in it forever. Two rows are held to
+/// prove the pruning is selective: a plain click would leave only the last one.
 #[test]
 fn selection_survives_a_commit_and_is_pruned_on_refresh() {
     let parent = tempfile::tempdir().unwrap();
@@ -490,8 +491,7 @@ fn selection_survives_a_commit_and_is_pruned_on_refresh() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
     h.get_by_label("a.txt").click();
-    h.get_by_label("b.txt").click();
-    h.run();
+    click_with_modifiers(&mut h, "b.txt", egui::Modifiers::COMMAND);
     assert_eq!(
         h.state().ui.selected.len(),
         2,
@@ -706,9 +706,11 @@ fn assert_hover_paints(h: &mut Harness<'_, AppState>, at: egui::Pos2, needle: &s
 
 // ----------------------------------------------------- multi-selection ------
 
-/// **Multi-selection feeds Discard Changes.** The selection means "the files I
-/// am looking at", and these are the two verbs that still read it — so a
-/// selected group is the group acted on, and an unselected file is left alone.
+/// **Two plain clicks leave one file selected, and a multi-selection is what
+/// reaches Discard Changes.** The selection means "the files I am looking at",
+/// and these are the two verbs that still read it — so the last row clicked
+/// plainly is the only row held, and the row Command/Ctrl adds beside it joins
+/// the group the verb acts on.
 #[test]
 fn a_multi_selection_drives_discard_and_leaves_the_rest_alone() {
     let parent = tempfile::tempdir().unwrap();
@@ -724,7 +726,30 @@ fn a_multi_selection_drives_discard_and_leaves_the_rest_alone() {
     h.get_by_label("a.txt").click();
     h.get_by_label("b.txt").click();
     h.run();
-    assert_eq!(h.state().ui.selected.len(), 2, "both rows are selected");
+    assert_eq!(
+        h.state().ui.selected.len(),
+        1,
+        "a plain click replaces the selection rather than widening it: {:?}",
+        h.state().ui.selected
+    );
+    assert!(
+        h.state().ui.selected.contains(&repo.path.join("b.txt")),
+        "and what survives is the second click's file"
+    );
+    assert!(
+        !h.state().ui.selected.contains(&repo.path.join("a.txt")),
+        "the first click's file left the set"
+    );
+
+    // A second row joins the set only through Command/Ctrl, so that is how the
+    // multi-selection the verb reads is built.
+    click_with_modifiers(&mut h, "a.txt", egui::Modifiers::COMMAND);
+    assert_eq!(
+        h.state().ui.selected.len(),
+        2,
+        "the toggle adds a row and leaves the held one alone: {:?}",
+        h.state().ui.selected
+    );
 
     // The header's rollback control opens the discard confirm for the selection.
     h.get_by_label("Rollback").click();

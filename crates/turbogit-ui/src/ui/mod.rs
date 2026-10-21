@@ -33,6 +33,9 @@ pub mod branches;
 pub mod branches_tree;
 pub mod bulk_monitor;
 pub mod bulk_preflight;
+/// The Local Changes selection rule: one pure reducer over a row-body click and
+/// the modifier it was clicked with.
+pub mod changes_selection;
 pub mod cherry_across;
 /// The one column-table grammar: the tool panes of `worktrees`, `submodules` and
 /// the commit window, plus the fleet matrices; internal like [`kit`].
