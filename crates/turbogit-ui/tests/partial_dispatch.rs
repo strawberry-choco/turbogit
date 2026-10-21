@@ -426,10 +426,6 @@ fn commit_with_partially_staged_file_commits_index_without_restaging() {
     let (state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     let mut h = harness(state);
-    // The staged-hunks rail (this file has one staged hunk) plus the loaded
-    // diff preview push the action row below the 800 px fold; grow the window
-    // so the commit controls stay reachable.
-    h.set_size(egui::vec2(1280.0, 1000.0));
     for _ in 0..3 {
         h.run();
     }

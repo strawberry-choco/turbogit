@@ -6,7 +6,7 @@
 //! transitions: the Commit window's flat staging file list (per-repo section
 //! headers and Stage all / Unstage all removed by issue 07 — staging lives in
 //! the per-file checkboxes), the diff viewer's hunk collapsing, per-hunk
-//! staged state in the hunk header, and the staged-hunk chip rail.
+//! staged state in the hunk header.
 
 use std::path::{Path, PathBuf};
 
@@ -71,15 +71,6 @@ fn staged_contains(repo: &Repo, needle: &str) -> bool {
     git(&repo.path, &["diff", "--cached", "--name-only"]).contains(needle)
 }
 
-/// Poll until `needle` is painted, running frames while waiting (async ops
-/// complete only through drained frames).
-fn wait_until_painted(h: &mut Harness<'_, AppState>, ms: u64, needle: &str) -> bool {
-    wait_until(ms, || {
-        h.run();
-        painted_text(h).join("\n").contains(needle)
-    })
-}
-
 // ------------------------------------------- UNSTAGED / STAGED sections ----
 
 #[test]
@@ -112,8 +103,7 @@ fn file_list_paints_flat_rows_without_section_headers_or_hunk_counts() {
 
     // Issue 05: hunk counts moved out of file rows into the diff header —
     // the old per-row badges ("1 hunk" galley, staged "1/1" ratio) no longer
-    // paint. (The staged-hunks rail still legitimately paints "1 hunk
-    // staged" for other.txt, so assert on the exact badge galleys.)
+    // paint, so each is asserted by its own galley.
     assert!(
         galley_origin(&h, "1 hunk").is_none(),
         "the unstaged row badge must be gone"
@@ -190,10 +180,10 @@ fn hunks_collapse_and_expand_on_demand() {
     assert_painted(&h, ALPHA_ADD);
 }
 
-// ---------------------------------------- staged-hunk chip rail -------------
+// ------------------------------ a hunk header names its own staged state ----
 
 #[test]
-fn the_rail_counts_staged_hunks_and_the_headers_name_their_state() {
+fn hunk_headers_name_their_own_staged_state() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "hunk-state");
     seed_two_hunk_edit(&repo);
@@ -213,16 +203,7 @@ fn the_rail_counts_staged_hunks_and_the_headers_name_their_state() {
         git(&repo.path, &["diff", "--cached", "--name-only"]),
         painted_text(&h).join("\n")
     );
-    assert!(
-        wait_until_painted(&mut h, 15_000, "1 hunk staged"),
-        "the rail must count the staged hunk"
-    );
-
     let text = painted_text(&h).join("\n");
-    assert!(
-        text.contains("code.rs @@1") && !text.contains("(part)"),
-        "the rail must chip the fully staged hunk without a part marker, got:\n{text}"
-    );
     // The header's own staged readout is back, and it is aggregated from the
     // per-line oracle rather than from span overlap. Which hunk says what is
     // matched by row, not by count: the galleys are the painted order, so the
@@ -261,6 +242,16 @@ fn the_rail_counts_staged_hunks_and_the_headers_name_their_state() {
         "and the untouched hunk answers none of them staged, got {:?}",
         named_at(rows[1].0)
     );
+    // Ordered after the two asserts above on purpose. `painted_text` reads the
+    // last run frame and `wait_until` never runs one, so those two are what
+    // prove this frame is the post-stage one. Measured against a frame that
+    // never held a staged hunk, this absence would pass with the rail still in
+    // the tree.
+    assert!(
+        !text.contains("hunk staged") && !text.contains("hunks staged"),
+        "the staged-hunk summary rail was removed deliberately, so no painted frame \
+         may count staged hunks for the reader, got:\n{text}"
+    );
     // A hunk header classifies staged-ness only, so no wording that names a
     // comparison axis may appear on it.
     for stale in ["· local", "· index", "· staged / local"] {
@@ -273,9 +264,9 @@ fn the_rail_counts_staged_hunks_and_the_headers_name_their_state() {
 }
 
 #[test]
-fn partially_staged_hunk_gets_a_part_chip() {
+fn partially_staged_hunk_names_itself_part_in_its_header() {
     let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "part-chip");
+    let repo = temp_repo(parent.path(), "part-header");
     // One hunk with two separate one-line edits (within context range).
     std::fs::write(
         repo.path.join("code.rs"),
@@ -332,21 +323,6 @@ fn partially_staged_hunk_gets_a_part_chip() {
         "both clicked lines must be staged, got:\n{}",
         git(&repo.path, &["diff", "--cached", "--", "code.rs"])
     );
-    assert!(
-        wait_until_painted(&mut h, 15_000, "1 hunk staged"),
-        "the rail must count the staged hunk"
-    );
-    let text = painted_text(&h).join("\n");
-    assert!(
-        text.contains("code.rs @@1 (part)"),
-        "a hunk with an unstaged remainder must carry the part marker, got:\n{text}"
-    );
-
-    // **Two `part` strings, two controls.** The ` (part)` above belongs to the
-    // staged-hunk chip rail in the commit window; the `· part` below belongs to the
-    // hunk header band in the preview pane. This frame has both, and neither may
-    // borrow the other's wording.
-    //
     // The header's `part` is the reason the text exists at all: muting cannot show
     // a mixed hunk. A hunk holding both states looks like a hunk holding some quiet
     // rows, and nobody can count those at a glance, so the rows go quiet and the

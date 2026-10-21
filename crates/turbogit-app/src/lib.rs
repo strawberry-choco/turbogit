@@ -18,9 +18,9 @@ pub use turbogit_engine::resolve_git_version;
 /// [`shell_writes`]; a verb that *does* git is named there, not borrowed from
 /// a module path.
 pub use turbogit_services::{
-    bulk_ops, bulk_run, cherry_across, conflict, diff_engine, history_editor, hunk_stats,
-    integrate_service, patch_apply, patch_create, remote_service, reselection, shelve_stash,
-    sync_service, tag_service,
+    bulk_ops, bulk_run, cherry_across, conflict, diff_engine, history_editor, integrate_service,
+    patch_apply, patch_create, remote_service, reselection, shelve_stash, sync_service,
+    tag_service,
 };
 
 /// The in-flight operation's owner, the one engine-api type the Shell paints:

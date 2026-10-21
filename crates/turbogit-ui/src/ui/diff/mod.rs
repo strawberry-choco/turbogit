@@ -62,9 +62,7 @@ mod model;
 mod panes;
 mod view;
 
-pub(crate) use actions::{
-    chip_button, preview_caret_line, preview_hunk_count, preview_line_counts,
-};
+pub(crate) use actions::{preview_caret_line, preview_hunk_count, preview_line_counts};
 pub use view::render_diff;
 
 // Re-exported here so the historical `ui::diff` paths keep resolving

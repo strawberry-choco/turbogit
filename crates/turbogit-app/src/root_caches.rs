@@ -161,8 +161,8 @@ pub struct RootCaches {
     /// belongs to is invalidated. A root-wide or surface-wide flag is refused
     /// for the same reason the log refuses one. A repository nobody has
     /// committed in fails only the `HEAD ↔ worktree` read while both
-    /// index-facing reads answer, and a single flag would black out the chip
-    /// rail and the per-line oracle to report one dead read.
+    /// index-facing reads answer, and a single flag would black out the per-line
+    /// oracle to report one dead read.
     diff_failed: HashMap<(RootId, StatsView), String>,
     /// Ahead/behind of each root's current branch vs its upstream (Epic D3).
     ahead_behind: HashMap<RootId, (usize, usize)>,
@@ -365,8 +365,9 @@ fn batch_within(
 }
 
 /// The three working-tree diff views of one root, parsed into per-file hunk
-/// spans (issue 20): hunk-count badges, per-hunk staged state, and the
-/// staged-hunk chip rail all read from this one snapshot.
+/// spans (issue 20): the per-line staged oracle and a whole-hunk click's
+/// resolution of the displayed hunk into section hunks both read from this one
+/// snapshot.
 #[derive(Clone, Debug, Default)]
 pub struct RootHunkStats {
     /// HEAD↔worktree (`git diff HEAD`): every change, staged or not.
@@ -966,14 +967,14 @@ impl RootCaches {
     /// recorded failure in `Self::diff_failed`, never an empty patch dressed
     /// up as an answer. A repository nobody has committed in is this fill's
     /// steady state, not a corner case: the `HEAD`-facing read refuses there
-    /// while both index-facing reads answer, so the badges, the staged-hunk
-    /// rail and the per-line oracle keep their real data and only the
-    /// HEAD-facing view is marked failed. Blanking the answered views for one
-    /// dead read is the surface-wide collapse the log rule above refuses, and
-    /// suppressing the entry entirely would make the honest-looking absence of
-    /// a badge indistinguishable from a measured zero. A surface that displays
-    /// a view consults the view's record before it displays anything built
-    /// from it ([`AppState::failed_view_message`](crate::state::AppState::failed_view_message));
+    /// while both index-facing reads answer, so the spans and the per-line
+    /// oracle keep their real data and only the HEAD-facing view is marked
+    /// failed. Blanking the answered views for one dead read is the
+    /// surface-wide collapse the log rule above refuses. The entry is one
+    /// value, so dropping it on a partial failure would take the two views
+    /// that did answer down with it. A surface that displays a view consults
+    /// the view's record before it displays anything built from it
+    /// ([`AppState::failed_view_message`](crate::state::AppState::failed_view_message));
     /// a `staged` or `local` failure additionally means `line_sets` saw an
     /// empty patch for that half, which is what the record is for there too.
     pub fn ensure_hunk_stats(&mut self, exec: &dyn GitExecutor, root: &RootId) {

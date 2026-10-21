@@ -131,54 +131,6 @@ pub(super) fn diff_options_menu(ui: &mut Ui, state: &mut AppState) -> bool {
 
 // --- toolbar widgets ---------------------------------------------------------
 
-/// Pill-shaped selectable chip: selected = solid BRAND with brand ink,
-/// unselected = SURFACE_3 with muted ink that brightens on hover. Also
-/// serves the staged-hunk chip rail (issue 20).
-pub(crate) fn chip_button(ui: &mut Ui, label: &str, selected: bool) -> Response {
-    // The shared chip height at button padding: this one is clickable, so it
-    // takes the same horizontal padding as every other control and as
-    // `widgets::segmented_control` (conformance issue 05).
-    let pad_x = crate::theme::BUTTON_PADDING.x;
-    let font_id = crate::theme::chrome_font(crate::theme::TYPE_CONTROL);
-
-    let idle_fg = if selected {
-        Palette::BRAND_INK
-    } else {
-        Palette::INK_2
-    };
-    let measured = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), font_id.clone(), idle_fg);
-    let geometry = widgets::ChipGeometry {
-        height: widgets::CHIP_HEIGHT,
-        pad_x,
-        radius: widgets::CHIP_GEOMETRY.radius,
-    };
-    let size = geometry.size(&measured);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let id = ui.id().with(("diff-chip", label));
-    let response = ui.interact(rect, id, Sense::click());
-
-    let bg = if selected {
-        Palette::BRAND
-    } else {
-        Palette::SURFACE_3
-    };
-    let fg = if selected || response.hovered() {
-        if selected {
-            Palette::BRAND_INK
-        } else {
-            Palette::INK
-        }
-    } else {
-        Palette::INK_2
-    };
-    geometry.paint(ui.painter(), rect, measured, bg, fg);
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
-    widgets::focus_ring(ui, &response);
-    response
-}
-
 /// Hunk navigation ‹ n/N › (spec §8.4). Stepping clamps to [0, total):
 /// Previous never goes above the first hunk, Next never past the last.
 pub(super) fn hunk_nav(ui: &mut Ui, state: &mut AppState, total_hunks: usize) {

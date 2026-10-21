@@ -57,7 +57,7 @@ use egui::{
 };
 use std::path::{Path, PathBuf};
 use turbogit_app::granular;
-use turbogit_app::root_caches::{Affected, StatsView};
+use turbogit_app::root_caches::Affected;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
 use turbogit_domain::model::{Change, ChangeStatus, DisplayName, Root, RootId};
@@ -256,9 +256,10 @@ fn has_staged_changes(state: &AppState) -> bool {
 }
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    // Hunk-span statistics (issue 20) feed the per-file hunk badges and the
-    // staged-hunk rail; computed on miss through the engine the app owns, keyed
-    // per root and invalidated with the other root caches.
+    // Hunk-span statistics (issue 20) feed the diff pane's per-hunk staged state
+    // and a whole-hunk click's resolution to index-facing section hunks; computed
+    // on miss through the engine the app owns, keyed per root and invalidated
+    // with the other root caches.
     if let Some(root_id) = state.selected_root.clone() {
         state.ensure_hunk_stats(&root_id);
     }
@@ -1723,63 +1724,7 @@ fn changes_header_overflow(trigger: &egui::Response) {
 
 // --------------------------------------------- preview + editor pane ------
 
-/// The staged-hunk summary rail (issue 20, screen 06): "N hunks staged"
-/// plus one chip per staged hunk of the selected root's files —
-/// "file @@start", with " (part)" when an unstaged remainder overlaps the
-/// staged hunk's region. A chip click previews that file. Rendered only
-/// when at least one hunk is staged.
-fn staged_hunks_rail(ui: &mut Ui, state: &mut AppState) {
-    use turbogit_app::hunk_stats;
-    let Some(root_id) = state.selected_root.clone() else {
-        return;
-    };
-    let Some(stats) = state.caches.hunk_stats(&root_id) else {
-        return;
-    };
-    // Collect the chips first — rendering the clicks needs `&mut state`.
-    let mut total = 0usize;
-    let mut chips: Vec<(String, PathBuf)> = Vec::new();
-    for f in &stats.staged {
-        if f.hunks.is_empty() {
-            continue;
-        }
-        let local = stats
-            .file(StatsView::Local, Path::new(&f.path))
-            .map(|lf| lf.hunks.as_slice())
-            .unwrap_or(&[]);
-        let name = Path::new(&f.path).display_name_lossy_or(&f.path);
-        for s in &f.hunks {
-            total += 1;
-            let part = if hunk_stats::staged_hunk_partial(s, local) {
-                " (part)"
-            } else {
-                ""
-            };
-            chips.push((
-                format!("{name} @@{}{part}", s.old_start),
-                PathBuf::from(&f.path),
-            ));
-        }
-    }
-    if total == 0 {
-        return;
-    }
-    ui.colored_label(
-        Palette::BRAND,
-        format!("{} staged", components::counted(total, "hunk", "hunks")),
-    );
-    ui.horizontal_wrapped(|ui| {
-        for (label, path) in chips {
-            if crate::ui::diff::chip_button(ui, &label, false).clicked() {
-                state.ui.preview_change = Some(path);
-            }
-        }
-    });
-    ui.add_space(4.0);
-}
-
 fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
-    staged_hunks_rail(ui, state);
     // Redesign Phase 4 (mockup): the preview is a full-height card whose
     // header states what is previewed and in which mode, so the
     // selection→preview link reads off the frame instead of hiding in the
@@ -1933,8 +1878,8 @@ fn change_nav(ui: &mut Ui, state: &mut AppState, path: &Path) {
 /// pretends to be a button.
 fn pill(ui: &mut Ui, label: &str, tint: Color32) {
     // The shared chip height at the compact-density padding: this roundel is a
-    // quiet label, not a control, so it is tighter than `chip_button` and
-    // looser than a badge (conformance issue 05).
+    // quiet label, not a control, so it takes the compact padding rather than
+    // a control's (conformance issue 05).
     let pad_x = crate::theme::DENSITY_COMPACT_BUTTON.x;
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),

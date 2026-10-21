@@ -119,11 +119,8 @@ impl HunkStaging {
     ///
     /// This text exists because muting cannot show a mixed hunk: a hunk holding
     /// both states looks like a hunk holding some quiet rows, and nobody can count
-    /// those at a glance. Spelled `· part`, and it is **not** the staged-hunk chip's
-    /// ` (part)` in `commit_window.rs`. That one labels a chip in the commit
-    /// window's index list, this one labels a hunk header on the diff screen: two
-    /// controls with two wordings, so one shared constant cannot serve both
-    /// without renaming the label the other shows.
+    /// those at a glance. So the rows go quiet and the header says what the paint
+    /// cannot, spelled `· part`.
     fn suffix(self) -> Option<&'static str> {
         match self {
             Self::Staged => Some("· staged"),

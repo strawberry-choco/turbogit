@@ -450,11 +450,12 @@ are on screen in one view, and the row's *state* is the role that paint owns.
   says which pane holds the reader's position. It stays `Palette::ACCENT` at
   `CARET_WIDTH` on both states' bands, and `CARET_WIDTH` stays a separate token from
   `RAIL_WIDTH` for the reason already written on it.
-- **Two `part` strings, two controls.** The hunk header's `· staged` / `· part` /
+- **The hunk header owns the only `part`.** Its `· staged` / `· part` /
   `· not staged` suffix names one hunk's state in the preview pane, aggregated from
-  the per-line oracle. The commit window's staged-hunk chip ` (part)` is a different
-  control in a different surface and its wording is untouched. They are never merged
-  and neither is a spelling of the other.
+  the per-line oracle. It is suffixed text on a header band, not a control, and it
+  is the app's one spelling of a mixed hunk: a surface that needs a hunk's own
+  state points at this suffix rather than adding a second wording. The whole-file
+  checkbox's `(partially staged)` is a file's word and is not governed here.
 - **A row's accessibility label states its state, never the consequence of the
   click.** The label is the row's text plus `(staged)`, `(unstaged)`, or
   `(staged-ness unknown)`, in the parenthetical vocabulary the whole-file checkbox's

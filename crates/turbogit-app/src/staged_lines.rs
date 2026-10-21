@@ -1026,9 +1026,8 @@ pub fn section_as_patch(sets: &FileLineSets, source: Source) -> Option<Patch> {
 /// displayed hunk's `new_start`. The other pair of numbers names a different
 /// revision on each side and would compare an index line against a HEAD one.
 ///
-/// Zero-length ranges stand for the single point at their start line, the same
-/// convention [`turbogit_services::hunk_stats::staged_hunk_partial`] uses for a
-/// pure insertion, so an added line still touches the hunk it was added inside.
+/// Zero-length ranges stand for the single point at their start line, so a pure
+/// insertion still touches the hunk it was added inside.
 #[must_use]
 pub fn covered_hunks(
     sets: &[FileLineSets],
