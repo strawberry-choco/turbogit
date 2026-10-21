@@ -12,7 +12,6 @@
 //! through the production read, so the rows these tests ask about are the rows
 //! the pane paints, gutter numbers and all.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -745,19 +744,12 @@ fn an_unmerged_path_answers_nothing_although_its_markers_are_ordinary_rows() {
 }
 
 #[test]
-fn a_binary_change_and_a_mode_only_change_answer_nothing() {
+fn a_binary_change_answers_no_line_in_either_space() {
     let parent = tempfile::tempdir().unwrap();
     let repo = repo_with_one_commit(parent.path(), "no-lines");
-    commit(&repo, "script.sh", "echo hi\n", "script");
     commit(&repo, "data.bin", "one\n", "bin");
     std::fs::write(repo.join("data.bin"), [0u8, 1, 2, 0, 3]).unwrap();
     git(&repo, &["add", "--", "data.bin"]);
-    std::fs::set_permissions(
-        repo.join("script.sh"),
-        std::fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
-    git(&repo, &["add", "--", "script.sh"]);
 
     let mut state = app_state(parent.path(), &repo);
     let binary = combined_value(&mut state, &repo, "data.bin");
@@ -767,28 +759,7 @@ fn a_binary_change_and_a_mode_only_change_answer_nothing() {
         geometry(&binary.model)
     );
 
-    let stats = stats(&mut state, &repo);
-    for rel in ["data.bin", "script.sh"] {
-        let entry = staged_lines::find(&stats.line_sets, Path::new(rel))
-            .expect("both paths are listed in the staged patch");
-        assert!(
-            entry.staged.added.is_empty()
-                && entry.staged.removed.is_empty()
-                && entry.local.added.is_empty()
-                && entry.local.removed.is_empty(),
-            "{rel} numbers no line in either space"
-        );
-        assert_eq!(
-            stats.row_is_staged(Path::new(rel), &row_at(RowKind::Add, 0, 1)),
-            None,
-            "an empty added set is not a claim that line 1 is staged: {rel}"
-        );
-        assert_eq!(
-            stats.row_is_staged(Path::new(rel), &row_at(RowKind::Del, 1, 0)),
-            None,
-            "{rel}"
-        );
-    }
+    assert_numbers_no_line(&mut state, &repo, "data.bin");
 
     let graded = git_states(&repo, "data.bin");
     assert_eq!(graded.porcelain, "M  data.bin");
@@ -797,18 +768,68 @@ fn a_binary_change_and_a_mode_only_change_answer_nothing() {
         "git's own marker, got: {}",
         graded.staged
     );
-    let mode_states = git_states(&repo, "script.sh");
-    assert_eq!(mode_states.porcelain, "M  script.sh");
+}
+
+/// A file mode is a POSIX concept, so this fixture sets the bit where git can
+/// record it. What the oracle and the pane actually consume, a mode-only
+/// section with no hunk, is pinned on every platform by the synthetic
+/// `old mode`/`new mode` patch in `diff_display_shapes.rs`.
+#[cfg(unix)]
+#[test]
+fn a_mode_only_change_answers_no_line_in_either_space() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = tempfile::tempdir().unwrap();
+    let repo = repo_with_one_commit(parent.path(), "mode-only");
+    commit(&repo, "script.sh", "echo hi\n", "script");
+    std::fs::set_permissions(
+        repo.join("script.sh"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(&repo, &["add", "--", "script.sh"]);
+
+    let mut state = app_state(parent.path(), &repo);
+    assert_numbers_no_line(&mut state, &repo, "script.sh");
+
+    let graded = git_states(&repo, "script.sh");
+    assert_eq!(graded.porcelain, "M  script.sh");
     assert!(
-        mode_states.staged.contains("new mode 100755"),
+        graded.staged.contains("new mode 100755"),
         "git's own mode headers, got: {}",
-        mode_states.staged
+        graded.staged
     );
     assert!(
-        !mode_states.staged.contains("@@"),
-        "a mode-only section carries no hunk, so the pane can show no row and no \
-         line of it has a number in any space: {}",
-        mode_states.staged
+        !graded.staged.contains("@@"),
+        "a mode-only section carries no hunk, so no line of it has a number in \
+         any space: {}",
+        graded.staged
+    );
+}
+
+/// Every per-line answer for `rel` says no line in either space. The section is
+/// listed, its sets are empty, and an empty set is never a claim that some line
+/// is staged.
+fn assert_numbers_no_line(state: &mut AppState, repo: &Path, rel: &str) {
+    let stats = stats(state, repo);
+    let entry = staged_lines::find(&stats.line_sets, Path::new(rel))
+        .unwrap_or_else(|| panic!("{rel} is listed in the staged patch"));
+    assert!(
+        entry.staged.added.is_empty()
+            && entry.staged.removed.is_empty()
+            && entry.local.added.is_empty()
+            && entry.local.removed.is_empty(),
+        "{rel} numbers no line in either space"
+    );
+    assert_eq!(
+        stats.row_is_staged(Path::new(rel), &row_at(RowKind::Add, 0, 1)),
+        None,
+        "an empty added set is not a claim that line 1 is staged: {rel}"
+    );
+    assert_eq!(
+        stats.row_is_staged(Path::new(rel), &row_at(RowKind::Del, 1, 0)),
+        None,
+        "{rel}"
     );
 }
 
