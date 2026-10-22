@@ -423,15 +423,12 @@ fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
 /// line. A pane with no numbered row at the caret — an insertion read as the
 /// `Before` side — has no line to jump to, and the key does nothing.
 fn jump_to_source(state: &mut AppState) {
-    let Some(root) = state.selected_root.clone() else {
-        return;
-    };
-    let Some((path, line)) = super::diff::preview_caret_line(state) else {
+    let Some((change, line)) = super::diff::preview_caret_line(state) else {
         return;
     };
     state.ui.blame = Some(turbogit_app::state::BlameTarget {
-        root,
-        path,
+        root: change.root,
+        path: change.path,
         rev: "HEAD".to_owned(),
     });
     state.ui.blame_caret_line = Some(line);

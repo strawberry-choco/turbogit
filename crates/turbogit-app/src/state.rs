@@ -1295,7 +1295,7 @@ impl DiffPane {
 /// release, so there is nothing for a key to clear.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CharDrag {
-    pub path: PathBuf,
+    pub change: ChangeRef,
     /// The pane's hunk index of the row the press landed on. Identity only: the
     /// draft is matched against the row the pointer is still over.
     pub hunk: usize,
@@ -1706,8 +1706,10 @@ pub struct UiState {
     /// [`crate::create_patch::apply_created`] or
     /// [`crate::create_patch::dismiss_created`] runs.
     pub patch_created: Option<PatchCreated>,
-    // commit-tab inline diff preview (Epic C3)
-    pub preview_change: Option<PathBuf>,
+    // commit-tab inline diff preview (Epic C3). The change list aggregates every
+    // registered root, so the previewed row carries the root it belongs to: a
+    // repo-relative path alone cannot say which repository to read it from.
+    pub preview_change: Option<ChangeRef>,
     // diff viewer (Epic E: async cache + layout)
     /// The diff read's value: one comparison's key and the patch text with its
     /// display model, settled by [`crate::keyed_read`], which is the only code
@@ -1755,15 +1757,15 @@ pub struct UiState {
     /// inside [`crate::diff_data::EDGE_WINDOW`] crosses to the adjacent
     /// changed file; anything else re-arms.
     pub hunk_nav_armed_edge: Option<(crate::diff_data::Dir, std::time::Instant)>,
-    /// The preview path a granular stage/unstage was last dispatched for
-    /// (spec R2 story 9). Consumed by the op-completion handler to decide
-    /// whether the file just left the changelist.
-    pub pending_granular: Option<PathBuf>,
-    /// Paths whose last granular op completed with nothing unstaged left
+    /// The change a granular stage/unstage was last dispatched for (spec R2
+    /// story 9). Consumed by the op-completion handler to decide whether the file
+    /// just left the changelist.
+    pub pending_granular: Option<ChangeRef>,
+    /// Changes whose last granular op completed with nothing unstaged left
     /// (spec R2 story 9): they stop being listed in the changelist buckets.
     /// Ephemeral by design — entries drop as soon as the path regains
     /// unstaged changes or disappears from status entirely.
-    pub granularly_completed: HashSet<PathBuf>,
+    pub granularly_completed: HashSet<ChangeRef>,
     /// The character-range drag in flight on the previewed diff, or `None`
     /// whenever no pointer is down on a row. A release either stages its
     /// range or leaves nothing at all, so this never outlives the gesture.
@@ -3872,6 +3874,7 @@ impl AppState {
         self.project_dir = dir.to_path_buf();
         self.multi = MultiRootManager::default();
         self.selected_root = None;
+        self.ui.preview_change = None;
         self.ui.workspace_picker_open = false;
         // Drop every cache entry: the old project's roots must not leak into
         // the new one (bug fix — only logs/ahead-behind were cleared before).
@@ -3892,6 +3895,7 @@ impl AppState {
         self.project_dir = dir.to_path_buf();
         self.multi = MultiRootManager::default();
         self.selected_root = None;
+        self.ui.preview_change = None;
         self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
         self.worktree.clear();
@@ -3972,6 +3976,10 @@ impl AppState {
     pub fn close_all_projects(&mut self) {
         self.multi = MultiRootManager::default();
         self.selected_root = None;
+        // These three sites replace every registered root, so a previewed change
+        // held here would name a root that no longer exists — and a preview reads
+        // its repository out of that id, never out of the focused root.
+        self.ui.preview_change = None;
         self.ui.workspace_picker_open = false;
         self.caches.invalidate_all();
         self.worktree.clear();

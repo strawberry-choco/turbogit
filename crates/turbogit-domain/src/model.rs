@@ -165,6 +165,29 @@ impl Root {
     }
 }
 
+/// One change, tied to the repository that owns it. A repo-relative path does
+/// not name a change in a multi-root workspace, because two roots can hold the
+/// same relative path.
+///
+/// Resolution goes through the root it names, and nowhere else:
+/// [`Root::resolve_change`] and [`Root::canonical_key`] stay the only owners of
+/// the path-matching and path-joining rules.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ChangeRef {
+    pub root: RootId,
+    /// Repo-relative, exactly as [`Change::path`].
+    pub path: PathBuf,
+}
+
+impl ChangeRef {
+    pub fn new(root: RootId, path: impl Into<PathBuf>) -> Self {
+        Self {
+            root,
+            path: path.into(),
+        }
+    }
+}
+
 /// Reference to a branch by name (local or fully-qualified remote).
 pub type BranchRef = String;
 

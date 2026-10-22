@@ -19,7 +19,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use test_support::git_seed::git;
 use turbogit_app::state::AppState;
-use turbogit_domain::model::VcsSettings;
+use turbogit_domain::model::{ChangeRef, RootId, VcsSettings};
 use turbogit_engine::{ApplyDirection, GitExecutor, cli::CliExecutor};
 
 // ---------------------------------------------------------------- helpers --
@@ -641,8 +641,10 @@ fn fully_staged_file_leaves_changelist_and_focus_advances_to_next_change() {
         "and its checkbox now reads fully staged"
     );
     assert!(
-        wait_until(15_000, || h.state().ui.preview_change
-            == Some(PathBuf::from("base.txt"))),
+        wait_until(15_000, || {
+            h.state().ui.preview_change
+                == Some(ChangeRef::new(RootId(repo.path.clone().into()), "base.txt"))
+        }),
         "preview focus must advance to the next changed file, got {:?}",
         h.state().ui.preview_change
     );

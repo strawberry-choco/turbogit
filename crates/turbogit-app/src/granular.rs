@@ -1,14 +1,19 @@
 //! The granular staging protocol (spec R2 stories 3/8/9) as one deep module.
 //!
-//! Callers pass pure intent — a file path plus a [`HunkTarget`] — and
-//! [`dispatch`] resolves every remaining input itself: the selected root, the
-//! change status, the appliable patch the operation is composed from, untracked
-//! routing, the op label, and the [`Affected`] scope. Missing inputs make the op
-//! a silent no-op; both call sites (the diff viewer's gutter controls and the
-//! command palette's Stage/Unstage Hunk verbs) depend on that. The module also
-//! owns completion settlement ([`settle`]), the char-range drag draft, and the
-//! refresh-scoped lifetimes ([`prune_on_refresh`], [`prune_selection_on_refresh`]);
-//! the draft itself stays physically in [`crate::state::UiState`].
+//! Callers pass pure intent — a [`ChangeRef`] plus a [`HunkTarget`] — and
+//! [`dispatch`] resolves every remaining input itself: the repository that owns
+//! the change, its status, the appliable patch the operation is composed from,
+//! untracked routing, the op label, and the [`Affected`] scope. Missing inputs
+//! make the op a silent no-op; both call sites (the diff viewer's gutter controls
+//! and the command palette's Stage/Unstage Hunk verbs) depend on that. The module
+//! also owns completion settlement ([`settle`]), the char-range drag draft, and
+//! the refresh-scoped lifetimes ([`prune_on_refresh`],
+//! [`prune_selection_on_refresh`]); the draft itself stays physically in
+//! [`crate::state::UiState`].
+//!
+//! The root travels with the change rather than being read off the focused root,
+//! because the changes list spans every registered repository: a click on a
+//! non-focused root's row would otherwise stage in the focused one.
 //!
 //! # What an operation is composed from, and what the user read
 //!
@@ -93,7 +98,7 @@ use crate::operation::Operation;
 use crate::root_caches::{Affected, StatsView};
 use crate::staged_lines::{self, Displayed, Ordinal, RowSource, Side, Source, Toggle};
 use crate::state::{AppState, CharDrag};
-use turbogit_domain::model::{ChangeStatus, Patch};
+use turbogit_domain::model::{Change, ChangeRef, ChangeStatus, Patch, RootId};
 use turbogit_services::partial::{self, HunkSelection, Selection};
 
 // --- dispatch ----------------------------------------------------------------
@@ -155,29 +160,25 @@ struct Planned {
 /// Every `None` on this path is the silent no-op a cold cache or an
 /// unanswerable row is supposed to produce, not an error: a conflicted, untracked,
 /// binary, rename-section or context row simply has no operation to make.
-fn plan(state: &AppState, path: &Path, target: &HunkTarget) -> Vec<Planned> {
-    let root = match state.selected_root.as_ref() {
-        Some(root) => root.clone(),
-        None => return Vec::new(),
-    };
-    let (status, keyed) = match change_of(state, path) {
-        Some(pair) => pair,
+fn plan(state: &AppState, change: &ChangeRef, target: &HunkTarget) -> Vec<Planned> {
+    let (status, keyed) = match change_of(state, &change.root, &change.path) {
+        Some(found) => (found.status, found.path.clone()),
         // An unlisted path keeps the fallback the status resolver gives the
         // controls, and its own spelling for the caches to miss on.
-        None => (ChangeStatus::Modified, path.to_path_buf()),
+        None => (ChangeStatus::Modified, change.path.clone()),
     };
     if status == ChangeStatus::Unversioned && target_is_a_stage(target) {
-        return plan_untracked(state, path, target);
+        return plan_untracked(state, change, target);
     }
-    let Some(stats) = state.caches.hunk_stats(&root) else {
+    let Some(stats) = state.caches.hunk_stats(&change.root) else {
         return Vec::new();
     };
     // The retained sections are keyed by git's `b/` side, repo-relative with
-    // forward slashes, while the caller's path can be either spelling: the
-    // changelist hands repo-relative paths and `ui::diff`'s own entry points hand
-    // absolute ones. Asking the caches with the absolute spelling would answer
-    // `PathAbsent` and turn every click in that pane into a silent no-op, so the
-    // resolution above is what the lookup is keyed on, not `path`.
+    // forward slashes, while a ref's path can be either spelling: the changes list
+    // hands the repo-relative form and an injected preview hands an absolute one.
+    // Asking the caches with the absolute spelling would answer `PathAbsent` and
+    // turn every click in that pane into a silent no-op, so the resolution above is
+    // what the lookup is keyed on, not `change.path`.
     let path = keyed.as_path();
     let Some(file) = staged_lines::find(&stats.line_sets, path) else {
         return Vec::new();
@@ -325,15 +326,15 @@ fn target_is_a_stage(target: &HunkTarget) -> bool {
 /// to that path. Its rows are all `+`, so the ordinal is read out of the same
 /// section by [`locate_line`], and staging it goes through intent-to-add exactly
 /// as it did before the preview was pinned.
-fn plan_untracked(state: &AppState, path: &Path, target: &HunkTarget) -> Vec<Planned> {
-    let Some(root) = state.selected_path() else {
+fn plan_untracked(state: &AppState, change: &ChangeRef, target: &HunkTarget) -> Vec<Planned> {
+    let Some(root) = state.multi.by_id(&change.root) else {
         return Vec::new();
     };
     let Some(patch) = state
         .peek(DiffTarget::working_tree(
-            root,
+            root.id.as_path().to_path_buf(),
             state.ui.diff_policies,
-            Some(path.to_path_buf()),
+            Some(change.path.clone()),
         ))
         .map(|value| value.patch.clone())
     else {
@@ -419,18 +420,15 @@ fn select(hunk: usize, body: HunkSelection) -> Selection {
 /// click would cost one more 14.5 ms, which is what any two clicks already pay.
 ///
 /// Missing inputs make the verb a silent no-op, which is the palette contract.
-pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget) {
-    let ops = plan(state, &path, &target);
+pub fn dispatch(state: &mut AppState, change: ChangeRef, target: HunkTarget) {
+    let ops = plan(state, &change, &target);
     if ops.is_empty() {
         return;
     }
-    let Some(root) = state.selected_root.clone() else {
-        return;
-    };
-    let status = change_status(state, &path);
-    // Story 9: remember which file the op targeted so completion can decide
+    let status = status_of(state, &change.root, &change.path);
+    // Story 9: remember which change the op targeted so completion can decide
     // exclusions/focus with fresh status.
-    state.ui.pending_granular = Some(path.clone());
+    state.ui.pending_granular = Some(change.clone());
     for op in ops {
         let Planned {
             patch,
@@ -439,8 +437,8 @@ pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget) {
             stage,
             untracked,
         } = op;
-        let root = root.clone();
-        let path = path.clone();
+        let root = change.root.clone();
+        let path = change.path.clone();
         state.dispatch(Operation::custom(
             label,
             Affected::Root(root.clone()),
@@ -469,38 +467,31 @@ pub fn dispatch(state: &mut AppState, path: PathBuf, target: HunkTarget) {
     }
 }
 
-/// The previewed path's [`ChangeStatus`] via the canonical resolver; an
-/// unlisted or absent path falls back to [`ChangeStatus::Modified`] — controls
+/// The previewed change's [`ChangeStatus`] via the canonical resolver; an
+/// unlisted or absent change falls back to [`ChangeStatus::Modified`] — controls
 /// stay enabled and the engine seam remains the final authority.
-pub fn preview_status(state: &AppState, path: Option<&Path>) -> ChangeStatus {
-    let Some(path) = path else {
+pub fn preview_status(state: &AppState, change: Option<&ChangeRef>) -> ChangeStatus {
+    let Some(change) = change else {
         return ChangeStatus::Modified;
     };
-    change_status(state, path)
+    status_of(state, &change.root, &change.path)
 }
 
-/// The path's [`ChangeStatus`] via the canonical resolver; unlisted paths
-/// fall back to [`ChangeStatus::Modified`] (same rule as the viewer's
-/// resolution).
-fn change_status(state: &AppState, path: &Path) -> ChangeStatus {
-    change_of(state, path)
-        .map(|(status, _)| status)
+/// One named root's path's [`ChangeStatus`] via the canonical resolver; an
+/// unlisted path falls back to [`ChangeStatus::Modified`] (same rule as the
+/// viewer's resolution).
+pub fn status_of(state: &AppState, root: &RootId, path: &Path) -> ChangeStatus {
+    change_of(state, root, path)
+        .map(|change| change.status)
         .unwrap_or(ChangeStatus::Modified)
 }
 
-/// The path's status and its repo-relative spelling, as the selected root's
-/// change entry reports them.
+/// The change entry `path` names inside `root`, in either of its spellings.
 ///
-/// The second half is what the caches are keyed on: a caller may hand an absolute
-/// path (the diff pane's own `ui::diff` entry points) or a repo-relative one (the
-/// changelist), and only one of those matches git's `b/` side.
-fn change_of(state: &AppState, path: &Path) -> Option<(ChangeStatus, PathBuf)> {
-    let root = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))?;
-    let change = root.resolve_change(path)?;
-    Some((change.status, change.path.clone()))
+/// The caller may hand an absolute path (an injected preview) or a repo-relative
+/// one (a row click), and only one of those is what the caches are keyed on.
+fn change_of<'a>(state: &'a AppState, root: &RootId, path: &Path) -> Option<&'a Change> {
+    state.multi.by_id(root)?.resolve_change(path)
 }
 
 // --- completion settlement (spec R2 story 9) ----------------------------------
@@ -513,26 +504,28 @@ fn change_of(state: &AppState, path: &Path) -> Option<(ChangeStatus, PathBuf)> {
 /// the combined preview never empties, because a row click cannot change
 /// `git diff HEAD`, so nothing about the pane tells the app the file is finished.
 /// [`is_fully_staged`] asks git's status instead, which is what the flat list's
-/// buckets are keyed on, and the exclusion is stored under the absolute
-/// bucket-key form the builders compare (root join), whatever form `path` arrived
-/// in. The follow-up preview is computed BEFORE inserting the exclusion — the
-/// search already skips `key` itself via its `just_finished` comparisons, so the
-/// ordering is equivalent and `key` can then move. If the finished file was being
-/// previewed, focus advances to the next changed file in display order
-/// (Default → Unversioned → Conflicts, skipping exclusions) or clears.
+/// buckets are keyed on, and the exclusion is stored as the change's own
+/// identity — root plus the repo-relative spelling the entry carries, whatever
+/// spelling the click arrived in. The follow-up preview is computed BEFORE
+/// inserting the exclusion — the search already skips the finished change via its
+/// `just_finished` comparison, so the ordering is equivalent and the exclusion can
+/// then move. If the finished file was being previewed, focus advances to the next
+/// changed file of that root in display order (Default → Unversioned → Conflicts,
+/// skipping exclusions) or clears.
 pub(crate) fn settle(state: &mut AppState) {
-    let Some(path) = state.ui.pending_granular.take() else {
+    let Some(pending) = state.ui.pending_granular.take() else {
         return;
     };
-    let Some(key) = granular_key(state, &path) else {
+    let Some(change) = change_of(state, &pending.root, &pending.path) else {
         return;
     };
-    if !is_fully_staged(state, &path) {
+    let change = ChangeRef::new(pending.root.clone(), change.path.clone());
+    if !is_fully_staged(state, &change) {
         return;
     }
-    let next_preview = next_preview_candidate(state, &key);
-    state.ui.granularly_completed.insert(key);
-    if state.ui.preview_change.as_ref() == Some(&path) {
+    let next_preview = next_preview_candidate(state, &change);
+    state.ui.granularly_completed.insert(change.clone());
+    if state.ui.preview_change.as_ref() == Some(&change) {
         state.ui.preview_change = next_preview;
     }
 }
@@ -543,38 +536,17 @@ pub(crate) fn on_op_failed(state: &mut AppState) {
     state.ui.pending_granular = None;
 }
 
-/// The absolute bucket-key form of `path` (repo-relative or absolute),
-/// when it currently appears in the selected root's changes.
-fn granular_key(state: &AppState, path: &Path) -> Option<PathBuf> {
-    let root = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))?;
-    root.resolve_change(path).map(|c| root.canonical_key(c))
+/// Whether the change, resolved through the root that owns it, currently has
+/// staged content and no unstaged counterpart.
+fn is_fully_staged(state: &AppState, change: &ChangeRef) -> bool {
+    change_of(state, &change.root, &change.path).is_some_and(|c| c.staged && !c.unstaged)
 }
 
-/// Whether `path` (repo-relative or absolute, matching the viewer's
-/// resolution) currently has staged content and no unstaged counterpart.
-fn is_fully_staged(state: &AppState, path: &Path) -> bool {
-    let Some(root) = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-    else {
-        return false;
-    };
-    root.resolve_change(path)
-        .is_some_and(|c| c.staged && !c.unstaged)
-}
-
-/// First changed file of the selected root that is still listed — same
+/// First changed file of the finished change's root that is still listed — same
 /// bucket order as the Commit window (Default → Unversioned → Conflicts)
-/// — skipping excluded paths and `just_finished`.
-fn next_preview_candidate(state: &AppState, just_finished: &Path) -> Option<PathBuf> {
-    let root = state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))?;
+/// — skipping exclusions and `just_finished`.
+fn next_preview_candidate(state: &AppState, just_finished: &ChangeRef) -> Option<ChangeRef> {
+    let root = state.multi.by_id(&just_finished.root)?;
     let rank = |s: ChangeStatus| match s {
         ChangeStatus::Conflicted => 2,
         ChangeStatus::Unversioned => 1,
@@ -588,15 +560,14 @@ fn next_preview_candidate(state: &AppState, just_finished: &Path) -> Option<Path
             .filter(|c| c.status != ChangeStatus::Ignored)
             .find(|c| {
                 rank(c.status) == target
+                    && c.path != just_finished.path
                     && !state
                         .ui
                         .granularly_completed
-                        .contains(&root.canonical_key(c))
-                    && c.path != just_finished
-                    && root.canonical_key(c) != just_finished
+                        .contains(&ChangeRef::new(root.id.clone(), c.path.clone()))
             })
         {
-            return Some(c.path.clone());
+            return Some(ChangeRef::new(root.id.clone(), c.path.clone()));
         }
     }
     None
@@ -608,10 +579,10 @@ fn next_preview_candidate(state: &AppState, just_finished: &Path) -> Option<Path
 ///
 /// The row is addressed by its kind and its two gutters, which is what
 /// [`crate::staged_lines`] translates into whichever appliable section its
-/// staged-ness names. A silent no-op without a previewed path, or for a row the
+/// staged-ness names. A silent no-op without a previewed change, or for a row the
 /// oracle cannot answer.
-pub fn toggle_row(state: &mut AppState, path: &Option<PathBuf>, row: &Row) {
-    let Some(p) = path.clone() else {
+pub fn toggle_row(state: &mut AppState, change: &Option<ChangeRef>, row: &Row) {
+    let Some(p) = change.clone() else {
         return;
     };
     dispatch(state, p, HunkTarget::Row(row.kind, row.old_no, row.new_no));
@@ -626,17 +597,17 @@ pub fn toggle_row(state: &mut AppState, path: &Option<PathBuf>, row: &Row) {
 /// the number the operation is addressed by.
 pub fn begin_char_drag(
     state: &mut AppState,
-    path: &Option<PathBuf>,
+    change: &Option<ChangeRef>,
     hunk: usize,
     ord: usize,
     new_no: usize,
     anchor: usize,
 ) {
-    let Some(p) = path else {
+    let Some(p) = change else {
         return;
     };
     state.ui.char_drag = Some(CharDrag {
-        path: p.clone(),
+        change: p.clone(),
         hunk,
         ord,
         new_no,
@@ -651,13 +622,13 @@ pub fn begin_char_drag(
 /// positions).
 pub fn extend_char_drag(
     state: &mut AppState,
-    path: &Option<PathBuf>,
+    change: &Option<ChangeRef>,
     hunk: usize,
     ord: usize,
     cur: usize,
 ) {
     if let Some(draft) = state.ui.char_drag.as_mut()
-        && Some(&draft.path) == path.as_ref()
+        && Some(&draft.change) == change.as_ref()
         && draft.hunk == hunk
         && draft.ord == ord
     {
@@ -674,7 +645,7 @@ pub fn extend_char_drag(
 /// so the caller must know which one ran or a char drag also stages its line.
 pub fn finish_char_drag(
     state: &mut AppState,
-    path: &Option<PathBuf>,
+    change: &Option<ChangeRef>,
     hunk: usize,
     ord: usize,
 ) -> bool {
@@ -682,7 +653,7 @@ pub fn finish_char_drag(
         .ui
         .char_drag
         .clone()
-        .filter(|d| Some(&d.path) == path.as_ref() && d.hunk == hunk && d.ord == ord)
+        .filter(|d| Some(&d.change) == change.as_ref() && d.hunk == hunk && d.ord == ord)
     else {
         return false;
     };
@@ -693,21 +664,21 @@ pub fn finish_char_drag(
     }
     dispatch(
         state,
-        draft.path,
+        draft.change,
         HunkTarget::Chars(draft.new_no, start, end),
     );
     true
 }
 
 /// Selection-lifetime rule (refresh scope): exclusions only hold while the
-/// path is still fully staged; a new unstaged edit (or unstage, or deletion)
+/// change is still fully staged; a new unstaged edit (or unstage, or deletion)
 /// puts it back in the list.
 pub(crate) fn prune_on_refresh(state: &mut AppState) {
-    let still_fully_staged: HashSet<PathBuf> = state
+    let still_fully_staged: HashSet<ChangeRef> = state
         .ui
         .granularly_completed
         .iter()
-        .filter(|p| is_fully_staged(state, p))
+        .filter(|change| is_fully_staged(state, change))
         .cloned()
         .collect();
     state.ui.granularly_completed = still_fully_staged;

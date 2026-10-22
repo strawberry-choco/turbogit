@@ -50,6 +50,7 @@ use turbogit_app::events::AppEvent;
 use turbogit_app::keyed_read::{DiffTarget, Keyed};
 use turbogit_app::state::AppState;
 use turbogit_domain::error::TgError;
+use turbogit_domain::model::{ChangeRef, RootId};
 use turbogit_ui::theme::Palette;
 
 // --- git seeding -------------------------------------------------------------
@@ -232,7 +233,10 @@ fn diff_harness(repo: &Path) -> Harness<'static, AppState> {
 fn diff_renders_its_keyed_read_waiting_message_through_the_shared_presenter() {
     let (_tmp, repo) = repo_two_hunks();
     let mut harness = diff_harness(&repo);
-    harness.state_mut().ui.preview_change = Some(repo.join("nav.txt"));
+    harness.state_mut().ui.preview_change = Some(ChangeRef::new(
+        RootId(repo.to_path_buf().into()),
+        repo.join("nav.txt"),
+    ));
     harness.step();
     assert_painted(&harness, "Computing diff…");
 }
@@ -242,7 +246,10 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
     let (_tmp, repo) = repo_two_hunks();
     let mut harness = diff_harness(&repo);
     let path = repo.join("nav.txt");
-    harness.state_mut().ui.preview_change = Some(path.clone());
+    harness.state_mut().ui.preview_change = Some(ChangeRef::new(
+        RootId(repo.to_path_buf().into()),
+        path.clone(),
+    ));
     let target = DiffTarget::working_tree(
         repo.clone(),
         turbogit_domain::model::DiffPolicies::default(),
@@ -287,10 +294,13 @@ fn settle(harness: &mut Harness<'_, AppState>) {
     panic!("diff viewer did not settle within 15s");
 }
 
-/// Open the Commit tab's inline preview for one file (public state
-/// transition — the same thing clicking a row's Diff button does).
-fn open_preview(harness: &mut Harness<'_, AppState>, file: &Path) {
-    harness.state_mut().ui.preview_change = Some(file.to_path_buf());
+/// Open the Commit tab's inline preview for one file of one repository (public
+/// state transition — the same thing clicking a row's Diff button does).
+fn open_preview(harness: &mut Harness<'_, AppState>, root: &Path, file: &Path) {
+    harness.state_mut().ui.preview_change = Some(ChangeRef::new(
+        RootId(root.to_path_buf().into()),
+        file.to_path_buf(),
+    ));
     settle(harness);
 }
 
@@ -306,7 +316,7 @@ fn the_pane_answers_with_git_diff_head_and_shows_both_halves() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     assert_painted(&h, "GAMMA");
     assert_painted(&h, "gamma");
@@ -359,7 +369,13 @@ fn the_pinned_read_reaches_head() {
         }
         h.get_by_label("file.txt").click();
         settle(&mut h);
-        assert_eq!(h.state().ui.preview_change, Some(PathBuf::from("file.txt")));
+        assert_eq!(
+            h.state().ui.preview_change,
+            Some(ChangeRef::new(
+                RootId(repo.to_path_buf().into()),
+                "file.txt"
+            ))
+        );
 
         assert_painted(&h, "WORKTREE ONLY");
         if original.is_empty() {
@@ -391,7 +407,7 @@ fn a_fully_staged_file_still_answers_the_combined_read() {
     let (_tmp, repo) = repo_staged_only();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("one.txt"));
+    open_preview(&mut h, &repo, &repo.join("one.txt"));
 
     assert_painted(&h, "TWO");
     assert_painted(&h, "two");
@@ -416,7 +432,7 @@ fn segmented_control_toggles_side_by_side_and_unified() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     // Unified is the default: no side-by-side pane headers.
     assert!(!h.state().ui.diff_side_by_side);
@@ -442,7 +458,7 @@ fn hunk_navigation_counts_and_steps_across_two_hunks() {
     let (_tmp, repo) = repo_two_hunks();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("nav.txt"));
+    open_preview(&mut h, &repo, &repo.join("nav.txt"));
 
     // Counter shows position 1 of 2.
     assert_painted(&h, "1/2");
@@ -484,7 +500,7 @@ fn whitespace_policy_stops_painting_the_line_pair_it_calls_equal() {
     let (_tmp, repo) = repo_whitespace();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("ws.txt"));
+    open_preview(&mut h, &repo, &repo.join("ws.txt"));
 
     // The menu the five values live in replaces the checkbox, on the file row.
     assert_painted(&h, "Diff options");
@@ -518,7 +534,7 @@ fn add_del_rows_paint_token_backgrounds_with_muted_gutters() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     // The staged pair sits on the token bands, and the unstaged pair sits on the
     // muted roles beside them: four rows, two treatments, all painted in the same
@@ -644,7 +660,7 @@ fn ghost_icon_controls_keep_their_labels_and_enabled_flags() {
     let (_tmp, repo) = repo_two_hunks();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("nav.txt"));
+    open_preview(&mut h, &repo, &repo.join("nav.txt"));
 
     for label in ["Previous hunk", "Next hunk"] {
         assert!(
@@ -783,7 +799,7 @@ fn hunk_aim_sequence(repo: &Path, side_by_side: bool) {
     // hunk 1 — the next hunk down, still at the top of a 740-row diff — which is
     // also the one leg an "index space" bug cannot hide behind.
     settle(&mut h);
-    open_preview(&mut h, &repo.join("deep.txt"));
+    open_preview(&mut h, repo, &repo.join("deep.txt"));
     assert_eq!(h.state().ui.diff_side_by_side, side_by_side);
     assert!(
         painted_hunk_headers(&h).len() < HUNKS,
@@ -957,7 +973,7 @@ fn the_removed_axis_leaves_no_group_anywhere() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
     assert_painted(&h, "GAMMA");
     let working_tree_groups = axis_groups(&h);
     assert_no_comparison_chips(&h, "the working-tree toolbar");
@@ -1039,7 +1055,7 @@ fn the_file_row_carries_the_counts_and_the_diff_options_menu() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
     let toolbar = axis_span(&h);
@@ -1108,7 +1124,7 @@ fn the_file_row_takes_its_geometry_from_the_row_shell() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
     // The staged added row is the one that wears `DIFF_ADD_BG`; the unstaged row
@@ -1203,7 +1219,7 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
     let toggle = h.get_by_label("Diff options").rect();
@@ -1288,7 +1304,7 @@ fn side_by_side_paints_each_cells_own_staged_ness() {
     let mut h = diff_harness(&repo);
     settle(&mut h);
     h.state_mut().ui.diff_side_by_side = true;
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     for (who, band, ink) in [
         ("BETA", Palette::DIFF_ADD_BG, Palette::DIFF_ADD_TEXT),
@@ -1361,7 +1377,7 @@ fn hover_stays_visible_on_a_muted_row() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     // `GAMMA` is the worktree's line 8, and 8 is the number its gutter paints.
     let gutter_ink = |h: &Harness<'_, AppState>, row: Rect| {
@@ -1433,7 +1449,7 @@ fn a_conflicted_file_claims_no_staged_ness_anywhere() {
     let (_tmp, repo) = repo_conflicted();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("conf.txt"));
+    open_preview(&mut h, &repo, &repo.join("conf.txt"));
 
     assert!(
         painted_text(&h).iter().any(|t| t.starts_with("@@")),
@@ -1495,7 +1511,7 @@ fn a_rows_staged_ness_label_flips_after_the_click_that_moves_the_index() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo.join("file.txt"));
+    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     // The bytes the pane renders, taken from git's own answer for the one
     // comparison the read is pinned to.

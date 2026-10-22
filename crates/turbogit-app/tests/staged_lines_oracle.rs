@@ -26,7 +26,7 @@ use turbogit_app::staged_lines::{
 };
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{
-    ChangeStatus, DiffOpts, DiffPolicies, PatchLineKind, RootId, VcsSettings,
+    ChangeRef, ChangeStatus, DiffOpts, DiffPolicies, PatchLineKind, RootId, VcsSettings,
 };
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
@@ -316,7 +316,7 @@ fn a_staged_line_flips_the_answer_while_the_displayed_bytes_do_not_move() {
     // `Stage` here because the line is not in the index yet.
     granular::dispatch(
         &mut state,
-        PathBuf::from("f.txt"),
+        ChangeRef::new(root_id(&repo), "f.txt"),
         HunkTarget::Row(RowKind::Add, 0, 21),
     );
     state.drain_events();

@@ -17,6 +17,7 @@ use egui_kittest::kittest::Queryable;
 use test_support::git_seed::{git, pin_eol_lf};
 use test_support::harness::{assert_not_painted, assert_painted, painted_galleys, painted_text};
 use turbogit_app::state::AppState;
+use turbogit_domain::model::{ChangeRef, RootId};
 
 const NO_COMMITS_MESSAGE: &str =
     "this repository has no commits yet: there is no first commit to compare your changes against";
@@ -63,9 +64,13 @@ fn settle(harness: &mut Harness<'_, AppState>) {
     panic!("the shell did not settle within 15s");
 }
 
-/// Open the commit tab's inline preview for one file and let the pane answer.
-fn open_preview(harness: &mut Harness<'_, AppState>, file: &Path) {
-    harness.state_mut().ui.preview_change = Some(file.to_path_buf());
+/// Open the commit tab's inline preview for one file of one root and let the pane
+/// answer.
+fn open_preview(harness: &mut Harness<'_, AppState>, root: &Path, file: &Path) {
+    harness.state_mut().ui.preview_change = Some(ChangeRef::new(
+        RootId(root.to_path_buf().into()),
+        file.to_path_buf(),
+    ));
     settle(harness);
 }
 
@@ -78,7 +83,7 @@ fn an_unborn_preview_paints_the_sentence_and_no_rows_and_no_staged_ness_label() 
     let parent = tempfile::tempdir().unwrap();
     let work = unborn_tracked_repo(parent.path(), "unborn-painted");
     let mut h = harness(&work, parent.path());
-    open_preview(&mut h, &work.join("base.txt"));
+    open_preview(&mut h, &work, &work.join("base.txt"));
 
     assert_painted(&h, NO_COMMITS_MESSAGE);
     // The file's content is not on screen, and nothing that wears the row's
@@ -122,7 +127,7 @@ fn painting_the_unreadable_preview_starts_no_git_operation() {
     let staged_before = git(&work, &["diff", "--cached"]);
 
     let mut h = harness(&work, parent.path());
-    open_preview(&mut h, &work.join("base.txt"));
+    open_preview(&mut h, &work, &work.join("base.txt"));
     assert_painted(&h, NO_COMMITS_MESSAGE);
     for _ in 0..5 {
         h.run();
@@ -164,7 +169,7 @@ fn an_unborn_preview_of_an_unversioned_file_still_paints_its_rows() {
     std::fs::write(work.join("scratch.txt"), "untracked line\n").unwrap();
 
     let mut h = harness(&work, parent.path());
-    open_preview(&mut h, &work.join("scratch.txt"));
+    open_preview(&mut h, &work, &work.join("scratch.txt"));
 
     assert!(
         !painted_text(&h)

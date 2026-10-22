@@ -32,12 +32,18 @@ use turbogit_app::keyed_read::{DiffTarget, Read};
 use turbogit_app::root_caches::RootHunkStats;
 use turbogit_app::staged_lines;
 use turbogit_app::state::AppState;
-use turbogit_domain::model::{DiffPolicies, RootId};
+use turbogit_domain::model::{ChangeRef, DiffPolicies, RootId};
 
 // ---------------------------------------------------------------- helpers --
 
 fn root_id(repo: &Path) -> RootId {
     RootId(repo.to_path_buf().into())
+}
+
+/// One fixture change: each test registers one root, so a clicked row's change
+/// belongs to the repository that fixture created.
+fn change(repo: &Path, rel: &str) -> ChangeRef {
+    ChangeRef::new(root_id(repo), rel)
 }
 
 fn app_state(project: &Path, repo: &Path) -> AppState {
@@ -225,7 +231,7 @@ fn unstaging_one_staged_line_from_the_combined_view_reaches_git() {
         geometry(&value.model)
     );
 
-    granular::toggle_row(&mut state, &Some(PathBuf::from("f.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "f.txt")), &row);
     state.drain_events();
 
     let after = staged(&repo, "f.txt");
@@ -279,7 +285,7 @@ fn unstaging_one_staged_row_of_a_hunk_leaves_the_other_staged_change_staged() {
         Some(true)
     );
 
-    granular::toggle_row(&mut state, &Some(PathBuf::from("f.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "f.txt")), &row);
     state.drain_events();
 
     let after = staged(&repo, "f.txt");
@@ -321,7 +327,7 @@ fn two_staged_modifications_unstage_the_clicked_one_only() {
     let value = combined_value(&mut state, &repo, "f.txt");
     let row = held(only_row(&value.model, RowKind::Add, "ECHO"));
 
-    granular::toggle_row(&mut state, &Some(PathBuf::from("f.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "f.txt")), &row);
     state.drain_events();
 
     let after = staged(&repo, "f.txt");
@@ -368,7 +374,7 @@ fn the_displayed_bytes_do_not_move_while_the_answer_for_that_row_flips() {
         Some(false)
     );
 
-    granular::toggle_row(&mut state, &Some(PathBuf::from("f.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "f.txt")), &row);
     state.drain_events();
 
     let again = combined_value(&mut state, &repo, "f.txt");
@@ -403,13 +409,13 @@ fn a_row_toggled_both_ways_returns_the_index_to_its_original_bytes() {
     let repo = repo_with_one_commit(project.path(), "round-trip");
     commit(&repo, "f.txt", BASE, "f base");
     std::fs::write(repo.join("f.txt"), format!("{BASE}uniform\n")).unwrap();
-    let path = Some(PathBuf::from("f.txt"));
+    let change = Some(change(&repo, "f.txt"));
     let before = index_bytes(&repo, "f.txt");
 
     let mut state = app_state(project.path(), &repo);
     let value = combined_value(&mut state, &repo, "f.txt");
     let row = held(only_row(&value.model, RowKind::Add, "uniform"));
-    granular::toggle_row(&mut state, &path, &row);
+    granular::toggle_row(&mut state, &change, &row);
     state.drain_events();
     assert_eq!(
         body_line(&staged(&repo, "f.txt"), '+', "uniform"),
@@ -419,7 +425,7 @@ fn a_row_toggled_both_ways_returns_the_index_to_its_original_bytes() {
 
     let value = combined_value(&mut state, &repo, "f.txt");
     let row = held(only_row(&value.model, RowKind::Add, "uniform"));
-    granular::toggle_row(&mut state, &path, &row);
+    granular::toggle_row(&mut state, &change, &row);
     state.drain_events();
 
     assert_eq!(
@@ -461,7 +467,7 @@ fn a_mixed_hunk_through_the_gutter_plus_then_minus_moves_whole_and_back() {
 
     granular::dispatch(
         &mut state,
-        PathBuf::from("f.txt"),
+        change(&repo, "f.txt"),
         HunkTarget::Whole(0, Direction::Stage),
     );
     state.drain_events();
@@ -487,7 +493,7 @@ fn a_mixed_hunk_through_the_gutter_plus_then_minus_moves_whole_and_back() {
 
     granular::dispatch(
         &mut state,
-        PathBuf::from("f.txt"),
+        change(&repo, "f.txt"),
         HunkTarget::Whole(0, Direction::Unstage),
     );
     state.drain_events();
@@ -527,7 +533,7 @@ fn a_row_click_below_a_staged_insertion_stages_the_line_the_reader_clicked() {
         Some(false)
     );
 
-    granular::toggle_row(&mut state, &Some(PathBuf::from("f.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "f.txt")), &row);
     state.drain_events();
 
     let after = staged(&repo, "f.txt");
@@ -560,7 +566,7 @@ fn a_row_click_below_a_staged_deletion_stages_the_line_the_reader_clicked() {
     let row = held(only_row(&value.model, RowKind::Del, "oscar"));
     assert_eq!(row.old_no, 15, "HEAD 15");
 
-    granular::toggle_row(&mut state, &Some(PathBuf::from("f.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "f.txt")), &row);
     state.drain_events();
 
     let after = staged(&repo, "f.txt");
@@ -594,7 +600,7 @@ fn two_identical_adjacent_additions_stage_and_unstage_apart() {
     )
     .unwrap();
 
-    let path = Some(PathBuf::from("f.txt"));
+    let change = Some(change(&repo, "f.txt"));
     let mut state = app_state(project.path(), &repo);
     let value = combined_value(&mut state, &repo, "f.txt");
     let copies: Vec<Row> = rows(&value.model)
@@ -612,7 +618,7 @@ fn two_identical_adjacent_additions_stage_and_unstage_apart() {
             Some(false),
             "copy {which} is still unstaged"
         );
-        granular::toggle_row(&mut state, &path, &copies[which]);
+        granular::toggle_row(&mut state, &change, &copies[which]);
         state.drain_events();
         assert_eq!(
             body_line(&staged(&repo, "f.txt"), '+', "dup"),
@@ -633,7 +639,7 @@ fn two_identical_adjacent_additions_stage_and_unstage_apart() {
     );
     // Unstage one copy: it alone reverses out of the index, the other stays staged.
     let row = held(first_row(&value.model, RowKind::Add, "dup"));
-    granular::toggle_row(&mut state, &path, &row);
+    granular::toggle_row(&mut state, &change, &row);
     state.drain_events();
     assert_eq!(
         body_line(&staged(&repo, "f.txt"), '+', "dup"),
@@ -645,7 +651,7 @@ fn two_identical_adjacent_additions_stage_and_unstage_apart() {
 
     let value = combined_value(&mut state, &repo, "f.txt");
     let row = held(first_row(&value.model, RowKind::Add, "dup"));
-    granular::toggle_row(&mut state, &path, &row);
+    granular::toggle_row(&mut state, &change, &row);
     state.drain_events();
     assert!(
         staged(&repo, "f.txt").is_empty(),
@@ -748,7 +754,7 @@ fn unstaging_one_row_of_a_staged_creation_takes_the_whole_file_out() {
         geometry(&value.model)
     );
 
-    granular::toggle_row(&mut state, &Some(PathBuf::from("new.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "new.txt")), &row);
     state.drain_events();
 
     assert_eq!(
@@ -786,7 +792,7 @@ fn a_row_staged_then_edited_again_flips_to_unstaged_and_stays_in_the_view() {
         geometry(&value.model)
     );
 
-    granular::toggle_row(&mut state, &Some(PathBuf::from("f.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "f.txt")), &row);
     state.drain_events();
 
     let after = staged(&repo, "f.txt");
@@ -826,7 +832,7 @@ fn staging_one_half_of_a_replacement_pair_leaves_the_file_mm() {
     let mut state = app_state(project.path(), &repo);
     let value = combined_value(&mut state, &repo, "f.txt");
     let row = held(only_row(&value.model, RowKind::Add, "ECHO"));
-    granular::toggle_row(&mut state, &Some(PathBuf::from("f.txt")), &row);
+    granular::toggle_row(&mut state, &Some(change(&repo, "f.txt")), &row);
     state.drain_events();
 
     let after = staged(&repo, "f.txt");
@@ -874,7 +880,7 @@ fn a_row_click_on_a_conflicted_path_does_nothing_at_all() {
         .iter()
         .filter(|r| matches!(r.kind, RowKind::Add | RowKind::Del))
     {
-        granular::toggle_row(&mut state, &Some(PathBuf::from("conf.txt")), row);
+        granular::toggle_row(&mut state, &Some(change(&repo, "conf.txt")), row);
         state.drain_events();
     }
 

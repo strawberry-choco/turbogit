@@ -23,6 +23,7 @@ use egui_kittest::kittest::Queryable;
 use test_support::git_seed::{repo_with_conflict, repo_with_one_commit};
 use test_support::harness::{click_with_modifiers, shell_harness_over_unstyled};
 use turbogit_app::state::AppState;
+use turbogit_domain::model::{ChangeRef, RootId};
 
 // ---------------------------------------------------------------- helpers --
 
@@ -41,6 +42,12 @@ fn harness(state: AppState) -> Harness<'static, AppState> {
     let mut h = shell_harness_over_unstyled(state, egui::vec2(1280.0, 800.0), 1024);
     test_support::harness::settle(&mut h);
     h
+}
+
+/// The previewed change of these single-root fixtures: the row's repo-relative
+/// path, tied to the one repository the fixture registered.
+fn change(repo: &Path, rel: &str) -> ChangeRef {
+    ChangeRef::new(RootId(repo.to_path_buf().into()), rel)
 }
 
 /// `name`'s untracked file in `repo`, so it lands in the flat list.
@@ -109,7 +116,7 @@ fn a_plain_click_selects_one_row_and_clears_a_held_multi_selection() {
     );
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("c.txt")),
+        Some(change(&repo, "c.txt")),
         "and previews it"
     );
 }
@@ -142,7 +149,7 @@ fn a_command_click_moves_one_row_into_the_set_and_back_out() {
     );
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("a.txt")),
+        Some(change(&repo, "a.txt")),
         "a row taken out of the set is still the row being looked at"
     );
 }
@@ -169,7 +176,7 @@ fn a_shift_click_spans_the_painted_rows_and_reshapes_from_one_anchor() {
     );
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("d.txt")),
+        Some(change(&repo, "d.txt")),
         "a range click previews the row it landed on"
     );
 
@@ -239,7 +246,7 @@ fn a_shift_range_that_spans_the_conflicts_group_leaves_the_conflicted_path_out()
     );
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("conf.txt")),
+        Some(change(&solo, "conf.txt")),
         "clicking it is still a browse"
     );
 

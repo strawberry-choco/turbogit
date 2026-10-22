@@ -12,7 +12,7 @@ use egui::{
 use turbogit_app::granular;
 use turbogit_app::keyed_read::DiffTarget;
 use turbogit_app::state::AppState;
-use turbogit_domain::model::ChangeStatus;
+use turbogit_domain::model::{ChangeRef, ChangeStatus};
 
 // --- partial staging (spec R2) ----------------------------------------------
 
@@ -23,11 +23,11 @@ use turbogit_domain::model::ChangeStatus;
 /// (spec R7) can consult it per keypress without rebuilding any row map — and
 /// without starting a fetch the preview never asked for.
 pub(crate) fn preview_hunk_count(state: &AppState) -> usize {
-    let Some(path) = state.ui.preview_change.clone() else {
+    let Some(change) = state.ui.preview_change.clone() else {
         return 0;
     };
     state
-        .peek(preview_target(state, path))
+        .peek(preview_target(state, &change))
         .map_or(0, |diff| diff.model.hunk_count())
 }
 
@@ -37,24 +37,27 @@ pub(crate) fn preview_hunk_count(state: &AppState) -> usize {
 /// loading, errored, or the text parses to no rows (binary). Reads the display
 /// model the diff value carries, so the header never reparses the patch text
 /// per frame.
-pub(crate) fn preview_line_counts(state: &AppState, path: &std::path::Path) -> (usize, usize) {
+pub(crate) fn preview_line_counts(state: &AppState, change: &ChangeRef) -> (usize, usize) {
     state
-        .peek(preview_target(state, path.to_path_buf()))
+        .peek(preview_target(state, change))
         .map_or((0, 0), |diff| line_counts(&diff.model))
 }
 
-/// The commit window's preview target for `path`: the viewer's policy pair
+/// The commit window's preview target for `change`: the repository is the one the
+/// change names, because the changes list spans every registered root and a
+/// repo-relative path cannot say which one to read. The viewer's policy pair
 /// decides its model, and a peek of it spends no git work (ADR-0021).
-fn preview_target(state: &AppState, path: std::path::PathBuf) -> DiffTarget {
+fn preview_target(state: &AppState, change: &ChangeRef) -> DiffTarget {
     DiffTarget::working_tree(
-        state.selected_path().unwrap_or_default(),
+        change.root.as_path().to_path_buf(),
         state.ui.diff_policies,
-        Some(path),
+        Some(change.path.clone()),
     )
 }
 
-/// The line the caret sits on, on the pane that holds it — the target of `F4`
-/// (Jump to Source), which has to land in the same place the reader was looking.
+/// The line the caret sits on, with the change that owns it — the target of `F4`
+/// (Jump to Source), which has to land in the same place the reader was looking,
+/// in the same repository.
 ///
 /// The caret is **derived**, not stored: it is the first changed row of the
 /// current hunk on the active side, which is the position the hunk navigator just
@@ -62,9 +65,9 @@ fn preview_target(state: &AppState, path: std::path::PathBuf) -> DiffTarget {
 /// of its own would be a second canonical selection, which CONTEXT.md "Current
 /// hunk" exists to forbid. A side with no numbered row there — a pure insertion
 /// read as the `Before` pane — has no line to jump to, and says so.
-pub(crate) fn preview_caret_line(state: &AppState) -> Option<(std::path::PathBuf, usize)> {
-    let path = state.ui.preview_change.clone()?;
-    let diff = state.peek(preview_target(state, path.clone()))?;
+pub(crate) fn preview_caret_line(state: &AppState) -> Option<(ChangeRef, usize)> {
+    let change = state.ui.preview_change.clone()?;
+    let diff = state.peek(preview_target(state, &change))?;
     let want_add = state.ui.diff_pane == turbogit_app::state::DiffPane::New;
     diff.model
         .display
@@ -77,7 +80,7 @@ pub(crate) fn preview_caret_line(state: &AppState) -> Option<(std::path::PathBuf
         .find(|r| r.kind == if want_add { RowKind::Add } else { RowKind::Del })
         .map(|r| r.new_no.max(r.old_no))
         .filter(|line| *line > 0)
-        .map(|line| (path, line))
+        .map(|line| (change, line))
 }
 
 /// The diff viewer's settings menu (`⌃⇧D`): the two five-value policies, in the
@@ -205,7 +208,7 @@ pub(super) fn hunk_gutter_actions(
     paint: egui::Id,
     hunk: usize,
     status: ChangeStatus,
-    path: &Option<std::path::PathBuf>,
+    change: &Option<ChangeRef>,
 ) {
     const BTN: f32 = 18.0;
     const PAD_X: f32 = 6.0;
@@ -247,20 +250,20 @@ pub(super) fn hunk_gutter_actions(
     // names the direction and `Whole` resolves which appliable section's hunks
     // that direction reaches.
     if stage.clicked()
-        && let Some(path) = path.clone()
+        && let Some(change) = change.clone()
     {
         granular::dispatch(
             state,
-            path,
+            change,
             granular::HunkTarget::Whole(hunk, granular::Direction::Stage),
         );
     }
     if unstage.clicked()
-        && let Some(path) = path.clone()
+        && let Some(change) = change.clone()
     {
         granular::dispatch(
             state,
-            path,
+            change,
             granular::HunkTarget::Whole(hunk, granular::Direction::Unstage),
         );
     }

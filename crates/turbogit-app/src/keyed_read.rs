@@ -468,7 +468,7 @@ impl Keyed for DiffTarget {
         state.ui.diff_collapsed.clear();
 
         if let Some(rel) = self.path.as_ref()
-            && granular::preview_status(state, Some(rel.as_path()))
+            && granular::status_of(state, &RootId(self.root.clone().into()), rel)
                 == turbogit_domain::model::ChangeStatus::Unversioned
             && let Some(patch) = crate::diff_load::synthetic_untracked_patch(&self.root, rel)
         {
@@ -699,10 +699,14 @@ impl AppState {
     /// under `RootCaches::diff_failed`.
     pub fn failed_view_message(&self, target: &DiffTarget) -> Option<String> {
         let view = target.root_view()?;
-        if granular::preview_status(self, target.path.as_deref()) == ChangeStatus::Unversioned {
+        let root = RootId(target.root.clone().into());
+        if target
+            .path
+            .as_ref()
+            .is_some_and(|path| granular::status_of(self, &root, path) == ChangeStatus::Unversioned)
+        {
             return None;
         }
-        let root = RootId(target.root.clone().into());
         self.caches
             .diff_view_failure(&root, view)
             .map(str::to_owned)

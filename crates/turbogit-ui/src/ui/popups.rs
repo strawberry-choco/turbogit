@@ -242,11 +242,11 @@ pub fn run_action(state: &mut AppState, action: Action) {
             } else {
                 granular::Direction::Unstage
             };
-            let Some(path) = state.ui.preview_change.clone() else {
+            let Some(change) = state.ui.preview_change.clone() else {
                 return;
             };
             let hunk = state.ui.diff_current_hunk;
-            granular::dispatch(state, path, granular::HunkTarget::Whole(hunk, dir));
+            granular::dispatch(state, change, granular::HunkTarget::Whole(hunk, dir));
         }
         // File filter (spec R7): surface the Commit tool window and arm
         // next-frame focus of its inline filter input.

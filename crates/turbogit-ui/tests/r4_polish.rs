@@ -28,7 +28,7 @@ use test_support::harness::{
 };
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Dialog, Tab};
-use turbogit_domain::model::{LogOpts, VcsSettings};
+use turbogit_domain::model::{ChangeRef, LogOpts, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::Palette;
@@ -478,7 +478,11 @@ fn open_shell(shell: Shell, seed: Option<&Seed>) -> Harness<'static, AppState> {
             let mut harness = polish_harness(repo(), (1024.0, 768.0), tab);
             // Open the inline preview and prove it is up before the row names a
             // control in it.
-            harness.state_mut().ui.preview_change = Some(repo().alpha.join("file.txt"));
+            let alpha = repo().alpha.clone();
+            harness.state_mut().ui.preview_change = Some(ChangeRef::new(
+                RootId(alpha.to_path_buf().into()),
+                alpha.join("file.txt"),
+            ));
             settle_long(&mut harness);
             assert_painted(&harness, "Side-by-Side");
             harness

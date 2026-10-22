@@ -5,7 +5,7 @@
 //! — the stale key is ignored and the app renders the designed dark
 //! experience regardless.
 
-use turbogit_domain::model::ProjectState;
+use turbogit_domain::model::{ChangeRef, ProjectState, RootId};
 
 /// Complete pre-redesign `state.ron` document whose theme is a removed
 /// mode (`HighContrast`; `Light` is exercised via the same shape).
@@ -2618,7 +2618,10 @@ fn the_diff_colour_pair_is_untouched() {
     let (_tmp, repo) = diff_fixture_repo();
     let mut harness = diff_shell(&repo);
     settle_diff_shell(&mut harness);
-    harness.state_mut().ui.preview_change = Some(repo.join("file.txt"));
+    harness.state_mut().ui.preview_change = Some(ChangeRef::new(
+        RootId(repo.to_path_buf().into()),
+        repo.join("file.txt"),
+    ));
     settle_diff_shell(&mut harness);
 
     let origin_of = |needle: &str| {

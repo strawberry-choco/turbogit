@@ -26,6 +26,7 @@ use test_support::harness::{
 };
 use test_support::wait_until;
 use turbogit_app::state::{AppState, CommitSubTab, Dialog};
+use turbogit_domain::model::{ChangeRef, RootId};
 use turbogit_ui::theme::Palette;
 use turbogit_ui::ui::widgets::{CHIP_HEIGHT, PANE_HEADER_HEIGHT};
 
@@ -108,6 +109,12 @@ fn seed_conflict(repo: &Path, branch: &str) {
 }
 
 /// Headless harness over the given repository roots (see CONTEXT.md).
+/// The previewed change of these single-root fixtures: the row's repo-relative
+/// path, tied to the one repository the fixture registered.
+fn change(repo: &Path, rel: &str) -> ChangeRef {
+    ChangeRef::new(RootId(repo.to_path_buf().into()), rel)
+}
+
 fn app_state(roots: &[PathBuf]) -> AppState {
     let dir = roots
         .first()
@@ -319,7 +326,7 @@ struct InertSnapshot {
     selected: Vec<PathBuf>,
     expanded: Vec<String>,
     filter: String,
-    preview: Option<PathBuf>,
+    preview: Option<ChangeRef>,
     toast_kind: Option<turbogit_app::state::ToastKind>,
     toast_message: Option<String>,
     busy: bool,
@@ -1056,7 +1063,10 @@ fn diff_preview_reflects_selected_file() {
     // paints the previewed path (issue 06).
     h.get_by_label("base.txt").click();
     h.run();
-    assert_eq!(h.state().ui.preview_change, Some(PathBuf::from("base.txt")));
+    assert_eq!(
+        h.state().ui.preview_change,
+        Some(change(&repo.path, "base.txt"))
+    );
     h.get_by_label("Previewing base.txt");
 
     // Selecting another row swaps the preview to that file.
@@ -1064,7 +1074,7 @@ fn diff_preview_reflects_selected_file() {
     h.run();
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("added.txt"))
+        Some(change(&repo.path, "added.txt"))
     );
     h.get_by_label("Previewing added.txt");
 }
@@ -1123,7 +1133,10 @@ fn header_nav_buttons_walk_previous_and_next_changed_files() {
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
     h.get_by_label("base.txt").click();
     h.run();
-    assert_eq!(h.state().ui.preview_change, Some(PathBuf::from("base.txt")));
+    assert_eq!(
+        h.state().ui.preview_change,
+        Some(change(&repo.path, "base.txt"))
+    );
 
     // First file: Previous is disabled, Next advances.
     let prev = h.get_by_label("Previous change");
@@ -1135,7 +1148,7 @@ fn header_nav_buttons_walk_previous_and_next_changed_files() {
     h.run();
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("other.txt")),
+        Some(change(&repo.path, "other.txt")),
         "Next must walk to the second changed file"
     );
     h.get_by_label("Previewing other.txt");
@@ -1150,7 +1163,7 @@ fn header_nav_buttons_walk_previous_and_next_changed_files() {
     h.run();
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("base.txt")),
+        Some(change(&repo.path, "base.txt")),
         "Previous must walk back to the first changed file"
     );
 }
@@ -1341,7 +1354,7 @@ fn clicking_a_row_selects_and_previews_it_and_leaves_the_checkbox_alone() {
     );
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("base.txt")),
+        Some(change(&repo.path, "base.txt")),
         "a clicked row drives the diff preview"
     );
 
@@ -1380,7 +1393,7 @@ fn the_checkbox_toggles_the_index_without_moving_the_selection() {
     h.run();
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("other.txt"))
+        Some(change(&repo.path, "other.txt"))
     );
 
     h.get_by_label("Stage base.txt (unstaged)").click();
@@ -1395,7 +1408,7 @@ fn the_checkbox_toggles_the_index_without_moving_the_selection() {
     );
     assert_eq!(
         h.state().ui.preview_change,
-        Some(PathBuf::from("other.txt")),
+        Some(change(&repo.path, "other.txt")),
         "the checkbox must not move the preview either"
     );
 }

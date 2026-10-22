@@ -18,7 +18,7 @@ use turbogit_app::diff_model::RowKind;
 use turbogit_app::granular::{self, Direction, HunkTarget};
 use turbogit_app::keyed_read::{DiffTarget, Read};
 use turbogit_app::state::AppState;
-use turbogit_domain::model::{RootId, VcsSettings};
+use turbogit_domain::model::{ChangeRef, RootId, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::{ApplyDirection, GitExecutor};
 
@@ -133,6 +133,12 @@ fn seed_preview_cache(state: &mut AppState, root: &Path, rel: &str) {
     );
 }
 
+/// One fixture change: these suites register a single root, so every verb they
+/// dispatch belongs to the repository the fixture created.
+fn change(repo: &Path, rel: &str) -> ChangeRef {
+    ChangeRef::new(RootId(repo.to_path_buf().into()), rel)
+}
+
 // ------------------------------------------------------------------ tests --
 
 #[test]
@@ -147,7 +153,7 @@ fn granular_dispatch_stages_whole_hunk_forward() {
 
     granular::dispatch(
         &mut state,
-        PathBuf::from("words.txt"),
+        change(&repo.path, "words.txt"),
         HunkTarget::Whole(0, Direction::Stage),
     );
 
@@ -188,7 +194,7 @@ fn granular_dispatch_stages_a_single_line_target() {
     // because the row's staged-ness is the direction.
     granular::dispatch(
         &mut state,
-        PathBuf::from("words.txt"),
+        change(&repo.path, "words.txt"),
         HunkTarget::Row(RowKind::Add, 0, 2),
     );
 
@@ -241,7 +247,7 @@ fn granular_dispatch_stages_exactly_the_selected_character_range() {
 
     granular::dispatch(
         &mut state,
-        PathBuf::from("code.rs"),
+        change(&repo.path, "code.rs"),
         HunkTarget::Chars(2, 8, 24),
     );
     state.drain_events();
@@ -289,14 +295,14 @@ fn char_drag_release_stages_the_range_and_a_collapsed_drag_stages_nothing() {
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
     seed_preview_cache(&mut state, &repo.path, "code.rs");
-    let path = Some(PathBuf::from("code.rs"));
+    let change = Some(change(&repo.path, "code.rs"));
 
     // The gesture the viewer's drag forwards: anchor, move, release. The draft
     // carries the row's worktree gutter, which is what the release addresses.
-    granular::begin_char_drag(&mut state, &path, 0, 1, 2, 8);
-    granular::extend_char_drag(&mut state, &path, 0, 1, 24);
+    granular::begin_char_drag(&mut state, &change, 0, 1, 2, 8);
+    granular::extend_char_drag(&mut state, &change, 0, 1, 24);
     assert!(
-        granular::finish_char_drag(&mut state, &path, 0, 1),
+        granular::finish_char_drag(&mut state, &change, 0, 1),
         "a moved range stages at release"
     );
     assert!(
@@ -320,10 +326,10 @@ fn char_drag_release_stages_the_range_and_a_collapsed_drag_stages_nothing() {
 
     // A drag that never moved is a click, and the click route owns the line:
     // the release itself must stage nothing.
-    granular::begin_char_drag(&mut state, &path, 0, 0, 0, 4);
+    granular::begin_char_drag(&mut state, &change, 0, 0, 0, 4);
     let staged_before = git(&repo.path, &["diff", "--cached"]);
     assert!(
-        !granular::finish_char_drag(&mut state, &path, 0, 0),
+        !granular::finish_char_drag(&mut state, &change, 0, 0),
         "a collapsed range must report that it staged nothing"
     );
     assert!(state.ui.char_drag.is_none(), "the draft dies either way");
@@ -352,7 +358,7 @@ fn granular_dispatch_routes_untracked_stage_through_intent_to_add() {
 
     granular::dispatch(
         &mut state,
-        PathBuf::from("new.txt"),
+        change(&repo.path, "new.txt"),
         HunkTarget::Whole(0, Direction::Stage),
     );
 
@@ -401,7 +407,7 @@ fn a_row_click_on_an_untracked_file_stages_that_line_through_intent_to_add() {
     // Worktree line 2 is `two` in the synthesized one-hunk creation diff.
     granular::dispatch(
         &mut state,
-        PathBuf::from("new.txt"),
+        change(&repo.path, "new.txt"),
         HunkTarget::Row(RowKind::Add, 0, 2),
     );
     state.drain_events();
@@ -446,27 +452,27 @@ fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
 
     let (mut state, recorder) =
         app_state_with_recorder(parent.path(), std::slice::from_ref(&repo.path));
-    state.ui.preview_change = Some(PathBuf::from("words.txt"));
+    state.ui.preview_change = Some(change(&repo.path, "words.txt"));
     state
         .ui
         .granularly_completed
-        .insert(repo.path.join("gone.txt"));
+        .insert(change(&repo.path, "gone.txt"));
     seed_preview_cache(&mut state, &repo.path, "words.txt");
 
     granular::dispatch(
         &mut state,
-        PathBuf::from("words.txt"),
+        change(&repo.path, "words.txt"),
         HunkTarget::Whole(0, Direction::Stage),
     );
     state.drain_events();
 
-    // The whole file staged (single hunk) → story 9 exclusion lands under the
-    // canonical (root-joined) key…
+    // The whole file staged (single hunk) → story 9 exclusion lands as the
+    // change's own identity, root and repo-relative path…
     assert!(
         state
             .ui
             .granularly_completed
-            .contains(&repo.path.join("words.txt")),
+            .contains(&change(&repo.path, "words.txt")),
         "fully staged file must be excluded, completed={:?}",
         state.ui.granularly_completed
     );
@@ -474,7 +480,7 @@ fn granular_settle_excludes_fully_staged_file_and_advances_preview_order() {
     // the excluded `gone.txt` (rank 0, would have won otherwise).
     assert_eq!(
         state.ui.preview_change,
-        Some(PathBuf::from("notes.txt")),
+        Some(change(&repo.path, "notes.txt")),
         "focus must advance past exclusions to the next candidate"
     );
     assert!(
@@ -501,7 +507,7 @@ fn granular_dispatch_without_cached_diff_is_a_silent_no_op() {
     // what this contract exists to forbid.
     granular::dispatch(
         &mut state,
-        PathBuf::from("words.txt"),
+        change(&repo.path, "words.txt"),
         HunkTarget::Whole(0, Direction::Stage),
     );
 

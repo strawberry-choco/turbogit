@@ -19,7 +19,7 @@ use turbogit_app::granular;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
 use turbogit_app::staged_lines::{self, FileLineSets};
 use turbogit_app::state::{AppState, DiffPane};
-use turbogit_domain::model::{ChangeStatus, DisplayName};
+use turbogit_domain::model::{ChangeRef, ChangeStatus, DisplayName};
 
 // --- staged-ness: the one per-line answer the painters read --------------------
 
@@ -41,23 +41,20 @@ struct StagedRows<'a> {
 }
 
 impl<'a> StagedRows<'a> {
-    /// The selected root's changelist entry for `path`, and the line sets keyed on
-    /// git's own spelling of it.
+    /// The previewed change's own root holds its changelist entry, and the line
+    /// sets are keyed on git's own spelling of its path.
     ///
-    /// The pane hands an **absolute** path (its entry points take the previewed
-    /// change as the shell knows it) while the caches key on the repo-relative `b/`
-    /// side, so the changelist lookup is the one place the two spellings meet. A
-    /// root with no `hunk_stats` entry yet answers nothing at all, which is `None`
-    /// per row rather than a guess.
-    fn resolve(state: &'a AppState, path: &Option<std::path::PathBuf>) -> Option<Self> {
-        let root = state
-            .selected_root
-            .as_ref()
-            .and_then(|id| state.multi.by_id(id))?;
-        let change = root.resolve_change(path.as_deref()?)?;
+    /// A ref's path can be **absolute** (an injected preview) while the caches key
+    /// on the repo-relative `b/` side, so the changelist lookup is the one place
+    /// the two spellings meet. A root with no `hunk_stats` entry yet answers
+    /// nothing at all, which is `None` per row rather than a guess.
+    fn resolve(state: &'a AppState, change: &Option<ChangeRef>) -> Option<Self> {
+        let change = change.as_ref()?;
+        let root = state.multi.by_id(&change.root)?;
+        let entry = root.resolve_change(&change.path)?;
         let stats = state.caches.hunk_stats(&root.id)?;
         Some(Self {
-            path: &change.path,
+            path: &entry.path,
             sets: &stats.line_sets,
         })
     }
@@ -194,28 +191,37 @@ pub fn render_diff(
     state: &mut AppState,
     left: &Option<String>,
     right: &Option<String>,
-    path: &Option<std::path::PathBuf>,
+    change: &Option<ChangeRef>,
 ) {
-    let root = match state.selected_path() {
-        Some(r) => r,
-        None => {
-            widgets::empty_state(ui, "No repository selected.");
-            return;
-        }
+    // The pane reads the repository the previewed change names, never the focused
+    // one: the changes list spans every registered root, so a row of another
+    // root read against the focused one shows a different file under the same
+    // name. A comparison that names no change has no root to name either, and is
+    // the focused root's by default.
+    let root = match change {
+        Some(change) => change.root.as_path().to_path_buf(),
+        None => match state.selected_path() {
+            Some(root) => root,
+            None => {
+                widgets::empty_state(ui, "No repository selected.");
+                return;
+            }
+        },
     };
+    let path = change.as_ref().map(|change| change.path.clone());
 
     // The two kinds of diff target, told apart by which constructor they ask
     // for: no revision named means the working-tree preview, and the working
     // tree is read as `HEAD ↔ worktree`. A caller that names both sides gets
     // exactly the pair it asked for.
     let target = match (left, right) {
-        (None, None) => DiffTarget::working_tree(root, state.ui.diff_policies, path.clone()),
+        (None, None) => DiffTarget::working_tree(root, state.ui.diff_policies, path),
         _ => DiffTarget::new(
             root,
             left.clone(),
             right.clone(),
             state.ui.diff_policies,
-            path.clone(),
+            path,
         ),
     };
     // One ask, one verdict: the read answers from the cache, or starts the
@@ -262,7 +268,7 @@ pub fn render_diff(
     // came back empty, is still computing, or failed must not take the control
     // that produces it off screen along with the rows it would apply to.
     if let Some(message) = &view_failure {
-        file_header(ui, state, path.as_deref());
+        file_header(ui, state, change);
         widgets::keyed_read_presentation(
             ui,
             widgets::KeyedReadPresentation::Failed(message.as_str()),
@@ -272,12 +278,12 @@ pub fn render_diff(
     let diff = match verdict {
         Read::Fresh(diff) => diff,
         Read::Empty => {
-            file_header(ui, state, path.as_deref());
+            file_header(ui, state, change);
             ui.label("(no differences)");
             return;
         }
         Read::Waiting => {
-            file_header(ui, state, path.as_deref());
+            file_header(ui, state, change);
             widgets::keyed_read_presentation(
                 ui,
                 widgets::KeyedReadPresentation::Waiting("Computing diff…"),
@@ -285,7 +291,7 @@ pub fn render_diff(
             return;
         }
         Read::Failed(message) => {
-            file_header(ui, state, path.as_deref());
+            file_header(ui, state, change);
             widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Failed(&message));
             return;
         }
@@ -337,7 +343,7 @@ pub fn render_diff(
 
     // Gutter staging controls need the previewed file's status (spec R2);
     // resolved once per frame from the cached changelists.
-    let status = granular::preview_status(state, path.as_deref());
+    let status = granular::preview_status(state, change.as_ref());
 
     let side_by_side = state.ui.diff_side_by_side;
     // Per-frame paint plan (issue 20): collapsed hunks drop their body rows
@@ -346,7 +352,7 @@ pub fn render_diff(
     // indices; unified slots are (display index, member) with a Pair member
     // flattened into one slot per underlying row (ADR-0014 paging, now over
     // the filtered stream).
-    let plan = paint_plan(state, model, path);
+    let plan = paint_plan(state, model, change);
     let total_rows = if side_by_side {
         plan.sbs.len()
     } else {
@@ -407,9 +413,9 @@ pub fn render_diff(
             // hunk scroll-dedup state can be namespaced per diff with it
             // (issue #11).
             if side_by_side {
-                render_side_by_side(ui, state, model, &plan, visible, paint, status, path);
+                render_side_by_side(ui, state, model, &plan, visible, paint, status, change);
             } else {
-                render_unified(ui, state, model, &plan, visible, paint, status, path);
+                render_unified(ui, state, model, &plan, visible, paint, status, change);
             }
         },
     );
@@ -516,10 +522,10 @@ impl PaintPlan {
 /// rather than recomputed per row (ticket 12), and the same walk asks the
 /// per-line oracle about every changed row once, which is why staged-ness is
 /// painted from a resolved frame rather than a lookup per painted line.
-fn paint_plan(state: &AppState, model: &DiffModel, path: &Option<std::path::PathBuf>) -> PaintPlan {
+fn paint_plan(state: &AppState, model: &DiffModel, change: &Option<ChangeRef>) -> PaintPlan {
     let hunk_count = model.hunk_count();
     let want_add = matches!(state.ui.diff_pane, DiffPane::New);
-    let oracle = StagedRows::resolve(state, path);
+    let oracle = StagedRows::resolve(state, change);
     let mut caret: Option<usize> = None;
     let mut plan = PaintPlan {
         sbs: Vec::with_capacity(model.display.len()),
@@ -741,13 +747,13 @@ fn handle_char_drag(
     resp: &Response,
     text_origin_x: f32,
     row: &Row,
-    path: &Option<std::path::PathBuf>,
+    change: &Option<ChangeRef>,
 ) -> bool {
     if resp.drag_started()
         && let Some(pos) = ui.input(|i| i.pointer.press_origin())
     {
         let anchor = char_at_x(ui, &row.text, pos.x - text_origin_x);
-        granular::begin_char_drag(state, path, row.hunk, row.line_ord, row.new_no, anchor);
+        granular::begin_char_drag(state, change, row.hunk, row.line_ord, row.new_no, anchor);
     }
     // Not an else: the drag's first frame counts as both started and
     // dragged, and the pointer is already at its moved position there.
@@ -755,10 +761,10 @@ fn handle_char_drag(
         && let Some(pos) = resp.interact_pointer_pos()
     {
         let cur = char_at_x(ui, &row.text, pos.x - text_origin_x);
-        granular::extend_char_drag(state, path, row.hunk, row.line_ord, cur);
+        granular::extend_char_drag(state, change, row.hunk, row.line_ord, cur);
     }
     if resp.drag_stopped() {
-        return granular::finish_char_drag(state, path, row.hunk, row.line_ord);
+        return granular::finish_char_drag(state, change, row.hunk, row.line_ord);
     }
     false
 }
@@ -772,16 +778,16 @@ fn paint_char_highlight(
     rect: &Rect,
     text_origin_x: f32,
     row: &Row,
-    path: &Option<std::path::PathBuf>,
+    change: &Option<ChangeRef>,
 ) {
-    let Some(p) = path else {
+    let Some(c) = change else {
         return;
     };
     let Some(draft) = state
         .ui
         .char_drag
         .clone()
-        .filter(|d| d.path == *p && d.hunk == row.hunk && d.ord == row.line_ord)
+        .filter(|d| d.change == *c && d.hunk == row.hunk && d.ord == row.line_ord)
     else {
         return;
     };
@@ -901,7 +907,7 @@ fn render_unified(
     visible: Range<usize>,
     paint: egui::Id,
     status: ChangeStatus,
-    path: &Option<std::path::PathBuf>,
+    change: &Option<ChangeRef>,
 ) {
     let width = ui.available_width();
     let painter = ui.painter().clone();
@@ -927,7 +933,7 @@ fn render_unified(
                         &font,
                         paint,
                         status,
-                        path,
+                        change,
                         plan,
                         &mut frame_hover,
                         &mut rows_rect,
@@ -944,7 +950,7 @@ fn render_unified(
                         &font,
                         paint,
                         status,
-                        path,
+                        change,
                         plan,
                         &mut frame_hover,
                         &mut rows_rect,
@@ -961,7 +967,7 @@ fn render_unified(
                         &font,
                         paint,
                         status,
-                        path,
+                        change,
                         plan,
                         &mut frame_hover,
                         &mut rows_rect,
@@ -996,7 +1002,7 @@ fn paint_full_width_row(
     font: &FontId,
     paint: egui::Id,
     status: ChangeStatus,
-    path: &Option<std::path::PathBuf>,
+    change: &Option<ChangeRef>,
     plan: &PaintPlan,
     hovered: bool,
 ) -> bool {
@@ -1043,7 +1049,7 @@ fn paint_full_width_row(
                     font,
                 );
             }
-            hunk_gutter_actions(ui, state, *rect, paint, row.hunk, status, path);
+            hunk_gutter_actions(ui, state, *rect, paint, row.hunk, status, change);
             hunk_header_extras(
                 ui,
                 state,
@@ -1074,7 +1080,7 @@ fn unified_row(
     font: &FontId,
     paint: egui::Id,
     status: ChangeStatus,
-    path: &Option<std::path::PathBuf>,
+    change: &Option<ChangeRef>,
     plan: &PaintPlan,
     frame_hover: &mut Option<usize>,
     rows_rect: &mut Option<Rect>,
@@ -1108,12 +1114,12 @@ fn unified_row(
         let label = row_label(&row.text, plan.staged(display, row.kind));
         resp.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label.as_str()));
         let drag_staged = if draggable {
-            handle_char_drag(ui, state, &resp, rect.left() + TEXT_X, row, path)
+            handle_char_drag(ui, state, &resp, rect.left() + TEXT_X, row, change)
         } else {
             false
         };
         if resp.clicked() && !drag_staged {
-            granular::toggle_row(state, path, row);
+            granular::toggle_row(state, change, row);
         }
     }
     if paint_full_width_row(
@@ -1126,7 +1132,7 @@ fn unified_row(
         font,
         paint,
         status,
-        path,
+        change,
         plan,
         resp.hovered(),
     ) {
@@ -1206,7 +1212,7 @@ fn unified_row(
             );
             let text_origin = rect.left() + TEXT_X;
             paint_cell(painter, text_origin, &rect, &row.text, ink, font);
-            paint_char_highlight(painter, state, &rect, text_origin, row, path);
+            paint_char_highlight(painter, state, &rect, text_origin, row, change);
             if caret {
                 paint_caret(
                     painter,
@@ -1321,13 +1327,15 @@ fn file_row(
 /// when there is no `diff --git` line to show, and `+0 −0` for a comparison
 /// with nothing in it, because the toggle it carries has to be reachable in every
 /// state the comparison can be in.
-fn file_header(ui: &mut Ui, state: &mut AppState, path: Option<&std::path::Path>) {
-    let Some(path) = path else {
+fn file_header(ui: &mut Ui, state: &mut AppState, change: &Option<ChangeRef>) {
+    let Some(change) = change else {
         return;
     };
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, ROW_H), Sense::hover());
-    let label = path.display_name_lossy_or(&path.display().to_string());
+    let label = change
+        .path
+        .display_name_lossy_or(&change.path.display().to_string());
     file_row(ui, state, &rect, &label, (0, 0), &mono_font(), false);
 }
 
@@ -1436,7 +1444,7 @@ fn render_side_by_side(
     visible: Range<usize>,
     paint: egui::Id,
     status: ChangeStatus,
-    path: &Option<std::path::PathBuf>,
+    change: &Option<ChangeRef>,
 ) {
     let width = ui.available_width();
     let spacing = ui.style().spacing.item_spacing.x;
@@ -1475,7 +1483,7 @@ fn render_side_by_side(
                         &font,
                         paint,
                         status,
-                        path,
+                        change,
                         plan,
                         resp.hovered(),
                     );
@@ -1556,7 +1564,7 @@ fn render_side_by_side(
                             false,
                         );
                         if cell.clicked() {
-                            granular::toggle_row(state, path, d);
+                            granular::toggle_row(state, change, d);
                         }
                         cell
                     } else {
@@ -1595,11 +1603,12 @@ fn render_side_by_side(
                             true,
                         );
                         let text_origin = cell.rect.left() + NUM_W + 20.0;
-                        let drag_staged = handle_char_drag(ui, state, &cell, text_origin, a, path);
+                        let drag_staged =
+                            handle_char_drag(ui, state, &cell, text_origin, a, change);
                         if cell.clicked() && !drag_staged {
-                            granular::toggle_row(state, path, a);
+                            granular::toggle_row(state, change, a);
                         }
-                        paint_char_highlight(&painter, state, &cell.rect, text_origin, a, path);
+                        paint_char_highlight(&painter, state, &cell.rect, text_origin, a, change);
                         cell
                     } else {
                         cell_band(

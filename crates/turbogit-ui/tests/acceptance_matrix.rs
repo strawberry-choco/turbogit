@@ -60,7 +60,7 @@ use std::path::{Path, PathBuf};
 use test_support::git_seed::git;
 use test_support::harness::shell_harness_over;
 use turbogit_app::state::{AppState, Dialog};
-use turbogit_domain::model::{RootId, Submodule, SubmoduleState, Worktree};
+use turbogit_domain::model::{ChangeRef, RootId, Submodule, SubmoduleState, Worktree};
 
 /// The box every page is captured at, in points: the frame size.
 ///
@@ -555,7 +555,7 @@ fn acceptance_matrix_screenshots() {
     // changelist hands it the repo-relative path a row click stores. The
     // absolute form was the fixture's own invention: it painted this machine's
     // temp dir into a tracked PNG.
-    h.state_mut().ui.preview_change = Some(PathBuf::from("lib.txt"));
+    h.state_mut().ui.preview_change = Some(ChangeRef::new(RootId(repo.clone().into()), "lib.txt"));
     h.state_mut().ui.tab = turbogit_app::state::Tab::Commit;
     settle(&mut h);
     snapshot(&mut h, "04-diff");

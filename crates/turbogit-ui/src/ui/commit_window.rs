@@ -67,7 +67,7 @@ use turbogit_app::granular;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
-use turbogit_domain::model::{Change, ChangeStatus, DisplayName, Root, RootId};
+use turbogit_domain::model::{Change, ChangeRef, ChangeStatus, DisplayName, Root, RootId};
 
 /// Fixed width of the Commit panel (redesign 03, screen 01): the Commit
 /// window is exactly two zones — this fixed-width panel on the left and
@@ -136,9 +136,12 @@ enum RowAction {
     /// selection, the anchor and the diff preview. Keyed by the canonical
     /// root-scoped path because the selection is per-root, and carrying the
     /// [`ClickKind`] the held modifier picked at the click site, because which
-    /// gesture this is cannot be recovered after the frame.
+    /// gesture this is cannot be recovered after the frame. The root is the row's
+    /// own, for the reason [`Self::ToggleStage`] states: the preview has to be
+    /// read in the repository the row belongs to.
     Select {
         key: PathBuf,
+        root: RootId,
         path: PathBuf,
         kind: ClickKind,
     },
@@ -184,7 +187,12 @@ fn apply_actions(state: &mut AppState, actions: Vec<RowAction>, order: &[RowSlot
     for action in actions {
         match action {
             RowAction::ToggleStage { root, path } => set_file_staged(state, &root, &path),
-            RowAction::Select { key, path, kind } => {
+            RowAction::Select {
+                key,
+                root,
+                path,
+                kind,
+            } => {
                 changes_selection::apply(
                     &mut state.ui.selected,
                     &mut state.ui.selection_anchor,
@@ -194,7 +202,7 @@ fn apply_actions(state: &mut AppState, actions: Vec<RowAction>, order: &[RowSlot
                 );
                 // The preview follows every gesture, range and toggle included:
                 // the row the pointer landed on is the row to look at.
-                state.ui.preview_change = Some(path);
+                state.ui.preview_change = Some(ChangeRef { root, path });
             }
             RowAction::ToggleGroup(id) => {
                 if state.ui.changes_expanded.contains(&id) {
@@ -223,27 +231,24 @@ fn set_file_staged(state: &mut AppState, root: &RootId, path: &Path) {
 }
 
 /// Space: toggle the staging checkbox of the row being previewed. The
-/// previewed row *is* the focused one — `preview_change` is the single file
-/// this window is looking at, and a row click is what sets it. With nothing
-/// previewed there is no focused row and the key does nothing; defaulting to
-/// the first row would stage a file nobody aimed at.
+/// previewed row is the single file this window is looking at, in whichever root
+/// owns it, and a row click is what sets it. With nothing previewed there is no
+/// focused row and the key does nothing; defaulting to the first row would stage
+/// a file nobody aimed at.
 pub fn toggle_previewed_row_checkbox(state: &mut AppState) {
-    let Some(root) = state.selected_root.clone() else {
-        return;
-    };
-    let Some(path) = state.ui.preview_change.clone() else {
+    let Some(change) = state.ui.preview_change.clone() else {
         return;
     };
     if state
         .multi
-        .by_id(&root)
-        .and_then(|r| r.resolve_change(&path))
+        .by_id(&change.root)
+        .and_then(|r| r.resolve_change(&change.path))
         .is_some_and(|c| c.status == ChangeStatus::Conflicted)
     {
         // A conflicted path has no checkbox, so it has no Space gesture either.
         return;
     }
-    set_file_staged(state, &root, &path);
+    set_file_staged(state, &change.root, &change.path);
 }
 
 /// Collect the `Change` objects of the selected root the developer is looking
@@ -283,6 +288,11 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     // on miss through the engine the app owns, keyed per root and invalidated
     // with the other root caches.
     if let Some(root_id) = state.selected_root.clone() {
+        state.ensure_hunk_stats(&root_id);
+    }
+    // The pane previews, and a granular verb stages, in the root the previewed
+    // change names — whose cold statistics are the same requirement.
+    if let Some(root_id) = state.ui.preview_change.as_ref().map(|c| c.root.clone()) {
         state.ensure_hunk_stats(&root_id);
     }
     sub_tab_strip(ui, state);
@@ -1003,19 +1013,25 @@ fn group_section(
     indent_guide(ui, body.response.rect);
 }
 
-/// Flat changed-file paths of the active Commit sub-tab in display order —
-/// the F7/Shift+F7 cross-file traversal list (spec R7). Unfiltered by the
-/// file filter: navigation walks the real file list. Local Changes spans each
-/// repo's flat list and its conflicts group; the placeholder tabs contribute
-/// nothing.
-pub(crate) fn active_subtab_files(state: &AppState) -> Vec<PathBuf> {
+/// Flat changes of the active Commit sub-tab in display order — the F7/Shift+F7
+/// cross-file traversal list (spec R7). Unfiltered by the file filter:
+/// navigation walks the real file list. Local Changes spans each repo's flat
+/// list and its conflicts group; the placeholder tabs contribute nothing.
+///
+/// Each carries its own root, because the list does span every root: relative to
+/// one root alone, navigation could never leave the first root's duplicate.
+pub(crate) fn active_subtab_files(state: &AppState) -> Vec<ChangeRef> {
     let buckets = match state.ui.commit_subtab {
         CommitSubTab::LocalChanges => change_buckets(state),
         CommitSubTab::Shelf | CommitSubTab::Stash => return Vec::new(),
     };
     buckets
         .iter()
-        .flat_map(|b| b.changes.iter().map(|c| c.path.clone()))
+        .flat_map(|b| {
+            b.changes
+                .iter()
+                .map(|c| ChangeRef::new(b.root.id.clone(), c.path.clone()))
+        })
         .collect()
 }
 
@@ -1091,12 +1107,11 @@ fn status_color(c: &Change) -> Color32 {
 /// row's badge letter wears, resolved through the same [`status_color`] so the
 /// pill and the letter cannot drift. `Modified` is the fallback for a path the
 /// status no longer lists, matching `granular::preview_status`'s own.
-fn preview_status_tint(state: &AppState, path: &Path) -> Color32 {
+fn preview_status_tint(state: &AppState, change: &ChangeRef) -> Color32 {
     state
-        .selected_root
-        .as_ref()
-        .and_then(|id| state.multi.by_id(id))
-        .and_then(|root| root.resolve_change(path))
+        .multi
+        .by_id(&change.root)
+        .and_then(|root| root.resolve_change(&change.path))
         .map_or(Palette::STATUS_MODIFIED, status_color)
 }
 
@@ -1268,7 +1283,7 @@ fn change_row(
 ) {
     let key = root.canonical_key(c);
     if c.status == ChangeStatus::Conflicted {
-        conflict_row(ui, state, c, &key, actions, order);
+        conflict_row(ui, state, &root.id, c, &key, actions, order);
         return;
     }
 
@@ -1489,6 +1504,7 @@ fn change_row(
     if body.clicked() {
         actions.push(RowAction::Select {
             key,
+            root: root.id.clone(),
             path: c.path.clone(),
             kind: row_click_kind(ui),
         });
@@ -1519,12 +1535,16 @@ fn change_row(
 fn conflict_row(
     ui: &mut Ui,
     state: &AppState,
+    root: &RootId,
     c: &Change,
     key: &PathBuf,
     actions: &mut Vec<RowAction>,
     order: &mut Vec<RowSlot>,
 ) {
-    let previewing = state.ui.preview_change.as_ref() == Some(&c.path);
+    // The rail marks the previewed *change*, so two roots holding the same
+    // relative path light up one row, not both.
+    let previewing =
+        state.ui.preview_change.as_ref() == Some(&ChangeRef::new(root.clone(), c.path.clone()));
     let (glyph, glyph_tint) = status_glyph(c.status);
     let label = format!("{} {}", badge_letter(c), c.path.display());
     let font = FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional);
@@ -1585,6 +1605,7 @@ fn conflict_row(
     if response.clicked() {
         actions.push(RowAction::Select {
             key: key.clone(),
+            root: root.clone(),
             path: c.path.clone(),
             kind: row_click_kind(ui),
         });
@@ -1801,11 +1822,11 @@ fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
     // too. See [`diff_stats`] for why the header's copy is deliberate.
     widgets::card(ui, widgets::CardFrame::default(), |ui| {
         let preview = state.ui.preview_change.clone();
-        preview_header(ui, state, preview.as_deref());
+        preview_header(ui, state, preview.as_ref());
         match preview {
-            Some(path) => {
-                diff_stats(ui, state, &path);
-                crate::ui::diff::render_diff(ui, state, &None, &None, &Some(path));
+            Some(change) => {
+                diff_stats(ui, state, &change);
+                crate::ui::diff::render_diff(ui, state, &None, &None, &Some(change));
             }
             None => {
                 ui.colored_label(
@@ -1833,7 +1854,7 @@ fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
 /// drifting from the other, and this is the ratchet for that: both readings are
 /// taken from the painted frame, and every `+N` / `−M` pair in the preview card
 /// has to be the same pair.
-fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {
+fn preview_header(ui: &mut Ui, state: &mut AppState, change: Option<&ChangeRef>) {
     widgets::card_header(ui, |ui| {
         ui.horizontal(|ui| {
             ui.label(
@@ -1845,8 +1866,8 @@ fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {
                     ))
                     .color(Palette::INK),
             );
-            if let Some(path) = path {
-                let path_text = path.display().to_string();
+            if let Some(change) = change {
+                let path_text = change.path.display().to_string();
                 let path_resp = ui.label(
                     RichText::new(&path_text)
                         .font(crate::theme::chrome_font(crate::theme::TYPE_DETAIL_TITLE))
@@ -1855,16 +1876,16 @@ fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {
                 path_resp.widget_info(|| {
                     WidgetInfo::labeled(WidgetType::Label, true, format!("Previewing {path_text}"))
                 });
-                let status = granular::preview_status(state, Some(path));
+                let status = granular::preview_status(state, Some(change));
                 pill(
                     ui,
                     status_chip_label(status),
-                    preview_status_tint(state, path),
+                    preview_status_tint(state, change),
                 );
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if let Some(path) = path {
-                    change_nav(ui, state, path);
+                if let Some(change) = change {
+                    change_nav(ui, state, change);
                 }
                 let mode = if state.ui.diff_side_by_side {
                     "Side-by-side diff"
@@ -1901,8 +1922,8 @@ fn preview_header(ui: &mut Ui, state: &mut AppState, path: Option<&Path>) {
 /// same display model in the diff pane), and
 /// `tests/commit_window.rs` asserts the two agree. What is forbidden is one
 /// copy drifting from the other, which is a different defect and a real one.
-fn diff_stats(ui: &mut Ui, state: &AppState, path: &Path) {
-    let (added, removed) = crate::ui::diff::preview_line_counts(state, path);
+fn diff_stats(ui: &mut Ui, state: &AppState, change: &ChangeRef) {
+    let (added, removed) = crate::ui::diff::preview_line_counts(state, change);
     let stat_font = FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional);
     ui.horizontal(|ui| {
         ui.label(
@@ -1920,9 +1941,9 @@ fn diff_stats(ui: &mut Ui, state: &AppState, path: &Path) {
 
 /// Prev/next change navigation over the active sub-tab's changed-file list,
 /// right-aligned to the card's edge.
-fn change_nav(ui: &mut Ui, state: &mut AppState, path: &Path) {
+fn change_nav(ui: &mut Ui, state: &mut AppState, change: &ChangeRef) {
     let files = active_subtab_files(state);
-    let current = files.iter().position(|p| p.as_path() == path);
+    let current = files.iter().position(|c| c == change);
     let prev_enabled = current.is_some_and(|i| i > 0);
     let next_enabled = current.is_some_and(|i| i + 1 < files.len());
     // Right-to-left: the Next chevron is allocated first so it sits at the
