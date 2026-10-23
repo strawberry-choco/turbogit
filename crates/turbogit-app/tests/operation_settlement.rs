@@ -17,7 +17,8 @@ use test_support::git_seed::{self, GitEnv, commit, git_with_env};
 use turbogit_app::activity::ActivityKind;
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
-use turbogit_app::state::{AppState, UnmergedCommit, UnmergedCommits};
+use turbogit_app::shell_writes::commit as commit_writes;
+use turbogit_app::state::{AppState, Dialog, UnmergedCommit, UnmergedCommits};
 use turbogit_domain::model::{
     MergeOpts, RebaseAction, RebaseOpts, RebasePlanEntry, RootId, Upstream,
 };
@@ -817,4 +818,173 @@ fn a_failed_operation_names_the_operation_and_the_failure() {
         "a failed fetch is not a conflict hand-off"
     );
     let _ = root;
+}
+
+// --- the `Commit and Push…` chain ------------------------------------------------
+
+/// The chain's dialog opens on the commit's own completion, over the snapshots
+/// that completion already refreshed, and the armed ask is spent by the root that
+/// owed it.
+///
+/// **The outgoing snapshot is the pane's to build.** `ui.dlg.push_outgoing` is
+/// written by the Push dialog's first paint and never by settlement, so what is
+/// pinned here is the pair settlement owns — the dialog that opened and the ask it
+/// consumed. That the snapshot names the commit which just landed is the UI suite's
+/// claim, and only the spawned pump can judge it.
+#[test]
+fn a_landed_commit_that_owed_an_open_opens_the_push_dialog() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    std::fs::write(alpha.join("chained.txt"), "chained\n").unwrap();
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+
+    // The index is built through the shell's own staging entry, so the commit has
+    // something to land: an empty index would settle as a failure, not a chain.
+    dispatch_and_settle(
+        &mut state,
+        commit_writes::set_staged(&root, Path::new("chained.txt"), true),
+    );
+
+    state.dispatch_commit(&root, "the chained subject", false, true);
+    state.drain_events();
+    assert!(
+        !state.ui.busy,
+        "the commit settled; the feed read {:?}",
+        feed(&state)
+    );
+
+    assert_eq!(
+        state.ui.dialog,
+        Some(Dialog::Push),
+        "the chain opens its dialog on the commit's completion; the feed read {:?}",
+        feed(&state)
+    );
+    assert!(
+        state.ui.commit_push_dialog_pending.is_none(),
+        "the completion spent the ask rather than leaving it armed"
+    );
+    assert!(
+        subjects(&alpha).contains(&"the chained subject".to_string()),
+        "and the commit it chained from is really in the repository: {:?}",
+        subjects(&alpha)
+    );
+}
+
+/// A commit git refuses arms no dialog, so the owed open goes with it: the failure
+/// arm drops exactly what the success arm would have answered.
+#[test]
+fn a_commit_that_fails_opens_nothing_and_drops_the_ask() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+    let history_before = subjects(&alpha);
+
+    // The fixture's worktree is clean and level with `origin/main`, so the index
+    // is empty and `git commit -m` exits 1 on "nothing to commit". The failure is
+    // git's own, with no preflight or synthetic error between the dispatch and the
+    // completion.
+    state.dispatch_commit(&root, "nothing is staged", false, true);
+    state.drain_events();
+
+    let entries = &state.ui.activity.entries;
+    assert_eq!(entries.len(), 1, "the feed read {:?}", feed(&state));
+    assert_eq!(entries[0].kind, ActivityKind::Error);
+    assert!(
+        entries[0].message.starts_with("Commit:"),
+        "the failure names the commit it belongs to: {:?}",
+        entries[0].message
+    );
+    assert_eq!(
+        state.ui.dialog, None,
+        "a commit that did not land owes no push dialog"
+    );
+    assert!(
+        state.ui.commit_push_dialog_pending.is_none(),
+        "and the ask goes with the failure instead of standing over the next verb"
+    );
+    assert_eq!(
+        subjects(&alpha),
+        history_before,
+        "nothing landed on the refused commit"
+    );
+}
+
+/// The owed open answers only a commit: a completion of another kind on the *same*
+/// root neither opens the dialog nor loses the ask. This is the whole reason
+/// `OpKind::Commit` is its own identity — commit used to share the `Custom` tail
+/// with staging, and a shared tail cannot be gated on which verb ran without
+/// reading the label's prose (ADR-0020).
+#[test]
+fn a_completion_of_another_kind_cannot_answer_the_owed_open() {
+    for kind in ["a stage", "a fetch"] {
+        let (_tmp, project, alpha) = project_with_origin("alpha");
+        std::fs::write(alpha.join("other.txt"), "other\n").unwrap();
+        let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+        let root = registered_root(&state, &alpha);
+        // Armed by hand: the state a chain leaves while its commit is still on a
+        // worker thread and the developer is clicking something else.
+        state.ui.commit_push_dialog_pending = Some(root.clone());
+
+        // Both are `Affected::Root` on this very root, so the root half of the
+        // gate passes and only the operation's kind can hold the open shut.
+        let op = match kind {
+            "a stage" => commit_writes::set_staged(&root, Path::new("other.txt"), true),
+            _ => Operation::Fetch {
+                roots: vec![root.clone()],
+            },
+        };
+        dispatch_and_settle(&mut state, op);
+
+        assert_eq!(
+            state.ui.dialog,
+            None,
+            "{kind} cannot open the dialog a commit owed; the feed read {:?}",
+            feed(&state)
+        );
+        assert_eq!(
+            state.ui.commit_push_dialog_pending.as_ref(),
+            Some(&root),
+            "{kind} cannot spend it either; the feed read {:?}",
+            feed(&state)
+        );
+    }
+}
+
+/// **A plain commit clears an owed ask** instead of stranding a consent dialog on
+/// the next chain: the pending is assigned at dispatch, never set conditionally.
+///
+/// Under the inline pump an owed open always settles before a second click could
+/// arrive, so this assignment rule is pinned at the state level rather than
+/// through the surface.
+#[test]
+fn a_plain_commit_clears_an_owed_open_instead_of_stranding_it() {
+    let (_tmp, project, alpha) = project_with_origin("alpha");
+    std::fs::write(alpha.join("plain.txt"), "plain\n").unwrap();
+    let mut state = AppState::for_roots(&project, std::slice::from_ref(&alpha));
+    let root = registered_root(&state, &alpha);
+    dispatch_and_settle(
+        &mut state,
+        commit_writes::set_staged(&root, Path::new("plain.txt"), true),
+    );
+    // The ask the developer abandoned by clicking plain Commit.
+    state.ui.commit_push_dialog_pending = Some(root.clone());
+
+    state.dispatch_commit(&root, "a plain subject", false, false);
+    state.drain_events();
+
+    assert!(
+        state.ui.commit_push_dialog_pending.is_none(),
+        "a plain commit drops an ask it was not asked to answer"
+    );
+    assert_eq!(
+        state.ui.dialog,
+        None,
+        "and its own completion must not answer the ask the plain click replaced: {:?}",
+        feed(&state)
+    );
+    assert!(
+        subjects(&alpha).contains(&"a plain subject".to_string()),
+        "the plain commit still landed: {:?}",
+        subjects(&alpha)
+    );
 }

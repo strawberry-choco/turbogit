@@ -1594,6 +1594,13 @@ pub struct UiState {
     /// on a retry and to name the target a rejection reports;
     /// taking it is also what says "no push is in flight".
     pub push_in_flight: Option<crate::operation::PushRequest>,
+    /// The root whose landed commit still owes the Push dialog an open. Armed
+    /// before [`AppState::dispatch_commit`] and spent, opened, or dropped only by
+    /// the completion of the commit it names — an unrelated fetch, stage, or
+    /// second commit can neither answer it nor lose it. Session-only, like
+    /// [`Self::dialog`] and [`Self::push_in_flight`]: a commit that settled
+    /// before a restart does not owe the next session a dialog.
+    pub commit_push_dialog_pending: Option<RootId>,
     /// The last push rejection awaiting the user's reply, if any. Session-only
     /// like every dialog: a rejection is about the push that just failed.
     pub push_rejection: Option<PushRejection>,
@@ -2779,6 +2786,32 @@ impl AppState {
         self.ui.push_in_flight = Some(request);
         self.ui.push_rejection = None;
         self.dispatch(op);
+    }
+
+    /// Dispatch `root`'s commit, and arm the Push dialog's open for its
+    /// settlement when `then_push` says the chain was asked for.
+    ///
+    /// **The pending is armed before the dispatch** because under the inline pump
+    /// the completion is queued synchronously inside [`Self::dispatch`], so
+    /// arming after it is a lost race — the same rule
+    /// [`Self::unshelve`] states for the shelf record.
+    ///
+    /// The arm is an **assignment, not a conditional set**: a plain commit clears
+    /// an owed open instead of leaving a consent dialog stranded on a later one.
+    ///
+    /// The dialog is NOT opened here. Under the spawned pump the commit is still
+    /// on its worker thread while this frame paints, and the dialog builds its
+    /// outgoing snapshot once, on first paint, so opening it here paints a commit
+    /// that did land as "No outgoing commits". Only
+    /// [`crate::settle`]'s `open_push_dialog_owed` may open it, over the
+    /// snapshots the completion has already refreshed.
+    pub fn dispatch_commit(&mut self, root: &RootId, message: &str, amend: bool, then_push: bool) {
+        self.ui.commit_push_dialog_pending = then_push.then(|| root.clone());
+        self.dispatch(Operation::Commit {
+            root: root.clone(),
+            message: message.to_string(),
+            amend,
+        });
     }
 
     /// Dispatch a user-initiated pull of one root, optionally checking

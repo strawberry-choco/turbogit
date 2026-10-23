@@ -2641,16 +2641,13 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         state.ui.recent_messages.truncate(12);
     }
     if let Some(root) = root {
-        state.dispatch(shell_writes::commit::commit(&root, &msg, amend));
+        state.dispatch_commit(&root, &msg, amend, and_push);
     }
     // Only the message well resets. The selection is "the files I am looking
     // at", and a commit says nothing about what the developer is looking at —
     // clearing it would throw away their place in the list after every commit.
     state.ui.commit_message.clear();
     state.save_durable_ui();
-    if and_push {
-        state.ui.dialog = Some(Dialog::Push);
-    }
 }
 
 #[cfg(test)]

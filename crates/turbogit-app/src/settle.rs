@@ -45,7 +45,8 @@ use crate::granular;
 use crate::operation::{OpKind, PushRequest};
 use crate::root_caches::Affected;
 use crate::state::{
-    AppState, BranchDeleteUndo, BranchDivergence, DivergentRoot, PushRejection, Toast, ToastKind,
+    AppState, BranchDeleteUndo, BranchDivergence, Dialog, DivergentRoot, PushRejection, Toast,
+    ToastKind,
 };
 
 /// What a completion leaves the drain loop to do next.
@@ -73,6 +74,7 @@ pub const ROUTED_KINDS: &[OpKind] = &[
     OpKind::Unshelve,
     OpKind::WorktreeAdd,
     OpKind::WorktreeRemove,
+    OpKind::Commit,
     OpKind::DropCommit,
     OpKind::RewordCommit,
     OpKind::Push,
@@ -110,6 +112,8 @@ struct RuleSet {
     push_rejection: bool,
     /// Record an apply's titled outcome, which git never learned itself.
     apply_outcome: bool,
+    /// `Commit and Push…`: open the Push dialog the commit's own dispatch armed.
+    open_push_dialog: bool,
 }
 
 impl RuleSet {
@@ -122,6 +126,7 @@ impl RuleSet {
         shelf_removal: false,
         push_rejection: false,
         apply_outcome: false,
+        open_push_dialog: false,
     };
 }
 
@@ -162,6 +167,13 @@ fn rules_for(kind: OpKind) -> RuleSet {
         },
         OpKind::Unshelve => RuleSet {
             shelf_removal: true,
+            ..RuleSet::NONE
+        },
+        // The rule is named rather than carried by the `Custom` tail because
+        // staging shares that tail, and telling a commit from a stage by its
+        // label is the prose dispatch ADR-0020 removes.
+        OpKind::Commit => RuleSet {
+            open_push_dialog: true,
             ..RuleSet::NONE
         },
         OpKind::Shelve | OpKind::WorktreeAdd | OpKind::WorktreeRemove => RuleSet::NONE,
@@ -386,6 +398,30 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
     open_conflict_handoff(state, kind, conflicts);
     arm_branch_delete_undo(state, rules);
     remove_shelf_record(state, rules);
+    open_push_dialog_owed(state, rules, affected);
+}
+
+/// Rule twelve (issue 07): the `Commit and Push…` chain opens its dialog on the
+/// commit's own completion rather than on the click that dispatched it.
+///
+/// **The placement below [`refresh_affected`] is the behaviour, not ordering
+/// superstition.** The dialog's first paint reads
+/// `turbogit_services::sync_service::outgoing_per_root`, which resolves each
+/// root's upstream out of the `Root` snapshots rule three replaces, and
+/// `AppState::full_log`; it then keeps that snapshot for the whole time it is
+/// open. Opening it above the refresh compiles and passes the whole inline-pump
+/// suite while reproducing the defect.
+///
+/// **The short-circuit is deliberate and differs from its siblings.**
+/// [`arm_branch_delete_undo`] and [`arm_landed_rewrite_undo`] `take` the pending
+/// *before* testing their rule, which is right for a confirmation the user
+/// abandoned and wrong here: an unrelated fetch or a second commit sharing this
+/// tail would swallow the owed open along with it.
+fn open_push_dialog_owed(state: &mut AppState, rules: RuleSet, affected: &Affected) {
+    if rules.open_push_dialog && state.ui.commit_push_dialog_pending.as_ref() == affected.root() {
+        state.ui.commit_push_dialog_pending = None;
+        state.ui.dialog = Some(Dialog::Push);
+    }
 }
 
 /// Rule ten (issue 12): a confirmed local-branch deletion arms the short-window
@@ -534,6 +570,7 @@ fn settle_err(
     clear_delete_pending(state);
     clear_rewrite_undo_pending(state);
     clear_reselect(state, affected);
+    drop_push_dialog_owed(state, rules, affected);
     // Rule four is the only one that can end the arm early: a merge/rebase that
     // stopped on a conflict is not a failure, so nothing after it runs. The
     // control value is what lets the drain loop's own `continue` stay where it
@@ -569,6 +606,17 @@ fn clear_rewrite_undo_pending(state: &mut AppState) {
 /// follows it.
 fn clear_reselect(state: &mut AppState, affected: &Affected) {
     state.clear_pending_reselect(affected);
+}
+
+/// A commit that failed arms no dialog, so the owed open goes with it, beside
+/// the other pendings this arm clears unconditionally. The gate is
+/// [`open_push_dialog_owed`]'s rather than a bare clear: a completion of some
+/// other kind that happens to name the same root leaves the ask standing, which
+/// is the point of carrying a root at all.
+fn drop_push_dialog_owed(state: &mut AppState, rules: RuleSet, affected: &Affected) {
+    if rules.open_push_dialog && state.ui.commit_push_dialog_pending.as_ref() == affected.root() {
+        state.ui.commit_push_dialog_pending = None;
+    }
 }
 
 /// Rule four (issue 09): a merge/rebase that hits conflicts is not a failure —
@@ -906,6 +954,9 @@ fn report_for(state: &mut AppState, kind: OpKind, affected: &Affected, label: &s
         | OpKind::Unshelve
         | OpKind::WorktreeAdd
         | OpKind::WorktreeRemove
+        // A commit states the word and not an ahead count, because the Push
+        // dialog this kind's chain opens already owns that number.
+        | OpKind::Commit
         | OpKind::DropCommit
         | OpKind::RewordCommit
         // A take reports the verb it ran, and the verb's own label carries the

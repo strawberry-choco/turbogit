@@ -40,6 +40,13 @@ pub enum OpKind {
     Unshelve,
     WorktreeAdd,
     WorktreeRemove,
+    /// [`Operation::Commit`] — the index written as a commit on one root's HEAD.
+    /// Its own identity because the Push dialog's open must be gated on *which*
+    /// operation landed, and the [`Operation::Custom`] tail cannot answer that:
+    /// commit shared it with staging (`shell_writes::commit::set_staged`), so
+    /// the two are one identity there, and settlement may not read label prose
+    /// to tell them apart (ADR-0020).
+    Commit,
     /// [`Operation::DropCommit`] — one commit removed from the current branch's
     /// history, its descendants replayed.
     DropCommit,
@@ -425,6 +432,27 @@ pub enum Operation {
     },
     /// `git worktree remove` — mutates the root's linked-worktree set.
     WorktreeRemove { root: RootId, path: PathBuf },
+    /// The index of `root`, written as a commit under `message`; `amend`
+    /// rewrites HEAD instead of adding to it.
+    ///
+    /// It carries no path list on purpose. The window computes the message and
+    /// the amend flag, and the granular selection is already in the index, so a
+    /// commit that was told which files would be a second, contradicting answer
+    /// to what the developer staged.
+    ///
+    /// A named variant rather than a [`Operation::Custom`] closure because the
+    /// `Commit and Push…` chain opens a surface on this operation's
+    /// *completion*, and settlement can only gate that on an identity — not on
+    /// the word "Commit", which staging's closures do not share and which
+    /// ADR-0020 forbids reading as a discriminator.
+    ///
+    /// It is not a worktree mutation: a commit moves HEAD and the ref log, and
+    /// leaves every linked worktree's checked-out path exactly where it was.
+    Commit {
+        root: RootId,
+        message: String,
+        amend: bool,
+    },
     /// Remove ONE commit from `branch`'s history and replay everything built on
     /// top of it. A rewrite, so it carries the settings the protected-branch
     /// guard reads and the branch that guard names when HEAD is detached.
@@ -774,6 +802,10 @@ impl Operation {
             Self::Unshelve { name, .. } => format!("Unshelve '{name}'"),
             Self::WorktreeAdd { branch, .. } => format!("Add worktree {branch}"),
             Self::WorktreeRemove { .. } => "Remove worktree".to_string(),
+            // One word for both `amend` arms: the activity feed has always said
+            // "Commit" for an amend, and the message stays out of it exactly as
+            // a reword's does.
+            Self::Commit { .. } => "Commit".to_string(),
             // The short reference, because that is what the developer read in
             // the menu item they clicked. The reword's new message is content
             // and stays out of the feed.
@@ -828,6 +860,7 @@ impl Operation {
             | Self::Unshelve { root, .. }
             | Self::WorktreeAdd { root, .. }
             | Self::WorktreeRemove { root, .. }
+            | Self::Commit { root, .. }
             | Self::DropCommit { root, .. }
             | Self::RewordCommit { root, .. }
             // The in-flight resolution invalidates exactly the root it announced:
@@ -867,6 +900,7 @@ impl Operation {
             Self::Unshelve { .. } => OpKind::Unshelve,
             Self::WorktreeAdd { .. } => OpKind::WorktreeAdd,
             Self::WorktreeRemove { .. } => OpKind::WorktreeRemove,
+            Self::Commit { .. } => OpKind::Commit,
             Self::DropCommit { .. } => OpKind::DropCommit,
             Self::RewordCommit { .. } => OpKind::RewordCommit,
             // The recovery plan's presence is the phase: settlement matches
@@ -998,6 +1032,18 @@ impl Operation {
             }
             Self::WorktreeRemove { root, path } => {
                 vcs.worktree_remove(root.as_path(), &path, false)
+            }
+            // The service returns the new commit's id and it is **discarded**:
+            // what the completion reports is the operation's own outcome, and
+            // substituting the id would change what the toast says.
+            Self::Commit {
+                root,
+                message,
+                amend,
+            } => {
+                let _ =
+                    turbogit_services::changes::commit_index(vcs, root.as_path(), &message, amend)?;
+                Ok(())
             }
             Self::DropCommit {
                 root,

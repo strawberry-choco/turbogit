@@ -1,11 +1,14 @@
 //! The commit window's writes.
 //!
-//! Three verbs, and what separates them is *what the developer asked for*:
-//! the commit takes the index as it stands, while stage and un-stage each take
-//! one whole file and hand it straight to the port. None of them re-derives
-//! anything from the repository — the window computed the message, the amend
-//! flag and the path, and the granular selection is already in the index, which
-//! is why the commit no longer has to be told about it.
+//! Stage and un-stage are **one entry for two directions**: each takes one
+//! whole file and hands it straight to the port, and the label is spelled here
+//! rather than at the click so the two toasts cannot drift. The window's other
+//! verb is a named
+//! [`Operation::Commit`](crate::operation::Operation::Commit), dispatched
+//! through [`AppState::dispatch_commit`](crate::state::AppState::dispatch_commit)
+//! — named `Operation` variants are
+//! [`crate::shell_writes`](crate::shell_writes)'s stated exclusion, not an
+//! entry here.
 
 use std::path::Path;
 
@@ -14,20 +17,6 @@ use turbogit_services::changes;
 
 use crate::operation::Operation;
 use crate::root_caches::Affected;
-
-/// Commit the index of `root` under `message`.
-///
-/// The service returns the new commit's id and it is **discarded**: what the
-/// completion reports is the operation's own outcome, and substituting the id
-/// would change what the toast says.
-pub fn commit(root: &RootId, message: &str, amend: bool) -> Operation {
-    let msg = message.to_string();
-    let root = root.clone();
-    Operation::custom("Commit", Affected::Root(root.clone()), move |v| {
-        let _ = changes::commit_index(v, root.as_path(), &msg, amend)?;
-        Ok(())
-    })
-}
 
 /// Stage or un-stage one whole file in `root`.
 ///

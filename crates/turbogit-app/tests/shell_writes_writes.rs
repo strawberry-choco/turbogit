@@ -11,6 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use test_support::git_seed::{commit, git, repo_with_history, repo_with_origin};
+use turbogit_app::operation::Operation;
 use turbogit_app::shell_writes::{
     branch as branch_writes, commit as commit_writes, rewrite as rewrite_writes,
     stash as stash_writes, tag as tag_writes,
@@ -186,16 +187,16 @@ fn commit_window_stash_entries_apply_and_pop_by_index() {
 }
 
 #[test]
-fn commit_entry_commits_the_index_and_the_amend_entry_rewrites_the_last_one() {
+fn committing_the_index_lands_and_an_amend_rewrites_the_last_commit() {
     let tmp = tempfile::tempdir().unwrap();
     let work = repo_with_origin(tmp.path(), "work");
     std::fs::write(work.join("new.txt"), "new\n").unwrap();
     let mut state = state_for(&work);
     let root = state.selected_root.clone().unwrap();
 
-    // The commit entry takes no file list: what lands is the index. The new
+    // The commit takes no file list: what lands is the index. The new
     // file has to reach the index first, through the staging entry — which is
-    // the whole contract the two entries now share.
+    // the whole contract the two share.
     let op = commit_writes::set_staged(&root, Path::new("new.txt"), true);
     assert_eq!(op.label(), "Stage new.txt");
     state.dispatch(op);
@@ -206,7 +207,11 @@ fn commit_entry_commits_the_index_and_the_amend_entry_rewrites_the_last_one() {
         "the stage entry put the file in the index"
     );
 
-    let op = commit_writes::commit(&root, "add a file", false);
+    let op = Operation::Commit {
+        root: root.clone(),
+        message: "add a file".into(),
+        amend: false,
+    };
     assert_eq!(op.label(), "Commit");
     state.dispatch(op);
     state.drain_events();
@@ -216,7 +221,11 @@ fn commit_entry_commits_the_index_and_the_amend_entry_rewrites_the_last_one() {
         "the commit landed"
     );
 
-    let op = commit_writes::commit(&root, "add a file, amended", true);
+    let op = Operation::Commit {
+        root: root.clone(),
+        message: "add a file, amended".into(),
+        amend: true,
+    };
     assert_eq!(op.label(), "Commit");
     state.dispatch(op);
     state.drain_events();
@@ -232,7 +241,7 @@ fn commit_entry_commits_the_index_and_the_amend_entry_rewrites_the_last_one() {
     );
 }
 
-/// **The commit entry stages nothing.** The observable fact is *which files
+/// **A commit stages nothing.** The observable fact is *which files
 /// land*: a tracked file the developer deliberately left out of the index must
 /// stay out of the commit, and stay dirty afterwards. The absence of a stage
 /// call is pinned at the services seam, against the recording executor —
@@ -251,7 +260,11 @@ fn committing_takes_the_index_and_leaves_an_unstaged_file_out() {
     let mut state = state_for(&work);
     let root = state.selected_root.clone().unwrap();
 
-    let op = commit_writes::commit(&root, "index only", false);
+    let op = Operation::Commit {
+        root: root.clone(),
+        message: "index only".into(),
+        amend: false,
+    };
     state.dispatch(op);
     state.drain_events();
 

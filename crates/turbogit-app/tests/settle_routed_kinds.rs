@@ -86,6 +86,11 @@ fn one_of_every_variant() -> Vec<Operation> {
             root: r.clone(),
             path: PathBuf::from("/repo/wt"),
         },
+        Operation::Commit {
+            root: r.clone(),
+            message: "a subject".into(),
+            amend: false,
+        },
         Operation::drop_commit(&r, "feature", SHA, &s),
         Operation::reword_commit(&r, "feature", SHA, "a better message", &s),
         Operation::push(push_request()),
