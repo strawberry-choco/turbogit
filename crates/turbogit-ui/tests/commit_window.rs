@@ -698,6 +698,79 @@ fn commit_and_push_chains_commit_then_opens_push_dialog() {
     );
 }
 
+/// A repository whose branch already tracks `origin`, plus the bare remote it
+/// was pushed to. The remote lives outside the scanned project directory so
+/// root discovery cannot register it as a second root.
+fn repo_tracking_origin(scratch: &Path) -> (Repo, tempfile::TempDir) {
+    let remote = tempfile::tempdir().expect("temp bare remote");
+    git(remote.path(), &["init", "-q", "--bare", "."]);
+    let repo = temp_repo(scratch, "tracking-repo");
+    git(
+        &repo.path,
+        &[
+            "remote",
+            "add",
+            "origin",
+            &remote.path().display().to_string(),
+        ],
+    );
+    git(&repo.path, &["push", "-q", "-u", "origin", &repo.branch()]);
+    (repo, remote)
+}
+
+/// The push dialog must describe the commit the chain just made, not the
+/// repository as it was before the click.
+///
+/// **Only the spawned pump can show this.** `for_roots` runs git inline, so its
+/// `dispatch` returns after the commit has landed and the dialog is built from
+/// post-commit git on the very next read; `launch_in` uses the pump production
+/// runs, where the frame that opens the dialog paints while the commit worker
+/// is still going.
+#[test]
+fn commit_and_push_dialog_lists_the_commit_the_chain_just_landed() {
+    let parent = tempfile::tempdir().unwrap();
+    let (repo, _remote) = repo_tracking_origin(parent.path());
+    std::fs::write(repo.path.join("base.txt"), "chained\n").unwrap();
+
+    let cfg = tempfile::tempdir().unwrap();
+    let cfg_path = cfg.path().to_path_buf();
+    std::mem::forget(cfg);
+    let state = AppState::launch_in(Some(parent.path().to_path_buf()), Some(cfg_path));
+    assert_eq!(
+        state.multi.roots.len(),
+        1,
+        "the fixture must register exactly the repository under test"
+    );
+
+    let mut h = harness(state);
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
+    h.state_mut().ui.commit_message = "chained subject".into();
+    h.run();
+    open_commit_split_dropdown(&h);
+    h.run();
+    h.get_by_label("Commit and Push...").click();
+    h.run();
+
+    assert!(
+        wait_until(15_000, || repo
+            .subjects()
+            .contains(&"chained subject".to_string())),
+        "the commit must land before the dialog is judged"
+    );
+    assert_eq!(
+        h.state().ui.dialog,
+        Some(Dialog::Push),
+        "commit-and-push must open the push dialog"
+    );
+    // The repo node's ahead count and the empty-state line are both the
+    // dialog's own output (`outgoing_tree`), read off the snapshot it builds
+    // once when it opens. The commit message is NOT a usable assertion here:
+    // the commit window's "Recent:" chip paints the same string whatever the
+    // dialog says, so it passes from a stale dialog too.
+    assert_not_painted(&h, "No outgoing commits.");
+    assert_painted(&h, "tracking-repo — 1 commits ahead");
+}
+
 /// Track a new file in `repo` so it counts as a modified (M) change when
 /// its worktree content diverges afterwards — untracked files render as
 /// `? name` rows and would not exercise the modified-row assertions.
