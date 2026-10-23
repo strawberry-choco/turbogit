@@ -211,8 +211,9 @@ fn body(ui: &mut Ui, state: &mut AppState, op: BulkOp) {
 /// column answers *may this row run*, which is a different question from *what
 /// colour is this repository*, and the two happen to share a definition of
 /// diverged today — a coincidence to revisit, not an invariant. That is why the
-/// strings stay capitalised and stay this short (`Dirty` where the owner says
-/// `dirty worktree`, `Clean` where it says `in sync`) and why `No upstream` is
+/// strings stay capitalised and stay this short (`Dirty` where the owner words
+/// it lowercase, and `Clean` where the owner says nothing at all) and why
+/// `No upstream` is
 /// an arm at all: a missing upstream is not a repository state the ladder models.
 /// Only the diverged *condition* is the owner's, and only because the bulk-ops
 /// skip reason beside it already states that definition.

@@ -434,10 +434,14 @@ fn assert_section(harness: &Harness<'_, AppState>, label: &str, count: usize) {
 fn rows_render_icon_count_pairs_in_sync_gone_and_upstream() {
     let (_project, _dir, harness) = open_branches_over(sync_repo_project(), branches_harness);
 
-    // feat: diverged from origin/main → one badge per direction, each with its
-    // own arrow icon and its words.
-    assert_painted(&harness, "2 ahead");
-    assert_painted(&harness, "1 behind");
+    // feat: diverged from origin/main → one badge per direction, each its own
+    // direction arrow and count, with no word left in it. This is the whole-frame
+    // smoke check that a real git repository reaches those marks; the sharp claim
+    // (which line paints them, in which ink and face) is
+    // `a_current_row_keeps_its_state_marks` in `branch_tree_view.rs`, because the
+    // sidebar's repository badge spells the same fact `↑2` in this same frame.
+    assert_painted(&harness, "↑2");
+    assert_painted(&harness, "↓1");
     assert_painted(&harness, "origin/main");
     // main: tracks origin/main and is in sync → unmarked (no "in sync" label).
     assert_not_painted(&harness, "in sync");
@@ -1611,7 +1615,7 @@ mod pure {
             behind: 1,
             gone: false,
             expect_upstream: Some("origin/main"),
-            expect_badge: &[(SyncKind::Ahead, "2 ahead"), (SyncKind::Behind, "1 behind")],
+            expect_badge: &[(SyncKind::Ahead, "↑2"), (SyncKind::Behind, "↓1")],
         },
         // Untracked: no upstream, no badge.
         RowMetaCase {
@@ -2604,7 +2608,7 @@ fn a_branch_name_is_a_ref_chip_and_its_state_is_coloured_text_beside_it() {
 ///
 /// The mark pair paints its dot and its words in one colour, so every painted
 /// word on the row that is *not* the name, the tracking ref or the current
-/// marker is state. Scoped by the row's own rect, because "3 behind" paints on
+/// marker is state. Scoped by the row's own rect, because "↓3" paints on
 /// every row that is three behind — and every ink is checked against the one
 /// map, so a state that grew a colour of its own would fail here rather than in
 /// the token suite.

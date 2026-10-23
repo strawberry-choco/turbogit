@@ -467,7 +467,8 @@ fn the_added_accent_clears_aa_on_the_content_surface_at_its_new_value() {
     // changed one accent" is checkable rather than asserted by vibes:
     //
     // - `AHEAD` is unchanged, and clears AA where it is used (ahead counts,
-    //   the current-branch icon and "in sync" all sit on the content surface).
+    //   the current-branch icon and a clean repository's state dot all sit on the
+    //   content surface).
     //   It is *not* clear on every audited surface (3.69:1 on the highest
     //   raised one), so this is not a blanket promise and the suite does not
     //   make one.
@@ -1374,8 +1375,10 @@ fn p0_repo_state_shared_mapping_is_app_wide() {
     );
     // The same value that colours the dot names the state in words, so the two
     // can never disagree (§13; wording reused from the sidebar's smart groups).
-    assert_eq!(RepoState::Clean.words(), "in sync");
-    assert_eq!(RepoState::Dirty.words(), "dirty worktree");
+    // `Clean` is the state that has no words: nothing outstanding is nothing to
+    // say, and the mark is its dot alone.
+    assert_eq!(RepoState::Clean.words(), "");
+    assert_eq!(RepoState::Dirty.words(), "dirty");
     assert_eq!(RepoState::Conflict.words(), "has conflicts");
     assert_eq!(RepoState::Diverged.words(), "diverged");
     assert_eq!(RepoState::Unpushed.words(), "unpushed commits");

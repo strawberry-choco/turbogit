@@ -210,9 +210,13 @@ shared equivalent and paints its own stroke.
 `widgets/chips.rs:1-49` is the owner: it states the closed set of three — one
 function each, with their fills, inks and what each carries — that the badge and
 `hash_chip` are deliberately outside it, and that **semantic state is not a
-chip**: `dirty`, `↓ 2 behind`, `Up to date` and `Needs update` render as coloured
+chip**: `dirty`, `↓2`, `Up to date` and `Needs update` render as coloured
 text or a leading dot from the one `RepoState::color()` map, because a state
-behind a fill stops reading as state and starts reading as a category. What
+behind a fill stops reading as state and starts reading as a category. A sync
+badge's direction arrow is set in the data face (`components::badge_face`): the
+chrome face has no arrow of its own and would resolve it through a fallback cut,
+putting two typefaces inside a three-glyph mark, and a count is data by §19
+anyway. What
 that page does not record is the decision that closed the question of "what does
 a state colour mean". The map has seven states and only **three colours** that
 name a severity, so "no chip may wear a state colour" had to be answered twice:

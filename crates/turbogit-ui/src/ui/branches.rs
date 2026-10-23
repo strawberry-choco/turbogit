@@ -852,7 +852,7 @@ fn checkout_branch(state: &mut AppState, root: &RootId, branch: &Branch) {
 /// selected branch's block (issue 05) or the quiet selection prompt. It never
 /// blocks the list — it is a side panel on the same frame.
 /// One quiet relationship line: the sync state vs its tracked remote
-/// ("2 ahead · 1 behind · tracks origin/main"). The status words come from
+/// ("↑2 · ↓1 · tracks origin/main"). The status words come from
 /// [`sync_badge`], the same source the row's chips read, so the panel and the
 /// list cannot drift.
 /// The action list in the spec's order and wording (issue 05), now a shim

@@ -30,7 +30,7 @@
 //!
 //! # Semantic state is not a chip
 //!
-//! `dirty`, `↓ 2 behind`, `Up to date` and `Needs update` render as **coloured
+//! `dirty`, `↓2`, `Up to date` and `Needs update` render as **coloured
 //! text or a leading dot**, coloured from the one repository-state map,
 //! [`crate::theme::RepoState::color`]. A state is not a ref and not a number, so
 //! a filled chip is the wrong shape for it: a state behind a fill stops reading

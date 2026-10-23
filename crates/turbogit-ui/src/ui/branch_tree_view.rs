@@ -44,10 +44,10 @@ use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches::{branch_matches, matches_query, row_meta};
 use crate::ui::branches_tree::{self, BranchNode, BranchView, RemoteGroup, RepoSection};
 use crate::ui::components::{
-    BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H,
-    current_row_fill, kit_button, kit_button_width, middle_truncate_to_width, paint_rail,
-    ref_chip_with_ink, ref_chip_with_ink_width, row_fill, row_ink, section_header, state_mark,
-    state_mark_width, sync_badge, sync_ink,
+    BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H, badge_mark,
+    badge_mark_width, current_row_fill, kit_button, kit_button_width, middle_truncate_to_width,
+    paint_rail, ref_chip_with_ink, ref_chip_with_ink_width, row_fill, row_ink, section_header,
+    state_mark, state_mark_width, sync_badge, sync_ink,
 };
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::menu_host::{self, MenuId};
@@ -721,7 +721,9 @@ fn paint_nodes(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    let step = indent_step(ui);
+    // One icon's width off the shared tree step: this tree's rows already lead
+    // with an icon, so the base two-space pair over-hangs its own parent.
+    let step = indent_step(ui) - KIT_ICON;
     for n in nodes {
         match n {
             BranchNode::Leaf(l) => {
@@ -837,10 +839,10 @@ fn repo_header(
     }
 
     // Right cluster: the repo's Fetch, with the state summary in front of it.
-    // The summary is the **mark pair** — a leading dot and the words, the count
-    // and the separator all wearing the one map's colour — and it is never a
-    // chip: a state behind a fill stops reading as state and starts reading as
-    // a category.
+    // The summary is the **mark pair** — a leading dot and the state (counts in
+    // the badge spelling, words for everything else), all wearing the one map's
+    // colour — and it is never a chip: a state behind a fill stops reading as
+    // state and starts reading as a category.
     let mut right = ui.new_child(
         UiBuilder::new()
             .max_rect(Rect::from_min_max(
@@ -891,15 +893,22 @@ fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
     "…".to_owned()
 }
 
-/// The header's status in words: the current branch's upstream counts, then the
-/// repository's state — both read off the section the builder already derived,
-/// so the numbers and the dot can never disagree.
+/// The header's state summary: the current branch's counts in the one badge
+/// spelling (`↑2 · ↓1`), then the repository's state in words — all read off
+/// the section the builder already derived, so the numbers, the dot and the
+/// words can never disagree. A state with nothing to report contributes no
+/// words, and an empty part is dropped rather than left to dangle a separator.
+///
+/// The band is one chrome galley, so the arrows ride the fallback cut exactly
+/// as they do in the sidebar's repository rows; the row badges are the marks
+/// that take the data face ([`badge_mark`]).
 fn header_summary(section: &RepoSection) -> String {
     let mut parts: Vec<String> = sync_badge(section.ahead, section.behind, false)
         .into_iter()
-        .map(|(_, words)| words)
+        .map(|(_, label)| label)
         .collect();
     parts.push(section.status.words().to_string());
+    parts.retain(|part| !part.is_empty());
     parts.join(" · ")
 }
 
@@ -1218,7 +1227,7 @@ fn branch_row(
     let mut badges_w: f32 = pill_w
         + chips
             .iter()
-            .map(|(_kind, label)| state_mark_width(ui, label) + 4.0)
+            .map(|(kind, label)| badge_mark_width(ui, *kind, label) + 4.0)
             .sum::<f32>();
 
     // The name/tracking split reads off the row's own width and nothing else —
@@ -1285,8 +1294,15 @@ fn branch_row(
                 // and a state behind a fill reads as a category. This is the
                 // site the v1 `sync_chip` used to tint a chip background with
                 // `RepoState::color()`.
-                state_mark(ui, label, sync_ink(*kind));
+                //
+                // The gap is spent *before* the mark: this zone runs
+                // right-to-left, so a space added after it lands between this
+                // mark and the one further left, and the rightmost mark sits
+                // flush against the `Current` marker it is supposed to stand
+                // apart from. It also matches the slot the row reserved, which
+                // charges each chip its mark plus 4px on its left.
                 ui.add_space(4.0);
+                badge_mark(ui, *kind, label, sync_ink(*kind));
             }
         }
         // A remote-tracking ref deleted upstream reads "gone" (issue 17,

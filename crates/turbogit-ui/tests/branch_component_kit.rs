@@ -76,7 +76,7 @@ fn surface_tokens_match_design_doc() {
 #[test]
 fn meaning_colors_match_design_doc() {
     assert_eq!(Palette::ACCENT, egui::Color32::from_rgb(0x35, 0x74, 0xf0)); // primary action / branch chips
-    assert_eq!(Palette::AHEAD, egui::Color32::from_rgb(0x5f, 0xa8, 0x6c)); // ahead counts, current branch, in sync
+    assert_eq!(Palette::AHEAD, egui::Color32::from_rgb(0x5f, 0xa8, 0x6c)); // ahead counts, current branch, a clean repo's dot
     assert_eq!(Palette::DANGER, egui::Color32::from_rgb(0xdb, 0x5c, 0x5c)); // delete only
     assert_eq!(Palette::LINK, egui::Color32::from_rgb(0x74, 0xa3, 0xe8)); // the commit hash chip's ink
 }
@@ -1026,14 +1026,24 @@ fn no_chip_in_the_set_is_a_repository_state() {
 fn repository_state_is_one_map_and_the_chip_set_holds_none_of_it() {
     use turbogit_ui::ui::widgets::{COUNT_CHIP_COLORS, CURRENT_CHIP_COLORS, REF_CHIP_COLORS};
 
-    // Every state has words and a colour, from the same map — a dot and the
-    // summary beside it can never disagree, because there is only one source for
-    // both halves.
+    // Every state has a colour, and every state that has something to report has
+    // words — a dot and the summary beside it can never disagree, because there
+    // is only one source for both halves. `Clean` is the one state that says
+    // nothing: a repository with nothing outstanding is not an event worth a
+    // sentence, and its band paints the green dot alone.
     for state in ALL_REPO_STATES {
-        assert!(
-            !state.words().is_empty(),
-            "{state:?} must have wording: a state nobody can read is not a state"
-        );
+        if state == turbogit_ui::theme::RepoState::Clean {
+            assert_eq!(
+                state.words(),
+                "",
+                "{state:?} is the state that says nothing: its mark is the dot"
+            );
+        } else {
+            assert!(
+                !state.words().is_empty(),
+                "{state:?} must have wording: a state nobody can read is not a state"
+            );
+        }
         println!("{state:?}: {:?} in {:?}", state.words(), state.color());
     }
 
@@ -1128,7 +1138,7 @@ fn a_dirty_repository_reaches_the_branches_screen_as_a_dot_and_words_never_as_a_
     // The state the fixture actually produced. Read from the words the frame
     // painted rather than assumed, so a fixture that stopped being dirty fails
     // here for the honest reason instead of passing vacuously.
-    let words = "dirty worktree";
+    let words = "dirty";
     let expected_ink = turbogit_ui::theme::RepoState::Dirty.color();
     assert_eq!(
         expected_ink,
@@ -1140,9 +1150,12 @@ fn a_dirty_repository_reaches_the_branches_screen_as_a_dot_and_words_never_as_a_
     // (1) Coloured text. The words paint, once, in the map's colour. Scoped by
     // string, and the count is asserted rather than assumed: a second copy of
     // the summary elsewhere in the tree would make "which one" unanswerable.
+    // Whole-galley equality, not `contains`: this fixture's own branches are
+    // named `dirty-current` and `dirty-feature`, and a substring test would
+    // count their name chips as state words.
     let hits: Vec<_> = painted_galleys(&harness)
         .into_iter()
-        .filter(|g| g.text.contains(words))
+        .filter(|g| g.text == words)
         .collect();
     assert_eq!(
         hits.len(),
@@ -1227,31 +1240,93 @@ fn danger_rests_tinted_and_grows_stronger() {
 
 #[test]
 fn sync_badge_contract_matches_design() {
-    // The badge states the relationship in words, one entry per direction; the
-    // arrow itself is the chip's icon, so it never duplicates it in the label.
+    // One entry per direction, stated as its direction glyph and its count. The
+    // word is gone and the arrow carries it, which is the spelling the sidebar's
+    // repository rows and the branches popup already use.
     assert_eq!(
         sync_badge(2, 0, false),
-        vec![(SyncKind::Ahead, "2 ahead".to_string())]
+        vec![(SyncKind::Ahead, "↑2".to_string())]
     );
     assert_eq!(
         sync_badge(0, 1, false),
-        vec![(SyncKind::Behind, "1 behind".to_string())]
+        vec![(SyncKind::Behind, "↓1".to_string())]
     );
     // Diverged is the pair, not one combined marker.
     assert_eq!(
         sync_badge(2, 1, false),
         vec![
-            (SyncKind::Ahead, "2 ahead".to_string()),
-            (SyncKind::Behind, "1 behind".to_string()),
+            (SyncKind::Ahead, "↑2".to_string()),
+            (SyncKind::Behind, "↓1".to_string()),
         ]
     );
     // In sync says nothing — an empty list, not a label.
     assert_eq!(sync_badge(0, 0, false), vec![]);
-    // A deleted upstream wins over any count.
+    // A deleted upstream wins over any count, and stays a word.
     assert_eq!(
         sync_badge(3, 0, true),
         vec![(SyncKind::Gone, "gone".to_string())]
     );
+}
+
+/// The face a sync badge is laid out in must own both of its glyphs. A badge is
+/// arrow plus digit, and in the chrome chain the arrow only resolves through a
+/// fallback cut — two typefaces inside a three-glyph mark. This pins the half
+/// that does not depend on which fallbacks the chain happens to carry: the data
+/// face covers both arrows itself. `a_current_row_keeps_its_state_marks` pins the
+/// other half, that a painted badge really is monospace.
+#[test]
+fn the_data_face_owns_both_direction_arrows() {
+    use turbogit_ui::theme::{TYPE_CHIP, data_font};
+
+    let mut harness = Harness::new_ui_state(
+        |ui, _| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::install_fonts(ui.ctx());
+        },
+        (),
+    );
+    settle(&mut harness);
+    // The frame has to actually render: the font atlas queues texture deltas for
+    // the glyphs it lays out, and an unrendered context drops them on the floor.
+    let _image = harness.render().expect("renderer produced no image");
+    for arrow in ["↑", "↓"] {
+        assert!(
+            harness
+                .ctx
+                .fonts_mut(|f| f.has_glyphs(&data_font(TYPE_CHIP), arrow)),
+            "{arrow} must be covered by the face the badge is painted in, or the \
+             mark loses its direction and the row states nothing"
+        );
+    }
+}
+
+/// The band's summary paints its counts in the chrome galley (`state_mark`), so
+/// the arrows ride whatever the proportional chain resolves them through. That
+/// chain changing is invisible to every text assertion — tofu still lays out as
+/// text — so the coverage the band now depends on is pinned the way the data
+/// face's is.
+#[test]
+fn the_chrome_chain_resolves_the_arrows_the_band_summary_needs() {
+    use turbogit_ui::theme::{TYPE_CHIP, chrome_font};
+
+    let mut harness = Harness::new_ui_state(
+        |ui, _| {
+            turbogit_ui::theme::configure_style(ui.ctx());
+            turbogit_ui::theme::install_fonts(ui.ctx());
+        },
+        (),
+    );
+    settle(&mut harness);
+    let _image = harness.render().expect("renderer produced no image");
+    for arrow in ["↑", "↓"] {
+        assert!(
+            harness
+                .ctx
+                .fonts_mut(|f| f.has_glyphs(&chrome_font(TYPE_CHIP), arrow)),
+            "{arrow} must resolve somewhere in the chrome chain, or the band's \
+             summary paints a box where its count belongs"
+        );
+    }
 }
 
 // --- §14.4/§14.7 truncation ----------------------------------------------------
@@ -2571,10 +2646,13 @@ fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apar
 // and in every state it does not.
 #[test]
 fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
-    let src = srcscan::fn_code(
-        &srcscan::read_source(Path::new(CRATE_SRC).join("ui/components.rs")),
-        "state_mark",
-    );
+    // The scan target is `mark`, the one implementation behind both faces:
+    // `state_mark` (a state in words, chrome) and `badge_mark` (a direction
+    // arrow and its count, data) each hand the text and the face to it, so the
+    // dot's geometry is still decided in exactly one place. A second copy of
+    // these claims would have to be a second mark, which is what this guards.
+    let components = Path::new(CRATE_SRC).join("ui/components.rs");
+    let src = srcscan::fn_code(&srcscan::read_source(&components), "mark");
 
     // The mark is a circle: a filled circle, no fill rect. A state behind a rect
     // stops reading as state and starts reading as a category, which is the
@@ -2603,14 +2681,11 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
              `RepoState::color()` map at the call site. {src}"
         );
     }
-    // …and it really is a dot: the circle is painted by `state_mark` itself, in
+    // …and it really is a dot: the circle is painted by the mark's own body, in
     // the same function, at the caller's colour. Both assertions read one
     // function now, which is the point — the dot's geometry and the words
     // beside it are one thing's business.
-    let dot = srcscan::fn_code(
-        &srcscan::read_source(Path::new(CRATE_SRC).join("ui/components.rs")),
-        "state_mark",
-    );
+    let dot = srcscan::fn_code(&srcscan::read_source(&components), "mark");
     assert!(
         dot.contains("circle_filled"),
         "the mark's leading dot is a filled circle and nothing else: {dot}"
@@ -2644,7 +2719,7 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
             egui::CentralPanel::default().show(ui, |ui| {
                 turbogit_ui::ui::components::state_mark(
                     ui,
-                    "2 behind",
+                    "unpulled commits",
                     turbogit_ui::theme::RepoState::Unpulled.color(),
                 );
             });
@@ -2663,7 +2738,7 @@ fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
         .collect();
     assert_eq!(
         words,
-        vec!["2 behind".to_owned()],
+        vec!["unpulled commits".to_owned()],
         "…and the state in words, with no chip body behind either of them: {words:?}"
     );
 }

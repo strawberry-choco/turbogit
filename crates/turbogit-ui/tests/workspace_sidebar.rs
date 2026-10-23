@@ -337,7 +337,7 @@ fn smart_groups_paint_with_member_counts() {
     assert_painted(&h, "has conflicts");
     assert_painted(&h, "unpushed commits");
     assert_painted(&h, "unpulled commits");
-    assert_painted(&h, "dirty worktree");
+    assert_painted(&h, "dirty");
     // …each currently holding exactly one member (five count badges of 1).
     assert_galley(&h, "1");
 }
@@ -378,16 +378,13 @@ fn clicking_a_smart_group_filters_the_tree_to_its_members() {
         "the memberless oss group header must drop out"
     );
 
-    // Switching to another group re-filters: dirty worktree keeps only lib
+    // Switching to another group re-filters: dirty keeps only lib
     // (the status bar still paints the focused repo alpha, so the tree-level
     // signal is the frontend folder dropping out and the single surviving
     // chain collapsing to its path label).
-    h.get_by_label("dirty worktree").click();
+    h.get_by_label("dirty").click();
     settle(&mut h);
-    assert_eq!(
-        h.state().ui.sidebar_smart_group,
-        Some("dirty worktree".into())
-    );
+    assert_eq!(h.state().ui.sidebar_smart_group, Some("dirty".into()));
     assert_galley(&h, "w/o/lib");
     h.get_by_label("Select repo lib");
     assert!(
@@ -397,7 +394,7 @@ fn clicking_a_smart_group_filters_the_tree_to_its_members() {
 
     // Clicking the active group again clears the filter: the whole tree
     // comes back.
-    h.get_by_label("dirty worktree").click();
+    h.get_by_label("dirty").click();
     settle(&mut h);
     assert_eq!(h.state().ui.sidebar_smart_group, None);
     assert_painted(&h, "alpha");
@@ -445,13 +442,13 @@ fn smart_group_membership_follows_a_refresh() {
     assert_not_painted(&h, "diverged");
     assert_not_painted(&h, "has conflicts");
     assert_not_painted(&h, "unpushed commits");
-    assert_not_painted(&h, "dirty worktree");
+    assert_not_painted(&h, "dirty");
 
     // lib gets uncommitted work on disk; the next refresh collects it into
-    // the dirty worktree group with no manual action beyond the refresh.
+    // the dirty group with no manual action beyond the refresh.
     std::fs::write(lib.join("wip.txt"), "wip\n").unwrap();
     manual_refresh(&mut h);
-    assert_painted(&h, "dirty worktree");
+    assert_painted(&h, "dirty");
     assert_galley(&h, "1");
     // Membership is computed, not manual: the still-clean alpha joins
     // nothing else.
@@ -871,13 +868,13 @@ fn folder_rows_paint_subtree_dirty_badges_reflecting_the_worktree() {
 
     // lib gets uncommitted work; the refresh lands it in the `oss` folder's
     // dirty badge (a "1" for one dirty repo in the subtree) and in the
-    // "dirty worktree" smart-group row.
+    // "dirty" smart-group row.
     std::fs::write(lib.join("wip.txt"), "wip\n").unwrap();
     manual_refresh(&mut h);
     assert_galley(&h, "1");
 
     // A conflicted repo counts as dirty too (the smart-group predicate).
-    assert_painted(&h, "dirty worktree");
+    assert_painted(&h, "dirty");
 }
 
 // -- Background incoming check (issue #27) -------------------------------------

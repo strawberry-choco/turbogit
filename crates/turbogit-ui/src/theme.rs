@@ -303,7 +303,8 @@ impl Palette {
 
     /// Accent / primary action (`#3574F0`): New Branch, Checkout, branch chips.
     pub const ACCENT: Color32 = Self::BRAND;
-    /// Ahead (`#5FA86C`): ahead counts, current-branch icon, "in sync".
+    /// Ahead (`#5FA86C`): ahead counts, current-branch icon, a clean
+    /// repository's state dot.
     pub const AHEAD: Color32 = Color32::from_rgb(0x5f, 0xa8, 0x6c);
     /// Danger (`#DB5C5C`): Delete only.
     pub const DANGER: Color32 = Color32::from_rgb(0xdb, 0x5c, 0x5c);
@@ -521,12 +522,18 @@ pub enum RepoState {
 impl RepoState {
     /// The state in words, beside [`RepoState::color`] so a dot and the summary
     /// next to it can never disagree. The wording is the sidebar's smart-group
-    /// vocabulary where the states overlap; `in sync` is new, and is what a
-    /// repository with nothing to report says.
+    /// vocabulary where the states overlap, and it is the short form: the state
+    /// names itself in the words a row has to spare.
+    ///
+    /// [`Self::Clean`] has **no** words. A repository with nothing to report says
+    /// nothing, and its mark is the dot alone (`state_mark` reserves no text gap
+    /// for an empty word). Syncing is not an event worth a sentence, and the
+    /// green dot already answers "nothing outstanding" wherever two repositories
+    /// are scanned side by side.
     pub fn words(self) -> &'static str {
         match self {
-            Self::Clean => "in sync",
-            Self::Dirty => "dirty worktree",
+            Self::Clean => "",
+            Self::Dirty => "dirty",
             Self::Conflict => "has conflicts",
             Self::Diverged => "diverged",
             Self::Unpushed => "unpushed commits",

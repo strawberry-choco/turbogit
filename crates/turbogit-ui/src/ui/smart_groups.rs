@@ -235,7 +235,7 @@ mod tests {
                 ("has conflicts", 1),
                 ("unpushed commits", 1),
                 ("unpulled commits", 1),
-                ("dirty worktree", 1),
+                ("dirty", 1),
             ],
             "the five built-ins with their member counts, in display order"
         );

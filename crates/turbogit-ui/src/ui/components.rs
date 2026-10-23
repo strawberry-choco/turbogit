@@ -13,8 +13,8 @@
 //! visible control is smaller (§14).
 
 use egui::{
-    Align, Color32, CornerRadius, Layout, Pos2, Response, RichText, Sense, Stroke, StrokeKind, Ui,
-    Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontId, Layout, Pos2, Response, RichText, Sense, Stroke,
+    StrokeKind, Ui, Vec2, WidgetInfo, WidgetType,
 };
 
 use super::icons::{self, Icon};
@@ -307,10 +307,26 @@ pub const STATE_DOT_R: f32 = 3.0;
 /// measured words. A row that lays its zones out up front reserves through this
 /// rather than guessing.
 pub fn state_mark_width(ui: &Ui, text: &str) -> f32 {
+    mark_width(ui, text, &chrome_font(TYPE_CHIP))
+}
+
+/// The mark pair's geometry, measured in the face its text is painted in. One
+/// implementation behind both [`state_mark`] and [`badge_mark`], so the dot, its
+/// offset and its gap are decided in exactly one place whether the state reads
+/// as a word or as a glyph beside a count.
+///
+/// A mark with no words is a dot alone, so it holds no gap for text it is not
+/// painting: the repository state with nothing to report contributes no words
+/// ([`crate::theme::RepoState::words`]) and its dot still sits where the band's
+/// summary ends.
+fn mark_width(ui: &Ui, text: &str, font: &FontId) -> f32 {
+    if text.is_empty() {
+        return STATE_DOT_R * 2.0;
+    }
     STATE_DOT_R * 2.0
         + 6.0
         + ui.painter()
-            .layout_no_wrap(text.to_owned(), chrome_font(TYPE_CHIP), Color32::WHITE)
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
             .size()
             .x
 }
@@ -332,10 +348,18 @@ pub fn state_mark_width(ui: &Ui, text: &str) -> f32 {
 /// and starts reading as a category.
 ///
 /// The text is interface, not data, so it reads in the proportional face at the
-/// chip's type size: a state is a sentence, and `2 behind` is a count beside a
-/// word rather than a ref name.
+/// chip's type size: a state is a sentence rather than a ref name. A row's
+/// direction badge is a count and takes [`badge_mark`] in the data face instead;
+/// the band's summary is the one place counts and words share this chrome
+/// galley, its arrows riding the fallback chain like the sidebar's rows.
 pub fn state_mark(ui: &mut Ui, text: &str, color: Color32) -> Response {
-    let w = state_mark_width(ui, text);
+    mark(ui, text, color, &chrome_font(TYPE_CHIP))
+}
+
+/// The mark pair painted in a caller-chosen face: see [`mark_width`] for why
+/// there is only one copy of the geometry.
+fn mark(ui: &mut Ui, text: &str, color: Color32, font: &FontId) -> Response {
+    let w = mark_width(ui, text, font);
     let h = super::widgets::CHIP_HEIGHT;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     if ui.is_rect_visible(rect) {
@@ -346,7 +370,7 @@ pub fn state_mark(ui: &mut Ui, text: &str, color: Color32) -> Response {
         );
         let galley = ui
             .painter()
-            .layout_no_wrap(text.to_owned(), chrome_font(TYPE_CHIP), color);
+            .layout_no_wrap(text.to_owned(), font.clone(), color);
         ui.painter().galley(
             Pos2::new(
                 rect.left() + STATE_DOT_R * 2.0 + 6.0,
@@ -358,6 +382,36 @@ pub fn state_mark(ui: &mut Ui, text: &str, color: Color32) -> Response {
     }
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, text));
     response
+}
+
+/// How wide [`badge_mark`] will paint one sync badge.
+pub fn badge_mark_width(ui: &Ui, kind: SyncKind, text: &str) -> f32 {
+    mark_width(ui, text, &badge_face(kind))
+}
+
+/// The mark pair for one sync badge: the same dot, then the direction glyph and
+/// its count (`↓1`).
+pub fn badge_mark(ui: &mut Ui, kind: SyncKind, text: &str, color: Color32) -> Response {
+    mark(ui, text, color, &badge_face(kind))
+}
+
+/// The face one sync badge's label is painted in, and why it is not the chrome
+/// face. Ahead and behind lead with a direction arrow, and the chrome chain owns
+/// U+2191/U+2193 only through a fallback face — so a chrome `↑2` lays its arrow
+/// out in one cut and its digit in another, which is two typefaces inside a
+/// three-glyph mark. JetBrains Mono carries both arrow and digit, so the badge
+/// reads as one thing, and a count with its direction glyph on it is data by §19
+/// regardless. `gone` is still a word, so it stays in chrome like every other
+/// state.
+///
+/// The coverage fact is contingent (an added fallback can supply the arrows) and
+/// so is not the claim any test makes: what is pinned is that the data face owns
+/// both glyphs, and that a row's badge paints in the monospace family.
+fn badge_face(kind: SyncKind) -> FontId {
+    match kind {
+        SyncKind::Ahead | SyncKind::Behind => data_font(TYPE_CHIP),
+        SyncKind::Diverged | SyncKind::InSync | SyncKind::Gone => chrome_font(TYPE_CHIP),
+    }
 }
 
 // --- R6: the ref chip, in the row's own ink ------------------------------------
@@ -566,21 +620,26 @@ pub enum SyncKind {
 }
 
 /// The row's sync relationship as a list of `(kind, label)` badges — the one
-/// place the status words are built, so the row's chips and the detail panel's
-/// relationship line can never drift apart. Each direction gets its own badge,
-/// which is what lets a diverged row show both arrows instead of one combined
-/// marker; an empty list means there is nothing to say (no upstream, or in
-/// sync). The arrow is the chip's icon, never part of the label.
+/// place the counts are turned into what a branch row paints. Each direction
+/// gets its own badge, which is what lets a diverged row show both arrows
+/// instead of one combined marker; an empty list means there is nothing to say
+/// (no upstream, or in sync).
+///
+/// A direction is stated as `glyph + count` (`↑2`, `↓1`), the spelling the
+/// sidebar's repository rows, the branches popup and the repository band's
+/// summary all use, so one meaning does not arrive in two formats across the
+/// panes. The arrow carries what the word used to and the mark pair's dot stays
+/// the icon; [`badge_mark`] paints it in the face that actually owns the glyph.
 pub fn sync_badge(ahead: usize, behind: usize, gone: bool) -> Vec<(SyncKind, String)> {
     if gone {
         return vec![(SyncKind::Gone, "gone".to_string())];
     }
     let mut badges = Vec::new();
     if ahead > 0 {
-        badges.push((SyncKind::Ahead, format!("{ahead} ahead")));
+        badges.push((SyncKind::Ahead, format!("↑{ahead}")));
     }
     if behind > 0 {
-        badges.push((SyncKind::Behind, format!("{behind} behind")));
+        badges.push((SyncKind::Behind, format!("↓{behind}")));
     }
     badges
 }

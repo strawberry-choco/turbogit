@@ -588,6 +588,49 @@ fn a_subgroup_a_section_and_a_row_are_distinguishable_by_geometry() {
     );
 }
 
+/// One nesting level hangs its children one icon's width tighter than the shared
+/// tree step. Every row in this tree leads with an icon, so the base step hangs
+/// past its own parent's glyph; the trim is measured off the painted frame so a
+/// change to either metric shows up here rather than in a screenshot review.
+#[test]
+fn a_nested_level_hangs_one_icon_tighter_than_the_shared_tree_step() {
+    use turbogit_ui::theme::{TYPE_BODY, data_font};
+    use turbogit_ui::ui::components::KIT_ICON;
+
+    let mut fx = Fixture::alpha_only();
+    fx.tree.show_remotes = false;
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    // Both measured galleys are name chips, so the chip's own inset cancels and
+    // what is left is exactly one level of hang: a plain label (the subgroup's
+    // own text) would carry 6px more and read as a wider step than the tree has.
+    let base = galleys_for(&h, "stale-branch")
+        .into_iter()
+        .next()
+        .expect("a depth-0 branch row");
+    let child = galleys_for(&h, "a")
+        .into_iter()
+        .next()
+        .expect("a row nested one level deep");
+    let step = child.pos.x - base.pos.x;
+
+    // `theme::two_space_indent` × `INDENT_STEPS_PER_LEVEL`, re-measured here
+    // rather than called: the harness's own pixels-per-point is what this frame
+    // laid the tree out at, and the painted x values are in the same points.
+    let two_space = h.ctx.fonts_mut(|f| {
+        f.layout_no_wrap("  ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
+            .size()
+            .x
+    });
+    let shared = two_space * 2.0;
+    assert!(
+        (step - (shared - KIT_ICON)).abs() < 0.6,
+        "a level hangs the shared tree step minus one icon width: step {step}, \
+         shared {shared}, two-space {two_space}"
+    );
+}
+
 /// The collapsed rollup sits at `LOCAL`'s level, so it takes the same casing.
 #[test]
 fn the_collapsed_rollup_reads_as_a_section_label() {
@@ -610,22 +653,25 @@ fn the_collapsed_rollup_reads_as_a_section_label() {
 
 // --- the repo header's summary -------------------------------------------------
 
-/// A header says what state its repository is in, in words, with the current
-/// branch's counts when there are any.
+/// A header says what state its repository is in: the current branch's counts in
+/// the one badge spelling, then the state in words. A repository with nothing
+/// outstanding is the one that has no sentence: the band keeps its state dot and
+/// paints no words, because "in sync" was a word for the absence of a fact.
 #[test]
-fn the_repo_header_names_its_status_in_words() {
+fn the_repo_header_names_its_status() {
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
     let texts = painted_text(&h);
 
-    // alpha: nothing to report.
+    // alpha: nothing to report, so nothing said.
     assert!(
-        texts.iter().any(|t| t == "in sync"),
-        "a clean repo says `in sync`: {texts:#?}"
+        !texts.iter().any(|t| t == "in sync"),
+        "a clean repo's band says nothing: {texts:#?}"
     );
-    // beta: its current branch `wip` is 2 ahead and 1 behind.
+    // beta: its current branch `wip` is 2 ahead and 1 behind, and the counts
+    // arrive in the same spelling the row's badges use.
     assert!(
-        texts.iter().any(|t| t == "2 ahead · 1 behind · diverged"),
+        texts.iter().any(|t| t == "↑2 · ↓1 · diverged"),
         "the counts and the state both belong to the header summary: {texts:#?}"
     );
 }
@@ -1047,7 +1093,7 @@ fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_a_word() {
 /// their ink. The rule the old assertion was reaching for (the band never hides
 /// what the row says) is the same rule; the shape of what it says changed.
 #[test]
-fn a_current_row_keeps_its_state_words() {
+fn a_current_row_keeps_its_state_marks() {
     use turbogit_ui::ui::components::SyncKind;
 
     let mut fx = Fixture::two_repos();
@@ -1061,7 +1107,7 @@ fn a_current_row_keeps_its_state_words() {
         .max_by(|a, b| a.pos.y.total_cmp(&b.pos.y))
         .expect("the current row");
     let center_y = row.pos.y + 6.0;
-    for (label, kind) in [("2 ahead", SyncKind::Ahead), ("1 behind", SyncKind::Behind)] {
+    for (label, kind) in [("↑2", SyncKind::Ahead), ("↓1", SyncKind::Behind)] {
         let words = galleys_for(&h, label)
             .into_iter()
             .find(|g| (g.pos.y - row.pos.y).abs() < 4.0)
@@ -1073,7 +1119,13 @@ fn a_current_row_keeps_its_state_words() {
         assert_eq!(
             words.color,
             sync_ink(kind),
-            "the state word wears the one repository-state map's ink"
+            "the state mark wears the one repository-state map's ink"
+        );
+        assert_eq!(
+            words.family,
+            egui::FontFamily::Monospace,
+            "the badge is one mark, so one face must own both its glyphs; in the \
+             chrome face the arrow only arrives through a fallback cut"
         );
     }
     // …and neither state ink is ever a *fill* anywhere in the frame.
@@ -1632,14 +1684,14 @@ fn a_hovered_row_keeps_painting_its_sync_badges() {
     settle(&mut h);
 
     assert_eq!(
-        galleys_for(&h, "2 ahead").len(),
+        galleys_for(&h, "↑2").len(),
         1,
         "the unhovered row states its sync state"
     );
     button(&h, "wip").hover();
     h.step();
     h.step();
-    for label in ["2 ahead", "1 behind"] {
+    for label in ["↑2", "↓1"] {
         assert_eq!(
             galleys_for(&h, label).len(),
             1,
