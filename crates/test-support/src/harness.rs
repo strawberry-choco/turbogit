@@ -705,3 +705,27 @@ pub fn settle_quiet<S>(harness: &mut Harness<'_, S>) {
     }
     panic!("shell layout did not settle within 300 frames; last painted:\n{prev}");
 }
+
+/// Step frames until the painted output stabilizes **and no keyed read is
+/// pending** — diff or blame, the gate does not say which.
+///
+/// Neither [`settle`] nor [`settle_quiet`] fits a surface whose content arrives
+/// through the keyed read: both ask only whether the layout stopped relaying
+/// out, so a suite could read a "Computing…" placeholder and call it a result.
+pub fn settle_reads(harness: &mut Harness<'_, AppState>) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut prev = String::new();
+    while std::time::Instant::now() < deadline {
+        harness.step();
+        let fingerprint = format!(
+            "{:?}|read={}",
+            painted_text(harness),
+            harness.state().read_pending(),
+        );
+        if fingerprint == prev && !harness.state().read_pending() {
+            return;
+        }
+        prev = fingerprint;
+    }
+    panic!("the keyed-read surface did not settle within 15s");
+}
