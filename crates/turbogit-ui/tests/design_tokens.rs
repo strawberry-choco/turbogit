@@ -2331,6 +2331,7 @@ const TOKEN_INVENTORY: &[&str] = &[
     // --- Module-level: embedded font binaries
     "JETBRAINS_MONO_REGULAR",
     "JETBRAINS_MONO_BOLD",
+    "NOTO_SANS_SC_REGULAR",
 ];
 
 /// Every `pub const NAME` declared in `theme.rs`, in source order.
