@@ -944,10 +944,14 @@ pub const JETBRAINS_MONO_REGULAR: &[u8] =
     include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf");
 /// Embedded JetBrains Mono Bold.
 pub const JETBRAINS_MONO_BOLD: &[u8] = include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf");
+/// Embedded Noto Sans SC Regular (OFL-licensed; see
+/// `assets/fonts/OFL-NotoSansSC.txt`): the CJK face every chain falls back to.
+pub const NOTO_SANS_SC_REGULAR: &[u8] = include_bytes!("../assets/fonts/NotoSansSC-Regular.ttf");
 
 /// Registry keys used in [`font_definitions`].
 const JBM_REGULAR_KEY: &str = "jetbrains-mono-regular";
 const JBM_BOLD_KEY: &str = "jetbrains-mono-bold";
+const NOTO_SANS_SC_KEY: &str = "noto-sans-sc-regular";
 /// egui's built-in proportional face, already carried in
 /// `FontDefinitions::default()`'s font data. Leads the chrome chain.
 const UI_SANS_KEY: &str = "Ubuntu-Light";
@@ -976,10 +980,10 @@ fn system_font_data(file_names: &[&str]) -> Option<std::borrow::Cow<'static, [u8
 
 /// Build the design font stack: the Monospace (data) family leads with embedded
 /// JetBrains Mono Regular+Bold, the Proportional (chrome) family leads with
-/// egui's embedded UI sans, and both keep egui's built-in glyph fallbacks plus —
+/// egui's embedded UI sans, both keep egui's built-in glyph fallbacks plus —
 /// when present on this machine — the Windows system faces (`Segoe UI`,
-/// `Consolas`). System faces are consulted only for glyphs missing from the
-/// leading faces and degrade gracefully by omission when absent.
+/// `Consolas`), and every chain ends with embedded Noto Sans SC, which carries
+/// the CJK the leading faces have no glyphs for.
 ///
 /// Per ADR-0002 every leading face is embedded binary so text metrics are
 /// deterministic across machines; system lookup would vary layout.
@@ -997,6 +1001,16 @@ pub fn font_definitions() -> FontDefinitions {
         JBM_BOLD_KEY.into(),
         std::sync::Arc::new(FontData {
             font: std::borrow::Cow::Borrowed(JETBRAINS_MONO_BOLD),
+            index: 0,
+            tweak: FontTweak::default(),
+        }),
+    );
+    // Appended last in every chain below, so the leading faces keep their
+    // current Latin metrics and this face answers only the glyphs they lack.
+    defs.font_data.insert(
+        NOTO_SANS_SC_KEY.into(),
+        std::sync::Arc::new(FontData {
+            font: std::borrow::Cow::Borrowed(NOTO_SANS_SC_REGULAR),
             index: 0,
             tweak: FontTweak::default(),
         }),
@@ -1044,6 +1058,7 @@ pub fn font_definitions() -> FontDefinitions {
     if segoe_ui_available.is_some() {
         proportional.push("Segoe UI".to_owned());
     }
+    proportional.push(NOTO_SANS_SC_KEY.to_owned());
     defs.families
         .insert(egui::FontFamily::Proportional, proportional);
 
@@ -1058,12 +1073,28 @@ pub fn font_definitions() -> FontDefinitions {
     if consolas_available.is_some() {
         monospace.push("Consolas".to_owned());
     }
+    monospace.push(NOTO_SANS_SC_KEY.to_owned());
     defs.families.insert(egui::FontFamily::Monospace, monospace);
 
-    // Named bold family for real bold rendering via FontId.
+    // Named bold family for real bold rendering via FontId. Like the two style
+    // chains it keeps egui's built-in glyph fallbacks behind the embedded cut,
+    // then the CJK face: alone, this chain resolved an emoji in a bold title to
+    // the bold face's `?` and a Han to nothing at all. Noto joins at its regular
+    // weight, because a Chinese subject needs glyphs more than a bold Han cut.
+    //
+    // `NotoEmoji-Regular` also keeps a coverage probe honest on this chain.
+    // epaint names the first face carrying `◻`, else the first carrying `?`, as
+    // the chain's replacement face, and `has_glyph` reports false for every
+    // character resolving to it. With no `◻` carrier here that face is JetBrains
+    // Mono Bold itself, so the chain reads as if its own Latin were missing.
     defs.families.insert(
         egui::FontFamily::Name("jetbrains-mono-bold".into()),
-        vec![JBM_BOLD_KEY.into()],
+        vec![
+            JBM_BOLD_KEY.into(),
+            "NotoEmoji-Regular".into(),
+            "emoji-icon-font".into(),
+            NOTO_SANS_SC_KEY.into(),
+        ],
     );
 
     defs
