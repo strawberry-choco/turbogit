@@ -477,10 +477,11 @@ fn paint_icon_at(ui: &mut Ui, icon: Icon, origin: Pos2, size: f32, color: Color3
 /// option index (the caller applies the change to its own state).
 ///
 /// The widget is the shared picker used by every surface that needs a
-/// token-exact two- or three-way choice — diff side-by-side/unified, file/
-/// hunk/line granularity, CLI/libgit2/Auto backend, strategy pickers — so
-/// these controls render identically everywhere and a new surface can adopt
-/// the widget instead of inventing a second variant.
+/// token-exact two-, three- or four-way choice — diff side-by-side/unified,
+/// file/hunk/line granularity, CLI/libgit2/Auto backend, strategy pickers,
+/// the push dialog's PUSH SCOPE — so these controls render identically
+/// everywhere and a new surface can adopt the widget instead of inventing a
+/// second variant.
 pub fn segmented_control(ui: &mut Ui, options: &[&str], selected: usize) -> Option<usize> {
     const SEGMENT_H: f32 = 24.0;
     // Segments are controls, so they take the shared button padding.

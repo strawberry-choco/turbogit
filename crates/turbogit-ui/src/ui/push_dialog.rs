@@ -21,11 +21,20 @@
 //! banner naming the protected repos and matching pattern, with a one-click
 //! "Remove N protected repos from scope" action that excludes them so the
 //! push can proceed for the rest.
+//!
+//! # The shape
+//!
+//! IntelliJ's Push Commits dialog puts the commits on the LEFT and the
+//! changed files on the RIGHT, the push target and the push options in bands
+//! below them, and one shared footer at the bottom. This dialog has that
+//! shape: the two-pane body is the dialog's primary content, the TARGET band
+//! sits directly above the OPTIONS band, and the footer is the app's shared
+//! one.
 
 use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::widgets;
-use egui::{RichText, Ui};
+use egui::{Align, Layout, Pos2, Rect, RichText, ScrollArea, Ui, UiBuilder, Vec2};
 use turbogit_app::operation::PushRequest;
 use turbogit_app::state::{AppState, OutgoingRoot, PushPreview};
 use turbogit_app::sync_service::{self, PushScope, SubsetPushState};
@@ -34,12 +43,40 @@ use turbogit_domain::model::{
     SignatureState,
 };
 
+/// The height both pane bodies share, so the two panes read as one row and
+/// the divider between them spans both.
+///
+/// It is sized for the commit list the dialog is about: a commit row is 24 px
+/// (the ref chip sets the height), so a project node, two root nodes and four
+/// commits need 168 px of viewport, and the pane carries that plus its own
+/// 21 px of header. The commit list is the dialog's primary content and is
+/// the one region that grows.
+const PANE_BODY_H: f32 = 197.0;
+
+/// The scope variants in the order the control paints them.
+///
+/// The label array and the index mapping both come from this one table, so a
+/// segment can never be painted under another scope's name.
+const SCOPE_ORDER: [PushScope; 4] = [
+    PushScope::ThisRepo,
+    PushScope::Selection,
+    PushScope::Subtree,
+    PushScope::All,
+];
+
 pub fn show(ui: &mut Ui, state: &mut AppState) {
     let ctx = ui.ctx().clone();
     let mut open = true;
+    // The window's height is capped to the screen. A body that grows past the
+    // screen's bottom edge makes egui MOVE the window up, and a window that
+    // moves reflows every row under it — so the cap keeps the dialog's own
+    // rows where the user last saw them, and the report well scrolls inside
+    // the dialog instead of pushing the footer off the screen.
+    let max_height = ctx.input(|i| i.content_rect().height()) - 40.0;
     egui::Window::new("Push")
         .open(&mut open)
-        .default_width(560.0)
+        .default_width(720.0)
+        .max_height(max_height)
         .show(&ctx, |ui| {
             ensure_outgoing(state);
             ensure_target_defaults(state);
@@ -52,43 +89,20 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 
             // PUSH SCOPE control sits at the top (screen 10).
             push_scope_control(ui, state);
-            ui.separator();
 
             // Protected-branch remediation banner — names repos + pattern
             // and offers a one-click exclusion (issue #25). The banner is
             // skipped when the scope covers zero protected roots.
             let _protected_count = remediation_banner(ui, state, &scope);
 
-            // The aggregated outgoing tree; root-node clicks filter the
-            // changed-files PREVIEW only (ADR-0006), never the batch push.
-            outgoing_tree(ui, state);
-            changed_files_preview(ui, state);
+            // The two-pane body. Root-node clicks filter the changed-files
+            // PREVIEW only (ADR-0006), never the batch push.
+            push_panes(ui, state);
 
-            // Subset-push banner (issue #24) — explains why the unchecked
-            // older commit forces a full push.
-            let outgoing_shas: Vec<String> = state
-                .ui
-                .dlg
-                .push_outgoing
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .flat_map(|r| match &r.commits {
-                    Ok(cs) => cs.iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
-                    Err(_) => Vec::new(),
-                })
-                .collect();
-            let subset = sync_service::subset_push_state(
-                &outgoing_shas,
-                &state.ui.dlg.push_selected_commits,
-            );
+            // The subset state is the dialog's own reading of the commit
+            // selection: an unchecked older ancestor forces a full push.
+            let subset = subset_push_state(state);
             state.ui.dlg.push_subset = subset.clone();
-            if matches!(state.ui.dlg.push_subset, SubsetPushState::OlderUnchecked) {
-                ui.colored_label(
-                    Palette::STATE_WARNING,
-                    "All commits will be pushed — an unchecked older ancestor forces a full push.",
-                );
-            }
 
             // Explicit target fields above the options section (ADR-0007).
             // They only drive the `ThisRepo` scope path (issue #25).
@@ -98,58 +112,12 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                 no_target = target_panel(ui, state);
             }
 
-            ui.checkbox(
-                &mut state.ui.dlg.force_push,
-                "Force push (--force-with-lease)",
-            );
-            ui.checkbox(&mut state.ui.dlg.push_tags, "Push tags");
-            ui.checkbox(&mut state.ui.dlg.push_no_verify, "Skip pre-push hooks");
-            ui.checkbox(
-                &mut state.ui.dlg.push_set_upstream,
-                "Set upstream (--set-upstream)",
-            );
-            if state.ui.dlg.push_set_upstream {
-                ui.colored_label(Palette::STATE_INFO, "upstream will be set");
-            }
-
-            // Safety strip (issue #21): acknowledging force warns about
-            // history rewrite; naming a protected branch in the exact Branch
-            // field BLOCKS the ThisRepo path outright.
-            if scope_is_this_repo {
-                let branch = state.ui.dlg.push_branch.clone();
-                let force_blocked =
-                    state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch);
-                if force_blocked {
-                    widgets::inline_error(
-                        ui,
-                        format!("⚠ '{branch}' is protected — force-push blocked."),
-                    );
-                    widgets::inline_error(
-                        ui,
-                        "Uncheck force push or retarget the Branch field to continue.",
-                    );
-                } else if state.ui.dlg.force_push {
-                    ui.colored_label(
-                        Palette::STATE_WARNING,
-                        "⚠ Force push rewrites the remote branch (--force-with-lease).",
-                    );
-                }
-            }
+            options_band(ui, state, scope_is_this_repo, &subset);
 
             // Aggregated dry-run preview (issue #25): the summary line plus
             // one verbatim report per root in scope.
             if let Some(preview) = state.ui.dlg.push_preview_output.as_ref() {
-                ui.separator();
-                ui.label(
-                    RichText::new(format!(
-                        "{} commits → {} remotes · {} refs · {} rejected",
-                        preview.commits, preview.remotes, preview.refs, preview.rejected
-                    ))
-                    .small()
-                    .strong(),
-                );
-
-                preview_reports(ui, preview);
+                dry_run_well(ui, preview);
             }
 
             // Footer: Cancel / Preview / Push. The Push button names the
@@ -170,7 +138,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
                         if force_blocked_this_repo || no_target {
                             ui.disable();
                         }
-                        widgets::compact_button(ui, &label)
+                        widgets::compact_primary_button(ui, &label)
                     })
                     .inner;
                 if push.clicked() {
@@ -213,6 +181,8 @@ fn close(state: &mut AppState) {
 /// link, and it must state whether the push creates a ref or moves one that
 /// already exists rather than leaving that to be inferred from a branch name.
 fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
+    widgets::group_title(ui, "TARGET");
+
     // The root's facts are read once, owned: every arm below mutates
     // `state.ui.dlg`, and a borrow of the manager held across one of those
     // mutations is the compile error that would otherwise be a refactor.
@@ -223,6 +193,15 @@ fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
         .cloned();
     let no_remote = root.as_ref().is_some_and(|r| r.remotes.is_empty());
     let defining = no_remote && state.ui.dlg.push_define_remote;
+    let remote_field = state.ui.dlg.push_remote.clone();
+    let branch_field = state.ui.dlg.push_branch.clone();
+    let set_upstream = state.ui.dlg.push_set_upstream;
+    let target = root.as_ref().and_then(|r| {
+        sync_service::push_target_state(r, &remote_field, &branch_field, set_upstream)
+    });
+    let cannot_push = root
+        .as_ref()
+        .is_some_and(|r| r.remotes.is_empty() || sync_service::repository_is_empty(r));
 
     ui.horizontal(|ui| {
         ui.label("Remote:");
@@ -239,11 +218,14 @@ fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
     });
 
     if defining {
+        // The entry REPLACES the target rows rather than joining them. While
+        // the remote is undefined there is no push target to edit and no ref
+        // state to name, and a band that grew under the user would push the
+        // dialog's rows down the screen — and past the screen's bottom edge
+        // the window itself slides up, dragging every row above it with it.
         ui.horizontal(|ui| {
             ui.label("URL:");
             ui.text_edit_singleline(&mut state.ui.dlg.push_new_remote_url);
-        });
-        ui.horizontal(|ui| {
             let name = state.ui.dlg.push_new_remote_name.trim().to_string();
             let url = state.ui.dlg.push_new_remote_url.trim().to_string();
             let add = widgets::compact_button_enabled(
@@ -261,34 +243,24 @@ fn target_panel(ui: &mut Ui, state: &mut AppState) -> bool {
                 state.ui.dlg.push_remote_add_error = None;
             }
         });
+    } else {
+        ui.horizontal(|ui| {
+            ui.label("Branch:");
+            ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
+        });
+        if target.is_some() || cannot_push {
+            ui.horizontal(|ui| {
+                if let Some(target) = target {
+                    ui.label(RichText::new(target.label()).color(target_ink(target)));
+                }
+                if cannot_push {
+                    ui.label(RichText::new("Cannot push").color(Palette::STATE_WARNING));
+                }
+            });
+        }
     }
     if let Some(detail) = state.ui.dlg.push_remote_add_error.clone() {
         widgets::inline_error(ui, format!("Could not add remote: {detail}"));
-    }
-
-    ui.horizontal(|ui| {
-        ui.label("Branch:");
-        ui.text_edit_singleline(&mut state.ui.dlg.push_branch);
-    });
-
-    let remote_field = state.ui.dlg.push_remote.clone();
-    let branch_field = state.ui.dlg.push_branch.clone();
-    let set_upstream = state.ui.dlg.push_set_upstream;
-    let target = root.as_ref().and_then(|r| {
-        sync_service::push_target_state(r, &remote_field, &branch_field, set_upstream)
-    });
-    let cannot_push = root
-        .as_ref()
-        .is_some_and(|r| r.remotes.is_empty() || sync_service::repository_is_empty(r));
-    if target.is_some() || cannot_push {
-        ui.horizontal(|ui| {
-            if let Some(target) = target {
-                ui.label(RichText::new(target.label()).color(target_ink(target)));
-            }
-            if cannot_push {
-                ui.label(RichText::new("Cannot push").color(Palette::STATE_WARNING));
-            }
-        });
     }
     cannot_push
 }
@@ -309,6 +281,84 @@ fn target_ink(target: sync_service::PushTargetState) -> egui::Color32 {
         sync_service::PushTargetState::EmptyRepository => Palette::STATE_WARNING,
         _ => Palette::STATE_INFO,
     }
+}
+
+/// The OPTIONS band: the four push flags, and the hint/warning strip under
+/// them.
+///
+/// The band sits DIRECTLY below the TARGET band, and that order is load-bearing:
+/// the target-state name the panel paints must be a galley strictly between the
+/// `Branch:` row and the `Force push (--force-with-lease)` row, which only
+/// holds while the two bands are neighbours in this order.
+fn options_band(
+    ui: &mut Ui,
+    state: &mut AppState,
+    scope_is_this_repo: bool,
+    subset: &SubsetPushState,
+) {
+    widgets::group_title(ui, "OPTIONS");
+    ui.horizontal(|ui| {
+        ui.checkbox(
+            &mut state.ui.dlg.force_push,
+            "Force push (--force-with-lease)",
+        );
+        ui.checkbox(&mut state.ui.dlg.push_tags, "Push tags");
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut state.ui.dlg.push_no_verify, "Skip pre-push hooks");
+        ui.checkbox(
+            &mut state.ui.dlg.push_set_upstream,
+            "Set upstream (--set-upstream)",
+        );
+    });
+    if state.ui.dlg.push_set_upstream {
+        ui.colored_label(Palette::STATE_INFO, "upstream will be set");
+    }
+    if matches!(subset, SubsetPushState::OlderUnchecked) {
+        ui.colored_label(
+            Palette::STATE_WARNING,
+            "All commits will be pushed — an unchecked older ancestor forces a full push.",
+        );
+    }
+
+    // Safety strip (issue #21): acknowledging force warns about
+    // history rewrite; naming a protected branch in the exact Branch
+    // field BLOCKS the ThisRepo path outright.
+    if scope_is_this_repo {
+        let branch = state.ui.dlg.push_branch.clone();
+        let force_blocked =
+            state.ui.dlg.force_push && sync_service::is_protected(&state.settings, &branch);
+        if force_blocked {
+            widgets::inline_error(
+                ui,
+                format!("⚠ '{branch}' is protected — force-push blocked."),
+            );
+            widgets::inline_error(
+                ui,
+                "Uncheck force push or retarget the Branch field to continue.",
+            );
+        } else if state.ui.dlg.force_push {
+            ui.colored_label(
+                Palette::STATE_WARNING,
+                "⚠ Force push rewrites the remote branch (--force-with-lease).",
+            );
+        }
+    }
+}
+
+/// The dry-run well: the aggregate line and the verbatim per-root reports.
+fn dry_run_well(ui: &mut Ui, preview: &PushPreview) {
+    widgets::note(ui, None, |ui| {
+        ui.label(
+            RichText::new(format!(
+                "{} commits → {} remotes · {} refs · {} rejected",
+                preview.commits, preview.remotes, preview.refs, preview.rejected
+            ))
+            .small()
+            .strong(),
+        );
+        preview_reports(ui, preview);
+    });
 }
 
 /// Resolved roots in the dialog's current PUSH SCOPE, minus the user's
@@ -344,48 +394,48 @@ fn scope_outgoing<'a>(state: &'a AppState, scope: &'a [Root]) -> Vec<(&'a Root, 
         .collect()
 }
 
-/// Paint the PUSH SCOPE segmented control (issue #25, screen 10).
-fn push_scope_control(ui: &mut Ui, state: &mut AppState) {
-    let all = state.multi.roots.len();
-    let sel = state.ui.repo_selection.len();
+/// The scope's position in [`SCOPE_ORDER`].
+fn scope_index(scope: PushScope) -> usize {
+    SCOPE_ORDER.iter().position(|s| *s == scope).unwrap_or(0)
+}
+
+/// The scope a segment index names.
+fn scope_from_index(index: usize) -> PushScope {
+    SCOPE_ORDER.get(index).copied().unwrap_or(PushScope::All)
+}
+
+/// The four scope labels, in [`SCOPE_ORDER`] order, each carrying the count it
+/// would cover. One owner per count: the selection count, the subtree count and
+/// the all-roots count are read here and nowhere else.
+fn scope_labels(state: &AppState) -> [String; 4] {
+    let selected = state.ui.repo_selection.len();
     let subtree = state
         .multi
         .roots
         .iter()
         .filter(|r| r.path.starts_with(&state.project_dir))
         .count();
+    let all = state.multi.roots.len();
+    [
+        "This repo".to_string(),
+        format!("Selected {selected}"),
+        format!("Project subtree ({subtree})"),
+        format!("All {all}"),
+    ]
+}
+
+/// Paint the PUSH SCOPE control (issue #25, screen 10): the four-way segmented
+/// picker, whose labels carry the counts each scope would cover.
+fn push_scope_control(ui: &mut Ui, state: &mut AppState) {
+    let labels = scope_labels(state);
+    let options: Vec<&str> = labels.iter().map(String::as_str).collect();
     ui.horizontal(|ui| {
-        ui.label(RichText::new("PUSH SCOPE").small().strong());
-        let this_label = "This repo";
-        if ui
-            .selectable_label(state.ui.dlg.push_scope == PushScope::ThisRepo, this_label)
-            .clicked()
-        {
-            state.ui.dlg.push_scope = PushScope::ThisRepo;
-            state.ui.dlg.push_scope_excluded.clear();
-        }
-        let sel_label = format!("Selected {sel}");
-        if ui
-            .selectable_label(state.ui.dlg.push_scope == PushScope::Selection, &sel_label)
-            .clicked()
-        {
-            state.ui.dlg.push_scope = PushScope::Selection;
-            state.ui.dlg.push_scope_excluded.clear();
-        }
-        let sub_label = format!("Project subtree ({subtree})");
-        if ui
-            .selectable_label(state.ui.dlg.push_scope == PushScope::Subtree, &sub_label)
-            .clicked()
-        {
-            state.ui.dlg.push_scope = PushScope::Subtree;
-            state.ui.dlg.push_scope_excluded.clear();
-        }
-        let all_label = format!("All {all}");
-        if ui
-            .selectable_label(state.ui.dlg.push_scope == PushScope::All, &all_label)
-            .clicked()
-        {
-            state.ui.dlg.push_scope = PushScope::All;
+        widgets::group_title(ui, "PUSH SCOPE");
+        let selected = scope_index(state.ui.dlg.push_scope);
+        if let Some(index) = widgets::segmented_control(ui, &options, selected) {
+            state.ui.dlg.push_scope = scope_from_index(index);
+            // The exclusions belonged to the scope the banner named; a new
+            // scope has none of them.
             state.ui.dlg.push_scope_excluded.clear();
         }
     });
@@ -421,9 +471,9 @@ fn remediation_banner(ui: &mut Ui, state: &mut AppState, scope: &[Root]) -> usiz
     }
     let patterns = seen_patterns.join("|");
     let branch_label = protected[0].branch.clone();
-    ui.colored_label(
-        Palette::STATE_WARNING,
-        format!(
+    widgets::alert_box(
+        ui,
+        &format!(
             "Protected branch in scope — {names_str} track {branch_label}, which matches {patterns}"
         ),
     );
@@ -437,6 +487,285 @@ fn remediation_banner(ui: &mut Ui, state: &mut AppState, scope: &[Root]) -> usiz
         }
     }
     protected.len()
+}
+
+/// The two-pane body: COMMITS on the left, CHANGED FILES on the right.
+///
+/// The split is 55/45 — the file list needs less width than the commit
+/// subjects — and egui's `ui.columns` splits a row evenly, so the two panes
+/// are allocated explicitly here.
+fn push_panes(ui: &mut Ui, state: &mut AppState) {
+    let row = ui.available_rect_before_wrap();
+    let gap = ui.spacing().item_spacing.x;
+    let usable = row.width() - gap;
+    let left_rect = Rect::from_min_max(
+        row.min,
+        Pos2::new(row.min.x + usable * 0.55, row.min.y + PANE_BODY_H),
+    );
+    let right_rect = Rect::from_min_max(
+        Pos2::new(left_rect.right() + gap, row.min.y),
+        Pos2::new(row.right(), row.min.y + PANE_BODY_H),
+    );
+    // The row's height belongs to the parent, or the bands below would paint
+    // over the panes.
+    ui.allocate_space(Vec2::new(row.width(), PANE_BODY_H));
+
+    let mut left = ui.new_child(
+        UiBuilder::new()
+            .max_rect(left_rect)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    commits_pane(&mut left, state);
+    let mut right = ui.new_child(
+        UiBuilder::new()
+            .max_rect(right_rect)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    changed_files_pane(&mut right, state);
+
+    // The divider between the panes, in the structural hairline: `RULE_CONTENT`
+    // aliases the surface the panes sit on, so a rule in that tone is not seen.
+    let x = (left_rect.right() + right_rect.left()) / 2.0;
+    widgets::edge_rule(
+        ui.painter(),
+        Rect::from_min_max(
+            Pos2::new(x, row.min.y),
+            Pos2::new(x, row.min.y + PANE_BODY_H),
+        ),
+        widgets::Edge::Right,
+        Palette::RULE_STRUCTURAL,
+    );
+}
+
+/// The COMMITS pane: the outgoing tree, its live selection counter, and the
+/// per-commit checkboxes.
+fn commits_pane(ui: &mut Ui, state: &mut AppState) {
+    let snapshot = state
+        .ui
+        .dlg
+        .push_outgoing
+        .as_deref()
+        .unwrap_or(&[])
+        .to_vec();
+    let total: usize = snapshot
+        .iter()
+        .map(|r| r.commits.as_ref().map_or(0, |c| c.len()))
+        .sum();
+    let selected_count = state.ui.dlg.push_selected_commits.len();
+    // The header is one row: the title on the left, the live count on the
+    // right, the way a list header carries its count. Two rows would spend a
+    // line of the dialog's height on a label.
+    ui.horizontal(|ui| {
+        widgets::group_title(ui, "COMMITS");
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("{selected_count} selected of {total}"))
+                    .small()
+                    .weak(),
+            );
+        });
+    });
+    let project = state.project_dir.display_name_lossy_or("Project");
+    let body_h = ui.available_height();
+    let mut select_root: Option<Option<RootId>> = None;
+    // The salt is not decoration: the two panes are sibling children of one
+    // Ui, and egui gives sibling children the SAME id, so two scroll areas
+    // without their own salts would share one persisted scroll state and
+    // trade the scrollbar's visibility back and forth every frame.
+    ScrollArea::vertical()
+        .id_salt("push_commits")
+        .max_height(body_h)
+        .show(ui, |ui| {
+            if snapshot.is_empty() {
+                widgets::empty_state(ui, "No repositories to push.");
+                return;
+            }
+            let project_node = format!("{project} (all roots)");
+            if ui
+                .selectable_label(state.ui.dlg.push_preview_root.is_none(), &project_node)
+                .clicked()
+            {
+                select_root = Some(None);
+            }
+
+            if total == 0 {
+                widgets::empty_state(ui, "No outgoing commits.");
+            }
+
+            for entry in &snapshot {
+                let n = entry.commits.as_ref().map_or(0, |c| c.len());
+                let node = format!("{} — {n} commits ahead", entry.name);
+                let selected = state.ui.dlg.push_preview_root.as_ref() == Some(&entry.id);
+                ui.indent(entry.id.0.as_os_str(), |ui| {
+                    if ui.selectable_label(selected, &node).clicked() {
+                        select_root = Some(if selected {
+                            None
+                        } else {
+                            Some(entry.id.clone())
+                        });
+                    }
+                    if let Ok(commits) = &entry.commits {
+                        ui.indent((entry.id.0.as_os_str(), "commits"), |ui| {
+                            for c in commits {
+                                commit_row(ui, state, c);
+                            }
+                        });
+                    }
+                });
+            }
+        });
+    if let Some(next) = select_root {
+        state.ui.dlg.push_preview_root = next;
+    }
+}
+
+/// One commit row: the subject and its checkbox, the short ref and the
+/// metadata, all on one line.
+///
+/// The ref is a chip rather than a bare monospace label because the shared
+/// vocabulary owns the commit-reference mark, and the label it replaces spent
+/// the accent on a thing that is not an action.
+///
+/// The row is one line, not two: a two-line row measures 252 px for a four
+/// commit tree, and the pane body that would hold it does not fit a 600 px
+/// screen alongside the target, options and footer bands.
+fn commit_row(ui: &mut Ui, state: &mut AppState, c: &Commit) {
+    let subject = c.subject();
+    let mut checked = state.ui.dlg.push_selected_commits.contains(&c.id);
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut checked, subject).changed() {
+            if checked {
+                if !state.ui.dlg.push_selected_commits.contains(&c.id) {
+                    state.ui.dlg.push_selected_commits.push(c.id.clone());
+                }
+            } else {
+                state.ui.dlg.push_selected_commits.retain(|x| x != &c.id);
+            }
+        }
+        widgets::hash_chip(ui, &widgets::short_commit_ref(&c.id), "");
+        let meta = format!("{} · {}", c.author.name, rel_time(c.time));
+        ui.label(RichText::new(meta).small().weak());
+    });
+}
+
+/// Compact relative age for commit rows (display only).
+fn rel_time(epoch_secs: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let delta = (now - epoch_secs).max(0);
+    if delta < 60 {
+        "just now".into()
+    } else if delta < 3600 {
+        format!("{delta}m ago")
+    } else if delta < 86_400 {
+        format!("{}h ago", delta / 3600)
+    } else {
+        format!("{}d ago", delta / 86_400)
+    }
+}
+
+/// The CHANGED FILES pane: the scope's changed files, filtered by the clicked
+/// root node ONLY (ADR-0006).
+fn changed_files_pane(ui: &mut Ui, state: &mut AppState) {
+    // One header row, like the COMMITS pane: the title on the left, what the
+    // preview is filtered to on the right.
+    ui.horizontal(|ui| {
+        widgets::group_title(ui, "CHANGED FILES");
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(RichText::new(preview_subject(state)).small().weak());
+        });
+    });
+    let body_h = ui.available_height();
+    ScrollArea::vertical()
+        .id_salt("push_changed_files")
+        .max_height(body_h)
+        .show(ui, |ui| {
+            // The (root, commit) pairs are taken out first: the cache read wants
+            // the app state, and holding a borrow of `push_outgoing` across it
+            // would keep the two from coexisting.
+            let wanted: Vec<(RootId, CommitId)> = state
+                .ui
+                .dlg
+                .push_outgoing
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .filter(|e| {
+                    state
+                        .ui
+                        .dlg
+                        .push_preview_root
+                        .as_ref()
+                        .is_none_or(|f| f == &e.id)
+                })
+                .flat_map(|e| {
+                    e.commits
+                        .iter()
+                        .flat_map(move |cs| cs.iter().map(move |c| (e.id.clone(), c.id.clone())))
+                })
+                .collect();
+            let mut any = false;
+            for (root, commit) in wanted {
+                for ch in state.ensure_files(&root, &commit) {
+                    any = true;
+                    ui.label(format!(
+                        "{} {}",
+                        change_letter(ch.status),
+                        ch.path.display()
+                    ));
+                }
+            }
+            if !any {
+                widgets::empty_state(ui, "No changed files.");
+            }
+        });
+}
+
+/// What the CHANGED FILES pane is showing: every root, or the one root the
+/// user clicked.
+fn preview_subject(state: &AppState) -> String {
+    match &state.ui.dlg.push_preview_root {
+        None => "All roots".to_string(),
+        Some(id) => state
+            .ui
+            .dlg
+            .push_outgoing
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .find(|e| &e.id == id)
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| id.name()),
+    }
+}
+
+fn change_letter(status: ChangeStatus) -> &'static str {
+    match status {
+        ChangeStatus::Modified => "M",
+        ChangeStatus::Added => "A",
+        ChangeStatus::Deleted => "D",
+        _ => "?",
+    }
+}
+
+/// The dialog's own reading of the commit selection: an unchecked older
+/// ancestor forces a full push.
+fn subset_push_state(state: &AppState) -> SubsetPushState {
+    let outgoing_shas: Vec<String> = state
+        .ui
+        .dlg
+        .push_outgoing
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .flat_map(|r| match &r.commits {
+            Ok(cs) => cs.iter().map(|c| c.id.clone()).collect::<Vec<_>>(),
+            Err(_) => Vec::new(),
+        })
+        .collect();
+    sync_service::subset_push_state(&outgoing_shas, &state.ui.dlg.push_selected_commits)
 }
 
 /// Paint the verbatim per-root dry-run reports under the aggregate line
@@ -598,165 +927,6 @@ fn ensure_target_defaults(state: &mut AppState) {
     }
     if state.ui.dlg.push_branch.is_empty() {
         state.ui.dlg.push_branch = tracked_branch.unwrap_or(current_branch);
-    }
-}
-
-/// Project node → per-root nodes → commit rows. Root-node clicks set the
-/// PREVIEW filter only (ADR-0006); they never affect push scope. Issue #24
-/// adds per-commit checkboxes plus a live "N selected of M" counter.
-fn outgoing_tree(ui: &mut Ui, state: &mut AppState) {
-    let mut select_root: Option<Option<RootId>> = None;
-    let snapshot = state
-        .ui
-        .dlg
-        .push_outgoing
-        .as_deref()
-        .unwrap_or(&[])
-        .to_vec();
-    let total: usize = snapshot
-        .iter()
-        .map(|r| r.commits.as_ref().map_or(0, |c| c.len()))
-        .sum();
-    let selected_count = state.ui.dlg.push_selected_commits.len();
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!("{selected_count} selected of {total}"))
-                .small()
-                .weak(),
-        );
-    });
-    egui::ScrollArea::vertical()
-        .max_height(220.0)
-        .show(ui, |ui| {
-            if snapshot.is_empty() {
-                widgets::empty_state(ui, "No repositories to push.");
-                return;
-            }
-            let project = state.project_dir.display_name_lossy_or("Project");
-            let project_node = format!("{project} (all roots)");
-            if ui
-                .selectable_label(state.ui.dlg.push_preview_root.is_none(), &project_node)
-                .clicked()
-            {
-                select_root = Some(None);
-            }
-
-            if total == 0 {
-                widgets::empty_state(ui, "No outgoing commits.");
-            }
-
-            for entry in &snapshot {
-                let n = entry.commits.as_ref().map_or(0, |c| c.len());
-                let node = format!("{} — {n} commits ahead", entry.name);
-                let selected = state.ui.dlg.push_preview_root.as_ref() == Some(&entry.id);
-                ui.indent(entry.id.0.as_os_str(), |ui| {
-                    if ui.selectable_label(selected, &node).clicked() {
-                        select_root = Some(if selected {
-                            None
-                        } else {
-                            Some(entry.id.clone())
-                        });
-                    }
-                    if let Ok(commits) = &entry.commits {
-                        ui.indent((entry.id.0.as_os_str(), "commits"), |ui| {
-                            for c in commits {
-                                commit_row(ui, state, c);
-                            }
-                        });
-                    }
-                });
-            }
-        });
-    if let Some(next) = select_root {
-        state.ui.dlg.push_preview_root = next;
-    }
-}
-
-fn commit_row(ui: &mut Ui, state: &mut AppState, c: &Commit) {
-    let short = widgets::short_commit_ref(&c.id);
-    let subject = c.subject();
-    let mut checked = state.ui.dlg.push_selected_commits.contains(&c.id);
-    ui.horizontal(|ui| {
-        if ui.checkbox(&mut checked, subject).changed() {
-            if checked {
-                if !state.ui.dlg.push_selected_commits.contains(&c.id) {
-                    state.ui.dlg.push_selected_commits.push(c.id.clone());
-                }
-            } else {
-                state.ui.dlg.push_selected_commits.retain(|x| x != &c.id);
-            }
-        }
-        ui.label(RichText::new(short).monospace().color(Palette::BRAND));
-        let meta = format!("{} · {}", c.author.name, rel_time(c.time));
-        ui.label(RichText::new(meta).small().weak());
-    });
-}
-
-/// Compact relative age for commit rows (display only).
-fn rel_time(epoch_secs: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let delta = (now - epoch_secs).max(0);
-    if delta < 60 {
-        "just now".into()
-    } else if delta < 3600 {
-        format!("{delta}m ago")
-    } else if delta < 86_400 {
-        format!("{}h ago", delta / 3600)
-    } else {
-        format!("{}d ago", delta / 86_400)
-    }
-}
-
-/// Changed files across outgoing commits, filtered by the clicked root node
-/// ONLY (ADR-0006).
-fn changed_files_preview(ui: &mut Ui, state: &mut AppState) {
-    egui::CollapsingHeader::new("Changed files")
-        .default_open(true)
-        .show(ui, |ui| {
-            let filter = state.ui.dlg.push_preview_root.clone();
-            // The (root, commit) pairs are taken out first: the cache read wants
-            // the app state, and holding a borrow of `push_outgoing` across it
-            // would keep the two from coexisting.
-            let wanted: Vec<(RootId, CommitId)> = state
-                .ui
-                .dlg
-                .push_outgoing
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .filter(|e| filter.as_ref().is_none_or(|f| f == &e.id))
-                .flat_map(|e| {
-                    e.commits
-                        .iter()
-                        .flat_map(move |cs| cs.iter().map(move |c| (e.id.clone(), c.id.clone())))
-                })
-                .collect();
-            let mut any = false;
-            for (root, commit) in wanted {
-                for ch in state.ensure_files(&root, &commit) {
-                    any = true;
-                    ui.label(format!(
-                        "{} {}",
-                        change_letter(ch.status),
-                        ch.path.display()
-                    ));
-                }
-            }
-            if !any {
-                widgets::empty_state(ui, "No changed files.");
-            }
-        });
-}
-
-fn change_letter(status: ChangeStatus) -> &'static str {
-    match status {
-        ChangeStatus::Modified => "M",
-        ChangeStatus::Added => "A",
-        ChangeStatus::Deleted => "D",
-        _ => "?",
     }
 }
 
