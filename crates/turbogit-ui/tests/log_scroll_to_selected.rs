@@ -420,13 +420,18 @@ fn clicking_a_blame_row_brings_that_commit_into_view_in_the_log() {
         .get_by_label(&row_label(&seed.repo, &subject_at(touching)))
         .click();
     settle(&mut harness);
-    // The premise, checked before the file click opens the diff over the graph
-    // pane: the root commit must start far outside the list's rows.
+    harness.get_by_label("acc.txt").click();
+    settle(&mut harness);
+    // The premise, checked while the log is still the painted surface: the root
+    // commit is 99 rows down a list sitting at its top, so it is nowhere near
+    // being on screen.
     assert!(
         !is_visible(&harness, &seed.repo, 0),
         "the root commit must start far outside the list's rows"
     );
-    harness.get_by_label("acc.txt").click();
+    // The diff window the file click opened floats over the blamed rows; it
+    // closes before the blame opens through the context menu.
+    harness.get_by_label("Close").click();
     settle(&mut harness);
     test_support::harness::right_click_row(&mut harness, "acc.txt");
     test_support::harness::click_menu_item(&mut harness, "Show blame", "Show blame");

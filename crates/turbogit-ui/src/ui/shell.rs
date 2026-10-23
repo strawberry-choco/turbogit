@@ -431,7 +431,6 @@ fn jump_to_source(state: &mut AppState) {
         path: change.path,
         rev: "HEAD".to_owned(),
     });
-    state.ui.diff = None;
     state.ui.blame_caret_line = Some(line);
     switch_tab(state, Tab::Log);
 }

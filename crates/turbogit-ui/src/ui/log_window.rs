@@ -713,10 +713,9 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
         });
 
     // Pane 2 — graph fills the remainder, in a card of its own; the blame view
-    // (issue 18) or the log's diff surface takes its place while open, keeping
-    // the branches / files / details panes. Both are wrapped in the SAME
-    // `pane_card` call so the slot has one surface whatever is in it — the view
-    // swapped, the region did not.
+    // (issue 18) takes its place while open, keeping the branches / files /
+    // details panes. Both are wrapped in the SAME `pane_card` call so the slot
+    // has one surface whatever is in it — the view swapped, the region did not.
     //
     // The leftovers' geometry is what makes the two gutters: the branches panel
     // already claimed its [`PANE_COLUMN_GAP`], the right column already claimed
@@ -725,8 +724,6 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
     // cards keep the widths they have always had.
     if state.ui.blame.is_some() {
         pane_card(ui, |ui| super::blame_view::show_blame(ui, state));
-    } else if state.ui.diff.is_some() {
-        pane_card(ui, |ui| super::diff::show_diff(ui, state));
     } else {
         pane_card(ui, |ui| graph_pane(ui, state));
     }
@@ -2198,9 +2195,6 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
         }
         FileAction::OpenDiff(path) => {
             state.ui.log_selected_file = Some(path.clone());
-            // The two surfaces share the graph slot; opening one closes the
-            // other, or closing the blame would reveal a diff nobody asked for.
-            state.ui.blame = None;
             state.ui.diff = Some(DiffTarget::commit(
                 root_id.clone(),
                 parent,
@@ -2214,7 +2208,6 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
                 path,
                 rev: cid.to_owned(),
             });
-            state.ui.diff = None;
             // Reached from the file menu, not from a diff caret: no line travels,
             // so no stale line may survive into this view.
             state.ui.blame_caret_line = None;
@@ -2331,7 +2324,6 @@ fn apply_file_action(state: &mut AppState, root: &RootId, cid: &CommitId, action
                 path,
                 rev: cid.to_owned(),
             });
-            state.ui.diff = None;
             // Reached from the file menu, not from a diff caret: no line travels,
             // so no stale line may survive into this view.
             state.ui.blame_caret_line = None;

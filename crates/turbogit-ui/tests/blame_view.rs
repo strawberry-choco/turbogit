@@ -373,6 +373,11 @@ fn clicking_a_blamed_line_navigates_to_its_commit_in_the_log() {
     let mut harness = log_harness(&seed);
     select_commit_and_file(&mut harness, &seed);
 
+    // The diff window the file click opened floats over the graph slot; a
+    // reader clicks blame from the footer and closes the window to reach the
+    // blamed rows beneath it.
+    harness.get_by_label("Close").click();
+    settle_reads(&mut harness);
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
 
@@ -708,11 +713,12 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
 fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
+    select_commit_and_file(&mut harness, &seed);
 
-    let row_label = format!("{} alpha: second commit", short(&seed.c2));
-    harness.get_by_label(&row_label).click();
-    settle_reads(&mut harness);
-    let commit_row = harness.get_by_label(&row_label).rect();
+    // The control, first: what a chosen commit row looks like in this frame.
+    let commit_row = harness
+        .get_by_label(&format!("{} alpha: second commit", short(&seed.c2)))
+        .rect();
     let commit_band = filled_rects(&harness)
         .into_iter()
         .find(|(rect, color)| {
@@ -731,8 +737,6 @@ fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
         .map(|(rect, _)| rect)
         .expect("a chosen commit row paints the one accent rail");
 
-    harness.get_by_label("file.txt").click();
-    settle_reads(&mut harness);
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
 

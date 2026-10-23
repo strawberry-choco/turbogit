@@ -179,6 +179,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // window reachable from the Commit tool window's "Resolve…" entry and
     // from the bulk monitor's Resolve deep link.
     conflict_resolver::render(ui, state);
+    // The diff window the Log view's diff verbs open: floating over whatever
+    // tab is up, so the listing the verb came from stays exactly as it was.
+    diff::show_diff(ui, state);
     render_toast(ui, state);
 }
 

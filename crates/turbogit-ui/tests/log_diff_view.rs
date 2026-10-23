@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use egui_kittest::{Harness, kittest::Queryable};
 use tempfile::TempDir;
 use test_support::git_seed::{commit, git, pin_eol_lf};
-use test_support::harness::{assert_painted, painted_text, settle_reads};
+use test_support::harness::{assert_not_painted, assert_painted, painted_text, settle_reads};
 use turbogit_app::events::{AppEvent, LogBatchMode};
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{LogOpts, VcsSettings};
@@ -160,21 +160,18 @@ fn a_diff_opened_from_the_log_offers_no_staging() {
     );
 }
 
-/// **Closing the diff hands the region back to the commit table.**
+/// **Closing the diff window closes the window.**
 #[test]
-fn closing_the_diff_returns_the_commit_table() {
+fn closing_the_diff_window_closes_the_window() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
 
     select_commit_and_file(&mut harness, &seed);
-    assert!(harness.query_by_label("Search commits").is_none());
-    harness.get_by_label("Close diff").click();
+    assert_painted(&harness, ADDED_LINE);
+    harness.get_by_label("Close").click();
     settle_reads(&mut harness);
 
-    assert!(
-        harness.query_by_label("Search commits").is_some(),
-        "the commit table's own search box is the graph pane's return ticket"
-    );
+    assert_not_painted(&harness, ADDED_LINE);
 }
 
 /// **A root commit's changed file diffs the commit against the empty tree,

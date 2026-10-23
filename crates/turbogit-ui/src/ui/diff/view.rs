@@ -186,47 +186,36 @@ fn gutter_ink(hovered: bool) -> Color32 {
 
 // --- entry point -------------------------------------------------------------
 
-/// Render the diff surface the log window holds open (`state.ui.diff`), in the
-/// graph pane's slot — the swap the blame view got (issue 18), so a reader who
-/// opens a file's diff from the changed-files pane sees the same region change
-/// under one card. Reached from `log_window`'s pane swap.
+/// The floating diff window the log's diff verbs open (`state.ui.diff`), in
+/// the house `egui::Window` chrome. The log keeps its commit table; the
+/// window floats above the workspace and closes from its own footer or the
+/// title bar's X.
 ///
-/// The surface's own target is the caller's: the held
+/// The window's target is the caller's: the held
 /// [`turbogit_app::state::DiffTarget`] names the root, the sides and the file
-/// (or none, for a whole commit), and this entry hands them to [`render_diff`]
+/// (or none, for a whole commit), and the body hands them to [`render_diff`]
 /// verbatim rather than letting any of them fall back to a current selection.
 pub fn show_diff(ui: &mut Ui, state: &mut AppState) {
     let Some(target) = state.ui.diff.clone() else {
         return;
     };
-    let mut close = false;
-    widgets::pane_header(ui, "DIFF", None, |ui| {
-        if ui
-            .link("Close diff")
-            .on_hover_text("Back to the commit log")
-            .clicked()
-        {
-            close = true;
-        }
-    });
-    let subject = match &target.path {
-        Some(path) => format!(
-            "{} @ {}",
-            path.display(),
-            widgets::short_commit_ref(target.right.as_deref().unwrap_or_default()),
-        ),
-        None => match (target.left.as_deref(), target.right.as_deref()) {
-            (Some(left), Some(right)) => format!(
-                "{}..{}",
-                widgets::short_commit_ref(left),
-                widgets::short_commit_ref(right),
-            ),
-            (_, Some(right)) => widgets::short_commit_ref(right),
-            _ => String::new(),
-        },
-    };
+    let mut open = true;
+    egui::Window::new("Diff")
+        .open(&mut open)
+        // The body's ScrollArea owns scrolling; the window's own would leave it
+        // a remainder to measure, and the rows would collapse inside it.
+        .vscroll(false)
+        .default_size(egui::vec2(920.0, 620.0))
+        .show(ui.ctx(), |ui| diff_body(ui, state, &target));
+    if !open {
+        state.ui.diff = None;
+    }
+}
+
+/// The subject line names what is open, then the diff surface itself.
+fn diff_body(ui: &mut Ui, state: &mut AppState, target: &turbogit_app::state::DiffTarget) {
     ui.label(
-        RichText::new(subject)
+        RichText::new(subject_line(target))
             .font(FontId::new(
                 crate::theme::TYPE_CONTROL,
                 egui::FontFamily::Proportional,
@@ -245,8 +234,32 @@ pub fn show_diff(ui: &mut Ui, state: &mut AppState) {
         &target.right,
         &change,
     );
-    if close {
-        state.ui.diff = None;
+    ui.add_space(6.0);
+    widgets::dialog_footer(ui, |ui| {
+        if widgets::compact_button(ui, "Close").clicked() {
+            state.ui.diff = None;
+        }
+    });
+}
+
+/// What the window is looking at: the file at the commit that changed it, or
+/// the whole commit's sides.
+fn subject_line(target: &turbogit_app::state::DiffTarget) -> String {
+    match &target.path {
+        Some(path) => format!(
+            "{} @ {}",
+            path.display(),
+            widgets::short_commit_ref(target.right.as_deref().unwrap_or_default()),
+        ),
+        None => match (target.left.as_deref(), target.right.as_deref()) {
+            (Some(left), Some(right)) => format!(
+                "{}..{}",
+                widgets::short_commit_ref(left),
+                widgets::short_commit_ref(right),
+            ),
+            (_, Some(right)) => widgets::short_commit_ref(right),
+            _ => String::new(),
+        },
     }
 }
 
