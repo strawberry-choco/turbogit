@@ -1826,7 +1826,8 @@ fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
         match preview {
             Some(change) => {
                 diff_stats(ui, state, &change);
-                crate::ui::diff::render_diff(ui, state, &None, &None, &Some(change));
+                let root = change.root.clone();
+                crate::ui::diff::render_diff(ui, state, &root, &None, &None, &Some(change));
             }
             None => {
                 ui.colored_label(

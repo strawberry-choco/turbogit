@@ -16,7 +16,7 @@ use tempfile::TempDir;
 use test_support::git_seed::{commit, git};
 use test_support::harness::{
     assert_not_painted, assert_painted, click_menu_item, filled_rects, painted_text,
-    right_click_row,
+    right_click_row, settle_reads,
 };
 use test_support::srcscan;
 use turbogit_app::events::{AppEvent, LogBatchMode};
@@ -27,30 +27,6 @@ use turbogit_domain::model::{LogOpts, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine_api::GitExecutor;
 use turbogit_ui::theme::{configure_style, install_fonts};
-
-/// Step frames until the painted output stabilizes **and no keyed read is
-/// pending** — diff or blame, the gate does not say which.
-///
-/// Deliberately neither `harness::settle` nor `harness::settle_quiet`: both ask
-/// only whether the layout stopped relaying out, so a suite driving the blame
-/// view could read a placeholder while its diff or blame request is in flight.
-pub fn settle(harness: &mut Harness<'_, AppState>) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    let mut prev = String::new();
-    while std::time::Instant::now() < deadline {
-        harness.step();
-        let fingerprint = format!(
-            "{:?}|read={}",
-            painted_text(harness),
-            harness.state().read_pending(),
-        );
-        if fingerprint == prev && !harness.state().read_pending() {
-            return;
-        }
-        prev = fingerprint;
-    }
-    panic!("log/blame layout did not settle within 15s");
-}
 
 // --- fixture -------------------------------------------------------------------
 
@@ -146,7 +122,7 @@ fn log_harness(seed: &Seed) -> Harness<'static, AppState> {
         1280.0 + turbogit_ui::ui::sidebar::SIDEBAR_WIDTH,
         800.0,
     ));
-    settle(&mut harness);
+    settle_reads(&mut harness);
     harness
 }
 
@@ -159,9 +135,9 @@ fn short(id: &str) -> String {
 fn select_commit_and_file(harness: &mut Harness<'_, AppState>, seed: &Seed) {
     let row_label = format!("{} alpha: second commit", short(&seed.c2));
     harness.get_by_label(&row_label).click();
-    settle(harness);
+    settle_reads(harness);
     harness.get_by_label("file.txt").click();
-    settle(harness);
+    settle_reads(harness);
 }
 
 #[test]
@@ -253,7 +229,7 @@ fn blame_opens_from_the_footer_and_paints_per_line_attribution() {
     assert_painted(&harness, "Full path history");
 
     harness.get_by_label("Blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
 
     // The blame surface replaced the graph pane and records its target.
     assert!(harness.state().ui.blame.is_some(), "blame target recorded");
@@ -275,7 +251,7 @@ fn blame_opens_from_the_footer_and_paints_per_line_attribution() {
 
     // Closing blame returns to the commit graph.
     harness.get_by_label("Close blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     assert_eq!(harness.state().ui.blame, None, "close drops the target");
     assert_not_painted(&harness, "Close blame");
     assert_painted(&harness, "HASH");
@@ -323,7 +299,7 @@ fn blame_fills_the_commit_tables_card() {
 
     select_commit_and_file(&mut harness, &seed);
     harness.get_by_label("Blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
 
     let blame_card = centre_card(&harness);
     assert_eq!(
@@ -367,7 +343,7 @@ fn lines_from_the_blamed_commit_are_highlighted() {
     select_commit_and_file(&mut harness, &seed);
 
     harness.get_by_label("Blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
 
     // Line 2 was introduced by the blamed commit (c2): it carries the
     // translucent selection tint; line 1 (c1's) does not.
@@ -398,13 +374,13 @@ fn clicking_a_blamed_line_navigates_to_its_commit_in_the_log() {
     select_commit_and_file(&mut harness, &seed);
 
     harness.get_by_label("Blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
 
     // Click line 1 (introduced by c1) → the log selects c1 and the blame
     // view closes.
     let row_label = format!("{} alpha: initial commit", short(&seed.c1));
     harness.get_by_label(&row_label).click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
 
     assert_eq!(
         harness.state().ui.selected_commit.as_deref(),
@@ -425,38 +401,38 @@ fn context_menu_opens_blame_and_the_path_scope_survives_it() {
     // Scope the log to file.txt via its changed-file menu, on the shared host.
     let c2_label = format!("{} alpha: second commit", short(&seed.c2));
     harness.get_by_label(&c2_label).click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     right_click_row(&mut harness, "file.txt");
     click_menu_item(&mut harness, "Show blame", "Show history for file…");
-    settle(&mut harness);
+    settle_reads(&mut harness);
     assert!(harness.state().ui.log_path_scope.is_some());
     assert_not_painted(&harness, "alpha: docs commit");
 
     // Open blame on the scoped file from the footer, on a scoped commit.
     harness.get_by_label(&c2_label).click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     harness.get_by_label("file.txt").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     harness.get_by_label("Blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     assert!(harness.state().ui.blame.is_some());
     assert_painted(&harness, "alpha: second commit");
 
     // Back to the log: the scope is untouched — the graph still lists only
     // commits touching file.txt.
     harness.get_by_label("Close blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     assert!(harness.state().ui.log_path_scope.is_some());
     assert_painted(&harness, "alpha: initial commit");
     assert_not_painted(&harness, "alpha: docs commit");
 
     // The context menu offers blame directly on a changed file.
     harness.get_by_label(&c2_label).click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     harness.get_by_label("file.txt").click_secondary();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     harness.get_by_label("Show blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     assert!(
         harness.state().ui.blame.is_some(),
         "context menu opens blame"
@@ -479,7 +455,7 @@ fn the_blame_surface_labels_its_columns_with_the_shared_column_chrome() {
     let mut harness = log_harness(&seed);
     select_commit_and_file(&mut harness, &seed);
     harness.get_by_label("Blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
 
     let galleys = test_support::harness::painted_galleys(&harness);
     for label in BLAME_LABELS {
@@ -625,7 +601,7 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
 
     // ---- the row height, against the shared constant ----------------------
     harness.get_by_label("Blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     let first = harness
         .get_by_label(&blame_row_label(&seed.c1, "alpha: initial commit"))
         .rect();
@@ -665,7 +641,7 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
     // The control: the commit table's own header and row, one closing-the-view
     // click away, in the same harness and the same window.
     harness.get_by_label("Close blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
     let table_label = |label: &str| -> test_support::harness::PaintedGalley {
         test_support::harness::painted_galleys(&harness)
             .into_iter()
@@ -732,12 +708,11 @@ fn the_blame_view_adopts_the_commit_tables_row_height_and_column_offsets() {
 fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
-    select_commit_and_file(&mut harness, &seed);
 
-    // The control, first: what a chosen commit row looks like in this frame.
-    let commit_row = harness
-        .get_by_label(&format!("{} alpha: second commit", short(&seed.c2)))
-        .rect();
+    let row_label = format!("{} alpha: second commit", short(&seed.c2));
+    harness.get_by_label(&row_label).click();
+    settle_reads(&mut harness);
+    let commit_row = harness.get_by_label(&row_label).rect();
     let commit_band = filled_rects(&harness)
         .into_iter()
         .find(|(rect, color)| {
@@ -756,8 +731,10 @@ fn the_blame_view_paints_the_same_fills_and_rail_as_the_commit_table() {
         .map(|(rect, _)| rect)
         .expect("a chosen commit row paints the one accent rail");
 
+    harness.get_by_label("file.txt").click();
+    settle_reads(&mut harness);
     harness.get_by_label("Blame").click();
-    settle(&mut harness);
+    settle_reads(&mut harness);
 
     // The blamed-at line is the "chosen" row of this view: c2 introduced the
     // second line of the file.

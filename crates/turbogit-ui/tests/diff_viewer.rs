@@ -944,7 +944,8 @@ fn commit_diff_harness(repo: &Path) -> Harness<'static, AppState> {
             }
             state.drain_events();
             let (left, right) = ("HEAD~1".to_owned(), "HEAD".to_owned());
-            turbogit_ui::ui::diff::render_diff(ui, state, &Some(left), &Some(right), &None);
+            let root = state.multi.roots[0].id.clone();
+            turbogit_ui::ui::diff::render_diff(ui, state, &root, &Some(left), &Some(right), &None);
         },
         state,
     );

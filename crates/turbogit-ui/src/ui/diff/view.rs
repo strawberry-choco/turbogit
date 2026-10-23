@@ -19,7 +19,7 @@ use turbogit_app::granular;
 use turbogit_app::keyed_read::{DiffTarget, PaneFlavour, PaneTarget, Read};
 use turbogit_app::staged_lines::{self, FileLineSets};
 use turbogit_app::state::{AppState, DiffPane};
-use turbogit_domain::model::{ChangeRef, ChangeStatus, DisplayName};
+use turbogit_domain::model::{ChangeRef, ChangeStatus, DisplayName, RootId};
 
 // --- staged-ness: the one per-line answer the painters read --------------------
 
@@ -186,28 +186,85 @@ fn gutter_ink(hovered: bool) -> Color32 {
 
 // --- entry point -------------------------------------------------------------
 
+/// Render the diff surface the log window holds open (`state.ui.diff`), in the
+/// graph pane's slot — the swap the blame view got (issue 18), so a reader who
+/// opens a file's diff from the changed-files pane sees the same region change
+/// under one card. Reached from `log_window`'s pane swap.
+///
+/// The surface's own target is the caller's: the held
+/// [`turbogit_app::state::DiffTarget`] names the root, the sides and the file
+/// (or none, for a whole commit), and this entry hands them to [`render_diff`]
+/// verbatim rather than letting any of them fall back to a current selection.
+pub fn show_diff(ui: &mut Ui, state: &mut AppState) {
+    let Some(target) = state.ui.diff.clone() else {
+        return;
+    };
+    let mut close = false;
+    widgets::pane_header(ui, "DIFF", None, |ui| {
+        if ui
+            .link("Close diff")
+            .on_hover_text("Back to the commit log")
+            .clicked()
+        {
+            close = true;
+        }
+    });
+    let subject = match &target.path {
+        Some(path) => format!(
+            "{} @ {}",
+            path.display(),
+            widgets::short_commit_ref(target.right.as_deref().unwrap_or_default()),
+        ),
+        None => match (target.left.as_deref(), target.right.as_deref()) {
+            (Some(left), Some(right)) => format!(
+                "{}..{}",
+                widgets::short_commit_ref(left),
+                widgets::short_commit_ref(right),
+            ),
+            (_, Some(right)) => widgets::short_commit_ref(right),
+            _ => String::new(),
+        },
+    };
+    ui.label(
+        RichText::new(subject)
+            .font(FontId::new(
+                crate::theme::TYPE_CONTROL,
+                egui::FontFamily::Proportional,
+            ))
+            .color(Palette::BRAND),
+    );
+    let change = target
+        .path
+        .clone()
+        .map(|path| ChangeRef::new(target.root.clone(), path));
+    render_diff(
+        ui,
+        state,
+        &target.root,
+        &target.left,
+        &target.right,
+        &change,
+    );
+    if close {
+        state.ui.diff = None;
+    }
+}
+
+/// Render one comparison's diff. The comparison is named by the caller in
+/// full: it runs in `root`, between `left` and `right` (neither named is the
+/// working-tree preview), narrowed to the one file `change` names — or, with
+/// `change` gone, showing every section of a whole-commit patch. The root is
+/// a parameter and not a fallback for the same reason the target carries one:
+/// a whole-commit view names no change to derive it from, and a log spanning
+/// roots can hold a commit outside the focused one.
 pub fn render_diff(
     ui: &mut Ui,
     state: &mut AppState,
+    root: &RootId,
     left: &Option<String>,
     right: &Option<String>,
     change: &Option<ChangeRef>,
 ) {
-    // The pane reads the repository the previewed change names, never the focused
-    // one: the changes list spans every registered root, so a row of another
-    // root read against the focused one shows a different file under the same
-    // name. A comparison that names no change has no root to name either, and is
-    // the focused root's by default.
-    let root = match change {
-        Some(change) => change.root.as_path().to_path_buf(),
-        None => match state.selected_path() {
-            Some(root) => root,
-            None => {
-                widgets::empty_state(ui, "No repository selected.");
-                return;
-            }
-        },
-    };
     let path = change.as_ref().map(|change| change.path.clone());
 
     // The two kinds of diff target, told apart by which constructor they ask
@@ -215,9 +272,11 @@ pub fn render_diff(
     // tree is read as `HEAD ↔ worktree`. A caller that names both sides gets
     // exactly the pair it asked for.
     let target = match (left, right) {
-        (None, None) => DiffTarget::working_tree(root, state.ui.diff_policies, path),
+        (None, None) => {
+            DiffTarget::working_tree(root.as_path().to_path_buf(), state.ui.diff_policies, path)
+        }
         _ => DiffTarget::new(
-            root,
+            root.as_path().to_path_buf(),
             left.clone(),
             right.clone(),
             state.ui.diff_policies,
@@ -228,6 +287,7 @@ pub fn render_diff(
     // load and says it is waiting. The widget-state salt below is derived from
     // the target, never from the cache key, which the caller cannot name.
     let verdict = state.read(target.clone());
+    let staging_live = target.stages();
     // A root-wide read of the view this pane displays failed: the whole file
     // counts as failed to read, content and all. Consulted on a `Fresh` or
     // `Empty` verdict because every other verdict already stops the rows, and
@@ -352,7 +412,7 @@ pub fn render_diff(
     // indices; unified slots are (display index, member) with a Pair member
     // flattened into one slot per underlying row (ADR-0014 paging, now over
     // the filtered stream).
-    let plan = paint_plan(state, model, change);
+    let plan = paint_plan(state, model, change, staging_live);
     let total_rows = if side_by_side {
         plan.sbs.len()
     } else {
@@ -489,6 +549,9 @@ struct PaintPlan {
     /// Per hunk: those answers aggregated, which is what names the header's
     /// `· staged` / `· part` / `· not staged` suffix.
     hunk_staging: Vec<HunkStaging>,
+    /// Whether the granular staging verbs reach this comparison — `false` for
+    /// a historical pair, whose rows paint read-only.
+    staging_live: bool,
 }
 
 impl PaintPlan {
@@ -522,10 +585,21 @@ impl PaintPlan {
 /// rather than recomputed per row (ticket 12), and the same walk asks the
 /// per-line oracle about every changed row once, which is why staged-ness is
 /// painted from a resolved frame rather than a lookup per painted line.
-fn paint_plan(state: &AppState, model: &DiffModel, change: &Option<ChangeRef>) -> PaintPlan {
+fn paint_plan(
+    state: &AppState,
+    model: &DiffModel,
+    change: &Option<ChangeRef>,
+    staging_live: bool,
+) -> PaintPlan {
     let hunk_count = model.hunk_count();
     let want_add = matches!(state.ui.diff_pane, DiffPane::New);
-    let oracle = StagedRows::resolve(state, change);
+    // The oracle answers from the worktree changelist; a historical pair has
+    // no sides it can describe.
+    let oracle = if staging_live {
+        StagedRows::resolve(state, change)
+    } else {
+        None
+    };
     let mut caret: Option<usize> = None;
     let mut plan = PaintPlan {
         sbs: Vec::with_capacity(model.display.len()),
@@ -537,6 +611,7 @@ fn paint_plan(state: &AppState, model: &DiffModel, change: &Option<ChangeRef>) -
         caret: None,
         staging: vec![PairStaging::default(); model.display.len()],
         hunk_staging: vec![HunkStaging::NoAnswer; hunk_count],
+        staging_live,
     };
     // The section currently being totalled, and the counts of the one before
     // it — a file row opens its section, so the section's totals are only
@@ -1049,7 +1124,9 @@ fn paint_full_width_row(
                     font,
                 );
             }
-            hunk_gutter_actions(ui, state, *rect, paint, row.hunk, status, change);
+            if plan.staging_live {
+                hunk_gutter_actions(ui, state, *rect, paint, row.hunk, status, change);
+            }
             hunk_header_extras(
                 ui,
                 state,
@@ -1088,7 +1165,7 @@ fn unified_row(
     // Changed lines are clickable toggles (spec R2 story 3, issue 19);
     // additions additionally take char-range drags. Everything else stays
     // hover-only.
-    let toggleable = matches!(row.kind, RowKind::Del | RowKind::Add);
+    let toggleable = plan.staging_live && matches!(row.kind, RowKind::Del | RowKind::Add);
     let draggable = toggleable && row.kind == RowKind::Add;
     let (rect, resp) = ui.allocate_exact_size(
         Vec2::new(width, ROW_H),
@@ -1560,7 +1637,7 @@ fn render_side_by_side(
                             del_staged,
                             &painter,
                             &font,
-                            true,
+                            plan.staging_live,
                             false,
                         );
                         if cell.clicked() {
@@ -1599,8 +1676,8 @@ fn render_side_by_side(
                             add_staged,
                             &painter,
                             &font,
-                            true,
-                            true,
+                            plan.staging_live,
+                            plan.staging_live,
                         );
                         let text_origin = cell.rect.left() + NUM_W + 20.0;
                         let drag_staged =

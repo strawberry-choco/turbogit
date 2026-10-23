@@ -1250,6 +1250,30 @@ pub struct DiffTarget {
     pub path: Option<PathBuf>,
 }
 
+impl DiffTarget {
+    /// One commit's own change: against its parent, or against the empty tree
+    /// when the commit has none. Measured on git 2.54: a pair with no left
+    /// side answers plain `git diff` (index↔worktree), and `commit^!` answers
+    /// the same worktree comparison for a parentless commit, so neither form
+    /// names a root commit's own change.
+    pub fn commit(
+        root: RootId,
+        parent: Option<String>,
+        cid: String,
+        path: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            root,
+            left: Some(parent.unwrap_or_else(|| EMPTY_TREE_OID.to_owned())),
+            right: Some(cid),
+            path,
+        }
+    }
+}
+
+/// The OID git gives the tree with no entries — a root commit's left side.
+const EMPTY_TREE_OID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 /// What the blame view should display (issue 18): one file at one revision
 /// in one root. Set by the changed-files pane's footer link / context menu;
 /// it is also the target [`crate::keyed_read`] reads its lines by.
@@ -1580,6 +1604,12 @@ pub struct UiState {
     /// Carries its own target for the same reason the commit menu does — the row
     /// it opened on, not whatever is selected now.
     pub log_file_menu: Option<(RootId, CommitId, std::path::PathBuf)>,
+    /// Open diff view: `Some` renders the diff surface in the log window's
+    /// graph slot, the same swap the blame view below gets. Reached from the
+    /// changed-files pane (a row click or the footer's `Open diff`) and the
+    /// hidden-jump band's `View in Diff` escape; it is also the target
+    /// [`crate::keyed_read`] reads its patch by, so it carries the root the
+    /// comparison runs in, not whatever root is focused.
     pub diff: Option<DiffTarget>,
     /// Open blame view (issue 18): `Some` renders the blame surface for the
     /// target file at the target revision; `None` shows the commit graph.

@@ -371,6 +371,13 @@ impl DiffTarget {
         }
     }
 
+    /// Whether the granular staging verbs may act on this comparison: staging
+    /// composes a row's stage against the index, which only the two
+    /// working-tree views have. A historical pair answers `false`.
+    pub fn stages(&self) -> bool {
+        self.root_view().is_some()
+    }
+
     /// The two byte sources for one of this target's file sections, deriving
     /// which side is a rev, which is the worktree, and which is missing:
     ///

@@ -64,6 +64,7 @@ mod view;
 
 pub(crate) use actions::{preview_caret_line, preview_hunk_count, preview_line_counts};
 pub use view::render_diff;
+pub use view::show_diff;
 
 // Re-exported here so the historical `ui::diff` paths keep resolving
 // (DDD split issue 04).
