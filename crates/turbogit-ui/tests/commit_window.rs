@@ -913,8 +913,9 @@ fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
     let repo = temp_repo(parent.path(), "two-zone-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
-    let h = harness(app_state(std::slice::from_ref(&repo.path)));
-    h.get_by_label("base.txt");
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("base.txt").click();
+    h.run();
 
     // The width itself: unchanged, and still owned by this module.
     assert_eq!(
@@ -933,17 +934,16 @@ fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
         turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH
     );
 
-    // …and the preview zone starts exactly one column to its right.
-    let preview = galley_origin(&h, "Preview")
-        .expect("the diff preview zone must paint its heading without any toggle");
-    let expected_x = changes_card.left()
-        + turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH
-        + turbogit_ui::theme::PANEL_PADDING;
+    // …and the preview zone starts exactly one column to its right. The zone
+    // names itself by the previewed file once a row is selected.
+    let path = h.get_by_label("Previewing base.txt").rect();
+    let preview = card_rect(&h, path.center());
+    let expected_x = changes_card.left() + turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH;
     assert!(
-        (preview.x - expected_x).abs() < 0.5,
+        (preview.left() - expected_x).abs() < 0.5,
         "the diff preview must start at the fixed commit panel's edge \
          (x={expected_x}), got x={}",
-        preview.x
+        preview.left()
     );
 }
 
@@ -2290,12 +2290,13 @@ fn the_file_filter_gets_its_own_full_width_row_under_the_header() {
 
 #[test]
 fn preview_is_a_card_headered_by_the_path_and_navigation() {
-    // Redesign Phase 4 (mockup): the flat "Preview" heading becomes a
-    // full-height card whose header states what is being previewed, with the
-    // prev/next navigation beside it — the selection→preview link the empty
-    // state used to hide. Status and mode pills are deliberately absent: the
-    // changelist row already carries the status letter and the diff toolbar
-    // carries the mode.
+    // Redesign Phase 4 (mockup): the preview zone is a full-height card whose
+    // header states the previewed file's path alone — no zone title — with
+    // the prev/next navigation beside it, both centred on one band line. The
+    // selection→preview link the empty state used to hide stays; with no
+    // selection the header does not paint at all. Status and mode pills are
+    // deliberately absent: the changelist row already carries the status
+    // letter and the diff toolbar carries the mode.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "card-preview-repo");
     std::fs::write(repo.path.join("base.txt"), "a\nb\nc\n").unwrap();
@@ -2307,14 +2308,16 @@ fn preview_is_a_card_headered_by_the_path_and_navigation() {
     h.get_by_label("base.txt").click();
     h.run();
 
-    let heading = galley_origin(&h, "Preview").expect("the preview zone keeps its heading");
-    let card = card_rect(&h, heading);
-    let heading_band = heading.y + 8.0;
-
     let path = h.get_by_label("Previewing base.txt").rect();
+    let card = card_rect(&h, path.center());
     assert!(
         card.contains_rect(path),
         "the previewed path must sit inside the preview card {card:?}, got {path:?}"
+    );
+    // The flat zone title is gone: the file's name is the header's whole text.
+    assert!(
+        galley_origin(&h, "Preview").is_none(),
+        "the header must not paint a `Preview` title beside the path"
     );
 
     for label in ["Previous change", "Next change"] {
@@ -2324,9 +2327,10 @@ fn preview_is_a_card_headered_by_the_path_and_navigation() {
             "`{label}` must sit inside the preview card {card:?}, got {rect:?}"
         );
         assert!(
-            (rect.center().y - heading_band).abs() < 12.0,
-            "`{label}` belongs to the header strip beside the heading \
-             (band y={heading_band}, control centre {})",
+            (rect.center().y - path.center().y).abs() < 2.0,
+            "`{label}` and the path are centred on one band line \
+             (path centre {}, control centre {})",
+            path.center().y,
             rect.center().y
         );
     }
@@ -3890,10 +3894,7 @@ fn the_preview_card_paints_one_change_size_pair() {
 
     // The card holds exactly one `+N` / `−M` pair — the toolbar's — and it is
     // the file's own count.
-    let card = card_rect(
-        &h,
-        galley_origin(&h, "Preview").expect("the preview heading"),
-    );
+    let card = card_rect(&h, h.get_by_label("Previewing base.txt").rect().center());
     let pairs: Vec<(String, egui::Rect)> = painted_galleys(&h)
         .into_iter()
         .filter(|g| card.contains(g.pos))

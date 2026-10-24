@@ -1819,25 +1819,27 @@ fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// The preview card's header strip: the zone title, then the previewed file's
-/// path, with the prev/next change navigation right-aligned. The nav buttons
-/// retarget the preview to the adjacent changed file — the same path a
+/// The preview card's header strip: the previewed file's path, vertically
+/// centred, with the prev/next change navigation right-aligned. The nav
+/// buttons retarget the preview to the adjacent changed file — the same path a
 /// file-row click uses, so the diff read loads the new diff. The mode, the
 /// counts and the comparison controls belong to the diff toolbar the body
-/// renders; the header does not restate them.
+/// renders; the header does not restate them. With nothing previewed there is
+/// no file to name, so the strip is not painted at all.
 fn preview_header(ui: &mut Ui, state: &mut AppState, change: Option<&ChangeRef>) {
+    let Some(change) = change else {
+        return;
+    };
     widgets::card_header(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("Preview")
-                    .strong()
-                    .font(FontId::new(
-                        crate::theme::TYPE_BODY,
-                        FontFamily::Proportional,
-                    ))
-                    .color(Palette::INK),
-            );
-            if let Some(change) = change {
+        let width = ui.available_width();
+        // A fixed-height centred band, not a plain horizontal: a one-pass
+        // layout centres a first, shorter item against the row height it
+        // *starts* with, so the path hung high over the 28 pt chevrons that
+        // grew the row after it.
+        ui.allocate_ui_with_layout(
+            Vec2::new(width, widgets::ICON_BUTTON_SIZE),
+            Layout::left_to_right(Align::Center),
+            |ui| {
                 let path_text = change.path.display().to_string();
                 let path_resp = ui.label(
                     RichText::new(&path_text)
@@ -1847,13 +1849,11 @@ fn preview_header(ui: &mut Ui, state: &mut AppState, change: Option<&ChangeRef>)
                 path_resp.widget_info(|| {
                     WidgetInfo::labeled(WidgetType::Label, true, format!("Previewing {path_text}"))
                 });
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if let Some(change) = change {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     change_nav(ui, state, change);
-                }
-            });
-        });
+                });
+            },
+        );
     });
 }
 
