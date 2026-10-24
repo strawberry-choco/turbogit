@@ -1,8 +1,8 @@
-//! Issue #16 — Settings modal: a category-list dialog opened ONLY from the
-//! command palette's `Settings…` action (`Ctrl+Shift+A`), not from any tab
-//! strip or shell-chrome surface (spec §8.8, §9.1 correction; the toolbar gear
-//! retired with the IDE chrome in issue #03 and the topbar's `More` button
-//! with the topbar itself, so the palette is now the one entry point).
+//! Issue #16 — Settings modal: a category-list dialog opened from the command
+//! palette's `Settings…` action (`Ctrl+Shift+A`) and from the tab strip's
+//! settings button (the gear returned with the strip's action cluster; the
+//! IDE-chrome toolbar of issue #03 and the topbar's `More` button stay gone,
+//! and the VCS popup's frozen action set still carries no entry).
 //!
 //! Headless egui_kittest harness driving [`turbogit_ui::ui::render`] end-to-end.
 //! Asserts only on public surfaces:
@@ -22,9 +22,8 @@ use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{GitBackend, IncomingCheckInterval, VcsSettings};
 
 /// The modal opens from the command palette: the palette's `Settings…`
-/// action turns the flag on. The palette is the only entry point — the
-/// toolbar gear retired with the IDE chrome (issue #03) and the topbar's
-/// `More` button with the topbar.
+/// action turns the flag on. The tab strip's settings button is the other
+/// entry point; `header_actions.rs` owns that route.
 fn open_settings(harness: &mut Harness<'_, AppState>) {
     harness.state_mut().ui.command_palette = true;
     settle(harness);
@@ -43,18 +42,16 @@ fn toggle_staging(harness: &mut Harness<'_, AppState>) {
     settle(harness);
 }
 
-// --- Cycle 1: palette-only entry ----------------------------------------------
+// --- Cycle 1: palette entry --------------------------------------------------
 
 #[test]
-fn settings_is_a_modal_opened_only_from_the_command_palette() {
+fn settings_opens_from_the_command_palette() {
     let (mut harness, _project) = shell_harness();
     settle(&mut harness);
 
-    // No Settings surface exists before the palette action runs: the tab
-    // strip offers no Settings page (issue #16), the chrome carries no
-    // gear (issue #03), and the topbar's More menu is gone with the
-    // topbar — so `query_by_label` finds exactly one route to the modal,
-    // the palette action.
+    // No Settings surface exists before the palette action runs. This harness
+    // is the Welcome page, where the tab strip does not render at all; the
+    // strip's settings button on repo pages is `header_actions.rs`' subject.
     assert_not_painted(&harness, "Settings");
     assert!(
         harness.query_by_label("Settings").is_none(),
@@ -132,14 +129,17 @@ fn settings_modal_is_about_768px_wide() {
 }
 
 #[test]
-fn tab_strip_no_longer_offers_settings() {
+fn tab_strip_offers_no_settings_tab() {
     // The tab strip only renders with a project open, so run over a real
     // repo (the Welcome page shows the tool tabs no more).
     let (mut harness, _tmp) = repo_shell_harness();
     settle(&mut harness);
 
-    // The strip renders the five tool tabs; History was already deleted in
-    // issue #19 and Settings in issue #16.
+    // The strip renders the five tool tabs (History deleted in issue #19,
+    // the Settings tool window in issue #16) plus the action cluster, whose
+    // settings button opens the modal rather than switching tabs — so the
+    // painted labels gain no Settings tab and the active tab never becomes
+    // one.
     for label in ["Changes", "Log", "Branches", "Worktrees", "Submodules"] {
         assert_painted(&harness, label);
     }
