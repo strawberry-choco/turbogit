@@ -57,6 +57,7 @@ use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use crate::ui::widgets::PaneColumn;
+use crate::ui::widgets::TabItem;
 use egui::{
     Align, Color32, CornerRadius, FontFamily, FontId, Key, Layout, Margin, Pos2, Rect, RichText,
     Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
@@ -293,18 +294,31 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     if let Some(root_id) = state.ui.preview_change.as_ref().map(|c| c.root.clone()) {
         state.ensure_hunk_stats(&root_id);
     }
-    sub_tab_strip(ui, state);
-    match state.ui.commit_subtab {
-        CommitSubTab::LocalChanges => local_changes_body(ui, state),
-        // ADR-0008 made these two labelled placeholders because the panes had
-        // nothing behind them. They have panes now: a shelf list and a stash
-        // list, each with its verbs wired to the dispatch that does the work.
-        CommitSubTab::Shelf => shelf_pane(ui, state),
-        CommitSubTab::Stash => stash_pane(ui, state),
-    }
+    let active = state.ui.commit_subtab;
+    widgets::tab_view(
+        ui,
+        state,
+        &SUB_TAB_ITEMS,
+        active,
+        // Session-only selection, no side effects.
+        |state, tab| state.ui.commit_subtab = tab,
+        |_, _| {},
+        // Reads the state fresh, not the `active` snapshot: the assignment above
+        // may have run this very frame, and the body must switch same-frame.
+        |ui, state| match state.ui.commit_subtab {
+            CommitSubTab::LocalChanges => local_changes_body(ui, state),
+            // ADR-0008 made these two labelled placeholders because the panes had
+            // nothing behind them. They have panes now: a shelf list and a stash
+            // list, each with its verbs wired to the dispatch that does the work.
+            CommitSubTab::Shelf => shelf_pane(ui, state),
+            CommitSubTab::Stash => stash_pane(ui, state),
+        },
+    );
 
     // Conflict resolution tools (ours / theirs / 3-way merge editor); the
-    // renderer no-ops while nothing is conflicted.
+    // renderer no-ops while nothing is conflicted. Flow siblings of the content
+    // region: `tab_view` advanced the cursor past the used height, so these land
+    // beneath the content.
     crate::ui::conflicts::render(ui, state);
 
     if let Some(err) = &state.last_error {
@@ -319,25 +333,29 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
 /// treatment is superseded for Shelf and Stash, which list this root's shelves
 /// and git's stash entries. Unversioned Files was removed in the one-tree
 /// redesign (issue 04).
-const SUB_TABS: [(CommitSubTab, &str); 3] = [
-    (CommitSubTab::LocalChanges, "Local Changes"),
-    (CommitSubTab::Shelf, "Shelf"),
-    (CommitSubTab::Stash, "Stash"),
+const SUB_TAB_ITEMS: [TabItem<'static, CommitSubTab>; 3] = [
+    TabItem {
+        id: CommitSubTab::LocalChanges,
+        title: "Local Changes",
+        icon: None,
+        end_icon: None,
+        badge: None,
+    },
+    TabItem {
+        id: CommitSubTab::Shelf,
+        title: "Shelf",
+        icon: None,
+        end_icon: None,
+        badge: None,
+    },
+    TabItem {
+        id: CommitSubTab::Stash,
+        title: "Stash",
+        icon: None,
+        end_icon: None,
+        badge: None,
+    },
 ];
-
-fn sub_tab_strip(ui: &mut Ui, state: &mut AppState) {
-    ui.horizontal(|ui| {
-        for (tab, label) in SUB_TABS {
-            if ui
-                .selectable_label(state.ui.commit_subtab == tab, label)
-                .clicked()
-            {
-                state.ui.commit_subtab = tab;
-            }
-        }
-    });
-    ui.separator();
-}
 
 // ------------------------------------------------------------ file filter --
 

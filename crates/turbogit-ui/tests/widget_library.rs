@@ -2707,12 +2707,15 @@ fn the_column_header_row_underlines_itself_once_in_the_structural_tone() {
 ///
 /// R1 gives `Palette::BRAND` three jobs in the whole app: a view's single
 /// primary action button, the active tab underline, and a selected row's rail.
-/// Neither of the other two appears here — these harnesses render a pane alone in
-/// a central panel, with no tab strip and no shell — so every brand-filled rect
-/// in one of these four frames is a primary action button, and a pane has at
-/// most one of them. That is the whole of R1's second row, stated per pane rather
-/// than as a claim about the app: the number is written down, so a second blue in
-/// a pane is a failing assertion instead of a screen nobody looks at twice.
+/// Only the first two can appear here. These harnesses render a pane alone in
+/// a central panel with no shell, but the Changes pane has carried its own
+/// sub-tab strip since it moved onto the shared tab view, so its active tab
+/// paints the accent underline; the partition below reads it out beside the
+/// rails. Every remaining brand-filled rect in one of these four frames is a
+/// primary action button, and a pane has at most one of them. That is the whole
+/// of R1's second row, stated per pane rather than as a claim about the app:
+/// the number is written down, so a second blue in a pane is a failing
+/// assertion instead of a screen nobody looks at twice.
 const PANE_PRIMARY_ACTION: [(ChromePane, Option<&str>); 4] = [
     (ChromePane::Worktrees, Some("Add worktree")),
     (ChromePane::Submodules, None),
@@ -2741,16 +2744,18 @@ fn a_tool_pane_paints_at_most_one_brand_fill_and_it_is_its_primary_action() {
         settle(&mut harness);
         let rule = the_header_rule(&harness);
 
-        // R1 gives the accent three jobs and a pane is allowed two of them: its
-        // one primary action, and a selected row's rail. So the brand fills are
-        // *partitioned* rather than counted — a rail is the token's width at a
-        // row's leading edge, and everything else has to be the pane's primary.
+        // R1 gives the accent three jobs and a pane is allowed three of them:
+        // its one primary action, a selected row's rail, and its active tab's
+        // underline. So the brand fills are *partitioned* rather than counted —
+        // a rail is the token's width at a row's leading edge, a tab underline
+        // the token's width at the strip's bottom edge, and everything else has
+        // to be the pane's primary.
         let brand: Vec<egui::Rect> = painted_rects(&harness)
             .into_iter()
             .filter(|(_, fill, _, _)| *fill == Palette::BRAND)
             .map(|(rect, _, _, _)| rect)
             .collect();
-        let (rails, buttons): (Vec<egui::Rect>, Vec<egui::Rect>) = brand
+        let (rails, rest): (Vec<egui::Rect>, Vec<egui::Rect>) = brand
             .iter()
             .copied()
             .partition(|rect| (rect.width() - RAIL_WIDTH).abs() < 0.01);
@@ -2760,6 +2765,37 @@ fn a_tool_pane_paints_at_most_one_brand_fill_and_it_is_its_primary_action() {
                 "a brand-filled rect {rail:?} is a rail's width but is {}-tall: the \
                  accent fills a row's leading edge, and nothing else at that width",
                 rail.height()
+            );
+        }
+        // A 2px rule earns the underline reading only in the strip: it hugs the
+        // bottom of a band that holds a tab label and spans that one tab's own
+        // width. Anything else 2px tall is a brand rule drawn across a pane and
+        // stays in the button count, where it fails.
+        let (tab_rules, buttons): (Vec<egui::Rect>, Vec<egui::Rect>) = rest
+            .iter()
+            .copied()
+            .partition(|rect| (rect.height() - RAIL_WIDTH).abs() < 0.01);
+        assert!(
+            tab_rules.len() <= 1,
+            "one active tab paints one underline, so a pane carries at most one: \
+             {tab_rules:?}"
+        );
+        for rule in &tab_rules {
+            let band_top = rule.bottom() - TAB_STRIP_HEIGHT;
+            let spans: Vec<_> = painted_galleys(&harness)
+                .into_iter()
+                .filter(|g| {
+                    g.rect.center().y >= band_top
+                        && g.rect.center().y <= rule.bottom()
+                        && g.rect.center().x >= rule.left()
+                        && g.rect.center().x <= rule.right()
+                })
+                .collect();
+            assert_eq!(
+                spans.len(),
+                1,
+                "a brand rule {rule:?} reads as a tab underline only over the one \
+                 tab label it closes; found {spans:?} in its band"
             );
         }
 

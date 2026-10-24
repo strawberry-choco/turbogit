@@ -1284,6 +1284,32 @@ fn sub_tab_strip_switches_active_sub_tab_and_restores_local_changes() {
     h.get_by_label("base.txt");
 }
 
+/// One frame between the click and the assertion: the sub-tab strip runs the
+/// selection before the body closure, and the body reads the state fresh, so a
+/// click switches the painted pane on the very frame the click lands. A body
+/// that read a snapshot would lag one frame and fail here.
+#[test]
+fn a_sub_tab_click_switches_the_pane_on_the_same_frame() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "same-frame-subtab");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    h.get_by_label("Shelf").click();
+    h.step();
+
+    assert_eq!(h.state().ui.commit_subtab, CommitSubTab::Shelf);
+    let painted: Vec<String> = painted_text(&h);
+    assert!(
+        painted.iter().any(|t| t == "SHELVES"),
+        "the Shelf pane paints on the same frame as the click, got {painted:?}"
+    );
+    assert!(
+        !painted.iter().any(|t| t == "base.txt"),
+        "the changelist is gone the same frame: the body did not lag a click"
+    );
+}
+
 #[test]
 fn shelf_and_stash_replace_the_placeholder_with_their_own_panes() {
     // ADR-0008 made these two sub-tabs labelled placeholders because nothing
