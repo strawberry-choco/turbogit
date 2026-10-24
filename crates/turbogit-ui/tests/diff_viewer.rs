@@ -36,6 +36,7 @@
 //! partition while that ticket was in flight; the token contract is where a
 //! palette belongs, and this suite keeps the diff's *behaviour*.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1208,6 +1209,32 @@ fn multi_file_sections_keep_their_counts_on_the_file_rows() {
             );
         }
     }
+}
+
+/// Contract: a **mode-only** change has no content rows — a single-file pane
+/// suppresses the header block that was its whole content — so the pane states
+/// its emptiness instead of scrolling nothing.
+#[test]
+fn a_mode_only_change_states_its_empty_scroller() {
+    let (_tmp, repo) = init_repo();
+    let script = repo.join("script.sh");
+    write_file(&repo, "script.sh", "echo hi\n");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-q", "-m", "c1"]);
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod the worktree file");
+    assert!(
+        git(&repo, &["diff", "HEAD"]).contains("new mode 100755"),
+        "the seeded change must be mode-only, got:\n{}",
+        git(&repo, &["diff", "HEAD"])
+    );
+
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo, &script);
+    settle(&mut h);
+
+    assert_painted(&h, "No content changes.");
 }
 
 /// The toolbar's row band, by the view-mode control's own track: the track is

@@ -321,10 +321,8 @@ pub fn render_diff(
     // lists built in one O(model) walk. Side-by-side slots are display
     // indices; unified slots are (display index, member) with a Pair member
     // flattened into one slot per underlying row (ADR-0014 paging, now over
-    // the filtered stream). Computed before the toolbar because the toolbar
-    // reads a single-file pane's `+N −M` pair from it, and only where a plan
-    // can be used: every other verdict or pane kind stops the rows, and with
-    // them everything the plan pages.
+    // the filtered stream). Built before the toolbar, which reads a
+    // single-file pane's `+N −M` pair from it.
     let plan = match &verdict {
         Read::Fresh(diff)
             if view_failure.is_none() && pane_kind(&diff.model.files) == PaneKind::Text =>
@@ -336,9 +334,9 @@ pub fn render_diff(
 
     // Toolbar chrome (spec §8.4): view mode · counts · hunk nav · diff options.
     // Wrapped so narrow panes (commit preview) push a control to a second row
-    // instead of clipping it out of reach. The whole row is pane chrome: it
-    // paints before the verdict is consulted, so the controls are on screen in
-    // every state the pane can be in — waiting, failed, empty, binary, image.
+    // instead of clipping it out of reach, and painted before the verdict is
+    // consulted: the controls are pane chrome, on screen in every state the
+    // pane can be in.
     ui.horizontal_wrapped(|ui| {
         // The toolbar's own item rhythm is the gap between its groups: the
         // frames are the separation, so there is no rule painted between them.
@@ -347,12 +345,9 @@ pub fn render_diff(
         if let Some(idx) = widgets::segmented_control(ui, &["Side-by-Side", "Unified"], selected) {
             state.ui.diff_side_by_side = idx == 0;
         }
-        // A single-file pane has no file row to carry the counts (the model
-        // suppresses the section's plumbing), so the toolbar states them; a
-        // multi-file patch keeps its counts on the file rows. The labels
-        // `extend` because a wrapped-layout label lays its galley out from the
-        // ROW's left edge with a leading space — a statistic that never wraps
-        // wants its own cursor position, not the row's.
+        // The labels `extend` because a wrapped-layout label lays its galley
+        // out from the ROW's left edge with a leading space — a statistic that
+        // never wraps wants its own cursor position, not the row's.
         if let Some((added, removed)) = plan.as_ref().and_then(PaintPlan::toolbar_counts) {
             let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
             ui.add(
@@ -461,13 +456,19 @@ pub fn render_diff(
         return;
     }
 
+    // A mode-only change reaches a Fresh text verdict with zero rows — its only
+    // facts lived in the header block a single-file pane suppresses — so the
+    // pane owes the reader the same note instead of an empty scroller.
+    if model.display.is_empty() {
+        widgets::empty_state(ui, "No content changes.");
+        return;
+    }
+
     // Gutter staging controls need the previewed file's status (spec R2);
     // resolved once per frame from the cached changelists.
     let status = granular::preview_status(state, change.as_ref());
 
     let side_by_side = state.ui.diff_side_by_side;
-    // The plan above is `Some` in exactly the states that reach here: a
-    // settled, text, non-failed verdict — the only shape with rows to page.
     let plan = plan.expect("a settled text diff computed the paint plan");
     let total_rows = if side_by_side {
         plan.sbs.len()
@@ -569,7 +570,9 @@ impl HunkSlot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FileRowStats {
     /// Display index of the section's file row — the row these counts describe.
-    display: usize,
+    /// `None` for a single-file pane's section, which has no file row: the
+    /// toolbar states its totals.
+    display: Option<usize>,
     added: usize,
     removed: usize,
 }
@@ -616,13 +619,13 @@ impl PaintPlan {
     fn file_counts(&self, display: usize) -> (usize, usize) {
         self.file_rows
             .iter()
-            .find(|f| f.display == display)
+            .find(|f| f.display == Some(display))
             .map_or((0, 0), |f| (f.added, f.removed))
     }
 
     /// The toolbar's `+N −M` pair: the one section's totals, when the pane
-    /// shows exactly one file section. `None` for a multi-file patch, whose
-    /// counts stay on their file rows.
+    /// shows exactly one file section. Multi-file patches keep their counts on
+    /// the file rows.
     fn toolbar_counts(&self) -> Option<(usize, usize)> {
         match &self.file_rows[..] {
             [only] => Some((only.added, only.removed)),
@@ -647,12 +650,12 @@ impl PaintPlan {
 /// Walk the display model once, filtering collapsed hunks' bodies out of
 /// both slot streams (issue 20). Meta rows between sections stay visible —
 /// they belong to no hunk body. The same walk totals each file section's
-/// changed lines for its file row — or, when the model holds exactly one
-/// file section, for the toolbar, whose virtual section the walk opens up
-/// front — which is why the counts are carried here rather than recomputed
-/// per row (ticket 12), and the same walk asks the per-line oracle about
-/// every changed row once, which is why staged-ness is painted from a
-/// resolved frame rather than a lookup per painted line.
+/// changed lines for its file row, or for the toolbar when the section has
+/// no row of its own (one file in the patch), which is why the counts are
+/// carried here rather than recomputed per row (ticket 12), and the same
+/// walk asks the per-line oracle about every changed row once, which is why
+/// staged-ness is painted from a resolved frame rather than a lookup per
+/// painted line.
 fn paint_plan(
     state: &AppState,
     model: &DiffModel,
@@ -685,13 +688,11 @@ fn paint_plan(
     // it — a file row opens its section, so the section's totals are only
     // complete when the NEXT file row (or the end of the model) arrives.
     let mut open: Option<FileRowStats> = None;
-    // A single-file pane has no file row in the stream to open its section —
-    // the model suppresses the plumbing block — so the walk opens a virtual
-    // one up front. Its display index matches no row, and its totals are what
-    // [`PaintPlan::toolbar_counts`] hands the toolbar.
+    // A single-file pane has no file row in the stream to open its section,
+    // so the walk opens the rowless one the toolbar's counts come from.
     if model.files.len() == 1 {
         open = Some(FileRowStats {
-            display: usize::MAX,
+            display: None,
             added: 0,
             removed: 0,
         });
@@ -709,7 +710,7 @@ fn paint_plan(
                     if is_file_row(row) {
                         close(&mut plan, &mut open);
                         open = Some(FileRowStats {
-                            display: di,
+                            display: Some(di),
                             added: 0,
                             removed: 0,
                         });
@@ -1436,8 +1437,8 @@ fn file_row(
             .max_rect(trailing)
             .layout(Layout::right_to_left(Align::Center)),
     );
-    // The same `+N −M` stats treatment the toolbar's own counts use, in the
-    // same accents: the counts are statistics, not diff row content.
+    // The counts are statistics, not diff row content, so they keep the stats
+    // accents rather than the row's ink.
     let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
     zone.label(
         RichText::new(format!("\u{2212}{removed}"))
@@ -1452,9 +1453,8 @@ fn file_row(
 }
 
 /// The pane's header for one file, painted in every state of the comparison —
-/// settled or not. While the read is waiting, failed or empty, and the rows
-/// that would name the file are absent, this row is the only thing on the pane
-/// that says which file was asked for.
+/// settled or not. While the read is waiting, failed or empty, this row is
+/// the only thing on the pane that says which file was asked for.
 fn file_header(ui: &mut Ui, change: &Option<ChangeRef>) {
     let Some(change) = change else {
         return;
