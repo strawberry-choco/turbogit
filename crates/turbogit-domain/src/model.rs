@@ -862,8 +862,6 @@ pub enum GitBackend {
 pub struct VcsSettings {
     /// Path to the git executable (empty = resolve from PATH).
     pub git_executable: String,
-    /// Enable Git's index (staging-area) UI instead of changelists.
-    pub staging_area: bool,
     /// Synchronous branch control across roots.
     pub synchronous_branches: bool,
     /// Update method.
@@ -923,7 +921,6 @@ impl Default for VcsSettings {
     fn default() -> Self {
         Self {
             git_executable: String::new(),
-            staging_area: false,
             synchronous_branches: false,
             update_method: UpdateMethod::default(),
             clean_tree_method: CleanTreeMethod::default(),

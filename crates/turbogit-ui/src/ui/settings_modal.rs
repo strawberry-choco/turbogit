@@ -243,10 +243,6 @@ fn page_title(ui: &mut Ui, title: &str) {
 /// General: commit-surface behavior. Screen 11 keeps this page light.
 fn general_page(ui: &mut Ui, s: &mut VcsSettings) {
     ui.checkbox(
-        &mut s.staging_area,
-        "Use staging area instead of classic commit",
-    );
-    ui.checkbox(
         &mut s.restore_workspace,
         "Restore workspace context on branch switch",
     );
@@ -654,7 +650,6 @@ fn restore_category_defaults(state: &mut AppState) {
     let d = VcsSettings::default();
     match state.ui.settings_category {
         SettingsCategory::General => {
-            draft.staging_area = d.staging_area;
             draft.restore_workspace = d.restore_workspace;
         }
         SettingsCategory::Git => {

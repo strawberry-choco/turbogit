@@ -35,9 +35,9 @@ fn open_settings(harness: &mut Harness<'_, AppState>) {
     );
 }
 
-fn toggle_staging(harness: &mut Harness<'_, AppState>) {
+fn toggle_restore_workspace(harness: &mut Harness<'_, AppState>) {
     harness
-        .get_by_label("Use staging area instead of classic commit")
+        .get_by_label("Restore workspace context on branch switch")
         .click();
     settle(harness);
 }
@@ -91,13 +91,13 @@ fn categories_switch_the_visible_page() {
 
     // The modal opens on General…
     assert!(harness.state().ui.settings_category.is_general());
-    assert_painted(&harness, "Use staging area instead of classic commit");
+    assert_painted(&harness, "Restore workspace context on branch switch");
 
     // …and clicking a category swaps the visible page.
     harness.get_by_label("Protected Branches").click();
     settle(&mut harness);
     assert_painted(&harness, "Protected branch patterns");
-    assert_not_painted(&harness, "Use staging area instead of classic commit");
+    assert_not_painted(&harness, "Restore workspace context on branch switch");
 
     harness.get_by_label("Git").click();
     settle(&mut harness);
@@ -160,9 +160,9 @@ fn backed_rows_round_trip_to_persisted_settings() {
     settle(&mut harness);
     open_settings(&mut harness);
 
-    // Edit two backed rows: staging mode checkbox (General) + git executable
-    // input (Git page).
-    toggle_staging(&mut harness);
+    // Edit two backed rows: the General checkbox + git executable input
+    // (Git page).
+    toggle_restore_workspace(&mut harness);
     harness.get_by_label("Git").click();
     settle(&mut harness);
     {
@@ -176,12 +176,12 @@ fn backed_rows_round_trip_to_persisted_settings() {
     harness.get_by_label("Apply").click();
     settle(&mut harness);
     assert!(
-        harness.state().settings.staging_area,
+        harness.state().settings.restore_workspace,
         "Apply must copy the draft into the live settings"
     );
     assert_eq!(harness.state().settings.git_executable, "git-under-test");
     let on_disk = persistence::load_settings(project.path()).expect("state.ron readable");
-    assert!(on_disk.staging_area);
+    assert!(on_disk.restore_workspace);
     assert_eq!(on_disk.git_executable, "git-under-test");
 
     // Cancel closes; reopening shows the persisted values, not defaults.
@@ -189,7 +189,7 @@ fn backed_rows_round_trip_to_persisted_settings() {
     settle(&mut harness);
     open_settings(&mut harness);
     let draft = harness.state().ui.settings_draft.as_ref().unwrap();
-    assert!(draft.staging_area);
+    assert!(draft.restore_workspace);
     assert_eq!(draft.git_executable, "git-under-test");
 }
 
@@ -199,8 +199,7 @@ fn backed_rows_paint_their_loaded_values() {
     settle(&mut harness);
     open_settings(&mut harness);
 
-    // General: the landing page carries the commit behavior rows.
-    assert_painted(&harness, "Use staging area instead of classic commit");
+    // General: the landing page carries the commit behavior row.
     assert_painted(&harness, "Restore workspace context on branch switch");
 
     // Multi-Root carries the cross-root branch sync.
@@ -422,7 +421,7 @@ fn apply_is_disabled_until_dirty() {
     );
 
     // One edit → dirty → Apply enables.
-    toggle_staging(&mut harness);
+    toggle_restore_workspace(&mut harness);
     assert!(!apply_disabled(&harness), "Apply must enable once dirty");
 
     // Restore defaults resets the visible category (General) → clean again.
@@ -435,7 +434,7 @@ fn apply_is_disabled_until_dirty() {
 
     // Apply on a dirty draft succeeds and cleans the flag, keeping the modal
     // open (IDE semantics — users tweak several pages before closing).
-    toggle_staging(&mut harness);
+    toggle_restore_workspace(&mut harness);
     harness.get_by_label("Apply").click();
     settle(&mut harness);
     assert!(
@@ -455,7 +454,7 @@ fn restore_defaults_resets_only_the_visible_category() {
     open_settings(&mut harness);
 
     // Edit a General field, then move to Git and edit two Git fields.
-    toggle_staging(&mut harness);
+    toggle_restore_workspace(&mut harness);
     harness.get_by_label("Git").click();
     settle(&mut harness);
     harness.get_by_label("CLI").click();
@@ -478,7 +477,7 @@ fn restore_defaults_resets_only_the_visible_category() {
         "Git fields return to defaults"
     );
     assert!(
-        draft.staging_area,
+        draft.restore_workspace,
         "edits on other categories must survive the reset"
     );
 
@@ -496,7 +495,7 @@ fn cancel_discards_edits() {
     settle(&mut harness);
     open_settings(&mut harness);
 
-    toggle_staging(&mut harness);
+    toggle_restore_workspace(&mut harness);
     harness.get_by_label("Cancel").click();
     settle(&mut harness);
 
@@ -505,7 +504,7 @@ fn cancel_discards_edits() {
         harness.state().ui.settings_draft.is_none(),
         "Cancel must drop the draft"
     );
-    assert!(!harness.state().settings.staging_area);
+    assert!(!harness.state().settings.restore_workspace);
     assert_eq!(
         persistence::load_settings(project.path()).unwrap(),
         VcsSettings::default(),
@@ -514,10 +513,10 @@ fn cancel_discards_edits() {
 
     // The window close (X) button follows the same discard semantics.
     open_settings(&mut harness);
-    toggle_staging(&mut harness);
+    toggle_restore_workspace(&mut harness);
     harness.get_by_label("Close window").click();
     settle(&mut harness);
-    assert!(!harness.state().settings.staging_area);
+    assert!(!harness.state().settings.restore_workspace);
     assert!(harness.state().ui.settings_draft.is_none());
 }
 
