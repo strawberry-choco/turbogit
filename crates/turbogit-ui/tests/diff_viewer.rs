@@ -475,6 +475,61 @@ fn segmented_control_toggles_side_by_side_and_unified() {
     assert_not_painted(&h, "After Working tree");
 }
 
+// --- Cycle 2b: toolbar order --------------------------------------------------
+
+/// Contract: the mode toggle and Diff options lead the toolbar, and the counts
+/// and hunk nav close it, right-aligned — the nav is the toolbar's rightmost
+/// control, pushed to the row's trailing edge far beyond the one item gap
+/// that would read as inline, all on one row.
+#[test]
+fn the_toolbar_leads_with_mode_and_options_and_closes_with_the_counts_and_nav() {
+    let (_tmp, repo) = repo_two_hunks();
+    let mut h = diff_harness(&repo);
+    settle(&mut h);
+    open_preview(&mut h, &repo, &repo.join("nav.txt"));
+    settle(&mut h);
+
+    let seg = h.get_by_label("Side-by-Side").rect();
+    let options = h.get_by_label("Diff options").rect();
+    let prev = h.get_by_label("Previous hunk").rect();
+    let next = h.get_by_label("Next hunk").rect();
+
+    // One row: the four controls share a centre line.
+    let seg_y = seg.center().y;
+    for (label, rect) in [
+        ("Diff options", options),
+        ("Previous hunk", prev),
+        ("Next hunk", next),
+    ] {
+        assert!(
+            (rect.center().y - seg_y).abs() < 4.0,
+            "`{label}` shares the toolbar's one row (centre {} vs mode toggle \
+             {seg_y})",
+            rect.center().y
+        );
+    }
+
+    // Left to right: mode toggle, Diff options, then the counts+nav group.
+    assert!(
+        options.left() > seg.right(),
+        "Diff options follows the mode toggle on the toolbar's leading edge"
+    );
+    assert!(
+        prev.left() > options.right(),
+        "the counts and hunk nav close the toolbar, right of Diff options"
+    );
+
+    // Right-aligned, not merely following: the group is pushed to the row's
+    // trailing edge.
+    assert!(
+        next.right() > options.right() + 100.0,
+        "the hunk nav is right-aligned to the toolbar's trailing edge \
+         (nav right {:.1}, Diff options right {:.1})",
+        next.right(),
+        options.right()
+    );
+}
+
 // --- Cycle 3: hunk navigation -------------------------------------------------
 
 #[test]

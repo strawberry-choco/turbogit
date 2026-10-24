@@ -15,6 +15,10 @@ use turbogit_app::keyed_read::DiffTarget;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::{ChangeRef, ChangeStatus};
 
+/// The nav buttons' square, shared with [`hunk_nav_width`] so the width the
+/// toolbar reserves for the nav is the width it paints.
+const NAV_BUTTON_SIZE: f32 = 24.0;
+
 // --- partial staging (spec R2) ----------------------------------------------
 
 /// Hunk count of the diff the Commit window's preview would render right
@@ -169,14 +173,31 @@ pub(super) fn hunk_nav(ui: &mut Ui, state: &mut AppState, total_hunks: usize) {
     }
 }
 
+/// The width [`hunk_nav`] paints, in the layout it paints it with: the
+/// toolbar right-aligns the nav by sizing ONE spacer in front of it, so the
+/// estimate has to be this layout, not a guess that drifts from it.
+pub(super) fn hunk_nav_width(ui: &Ui, current: usize, total_hunks: usize) -> f32 {
+    let gap = ui.spacing().item_spacing.x;
+    let label_w = if total_hunks > 0 {
+        let galley = ui.painter().layout_no_wrap(
+            format!("{}/{}", current.min(total_hunks - 1) + 1, total_hunks),
+            crate::theme::chrome_font(crate::theme::TYPE_BODY),
+            Color32::WHITE,
+        );
+        galley.size().x + gap
+    } else {
+        0.0
+    };
+    NAV_BUTTON_SIZE + gap + label_w + NAV_BUTTON_SIZE
+}
+
 /// Square ghost icon button with an explicit accessibility label.
 ///
 /// The nav scale: a standard 24 px square the host allocates itself, delegating
 /// the ghost ladder to [`widgets::ghost_icon_button`].
 fn nav_button(ui: &mut Ui, icon: Icon, label: &str, enabled: bool) -> Response {
-    const SIZE: f32 = 24.0;
     const ICON_SIZE: f32 = 14.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(SIZE), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(NAV_BUTTON_SIZE), Sense::hover());
     let id = ui.id().with(("diff-nav", label));
     widgets::ghost_icon_button(ui, rect, id, label, enabled, |ui, rect, state| {
         let ink = widgets::ButtonVariant::Ghost.text(state);

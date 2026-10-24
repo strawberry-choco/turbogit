@@ -2,6 +2,7 @@
 //! side-by-side row painters (spec §8.4, ADR-0014).
 use super::actions::{
     commit_current_hunk, diff_options_button, hunk_gutter_actions, hunk_header_extras, hunk_nav,
+    hunk_nav_width,
 };
 use super::model::{
     DiffModel, DisplayRow, Highlight, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W,
@@ -263,6 +264,26 @@ fn subject_line(target: &turbogit_app::state::DiffTarget) -> String {
     }
 }
 
+/// The width the toolbar's `+N −M` pair paints, plus the item spacing that
+/// separates it from the hunk nav beside it, measured in the font the pair
+/// paints in. The toolbar right-aligns the pair by sizing ONE spacer in front
+/// of it, so the estimate has to be the layout, not a guess a font change
+/// would silently strand short of the row's trailing edge.
+fn toolbar_counts_width(ui: &Ui, plan: Option<&PaintPlan>) -> f32 {
+    let Some((added, removed)) = plan.and_then(PaintPlan::toolbar_counts) else {
+        return 0.0;
+    };
+    let font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
+    let stat = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x
+    };
+    let gap = ui.spacing().item_spacing.x;
+    stat(&format!("+{added}")) + gap + stat(&format!("\u{2212}{removed}")) + gap
+}
+
 /// Render one comparison's diff. The comparison is named by the caller in
 /// full: it runs in `root`, between `left` and `right` (neither named is the
 /// working-tree preview), narrowed to the one file `change` names — or, with
@@ -332,11 +353,13 @@ pub fn render_diff(
         _ => None,
     };
 
-    // Toolbar chrome (spec §8.4): view mode · counts · hunk nav · diff options.
-    // Wrapped so narrow panes (commit preview) push a control to a second row
-    // instead of clipping it out of reach, and painted before the verdict is
-    // consulted: the controls are pane chrome, on screen in every state the
-    // pane can be in.
+    // Toolbar chrome (spec §8.4): view mode and diff options lead on the left,
+    // the change-size counts and hunk nav close right-aligned on the trailing
+    // edge. Wrapped so a pane too narrow for both groups (the resizable diff
+    // window) sends the right-hand group to a row of its own instead of
+    // clipping it out of reach, and painted before the verdict is consulted:
+    // the controls are pane chrome, on screen in every state the pane can be
+    // in.
     ui.horizontal_wrapped(|ui| {
         // The toolbar's own item rhythm is the gap between its groups: the
         // frames are the separation, so there is no rule painted between them.
@@ -345,32 +368,42 @@ pub fn render_diff(
         if let Some(idx) = widgets::segmented_control(ui, &["Side-by-Side", "Unified"], selected) {
             state.ui.diff_side_by_side = idx == 0;
         }
-        // The labels `extend` because a wrapped-layout label lays its galley
-        // out from the ROW's left edge with a leading space — a statistic that
-        // never wraps wants its own cursor position, not the row's.
-        if let Some((added, removed)) = plan.as_ref().and_then(PaintPlan::toolbar_counts) {
-            let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
-            ui.add(
-                egui::Label::new(
+        ui.add_space(gap);
+        diff_options_button(ui, state);
+
+        // The right-hand group is right-aligned by ONE spacer sized from the
+        // row's remaining width. `available_width` on a wrapping layout
+        // answers the row's FULL width, so the remaining width on THIS row
+        // comes from the before-wrap rect; a row too short for the group ends
+        // here, and the group paints at the next row's leading edge. The
+        // group itself paints in a non-wrapped scope because a wrapped-layout
+        // label lays its galley out from the ROW's left edge with a leading
+        // space — a statistic that never wraps wants its own cursor position,
+        // not the row's.
+        let right_w = toolbar_counts_width(ui, plan.as_ref())
+            + hunk_nav_width(ui, state.ui.diff_current_hunk, total_hunks);
+        let remaining = ui.available_size_before_wrap().x;
+        if remaining >= right_w {
+            ui.add_space(remaining - right_w);
+        } else {
+            ui.end_row();
+        }
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            if let Some((added, removed)) = plan.as_ref().and_then(PaintPlan::toolbar_counts) {
+                let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
+                ui.label(
                     RichText::new(format!("+{added}"))
                         .font(stat_font.clone())
                         .color(Palette::DIFF_ADD_ACCENT),
-                )
-                .extend(),
-            );
-            ui.add(
-                egui::Label::new(
+                );
+                ui.label(
                     RichText::new(format!("\u{2212}{removed}"))
                         .font(stat_font)
                         .color(Palette::DIFF_DEL_ACCENT),
-                )
-                .extend(),
-            );
-        }
-        ui.add_space(gap);
-        hunk_nav(ui, state, total_hunks);
-        ui.add_space(gap);
-        diff_options_button(ui, state);
+                );
+            }
+            hunk_nav(ui, state, total_hunks);
+        });
     });
 
     // The verdict is the whole paint contract: which of these four the
