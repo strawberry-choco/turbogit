@@ -44,11 +44,7 @@ fn unprotected() -> VcsSettings {
 /// A project with both repos under one group so a single group click
 /// selects the fleet.
 fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/custom-command-{tag}"));
+    let base = test_support::scratch_root(&format!("custom-command-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("wsb");
     let frontend = project.join("frontend");

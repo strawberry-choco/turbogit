@@ -29,13 +29,9 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
 }
 
 /// A two-group project (`frontend`/alpha, `oss`/lib) under
-/// `.scratch/msm-<tag>/wsb`.
+/// `test_support::scratch_root("msm-<tag>")/wsb`.
 fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/msm-{tag}"));
+    let base = test_support::scratch_root(&format!("msm-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("wsb");
     let frontend = project.join("frontend");
@@ -51,11 +47,7 @@ fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 /// and `oss/{cli, lib}` — so both folder checkboxes display in the
 /// recursive tree. Returns the project dir and the repo paths.
 fn four_repo_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/msf-{tag}"));
+    let base = test_support::scratch_root(&format!("msf-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("wsb");
     let frontend = project.join("frontend");
@@ -91,11 +83,7 @@ fn assert_galley(harness: &Harness<'_, AppState>, text: &str) {
 /// `side` keeps the project folder displaying, which is what leaves `foo` as
 /// the topmost collapsing folder (ADR-0018 D3).
 fn promoted_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/msp-{tag}"));
+    let base = test_support::scratch_root(&format!("msp-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("ws");
     let foo_dir = project.join("foo");

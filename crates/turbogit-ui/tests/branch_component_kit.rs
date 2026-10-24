@@ -2111,9 +2111,8 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
 /// A two-repository workspace in a fresh temp dir: `alpha` and `beta`, each a
 /// git repository, side by side under the project root.
 ///
-/// A `TempDir` rather than a fixed `.scratch/...` path on purpose: several suites
-/// build fixtures under fixed scratch paths, and a shared one is a `config.lock`
-/// race rather than a test.
+/// A `TempDir` rather than a fixed shared scratch path on purpose: a shared
+/// path is a `config.lock` race rather than a test.
 fn two_repo_workspace() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let dir = tempfile::tempdir().expect("temp workspace");
     let alpha = temp_repo(dir.path(), "alpha");

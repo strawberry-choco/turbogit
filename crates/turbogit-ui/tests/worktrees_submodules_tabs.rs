@@ -33,13 +33,9 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
     path.canonicalize().unwrap()
 }
 
-/// A fresh scratch parent under the workspace's `.scratch`.
+/// A fresh scratch parent under the test scratch root.
 fn scratch(tag: &str) -> PathBuf {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/{tag}"));
+    let parent = test_support::scratch_root(tag);
     let _ = std::fs::remove_dir_all(&parent);
     std::fs::create_dir_all(&parent).unwrap();
     parent

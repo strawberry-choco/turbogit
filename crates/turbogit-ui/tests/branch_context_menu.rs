@@ -573,15 +573,11 @@ pub(crate) mod surface {
     // headless machine has no global identity to borrow. No assertion here
     // reads an author, so nothing about what git records is under test.
 
-    /// A project under the gitignored `<workspace>/.scratch/` holding one
+    /// A project under the test scratch root (`test_support::scratch_root`) holding one
     /// repo `alpha` on `main` with locals `feature-a` and `plain-b`. `main`
     /// and `feature-a` track a bare `origin`; `plain-b` stays untracked.
     pub(crate) fn one_repo_project(tag: &str) -> PathBuf {
-        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(2)
-            .unwrap()
-            .join(format!(".scratch/branch-context-menu-{tag}"));
+        let base = test_support::scratch_root(&format!("branch-context-menu-{tag}"));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("alpha")).unwrap();
         let repo = base.join("alpha");

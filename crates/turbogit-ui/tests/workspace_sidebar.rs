@@ -65,11 +65,7 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
 /// `<root>/wsb/<group>/<repo>` with groups `frontend` (alpha) and
 /// `oss` (lib). Returns the project dir and the two repo paths.
 fn two_group_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/wsb-{tag}"));
+    let base = test_support::scratch_root(&format!("wsb-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("wsb");
     let frontend = project.join("frontend");
@@ -86,11 +82,7 @@ fn two_group_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
 /// first-level folder displays. Returns the project dir and the four repo
 /// paths.
 fn two_by_two_project(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/ws2-{tag}"));
+    let base = test_support::scratch_root(&format!("ws2-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("ws2");
     let frontend = project.join("frontend");
@@ -110,11 +102,7 @@ fn two_by_two_project(tag: &str) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf
 /// `wsn/foo/bar/.git` (a single-repo chain → path label `f/bar`).
 /// Returns the project dir and every repo path.
 fn nested_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/wsn-{tag}"));
+    let base = test_support::scratch_root(&format!("wsn-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("wsn");
     let tools = project.join("tools");
@@ -133,11 +121,7 @@ fn nested_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
 /// `wss/a/src/{r1, r2}` and `wss/b/src/{r3, r4}` — collapse state must
 /// key by relative path so one collapses independently of the other.
 fn same_named_folders_project(tag: &str) -> (PathBuf, Vec<PathBuf>) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/wss-{tag}"));
+    let base = test_support::scratch_root(&format!("wss-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("wss");
     let a_src = project.join("a").join("src");

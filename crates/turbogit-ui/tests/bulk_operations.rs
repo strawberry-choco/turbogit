@@ -52,11 +52,7 @@ fn temp_repo(parent: &Path, name: &str) -> PathBuf {
 /// selects the fleet. `ui` starts with a dirty tracked file so skip
 /// classification has something to bite on.
 fn two_repo_project(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
-    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/bulk-{tag}"));
+    let base = test_support::scratch_root(&format!("bulk-{tag}"));
     let _ = std::fs::remove_dir_all(&base);
     let project = base.join("wsb");
     let frontend = project.join("frontend");

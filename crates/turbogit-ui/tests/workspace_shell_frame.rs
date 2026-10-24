@@ -147,11 +147,7 @@ fn manual_refresh(h: &mut Harness<'_, AppState>) {
 
 #[test]
 fn tab_strip_is_the_content_columns_topmost_band() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-topband");
+    let parent = test_support::scratch_root("workspace-shell-frame-topband");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-topband");
     let _ = std::fs::remove_dir_all(&parent);
@@ -206,11 +202,7 @@ fn tab_strip_is_the_content_columns_topmost_band() {
 
 #[test]
 fn center_tabs_include_changes_log_branches_worktrees_submodules() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-tabs");
+    let parent = test_support::scratch_root("workspace-shell-frame-tabs");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-tabs");
     let _ = std::fs::remove_dir_all(&parent);
@@ -229,11 +221,7 @@ fn center_tabs_include_changes_log_branches_worktrees_submodules() {
 
 #[test]
 fn unimplemented_tabs_render_empty_state_placeholder() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-placeholder");
+    let parent = test_support::scratch_root("workspace-shell-frame-placeholder");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-placeholder");
     let _ = std::fs::remove_dir_all(&parent);
@@ -315,11 +303,7 @@ fn tab_underlines(harness: &Harness<'_, AppState>) -> Vec<Rect> {
 
 #[test]
 fn the_active_tab_is_an_accent_underline_and_a_brighter_label() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-pill");
+    let parent = test_support::scratch_root("workspace-shell-frame-pill");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-pill");
     let _ = std::fs::remove_dir_all(&parent);
@@ -439,11 +423,7 @@ fn the_active_tab_is_an_accent_underline_and_a_brighter_label() {
 /// `state.ui.tab == tab` comparison in a refactor invites.
 #[test]
 fn exactly_one_tab_carries_the_accent_underline() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-one-underline");
+    let parent = test_support::scratch_root("workspace-shell-frame-one-underline");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-one-underline");
     let _ = std::fs::remove_dir_all(&parent);
@@ -487,11 +467,7 @@ fn shell_is_two_zones_without_metadata_rail() {
     // the repo header's deletion, the sidebar tree. The shell must no longer
     // paint the rail's header or its upstream row, while the status-bar
     // aggregates stay.
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-metadata");
+    let parent = test_support::scratch_root("workspace-shell-frame-metadata");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-metadata");
     let _ = std::fs::remove_dir_all(&parent);
@@ -545,11 +521,7 @@ fn shell_is_two_zones_without_metadata_rail() {
 
 #[test]
 fn status_bar_shows_aggregated_total_repos() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-statusbar");
+    let parent = test_support::scratch_root("workspace-shell-frame-statusbar");
     let project_dir = parent.clone();
     let repo = temp_repo(&parent, "alpha");
     let mut state = app_state(&project_dir, &[repo]);
@@ -565,11 +537,7 @@ fn status_bar_shows_aggregated_total_repos() {
 
 #[test]
 fn status_bar_shows_diverged_count_when_root_is_ahead_of_upstream() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-statusbar-diverged");
+    let parent = test_support::scratch_root("workspace-shell-frame-statusbar-diverged");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-statusbar-diverged");
     let _ = std::fs::remove_dir_all(&parent);
@@ -600,11 +568,7 @@ fn status_bar_paints_unpulled_dirty_and_scope_from_real_data() {
     // remote-only commit fetched in — so the status bar aggregates
     // `1 unpulled` and `1 dirty` from the real sync/status data, plus the
     // repo-scope count (issue 02 checkbox 1).
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-statusbar-unpulled");
+    let parent = test_support::scratch_root("workspace-shell-frame-statusbar-unpulled");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-statusbar-unpulled");
     let _ = std::fs::remove_dir_all(&parent);
@@ -663,11 +627,7 @@ fn status_bar_paints_unpulled_dirty_and_scope_from_real_data() {
 /// bar line paints: the version line, the `·` separators, the two aggregated
 /// counters, the scope readout, and the total.
 fn busy_status_bar(tag: &str) -> (Harness<'static, AppState>, PathBuf) {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(format!(".scratch/workspace-shell-frame-ramp-{tag}"));
+    let parent = test_support::scratch_root(&format!("workspace-shell-frame-ramp-{tag}"));
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join(format!("wsf-ramp-{tag}"));
     let _ = std::fs::remove_dir_all(&parent);
@@ -842,11 +802,7 @@ fn the_shell_renders_at_the_harness_default_size_without_clipping() {
     // default, and
     // [`the_harness_renders_the_sidebar_at_a_width_that_shows_it`] is about
     // the rail. Splitting them is what keeps neither vacuous.
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-noclip");
+    let parent = test_support::scratch_root("workspace-shell-frame-noclip");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-noclip");
     let _ = std::fs::remove_dir_all(&parent);
@@ -912,11 +868,7 @@ fn the_shell_renders_at_the_harness_default_size_without_clipping() {
 /// `SIDEBAR_VISIBLE_FROM` instead.
 #[test]
 fn the_harness_renders_the_sidebar_at_a_width_that_shows_it() {
-    let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap()
-        .join(".scratch/workspace-shell-frame-railing");
+    let parent = test_support::scratch_root("workspace-shell-frame-railing");
     let _ = std::fs::remove_dir_all(&parent);
     let parent = parent.parent().unwrap().join("wsf-railing");
     let _ = std::fs::remove_dir_all(&parent);

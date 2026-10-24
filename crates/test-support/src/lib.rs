@@ -27,6 +27,7 @@ pub mod git_seed;
 // own suites read production source and cannot reach a feature-gated module.
 pub mod srcscan;
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -840,6 +841,19 @@ impl GitExecutor for RecordingExecutor {
         // numstat through the raw path, and the wrapped engine must answer.
         self.inner.run_raw(root, args)
     }
+}
+
+/// A throwaway fixture root under the system temp dir, keyed by this test
+/// binary's path: two checkouts' runs can never share fixture paths (a
+/// `config.lock` race, not a test), and a rebuilt binary simply orphans the
+/// old root for the OS temp cleaner to reap. The caller owns creation and
+/// cleanup, as with [`git_seed`].
+pub fn scratch_root(leaf: &str) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    std::env::current_exe()
+        .expect("test binary path")
+        .hash(&mut hasher);
+    std::env::temp_dir().join(format!("turbogit-uitests-{:016x}/{leaf}", hasher.finish()))
 }
 
 /// Poll `f` every 25 ms until it returns `true` or `ms` elapses.
