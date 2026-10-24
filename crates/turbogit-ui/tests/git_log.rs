@@ -1584,16 +1584,8 @@ fn history_tab_is_gone_and_navigation_lands_only_on_valid_windows() {
 /// The Log pane renders the same tree component as the Branches tab, without
 /// its context menu, so the current branch must be marked there too — and only
 /// there, in the branches pane, not smeared across the graph or the details
-/// column.
-///
-/// **What moved, and why.** The marker used to be a filled pill printing the
-/// lowercase word `current`. Ticket 16 replaced it with the word `Current` in
-/// the accent text ink on no fill (a filled marker on the current row would be
-/// the same opaque value a chosen row takes), so the marker is now *words*
-/// rather than a badge. The claim this test makes — one current marker, in the
-/// branches pane, nowhere else in the window — is unchanged; only the string it
-/// finds changed, and it is found in the component's own output so the Log pane
-/// inherits the treatment automatically.
+/// column. The marker is the component's own output, so the Log pane inherits
+/// the treatment automatically.
 #[test]
 fn the_branches_pane_marks_the_current_branch_with_its_marker() {
     let seed = seeded_project();
@@ -1605,7 +1597,11 @@ fn the_branches_pane_marks_the_current_branch_with_its_marker() {
         .shapes
         .iter()
         .filter_map(|clipped| match &clipped.shape {
-            Shape::Text(shape) if shape.galley.text() == "Current" => Some(shape.pos),
+            Shape::Path(path)
+                if path.stroke.color == egui::epaint::ColorMode::Solid(Palette::ACCENT_TEXT) =>
+            {
+                Some(path.visual_bounding_rect().center())
+            }
             _ => None,
         })
         .fold((0, 0), |(mut a, mut b), pos| {

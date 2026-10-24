@@ -1209,7 +1209,7 @@ fn branch_row(
     let name_x = rect.left() + PAD_LIST + indent;
     let text_x = name_x + KIT_ICON + 6.0;
     let shows_pill = is_current && !is_remote;
-    // The current marker is a **word**, not a filled chip, and this is the
+    // The current marker is a check icon, not a filled chip, and this is the
     // measurement that reserves its slot. The reason is the design frame's, and
     // it is a real one: the current chip's fill *is* the selected-row fill, so a
     // filled marker on the current row would put the same opaque value on it
@@ -1218,11 +1218,7 @@ fn branch_row(
     // second filled shape whose whole job was to repeat a colour its own band
     // already had. The row already answers "which one is current" with its
     // band, its rail, and the repository band's head-ref chip above it.
-    let pill_w = if shows_pill {
-        current_marker_width(ui) + 8.0
-    } else {
-        0.0
-    };
+    let pill_w = if shows_pill { KIT_ICON + 8.0 } else { 0.0 };
     let content_right = rect.right() - PAD_LIST;
     let mut badges_w: f32 = pill_w
         + chips
@@ -1411,53 +1407,25 @@ fn branch_row(
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &branch.name));
 }
 
-/// The words a branch row's current marker paints, in the accent **text** ink
-/// and on no fill.
-///
-/// The v1 marker was `PillKind::Current`: the accent token filled solid, with
-/// brand ink on it. It became a second blue shape on every current row, and it
-/// competed with the one control the pane means you to press. The current
-/// *chip* is the vocabulary's replacement — but its fill is the selected-row
-/// fill, which is the whole reason it is not used here: on a current row it
-/// would be indistinguishable from the row's own selection, so the marker would
-/// name the current ref in precisely the way the selection already names
-/// itself. The row answers the question with its band, its rail, and the
-/// repository band's head-ref chip; the marker is the word beside it.
+/// The current row's marker's accessible name: the marker is a check icon, and
+/// this is the word it says.
 const CURRENT_MARKER: &str = "Current";
 
-/// How wide [`current_marker`] paints — the word, measured once, in the face and
-/// size it is painted at. The row reserves through this rather than guessing.
-fn current_marker_width(ui: &Ui) -> f32 {
-    ui.painter()
-        .layout_no_wrap(
-            CURRENT_MARKER.to_owned(),
-            chrome_font(TYPE_CHIP),
-            Color32::WHITE,
-        )
-        .size()
-        .x
-}
-
-/// The current row's marker: the word "Current" in [`Palette::ACCENT_TEXT`],
-/// which is the ink the current chip would have used, on no background at all.
+/// The current row's marker: a check icon at `KIT_ICON` in
+/// [`Palette::ACCENT_TEXT`], the ink the current chip would have used, on no
+/// background at all.
 ///
-/// Painted by allocating and placing, the way the mark pair does, rather than
-/// through a `Label`: a `Label` lays its own nested wrapping UI out from the
-/// left, which puts the word at the *start* of the row's trailing zone instead
-/// of its end, and the trailing zone is right-to-left.
+/// Painted through `paint_icon` over a manually allocated rect rather than
+/// through `icons::icon`, so the response carries the "Current" accessible
+/// label, which [`CURRENT_MARKER`] spells.
 fn current_marker(ui: &mut Ui) -> Response {
-    let font = chrome_font(TYPE_CHIP);
-    let galley = ui
-        .painter()
-        .layout_no_wrap(CURRENT_MARKER.to_owned(), font, Palette::ACCENT_TEXT);
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(galley.size().x, widgets::CHIP_HEIGHT),
-        Sense::hover(),
-    );
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(KIT_ICON), Sense::hover());
     if ui.is_rect_visible(rect) {
-        ui.painter().galley(
-            Pos2::new(rect.left(), rect.center().y - galley.size().y / 2.0),
-            galley,
+        icons::paint_icon(
+            ui.painter(),
+            rect.min,
+            KIT_ICON,
+            Icon::CHECK,
             Palette::ACCENT_TEXT,
         );
     }

@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::accesskit::Role;
-use egui::{Color32, Pos2};
+use egui::{Color32, Pos2, Shape};
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use egui_kittest::{Harness, Node};
 use test_support::harness::{
@@ -360,6 +360,27 @@ fn galleys_for(harness: &Harness<'_, Fixture>, text: &str) -> Vec<PaintedGalley>
     painted_galleys(harness)
         .into_iter()
         .filter(|g| g.text == text)
+        .collect()
+}
+
+/// Every path stroked in the accent text ink, as `(bounds, stroke)` — the shape
+/// the current marker's check icon paints.
+fn accent_paths(harness: &Harness<'_, Fixture>) -> Vec<(egui::Rect, egui::Stroke)> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            Shape::Path(path)
+                if path.stroke.color == egui::epaint::ColorMode::Solid(Palette::ACCENT_TEXT) =>
+            {
+                Some((
+                    path.visual_bounding_rect(),
+                    egui::Stroke::new(path.stroke.width, Palette::ACCENT_TEXT),
+                ))
+            }
+            _ => None,
+        })
         .collect()
 }
 
@@ -927,10 +948,10 @@ fn count_label(h: &Harness<'_, Fixture>, label: &str) -> usize {
 
 // --- the active-branch marker -------------------------------------------------
 
-/// One `Current` marker per repository section — the row's answer to "where am I
-/// right now". It is a word in the accent ink on no fill, so a current row
+/// One current marker per repository section — the row's answer to "where am I
+/// right now". It is a check icon in the accent ink on no fill, so a current row
 /// carries no second filled shape (see
-/// `the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_a_word`).
+/// `the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_an_icon`).
 ///
 /// (case, fixture, remotes revealed, markers expected). The third is the
 /// load-bearing one — revealing remotes must not add a second marker for the
@@ -962,7 +983,7 @@ fn one_current_marker_per_repo_section() {
         settle(&mut h);
 
         assert_eq!(
-            galleys_for(&h, "Current").len(),
+            accent_paths(&h).len(),
             expected,
             "{case}: one current marker per repo section: {:?}",
             painted_text(&h)
@@ -1006,33 +1027,20 @@ fn current_row_bands_the_whole_list_and_keeps_plain_name_ink() {
 }
 
 /// The repository band's head ref is a **neutral ref chip**, and the current
-/// row's marker is a **word in the accent text ink** — two different treatments
-/// on purpose.
-///
-/// **Why the assertion moved.** This test used to hold the band chip and the row
-/// badge together ("one component, so the same fact looks the same in both
-/// places"), because the head ref and the row's marker were both the
-/// brand-filled `PillKind::Current`. Ticket 16 splits them: the band names a ref
-/// (a neutral ref chip, so the band's blue is gone), the row states "this is the
-/// current ref" (the accent text ink, on no fill, because a filled marker there
-/// would be the same opaque value a chosen row takes). The proof is therefore
-/// two — the band chip's fill is the raised-on-card surface, and the marker
-/// paints no chip-sized rect under it at all.
+/// row's marker is a **check icon in the accent text ink** — two different
+/// treatments on purpose. The proof is two: the band chip's fill is the
+/// raised-on-card surface, and the marker paints no chip-sized rect under it
+/// at all.
 #[test]
-fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_a_word() {
+fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_an_icon() {
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
 
-    let marker = galleys_for(&h, "Current")
+    let marker_rect = accent_paths(&h)
         .into_iter()
         .next()
-        .expect("the current row's marker");
-    assert_eq!(
-        marker.color,
-        Palette::ACCENT_TEXT,
-        "the current marker is the accent *text* ink, which is the ink the \
-         current chip would have used: {marker:#?}"
-    );
+        .expect("the current row's marker, stroked in the accent text ink")
+        .0;
     // beta's band chip is the *upper* `wip`: the band sits above its row.
     let chip = galleys_for(&h, "wip")
         .into_iter()
@@ -1054,19 +1062,19 @@ fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_a_word() {
         Some(Palette::RAISED_ON_CARD),
         "the band's head ref is a neutral ref chip, never a brand fill"
     );
-    // The marker paints no chip under it at all: the only rects at its origin
+    // The marker paints no chip under it at all: the only rects at its center
     // are the row's own band and the rail, so no row carries a second filled
     // shape.
     let under_marker: Vec<egui::Rect> = filled_rects(&h)
         .into_iter()
-        .filter(|(rect, _)| rect.contains(marker.pos))
+        .filter(|(rect, _)| rect.contains(marker_rect.center()))
         .map(|(rect, _)| rect)
         .collect();
     assert!(
         under_marker
             .iter()
             .all(|r| r.width() > 200.0 || r.width() <= 4.0),
-        "the current marker is a word, not a second filled shape on the row: \
+        "the current marker is an icon, not a second filled shape on the row: \
          painted under it at {under_marker:?}"
     );
 }

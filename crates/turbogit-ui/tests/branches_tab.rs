@@ -2617,8 +2617,8 @@ fn a_branch_name_is_a_ref_chip_and_its_state_is_coloured_text_beside_it() {
 /// The inks of the state words a row paints beside its name, left to right.
 ///
 /// The mark pair paints its dot and its words in one colour, so every painted
-/// word on the row that is *not* the name, the tracking ref or the current
-/// marker is state. Scoped by the row's own rect, because "↓3" paints on
+/// word on the row that is *not* the name or the tracking ref is state. Scoped
+/// by the row's own rect, because "↓3" paints on
 /// every row that is three behind — and every ink is checked against the one
 /// map, so a state that grew a colour of its own would fail here rather than in
 /// the token suite.
@@ -2638,12 +2638,7 @@ fn state_inks_on_row(harness: &Harness<'_, AppState>, name: &str) -> Vec<egui::C
     };
     let mut words: Vec<PaintedGalley> = galleys_in(harness, row)
         .into_iter()
-        .filter(|g| {
-            g.text != name
-                && g.text != "origin/main"
-                && g.text != "Current"
-                && g.pos.x > name_galley.rect.right()
-        })
+        .filter(|g| g.text != name && g.text != "origin/main" && g.pos.x > name_galley.rect.right())
         .collect();
     words.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x));
     // Every colour the one state map can produce, asked of the map rather than

@@ -192,8 +192,8 @@ the wrappers are what the following contrasts are about:
 - `components::pill` with `PillKind::Current` and `PillKind::Count` **no longer
   exists**, the branches screen having been their only caller, and both variants
   were replaced by the closed chip set (the current marker is
-  `widgets::current_chip` / the word beside the row's band, a group's count is
-  `widgets::count_chip`). A second chip vocabulary nobody paints is how a
+  `widgets::current_chip` / the check icon beside the row's band, a group's
+  count is `widgets::count_chip`). A second chip vocabulary nobody paints is how a
   vocabulary rots.
 - Branch-tree sync chips, current-branch chips, and any similarly local chip
   remain branch-feature roles even when they reuse the shared chip geometry.
