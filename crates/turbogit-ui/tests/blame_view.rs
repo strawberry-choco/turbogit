@@ -373,11 +373,8 @@ fn clicking_a_blamed_line_navigates_to_its_commit_in_the_log() {
     let mut harness = log_harness(&seed);
     select_commit_and_file(&mut harness, &seed);
 
-    // The diff window the file click opened floats over the graph slot; a
-    // reader clicks blame from the footer and closes the window to reach the
-    // blamed rows beneath it.
-    harness.get_by_label("Close").click();
-    settle_reads(&mut harness);
+    // A row click selects the file without opening the diff, so the footer
+    // is already reachable; blame acts on the selected file.
     harness.get_by_label("Blame").click();
     settle_reads(&mut harness);
 

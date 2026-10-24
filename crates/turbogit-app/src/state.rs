@@ -1606,8 +1606,8 @@ pub struct UiState {
     pub log_file_menu: Option<(RootId, CommitId, std::path::PathBuf)>,
     /// Open diff view: `Some` renders the diff surface in the log window's
     /// graph slot, the same swap the blame view below gets. Reached from the
-    /// changed-files pane (a row click or the footer's `Open diff`) and the
-    /// hidden-jump band's `View in Diff` escape; it is also the target
+    /// changed-files pane's footer `Open diff` link and the hidden-jump
+    /// band's `View in Diff` escape; it is also the target
     /// [`crate::keyed_read`] reads its patch by, so it carries the root the
     /// comparison runs in, not whatever root is focused.
     pub diff: Option<DiffTarget>,

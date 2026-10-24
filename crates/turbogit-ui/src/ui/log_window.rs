@@ -2076,7 +2076,10 @@ fn paint_label_pill(painter: &egui::Painter, x: f32, cy: f32) -> Rect {
 /// borrowed — so mutations land after the pane finishes rendering.
 enum FileAction {
     None,
-    /// Row clicked: open its diff; the caller resolves root / commit / parent.
+    /// Row clicked: select the file; the footer's `Open diff` opens the preview.
+    Select(PathBuf),
+    /// Footer link: open the selected file's diff; the caller resolves root /
+    /// commit / parent.
     OpenDiff(PathBuf),
     /// Footer link / menu item: blame the file at the selected commit.
     OpenBlame(PathBuf),
@@ -2190,6 +2193,9 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
     match action {
         FileAction::None => {}
         FileAction::Refresh => state.refresh_commit_changes(),
+        FileAction::Select(path) => {
+            state.ui.log_selected_file = Some(path);
+        }
         FileAction::OpenMenu(path) => {
             state.ui.log_file_menu = Some((root_id.clone(), cid.to_owned(), path));
         }
@@ -2358,8 +2364,9 @@ fn badge_kind(status: ChangeStatus) -> BadgeKind {
 
 /// One changed-file row (redesign issue 04): status badge, file name on the
 /// first line, its directory underneath, and the commit's `+N −M` for this
-/// path at the right. Click opens the diff preview, context menu scopes the
-/// workspace to the file's history (issue #19).
+/// path at the right. Click selects the file for the footer verbs — the diff
+/// preview opens from the footer's `Open diff` alone — and the context menu
+/// scopes the workspace to the file's history (issue #19).
 /// Renders against a shared [`AppState`] and reports its intent; the caller
 /// applies it after rendering (plan §1.3 defer pattern).
 fn file_row(
@@ -2453,7 +2460,7 @@ fn file_row(
     });
     widgets::focus_ring(ui, &response);
     if response.clicked() {
-        return FileAction::OpenDiff(change.path.clone());
+        return FileAction::Select(change.path.clone());
     }
     // Right-click opens the shared menu (ticket 09): path-scoped file history
     // (issue #19) and blame (issue 18) are its two items.

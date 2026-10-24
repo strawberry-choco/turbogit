@@ -1,6 +1,6 @@
-//! The Log view's diff verbs: the changed-files pane's row click and its
-//! `Open diff` footer link both name one file in one commit, and the
-//! `View in Diff` escape names a whole commit.
+//! The Log view's diff verbs: the changed-files pane's row click selects a
+//! file and the pane's `Open diff` footer link opens that file at that
+//! commit; the `View in Diff` escape names a whole commit.
 
 use std::path::{Path, PathBuf};
 
@@ -111,20 +111,23 @@ fn short(id: &str) -> String {
     id[..7.min(id.len())].to_string()
 }
 
-/// Select the commit row and its changed-file entry, landing on the
-/// changed-files pane with the footer links enabled.
+/// Select the commit row and its changed-file entry, then open the file's
+/// diff through the pane's `Open diff` footer link — the one verb that opens
+/// a file diff.
 fn select_commit_and_file(harness: &mut Harness<'_, AppState>, seed: &Seed) {
     let row_label = format!("{} message of the second commit", short(&seed.c2));
     harness.get_by_label(&row_label).click();
     settle_reads(harness);
     harness.get_by_label("tracked.txt").click();
     settle_reads(harness);
+    harness.get_by_label("Open diff").click();
+    settle_reads(harness);
 }
 
-/// **Clicking a changed file in the Log view shows that file's diff at that
+/// **The footer's `Open diff` shows the selected file's diff at that
 /// commit.**
 #[test]
-fn a_changed_file_row_click_paints_its_diff_at_that_commit() {
+fn the_open_diff_footer_link_paints_the_selected_file_s_diff() {
     let seed = seeded_project();
     let mut harness = log_harness(&seed);
 
@@ -181,7 +184,7 @@ fn closing_the_diff_window_closes_the_window() {
 /// fell back to plain `git diff` would paint the dirty line as part of the
 /// commit's change.
 #[test]
-fn a_root_commit_file_click_paints_the_commit_s_own_diff() {
+fn a_root_commit_file_opened_through_the_footer_paints_the_commit_s_own_diff() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let project = tmp.path().join("project");
     let alpha = project.join("alpha");
@@ -215,6 +218,8 @@ fn a_root_commit_file_click_paints_the_commit_s_own_diff() {
         .click();
     settle_reads(&mut harness);
     harness.get_by_label("tracked.txt").click();
+    settle_reads(&mut harness);
+    harness.get_by_label("Open diff").click();
     settle_reads(&mut harness);
 
     assert_painted(&harness, root_added);
