@@ -49,6 +49,7 @@ mod inputs;
 mod menu;
 pub mod menu_host;
 mod rows;
+mod tabs;
 mod text;
 
 // A frozen compatibility import path: the token's real home is `crate::theme`,
@@ -85,6 +86,7 @@ pub use menu::{
 // `show` or `host_menu` would name no widget.
 pub use menu_host::{MenuId, target_of};
 pub use rows::paint_row;
+pub use tabs::{TAB_ITEM_HEIGHT, TAB_STRIP_HEIGHT, TabItem, tab_view};
 pub use text::{SHORT_COMMIT_REF_CHARS, empty_state, paint_centered_text, short_commit_ref};
 
 // Kept crate-private for the existing log-window caller; this is not public API.

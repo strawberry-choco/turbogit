@@ -1970,13 +1970,13 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
         "the 2px *radius* role stays its own declaration"
     );
 
-    // Who reads it. Exactly three files may name it, and each for a stated
+    // Who reads it. Exactly four files may name it, and each for a stated
     // reason:
     //
     // - `theme.rs` defines it.
     // - `components.rs` is the one rail **painter**: a 2px vertical bar at a
     //   row's leading edge, which is what the width is for.
-    // - `shell.rs` is the one other place the *number* is the whole point: the
+    // - `tabs.rs` is the one other place the *number* is the whole point: the
     //   active tab's 2px accent underline, which is R1's second non-button job
     //   for the brand and is the same thickness as the rail. It reads the token
     //   rather than restating `2.0` precisely so the two cannot drift apart — and
@@ -1986,7 +1986,7 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     //   painter, and this ratchet pins the set of *readers of the width*, not a
     //   set of painters.
     //
-    // A fourth file is a second opinion about how thick the accent is, which is
+    // A fifth file is a second opinion about how thick the accent is, which is
     // the drift the token exists to prevent.
     let naming: Vec<String> = srcscan::rust_files(Path::new(CRATE_SRC))
         .into_iter()
@@ -2005,6 +2005,7 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     let mut expected = vec![
         "components.rs".to_owned(),
         "shell.rs".to_owned(),
+        "tabs.rs".to_owned(),
         "theme.rs".to_owned(),
     ];
     let mut found = naming.clone();
@@ -2012,10 +2013,10 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     found.sort();
     assert_eq!(
         found, expected,
-        "exactly three files may name RAIL_WIDTH: theme.rs, which defines it; \
-         components.rs, the one rail painter that consumes it; and shell.rs, whose \
+        "exactly four files may name RAIL_WIDTH: theme.rs, which defines it; \
+         components.rs, the one rail painter that consumes it; and tabs.rs, whose \
          tab underline is the accent's other 2px job and reads the same width \
-         dimension. A fourth is a second definition of the width under another \
+         dimension. A fifth is a second definition of the width under another \
          name — or a rail that grew one."
     );
     // The third reader really does read the *token*, not a literal that happens
