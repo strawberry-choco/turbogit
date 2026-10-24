@@ -518,16 +518,6 @@ fn advanced_page(ui: &mut Ui, s: &mut VcsSettings) {
     ui.add_space(6.0);
     setting_row(
         ui,
-        "Commit message template",
-        "Path to a file whose content pre-fills new commit messages.",
-        |ui| {
-            labeled_text_input(ui, "Commit message template", &mut s.commit_template);
-        },
-    );
-
-    ui.add_space(6.0);
-    setting_row(
-        ui,
         "When patch is created",
         "What to do with a patch file after a create route has written it. The default \
          asks, because a patch nobody chose an ending for is a patch nobody found.",
@@ -691,7 +681,6 @@ fn restore_category_defaults(state: &mut AppState) {
             draft.warn_crlf = d.warn_crlf;
             draft.warn_detached = d.warn_detached;
             draft.no_commit_hooks = d.no_commit_hooks;
-            draft.commit_template = d.commit_template.clone();
         }
     }
 }

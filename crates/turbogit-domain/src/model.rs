@@ -882,8 +882,6 @@ pub struct VcsSettings {
     pub warn_crlf: bool,
     /// Warn when committing in detached HEAD / rebase.
     pub warn_detached: bool,
-    /// Commit message template path (`.git commit.template`).
-    pub commit_template: String,
     /// Restore workspace context on branch switch.
     pub restore_workspace: bool,
     /// Highlight modified lines in the gutter.
@@ -934,7 +932,6 @@ impl Default for VcsSettings {
             protected_branch_patterns: vec!["main".to_string(), "master".to_string()],
             warn_crlf: true,
             warn_detached: true,
-            commit_template: String::new(),
             restore_workspace: false,
             gutter_markers: true,
             date_format: DateFormat::default(),

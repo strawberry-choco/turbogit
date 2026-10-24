@@ -57,12 +57,12 @@ fn repo_with_remote_branch() -> (tempfile::TempDir, PathBuf) {
 }
 
 /// Persist settings, then rewrite the file so the backend reads `spelling` —
-/// exactly the bytes an older build left behind. The `commit_template` sentinel
-/// proves the file really parsed rather than a parse failure falling back to
-/// defaults.
+/// exactly the bytes an older build left behind. The `restore_workspace`
+/// sentinel (a non-default value) proves the file really parsed rather than a
+/// parse failure falling back to defaults.
 fn saved_with_spelling(project: &Path, spelling: &str) {
     let settings = VcsSettings {
-        commit_template: "/sentinel/commit-template".to_string(),
+        restore_workspace: true,
         ..VcsSettings::default()
     };
     persistence::save_settings(project, &settings).expect("settings saved");
@@ -87,8 +87,8 @@ fn a_saved_auto_spelling_loads_and_still_builds_the_composed_adapter() {
     saved_with_spelling(project, "Auto");
 
     let loaded = persistence::load_settings(project).expect("an old state.ron must still load");
-    assert_eq!(
-        loaded.commit_template, "/sentinel/commit-template",
+    assert!(
+        loaded.restore_workspace,
         "the file parsed — this is the settings on disk, not a default"
     );
     assert_eq!(
@@ -122,8 +122,8 @@ fn a_saved_libgit2_spelling_loads_onto_the_same_survivor() {
 
     let loaded = persistence::load_settings(project).expect("an old state.ron must still load");
     assert_eq!(loaded.backend, GitBackend::InProcessReads);
-    assert_eq!(
-        loaded.commit_template, "/sentinel/commit-template",
+    assert!(
+        loaded.restore_workspace,
         "the rest of the file parsed too — this is the loaded settings, not a default"
     );
 }
@@ -151,7 +151,7 @@ fn a_saved_commit_all_setting_still_loads_and_the_rest_of_the_file_with_it() {
     let tmp = tempfile::tempdir().unwrap();
     let project = tmp.path();
     let settings = VcsSettings {
-        commit_template: "/sentinel/commit-template".to_string(),
+        restore_workspace: true,
         ..VcsSettings::default()
     };
     persistence::save_settings(project, &settings).expect("settings saved");
@@ -160,12 +160,12 @@ fn a_saved_commit_all_setting_still_loads_and_the_rest_of_the_file_with_it() {
     let path = persistence::state_path(project);
     let text = fs::read_to_string(&path).expect("state.ron readable");
     let patched = text.replace(
-        "restore_workspace: false",
-        "restore_workspace: false,\n    commit_all_when_nothing_staged: true",
+        "warn_crlf: true",
+        "warn_crlf: true,\n    commit_all_when_nothing_staged: true",
     );
     assert!(
         patched != text,
-        "the serialized settings name `restore_workspace` on their own line: {text}"
+        "the serialized settings name `warn_crlf` on their own line: {text}"
     );
     fs::write(&path, patched).expect("state.ron rewritten");
 
@@ -173,8 +173,8 @@ fn a_saved_commit_all_setting_still_loads_and_the_rest_of_the_file_with_it() {
         "a settings file naming a retired field must still load — the loader \
          ignores fields it no longer has",
     );
-    assert_eq!(
-        loaded.commit_template, "/sentinel/commit-template",
+    assert!(
+        loaded.restore_workspace,
         "the file parsed: this is the settings on disk, not a default"
     );
 }

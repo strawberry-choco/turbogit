@@ -1650,8 +1650,11 @@ const CHANGES_PANE_TITLE: &str = "CHANGES";
 /// do anything *and cannot be read* is noise, and the previous version of this
 /// header was five of them. The scope gap is recorded in this table rather than
 /// hidden, and it is the same gap the spec keeps out of scope.
-const INERT_HEADER_ACTIONS: [(Icon, &str, &str); 1] =
-    [(Icon::LAYERS, "Group by", "No grouping surface yet (ADR-0010)")];
+const INERT_HEADER_ACTIONS: [(Icon, &str, &str); 1] = [(
+    Icon::LAYERS,
+    "Group by",
+    "No grouping surface yet (ADR-0010)",
+)];
 
 /// The changes card's header strip: the shared pane header (R7) — a 9px tracked
 /// title, the *file* count as a count chip beside it, a right-aligned action

@@ -762,7 +762,7 @@ intentionally not pursued.
 | Identity prompt before first commit | `git config` read; no prompt evidenced | **partial** — Rebased probes identity at *project open*, not first commit (runtime 2026-10-06, `runtime/R3-SESSION-1.md`) |
 | Post-commit notification with `Edit Commit Message` | `Dialog::Reword` exists; no post-commit window | **partial** — **open gap** |
 | Undo Commit (own unpushed commits) | `Git.Uncommit` exists; `Undo Commit…` menu item not evidenced | **partial** — and it opens a **dialog**, not a bare verb: `Select Target Changelist` with Name (defaulted to the commit message), Comment, Set active, Track context (§7.1a) |
-| Commit message template via `commit.template` | `Template` in the commit card meta row | **has** |
+| Commit message template via `commit.template` | — | **removed** (2026-10-24) — the `Template` button, the `commit_template` setting and its Advanced-row went with the single-description commit card |
 | Recent-message history in the field | `recent_messages_row` — up to 6 recent messages as chips (`commit_window.rs:1330-1347`) | **has** — a superset: the reference offers a history list, TurboGit offers a chip row |
 | `Unversioned Files` node + `Add` offer | `Unversioned Files` bucket | **partial** — no modal offer |
 | Force-add `.gitignore`d file, partially-cancelling dialog | stages directly | **absent** — no force-add affordance to gate |
