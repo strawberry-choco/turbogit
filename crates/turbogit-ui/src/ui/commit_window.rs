@@ -1603,10 +1603,8 @@ fn conflict_row(
 ///
 /// Not one of the card's three **controls** — a past message is a different
 /// thing from a commit input, and it is empty until the first commit, so the
-/// resting card really is well + meta row + Commit. It keeps its own row for
-/// the same reason it always did: six 22-character buttons cannot share a
-/// 316-pt row with the counter, Amend, Template and Clear without one of them
-/// losing its label.
+/// resting card really is well + meta row + Commit. It keeps its own wrapped
+/// row: six 22-character buttons cannot share the meta row's one line.
 ///
 /// The buttons wear the same [`meta_button`] as the meta row. They used to be
 /// raw `ui.button`s, which painted egui's stock grey on the card and read as a
@@ -1887,9 +1885,10 @@ fn change_nav(ui: &mut Ui, state: &mut AppState, change: &ChangeRef) {
 const MESSAGE_HEADING: &str = "Commit message:";
 
 /// The message well's accessible name, and the placeholder it lays down while
-/// the message is empty.
+/// the message is empty. One field, one name: there is no summary/description
+/// split to restate.
 const MESSAGE_WELL_LABEL: &str = "Commit message";
-const MESSAGE_WELL_HINT: &str = "Summary (required)\n\nDescription";
+const MESSAGE_WELL_HINT: &str = "Description";
 
 /// Body lines the message well shows at rest.
 ///
@@ -1917,7 +1916,7 @@ const MESSAGE_WELL_PAD: i8 = 8;
 /// It is the same four body lines the old well showed, plus the 8 pt of padding
 /// the well now carries on its own sides — the old one had none, and left its
 /// text against egui's stock `extreme_bg_color` frame, which is why it measured
-/// 64 pt. Four lines is a real subject plus the opening of a real body.
+/// 64 pt. Four lines is a real opening line plus the body behind it.
 ///
 /// It is a **resting** height, not a cap. A longer message grows the well,
 /// because a well that silently clipped the body of a commit message would be
@@ -1925,14 +1924,6 @@ const MESSAGE_WELL_PAD: i8 = 8;
 /// resting height *and* the file list's remaining height together, so the
 /// growth is visible rather than silent.
 pub const MESSAGE_WELL_HEIGHT: f32 = 76.0;
-
-/// Git's own bound on a commit subject, and the bound this card's counter
-/// tracks. Named so the counter's `/50` and its over-length test read the same
-/// number.
-const SUBJECT_LIMIT: usize = 50;
-
-/// The guidance shown beside the counter once the subject is over the bound.
-const SUBJECT_GUIDANCE: &str = "(keep \u{2264} 50)";
 
 /// Horizontal padding inside a meta-row button.
 const META_BUTTON_PAD_X: f32 = 8.0;
@@ -1977,9 +1968,8 @@ struct CommitHalves {
 /// separate act from "write the message".
 ///
 /// `Commit message:` remains the card's heading and the well's accessible name.
-/// It is not one of the three *controls* — the card had six of those, and it has
-/// three now: the well, the meta row (counter, Amend, Template, Clear) and the
-/// Commit control.
+/// It is not one of the three *controls* — the card has three: the well, the
+/// meta row (Amend) and the Commit control.
 fn commit_message_box(ui: &mut Ui, state: &mut AppState) {
     ui.label(RichText::new(MESSAGE_HEADING).color(Palette::INK_2));
     message_well(ui, &mut state.ui.commit_message);
@@ -2034,130 +2024,30 @@ fn message_well(ui: &mut Ui, buf: &mut String) -> egui::Response {
     out.response
 }
 
-/// **The card's one meta row: the subject counter, Amend, Template and Clear —
-/// all four on one line, inside the column the ticket refused to widen.**
-///
-/// This is the change the whole card is named for. The counter and the three
-/// actions used to be two rows, and the second row was the width the header had
-/// been borrowing: the commit column never had room for the meta row it
-/// actually needed, so the *fix* was to make the row smaller, not the column
-/// wider. [`COMMIT_PANEL_WIDTH`] is unchanged, the well beside it is
-/// [`MESSAGE_WELL_HEIGHT`], and this row fits the 316 pt that leaves — the
-/// counter and its over-length guidance included, which is the load the old
-/// layout spread over two lines.
+/// **The card's one meta row: Amend, right-aligned, inside the column the
+/// ticket refused to widen.**
 ///
 /// The row is laid out against an allocated rect rather than through
-/// `ui.horizontal` because every item on it has to be *centred on one line*:
-/// egui's `horizontal` cross-aligns to the top, which would hang the counter's
-/// text against the top edge of two 28 pt buttons beside it.
-///
-/// Left to right the row reads **counter | Amend | Template | Clear** — the
-/// counter is the only thing that is not a control, so it leads; the three
-/// actions are right-aligned as one group, so the row's leading edge is the
-/// card's leading edge and nothing wanders into the middle of it.
+/// `ui.horizontal` because the control has to be *centred on one line*:
+/// egui's `horizontal` cross-aligns to the top, which would hang the
+/// checkbox against the row's top edge. Right-aligned keeps the row's
+/// leading edge at the card's leading edge, where the well's text starts.
 fn commit_meta_row(ui: &mut Ui, state: &mut AppState) {
     let row_h = components::KIT_BUTTON_H;
     let width = ui.available_width();
     let (row, _) = ui.allocate_exact_size(Vec2::new(width, row_h), Sense::hover());
     let painter = ui.painter().clone();
     let font = crate::theme::chrome_font(crate::theme::TYPE_CONTROL);
-    let cy = row.center().y;
-
-    // The counter. Its own ink is the card's muted step, and it *becomes* the
-    // warning step the moment the subject is over git's own bound — so the
-    // number and its guidance cannot disagree about whether there is a problem.
-    let subject_len = state
-        .ui
-        .commit_message
-        .lines()
-        .next()
-        .unwrap_or("")
-        .chars()
-        .count();
-    let over = subject_len > SUBJECT_LIMIT;
-    let counter_ink = if over {
-        Palette::STATE_WARNING
-    } else {
-        Palette::INK_3
-    };
-    let counter = painter.layout_no_wrap(
-        format!("Subject: {subject_len}/{SUBJECT_LIMIT}"),
-        font.clone(),
-        counter_ink,
-    );
-    let mut x = row.left();
-    painter.galley_with_override_text_color(
-        Pos2::new(x, cy - counter.size().y / 2.0),
-        counter.clone(),
-        counter_ink,
-    );
-    x += counter.size().x;
-    if over {
-        let guidance =
-            painter.layout_no_wrap(SUBJECT_GUIDANCE.to_owned(), font.clone(), counter_ink);
-        painter.galley_with_override_text_color(
-            Pos2::new(x + ROW_GAP, cy - guidance.size().y / 2.0),
-            guidance,
-            counter_ink,
-        );
-    }
-
-    // Amend / Template / Clear, right-aligned as one group.
-    let clear_w = meta_button_width(ui, "Clear");
-    let template_w = meta_button_width(ui, "Template");
     let amend_label = painter.layout_no_wrap(AMEND_LABEL.to_owned(), font, Palette::INK_2);
     let amend_w = ROW_CHECKBOX + ROW_GAP + amend_label.size().x;
-
-    let mut right = row.right();
-    let clear = meta_button_at(
-        ui,
-        Rect::from_min_max(
-            Pos2::new(right - clear_w, row.top()),
-            Pos2::new(right, row.bottom()),
-        ),
-        "Clear",
-    );
-    if clear.clicked() {
-        state.ui.commit_message.clear();
-    }
-
-    right -= clear_w + ROW_GAP;
-    let template = meta_button_at(
-        ui,
-        Rect::from_min_max(
-            Pos2::new(right - template_w, row.top()),
-            Pos2::new(right, row.bottom()),
-        ),
-        "Template",
-    );
-    if template.clicked() {
-        apply_commit_template(state);
-    }
-
-    right -= template_w + ROW_GAP;
     amend_checkbox_at(
         ui,
         Rect::from_min_max(
-            Pos2::new(right - amend_w, row.top()),
-            Pos2::new(right, row.bottom()),
+            Pos2::new(row.right() - amend_w, row.top()),
+            Pos2::new(row.right(), row.bottom()),
         ),
         &mut state.ui.amend,
     );
-}
-
-/// Put the configured commit template into the well, or say why it could not.
-///
-/// Split out of the meta row so the row's layout reads as layout and this
-/// reads as the Template action's behaviour.
-fn apply_commit_template(state: &mut AppState) {
-    let tpl = state.settings.commit_template.clone();
-    if tpl.is_empty() {
-        state.ui.toast = Some(Toast::warning("No commit template configured."));
-    } else if let Ok(content) = std::fs::read_to_string(&tpl) {
-        state.ui.commit_message = content;
-    } else {
-        state.ui.toast = Some(Toast::error(format!("Could not read template: {tpl}")));
-    }
 }
 
 /// The meta row's Amend control, at an already-allocated rect.

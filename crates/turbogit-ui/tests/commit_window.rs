@@ -2394,9 +2394,9 @@ fn expanded_repo_group_paints_one_indent_guide_over_its_file_block() {
 
 // ------------------------------ issue: severity vocabulary (C2) -------------
 
-/// C2: commit-window messages use the shared semantic severity inks too —
-/// the surfaced error in STATE_ERROR, the subject-length guidance in
-/// STATE_WARNING — via the actual commit consumers, not raw severity colors.
+/// C2: commit-window messages use the shared semantic severity inks — the
+/// surfaced error in STATE_ERROR — via the actual commit consumers, not raw
+/// severity colors.
 #[test]
 fn commit_severity_messages_use_the_shared_semantic_inks() {
     let parent = tempfile::tempdir().unwrap();
@@ -2412,15 +2412,6 @@ fn commit_severity_messages_use_the_shared_semantic_inks() {
         painted_ink_of(&h, "push failed"),
         Some(Palette::STATE_ERROR),
         "the commit error banner must render in the shared error ink"
-    );
-
-    // The subject-length guidance is a warning with its message preserved.
-    h.state_mut().ui.commit_message = "a".repeat(51);
-    h.run();
-    assert_eq!(
-        painted_ink_of(&h, "keep \u{2264} 50"),
-        Some(Palette::STATE_WARNING),
-        "subject-length guidance must render in the shared warning ink"
     );
 }
 
@@ -3206,8 +3197,8 @@ fn commit_card(h: &Harness<'_, AppState>) -> egui::Rect {
 /// Found by its **width**, not by its fill: the well's fill is the thing the
 /// raised-ladder ratchet is about, so a helper that could only find the well by
 /// its correct colour would report "not found" instead of "wrong colour" — a
-/// failure that does not say what is wrong. Template and Clear are 28 pt and
-/// Amend's box is 16 pt, so only the well is the full inner width.
+/// failure that does not say what is wrong. Amend's box is 16 pt, so only the
+/// well is the full inner width.
 #[track_caller]
 fn message_well(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
     let inner = card.width() - 2.0 * turbogit_ui::theme::PANEL_PADDING;
@@ -3227,103 +3218,29 @@ fn message_well(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
 
 /// The card's one meta row, as the rect its controls share.
 ///
-/// Measured, not computed: "all four controls are on one row" is the claim, and
-/// the claim is that their painted/allocated rectangles agree, so the row is
-/// their union.
+/// Measured, not computed: "the one control is on its own row" is the claim, and
+/// the claim is that its painted/allocated rectangle agrees, so the row is the
+/// control's own extent.
 #[track_caller]
 fn meta_row(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
-    let rects: Vec<egui::Rect> = ["Amend", "Template", "Clear"]
-        .iter()
-        .map(|label| h.get_by_label(label).rect())
-        .chain(std::iter::once(counter_rect(h)))
-        .collect();
-    for r in &rects {
-        assert!(
-            card.contains_rect(*r),
-            "every meta-row control must sit inside the commit card {card:?}, \
-             got {r:?} (all: {rects:?})"
-        );
-    }
-    let centres: Vec<f32> = rects.iter().map(egui::Rect::center).map(|c| c.y).collect();
-    let lo = centres.iter().cloned().fold(f32::INFINITY, f32::min);
-    let hi = centres.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let amend = h.get_by_label("Amend").rect();
     assert!(
-        hi - lo <= 1.0,
-        "the counter, Amend, Template and Clear must share ONE row, not two: \
-         their centre lines span {:.1}pt (centres {centres:?}). The card is three \
-         things — a well, a meta row and a Commit control — and a second row for \
-         any one of the four puts it back to six.",
-        hi - lo
+        card.contains_rect(amend),
+        "the meta-row control must sit inside the commit card {card:?}, got {amend:?}"
     );
 
     // …and the row *fits* the column, which is the whole premise of keeping the
-    // width fixed. The counter is the item that grows (its over-length guidance
-    // appears beside it), so the claim is specifically that the counter's text
-    // stops short of the leftmost control.
-    let counter = counter_rect(h);
-    let controls_left = ["Amend", "Template", "Clear"]
-        .iter()
-        .map(|label| h.get_by_label(label).rect().left())
-        .fold(f32::INFINITY, f32::min);
-    assert!(
-        counter.right() + f32::from(turbogit_ui::theme::CONTROL_RADIUS) <= controls_left,
-        "the meta row fits the {COMMIT_PANEL_WIDTH}-wide column: the counter ends at \
-         {:.1} and the first control starts at {:.1}. The column width is not going \
-         anywhere, so a counter that runs into Amend has to be measured, not \
-         tolerated.",
-        counter.right(),
-        controls_left
-    );
-    let right = ["Amend", "Template", "Clear"]
-        .iter()
-        .map(|label| h.get_by_label(label).rect().right())
-        .fold(f32::NEG_INFINITY, f32::max);
+    // width fixed: the control is right-aligned to the card's inner edge.
     let inner = card.width() - 2.0 * turbogit_ui::theme::PANEL_PADDING;
     assert!(
-        (right - (card.left() + turbogit_ui::theme::PANEL_PADDING) - inner).abs() < 1.0,
-        "the meta row's controls are right-aligned to the card's inner edge \
-         (x={:.1}), got {right:.1}",
-        card.left() + turbogit_ui::theme::PANEL_PADDING
+        (amend.right() - (card.left() + turbogit_ui::theme::PANEL_PADDING) - inner).abs() < 1.0,
+        "the meta row's control is right-aligned to the card's inner edge \
+         (x={:.1}), got {:.1}",
+        card.left() + turbogit_ui::theme::PANEL_PADDING,
+        amend.right()
     );
 
-    egui::Rect::from_min_max(
-        egui::pos2(
-            rects
-                .iter()
-                .map(egui::Rect::left)
-                .fold(f32::INFINITY, f32::min),
-            rects
-                .iter()
-                .map(egui::Rect::top)
-                .fold(f32::INFINITY, f32::min),
-        ),
-        egui::pos2(
-            rects
-                .iter()
-                .map(egui::Rect::right)
-                .fold(f32::NEG_INFINITY, f32::max),
-            rects
-                .iter()
-                .map(egui::Rect::bottom)
-                .fold(f32::NEG_INFINITY, f32::max),
-        ),
-    )
-}
-
-/// The painted `Subject: n/50` counter's rect.
-#[track_caller]
-fn counter_rect(h: &Harness<'_, AppState>) -> egui::Rect {
-    painted_galleys(h)
-        .into_iter()
-        .find(|g| g.text.starts_with("Subject: ") && g.text.ends_with("/50"))
-        .unwrap_or_else(|| {
-            panic!(
-                "the card's one meta row must carry the `Subject: n/50` counter; \
-                 painted text: {:?}",
-                painted_text(h)
-            )
-        })
-        .rect
+    amend
 }
 
 /// The Commit control's two painted halves, as
@@ -3439,12 +3356,9 @@ const COMMIT_PANEL_WIDTH: f32 = turbogit_ui::ui::commit_window::COMMIT_PANEL_WID
 /// and the Commit control are on different rows from the meta row and from each
 /// other.**
 ///
-/// The four controls the ticket named (counter, Template, Clear, Amend) have to
-/// be *present* and *together*; the Commit control has to be *below* them. The
-/// old layout put the counter on one row and Amend/Template/Clear on the next,
-/// and that second row is the width the header had been borrowing — so
-/// "together" is the ratchet, and it is checked by centre line rather than by
-/// reading which function drew what.
+/// The card's controls have to be *present* and *stacked*; the Commit control
+/// has to be *below* them. The stacking is the ratchet, and it is checked by
+/// geometry rather than by reading which function drew what.
 #[test]
 fn the_commit_card_is_a_well_one_meta_row_and_one_commit_control() {
     let parent = tempfile::tempdir().unwrap();
@@ -3696,17 +3610,17 @@ fn the_well_is_about_76px_and_the_file_list_still_gets_rows() {
     }
 }
 
-/// **The well, Template and Clear all paint the raised-on-CARD fill, and none of
+/// **The well and Amend all paint the raised-on-CARD fill, and none of
 /// them paints the raised-on-background fill.**
 ///
 /// The commit card is a content-surface card, so every control raised on it has
 /// to take the *second* rung of the ladder. `RAISED` is 1.1:1 against this card
-/// and is the rung for controls on the app or a panel background; a Template
-/// button painted in it is a grey shape the eye cannot find. Asserting the exact
+/// and is the rung for controls on the app or a panel background; a control
+/// painted in it is a grey shape the eye cannot find. Asserting the exact
 /// token (and naming the wrong one) is what makes the mutation — one word,
 /// `RAISED_ON_CARD` to `RAISED` — a failure rather than a comment.
 #[test]
-fn the_well_template_and_clear_paint_the_raised_on_card_fill() {
+fn the_well_and_amend_paint_the_raised_on_card_fill() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "card-raised");
     seed_changes(&repo.path);
@@ -3716,8 +3630,6 @@ fn the_well_template_and_clear_paint_the_raised_on_card_fill() {
 
     for (who, rect) in [
         ("the message well", message_well(&h, card)),
-        ("Template", h.get_by_label("Template").rect()),
-        ("Clear", h.get_by_label("Clear").rect()),
         ("Amend's checkbox", {
             let node = h.get_by_label("Amend").rect();
             egui::Rect::from_center_size(
@@ -3802,15 +3714,14 @@ fn the_commit_control_is_the_only_brand_filled_control_on_the_card() {
     );
 }
 
-/// **A typed message is still editable, the counter still tracks the subject, and
-/// committing still dispatches exactly as before.**
+/// **A typed message is still editable, and committing still dispatches exactly
+/// as before.**
 ///
-/// The card was rebuilt around the well and its meta row, so the three things
+/// The card was rebuilt around the well and its meta row, so the two things
 /// that make it a commit form rather than a picture have to be re-asserted: the
-/// well takes keystrokes, the counter reads the subject it just received, and
-/// the Commit control still runs the same commit.
+/// well takes keystrokes, and the Commit control still runs the same commit.
 #[test]
-fn a_typed_message_is_editable_counted_and_commits() {
+fn a_typed_message_is_editable_and_commits() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "card-typed");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
@@ -3828,22 +3739,6 @@ fn a_typed_message_is_editable_counted_and_commits() {
         h.state().ui.commit_message,
         "typed from the harness",
         "the message well must still be editable"
-    );
-
-    // The counter tracks the subject it just received.
-    let counter = counter_rect(&h);
-    let subject_len = "typed from the harness".chars().count();
-    assert!(
-        painted_text(&h)
-            .iter()
-            .any(|t| t == &format!("Subject: {subject_len}/50")),
-        "the counter must track the subject length: painted {:?}",
-        painted_text(&h)
-    );
-    let card = commit_card(&h);
-    assert!(
-        card.contains(egui::pos2(counter.left(), counter.top())),
-        "the counter stays on the card {card:?}, got {counter:?}"
     );
 
     // And Commit still dispatches.
