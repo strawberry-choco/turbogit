@@ -1638,6 +1638,8 @@ pub struct UiState {
     // Workspace picker (issue #34). Session-only; never persisted.
     /// Whether the floating workspace picker is showing.
     pub workspace_picker_open: bool,
+    /// Whether the floating shortcuts help window is showing.
+    pub shortcuts_open: bool,
     /// Where the dropdown hangs from, in screen points: the trigger's
     /// bottom-left. `Some` comes from the sidebar's workspace header click;
     /// `None` — the palette route, which has no trigger rect — means the

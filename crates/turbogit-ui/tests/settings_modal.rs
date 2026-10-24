@@ -14,34 +14,12 @@
 use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use test_support::git_seed::repo_with_one_commit;
 use test_support::harness::{
-    assert_not_painted, assert_painted, settle, shell_harness, shell_harness_over,
+    assert_not_painted, assert_painted, repo_shell_harness, settle, shell_harness,
 };
 use turbogit_app::persistence;
 use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::{GitBackend, IncomingCheckInterval, VcsSettings};
-
-/// Harness over a real single-repo project so the shell (tab strip, repo
-/// header) renders — the Welcome page shows the tool tabs no more.
-///
-/// The shared constructor's per-frame `state.drain_events()` is what the live
-/// `git --version` badge needs in order to answer.
-fn repo_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let repo = repo_with_one_commit(tmp.path(), "repo");
-
-    let cfg = tempfile::tempdir().expect("temp config dir");
-    let cfg_path = cfg.path().to_path_buf();
-    std::mem::forget(cfg);
-    let state = AppState::launch_in(Some(repo), Some(cfg_path));
-    assert!(
-        !state.multi.roots.is_empty(),
-        "seeded repo root must be discovered"
-    );
-
-    (shell_harness_over(state, egui::vec2(1024.0, 768.0)), tmp)
-}
 
 /// The modal opens from the command palette: the palette's `Settings…`
 /// action turns the flag on. The palette is the only entry point — the
@@ -157,7 +135,7 @@ fn settings_modal_is_about_768px_wide() {
 fn tab_strip_no_longer_offers_settings() {
     // The tab strip only renders with a project open, so run over a real
     // repo (the Welcome page shows the tool tabs no more).
-    let (mut harness, _tmp) = repo_harness();
+    let (mut harness, _tmp) = repo_shell_harness();
     settle(&mut harness);
 
     // The strip renders the five tool tabs; History was already deleted in

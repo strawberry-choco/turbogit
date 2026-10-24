@@ -71,6 +71,7 @@ pub mod rewrite_preflight;
 pub mod rewrite_undo;
 pub mod settings_modal;
 pub mod shell;
+pub mod shortcuts_window;
 pub mod sidebar;
 pub mod smart_groups;
 pub mod smart_rule_modal;
@@ -167,6 +168,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // by the time the rejection settles.
     push_rejected::render(ui, state);
     settings_modal::show(ui, state);
+    shortcuts_window::show(ui, state);
     smart_rule_modal::show(ui, state);
     bulk_preflight::show(ui, state);
     bulk_monitor::show(ui, state);

@@ -67,7 +67,7 @@ pub use containers::{
     pane_header, recovery_note,
 };
 pub use controls::{
-    ButtonVariant, WidgetState, action_button, button_enabled, compact_button,
+    ButtonVariant, ICON_BUTTON_SIZE, WidgetState, action_button, button_enabled, compact_button,
     compact_button_enabled, compact_primary_button, disabled_child_scope, focus_ring, ghost_button,
     ghost_icon_button, icon_button, icon_button_enabled, mix, primary_button, segmented_control,
     tint_over_bg,

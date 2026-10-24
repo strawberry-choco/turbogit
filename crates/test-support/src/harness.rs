@@ -141,6 +141,16 @@ pub fn widget_harness(size: Vec2, body: impl Fn(&mut Ui) + 'static) -> Harness<'
     harness
 }
 
+/// A throwaway config dir, injected per the ADR-0005 test seam and deliberately
+/// leaked: the harness outlives the caller, and a deleted config dir would make
+/// later recents reads/writes racy.
+fn leaked_temp_dir() -> std::path::PathBuf {
+    let dir = tempfile::tempdir().expect("temp config dir");
+    let path = dir.path().to_path_buf();
+    std::mem::forget(dir);
+    path
+}
+
 /// A harness rendering the full shell over a fresh [`AppState`].
 ///
 /// The project dir is an empty temp directory: zero roots are discovered, so
@@ -149,19 +159,26 @@ pub fn widget_harness(size: Vec2, body: impl Fn(&mut Ui) + 'static) -> Harness<'
 /// Welcome placeholder while every shell region still renders.
 pub fn shell_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
     let project = tempfile::tempdir().expect("temp project dir");
-    // Inject an empty throwaway config dir so the developer's real global
-    // recents file never leaks into headless tests (ADR-0005 test seam —
-    // `AppState` docs: "Tests inject a temp dir so the real user
-    // configuration is never touched"). Deliberately leaked: the harness
-    // outlives this function, and a deleted config dir would make later
-    // recents reads/writes racy.
-    let cfg = tempfile::tempdir().expect("temp config dir");
-    let cfg_path = cfg.path().to_path_buf();
-    std::mem::forget(cfg);
-    let state = AppState::launch_in(Some(project.path().to_path_buf()), Some(cfg_path));
+    let state = AppState::launch_in(Some(project.path().to_path_buf()), Some(leaked_temp_dir()));
     assert!(
         state.multi.roots.is_empty(),
         "test project must discover no roots"
+    );
+    (shell_harness_over(state, Vec2::new(1024.0, 768.0)), project)
+}
+
+/// A harness rendering the full shell over a real single-repo [`AppState`].
+///
+/// [`shell_harness`] seeds an empty project so the Welcome placeholder shows;
+/// this one seeds one repo so the tool tab strip renders — suites that click
+/// shell chrome need it.
+pub fn repo_shell_harness() -> (Harness<'static, AppState>, tempfile::TempDir) {
+    let project = tempfile::tempdir().expect("temp project dir");
+    let repo = crate::git_seed::repo_with_one_commit(project.path(), "repo");
+    let state = AppState::launch_in(Some(repo), Some(leaked_temp_dir()));
+    assert!(
+        !state.multi.roots.is_empty(),
+        "seeded repo root must be discovered"
     );
     (shell_harness_over(state, Vec2::new(1024.0, 768.0)), project)
 }

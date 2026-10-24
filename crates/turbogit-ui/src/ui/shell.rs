@@ -207,8 +207,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 /// Shortcut dispatch (ADR-0009 frozen five + spec R7's F7/Shift+F7 and `/`),
 /// behind the three-tier input gate:
 ///
-/// - **Tier 1** — a dimmed modal dialog (dialog, Settings, confirm prompt,
-///   conflict editor) is open: every shell shortcut is suppressed.
+/// - **Tier 1** — a dimmed modal dialog (dialog, Settings, shortcuts help,
+///   confirm prompt, conflict editor) is open: every shell shortcut is
+///   suppressed.
 /// - **Tier 2** — a floating popup (VCS operations, command palette,
 ///   Branches) is open: the popup owns plain typing through its own widgets,
 ///   and the R7 keys pause. The frozen five keep their dispatch-first
@@ -221,6 +222,7 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
 fn handle_shortcuts(ui: &mut Ui, state: &mut AppState) {
     let dialog_open = state.ui.dialog.is_some()
         || state.ui.settings_open
+        || state.ui.shortcuts_open
         || state.ui.confirm.is_some()
         || state.ui.conflict_open.is_some()
         || state.ui.bulk_op.is_some()
@@ -551,6 +553,30 @@ fn render_tab_strip(ui: &mut Ui, state: &mut AppState) {
         );
         tab_item(ui, state, rect, tab, icon, &label, galley);
         x += rect.width() + 2.0;
+    }
+
+    // Measured from the strip's right edge inward, the way the status bar's
+    // right cluster is: a cluster laid out from the left of whatever the tabs
+    // leave over cannot hold its right edge.
+    let cluster_w = widgets::ICON_BUTTON_SIZE * 2.0 + ui.spacing().item_spacing.x;
+    let cluster = Rect::from_min_max(
+        Pos2::new(strip.right() - 8.0 - cluster_w, strip.top()),
+        Pos2::new(strip.right() - 8.0, strip.bottom()),
+    );
+    let mut actions = ui.new_child(
+        UiBuilder::new()
+            .max_rect(cluster)
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    let shortcuts = widgets::icon_button(&mut actions, Icon::KEYBOARD);
+    shortcuts.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Show shortcuts"));
+    if shortcuts.clicked() {
+        state.ui.shortcuts_open = true;
+    }
+    let settings = widgets::icon_button(&mut actions, Icon::SETTINGS);
+    settings.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Open settings"));
+    if settings.clicked() {
+        state.ui.settings_open = true;
     }
 }
 

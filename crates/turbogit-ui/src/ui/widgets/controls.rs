@@ -10,7 +10,10 @@ use crate::ui::icons::{self, Icon};
 
 const BUTTON_HEIGHT: f32 = 32.0; // .tg-btn
 const COMPACT_BUTTON_HEIGHT: f32 = 28.0; // h-7 compact variants
-const ICON_BUTTON_SIZE: f32 = 28.0; // square ghost (dialog close X)
+/// Public like the other re-exported band metrics (`PANE_HEADER_HEIGHT`): a
+/// host band reserves the cluster's exact width from it (the tab strip's
+/// action cluster) instead of restating the number.
+pub const ICON_BUTTON_SIZE: f32 = 28.0;
 const BUTTON_ICON_SIZE: f32 = 16.0; // §5.3: 16×16 in buttons
 
 // The compact primary's whole reason to exist is the pane-header band, so the
