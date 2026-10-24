@@ -18,7 +18,9 @@
 //! conflict grammar's module-private header was absorbed into that same
 //! function rather than left as a second one. Two implementations of "the top
 //! strip of a pane" is not two spellings of one decision; it is two headers the
-//! user can tell apart. `tests/widget_library.rs` pins the retirement at the
+//! user can tell apart. [`pane_header_inset`] is that one header with one knob
+//! (a title inset for full-bleed surfaces), not a second header.
+//! `tests/widget_library.rs` pins the retirement at the
 //! declaration and, more usefully, at the paint: four panes rendering the same
 //! header geometry.
 //!
@@ -64,7 +66,7 @@ pub use containers::{
     AVATAR_SIZE, COLUMN_HEADER_HEIGHT, CardFrame, CardSizing, CardSurface, ColumnAlign, Edge,
     PANE_HEADER_HEIGHT, PaneColumn, alert_box, avatar_initials, card, card_header, cautions_rail,
     churn_bar, column_cell, column_header, dialog_footer, edge_rule, group_title, note,
-    pane_header, recovery_note,
+    pane_header, pane_header_inset, recovery_note,
 };
 pub use controls::{
     ButtonVariant, ICON_BUTTON_SIZE, WidgetState, action_button, button_enabled, compact_button,

@@ -225,33 +225,35 @@ fn render_pinned_views(ui: &mut Ui, state: &mut AppState) {
     if state.ui.pinned_views.is_empty() {
         return;
     }
-    widgets::group_title(ui, "PINNED VIEWS");
-    ui.add_space(4.0);
-    let width = ui.available_width();
-    let row = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, 26.0));
-    ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::hover());
-    let mut chips = ui.new_child(
-        UiBuilder::new()
-            .max_rect(row)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    let views = state.ui.pinned_views.clone();
-    for view in &views {
-        let chip = widgets::compact_button(&mut chips, &view.name);
-        chip.widget_info(|| {
-            WidgetInfo::labeled(
-                WidgetType::Button,
-                true,
-                format!("Restore view {}", view.name),
-            )
-        });
-        if chip.clicked() {
-            let registered: Vec<_> = state.multi.roots.iter().map(|r| r.id.clone()).collect();
-            state.ui.repo_selection =
-                turbogit_app::pinned_views::selection_from_view(view, &registered);
+    inset_column(ui, |ui| {
+        widgets::group_title(ui, "PINNED VIEWS");
+        ui.add_space(4.0);
+        let width = ui.available_width();
+        let row = Rect::from_min_size(ui.cursor().left_top(), Vec2::new(width, 26.0));
+        ui.allocate_exact_size(Vec2::new(width, 26.0), Sense::hover());
+        let mut chips = ui.new_child(
+            UiBuilder::new()
+                .max_rect(row)
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        let views = state.ui.pinned_views.clone();
+        for view in &views {
+            let chip = widgets::compact_button(&mut chips, &view.name);
+            chip.widget_info(|| {
+                WidgetInfo::labeled(
+                    WidgetType::Button,
+                    true,
+                    format!("Restore view {}", view.name),
+                )
+            });
+            if chip.clicked() {
+                let registered: Vec<_> = state.multi.roots.iter().map(|r| r.id.clone()).collect();
+                state.ui.repo_selection =
+                    turbogit_app::pinned_views::selection_from_view(view, &registered);
+            }
         }
-    }
-    ui.add_space(8.0);
+        ui.add_space(8.0);
+    });
 }
 
 /// The bottom selection bar (screen 04): "N selected / total" on the left,
@@ -390,9 +392,30 @@ fn count_chip_at(painter: &egui::Painter, right_edge: f32, cy: f32, text: &str) 
 
 /// Air between two adjacent marks in a row's right cluster.
 const BADGE_GAP: f32 = 6.0;
-/// The row's right inset — the same 12 the workspace header and the selection
-/// bar use, so every rail row's cluster stops at one x.
-const ROW_RIGHT_INSET: f32 = 12.0;
+/// The rail's one inset, public because the rail's geometry contract reads it:
+/// a row's badge cluster stops this far from the row's right edge, the
+/// workspace header and the selection bar keep this far from the rail's edges,
+/// and every non-row content item (the filter field, the section titles, the
+/// pinned-view chips) steps in by it on both edges. Rows, their bands and the
+/// section rules are the exemption — they run full-bleed on purpose.
+pub const RAIL_INSET: f32 = 12.0;
+
+/// One non-row content item in the rail's flow — the filter field, the
+/// pinned-view chips — run in a column stepped in by [`RAIL_INSET`] on both
+/// edges, after which the caller's cursor continues below it. The rows, their
+/// bands and the section rules stay full-bleed; only the things that would
+/// otherwise touch the border go through here.
+fn inset_column<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let rail = ui.max_rect();
+    let column = Rect::from_min_max(
+        Pos2::new(ui.cursor().left() + RAIL_INSET, ui.cursor().top()),
+        Pos2::new(rail.right() - RAIL_INSET, rail.bottom()),
+    );
+    let mut child = ui.new_child(UiBuilder::new().max_rect(column));
+    let out = add(&mut child);
+    ui.advance_cursor_after_rect(child.min_rect());
+    out
+}
 
 /// Render the workspace tree into `ui`, whose max rect is the shell's
 /// reserved left rail (see `shell::render`).
@@ -418,11 +441,9 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     col.add_space(8.0);
     render_workspace_header(&mut col, state);
     col.add_space(10.0);
-    widgets::search_input(
-        &mut col,
-        "Filter repos / branches…",
-        &mut state.ui.sidebar_filter,
-    );
+    inset_column(&mut col, |ui| {
+        widgets::search_input(ui, "Filter repos / branches…", &mut state.ui.sidebar_filter);
+    });
     col.add_space(12.0);
 
     // Snapshot the tree so the rows borrow nothing while clicks mutate
@@ -445,7 +466,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     // rather than a section label, and gave them no rule at all, so the left
     // rail's two sections and every pane to the right of it disagreed about
     // what a section looks like.
-    widgets::pane_header(&mut col, "PROJECTS", None, |_ui| {});
+    widgets::pane_header_inset(&mut col, "PROJECTS", None, RAIL_INSET, |_ui| {});
 
     // Both filters narrow the recursive tree and re-collapse the survivors
     // with the same path labels (sidebar-project-tree issue 01), so no view
@@ -615,8 +636,10 @@ fn render_smart_groups(ui: &mut Ui, state: &mut AppState, tree: &project_tree::P
     // the shared chrome reserves for exactly this. The header's own band
     // registers no click plane, so the `+` keeps its own hit target and a click
     // on the title is a click on nothing rather than a click on the button.
-    widgets::pane_header(ui, "SMART GROUPS", None, |ui| {
-        ui.add_space(ROW_RIGHT_INSET);
+    // The widget insets the title's leading edge; the `+`'s trailing inset
+    // stays the action slot's own.
+    widgets::pane_header_inset(ui, "SMART GROUPS", None, RAIL_INSET, |ui| {
+        ui.add_space(RAIL_INSET);
         let plus = ui.add(egui::Button::new(RichText::new("+").color(Palette::INK_3)));
         plus.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "New rule"));
         if plus.clicked() {
@@ -690,7 +713,7 @@ fn render_smart_group_row(
     // counts used to end.
     count_chip_at(
         &painter,
-        row.right() - ROW_RIGHT_INSET,
+        row.right() - RAIL_INSET,
         cy,
         &entry.count.to_string(),
     );
@@ -999,7 +1022,7 @@ fn render_folder_row(
     // reserved counter orange. That is the only reason orange appears on this
     // surface at all, and it is why turning the dirty count into a chip (the
     // obvious "make them all the same" move) would be wrong rather than tidy.
-    let mut right = header.right() - ROW_RIGHT_INSET;
+    let mut right = header.right() - RAIL_INSET;
     if folder.dirty > 0 {
         let galley = ui.painter().layout_no_wrap(
             folder.dirty.to_string(),
@@ -1150,7 +1173,7 @@ fn render_repo_node(
     );
     // Keep controls and a minimum name column even when counters are huge.
     let left = (row.left() + REPO_NAME_X + indent).min(row.right());
-    let mut right = row.right() - ROW_RIGHT_INSET;
+    let mut right = row.right() - RAIL_INSET;
     let badge_left = left + ((right - left).max(0.0) * 0.52).max(24.0);
     // The ahead / behind badges are **state**, not counts: they say which way
     // this repository has drifted, so they are coloured text from the one map

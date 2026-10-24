@@ -490,6 +490,24 @@ pub fn pane_header<R>(
     count: Option<&str>,
     actions: impl FnOnce(&mut Ui) -> R,
 ) -> InnerResponse<R> {
+    pane_header_inset(ui, title, count, 0.0, actions)
+}
+
+/// [`pane_header`] with the title's leading edge stepped `inset` in from the
+/// band's left edge, while the hairline still spans the band's full width.
+///
+/// The split exists for the full-bleed surfaces (the workspace rail): their
+/// rows, bands and rules run to the surface's own edges, so a caller that
+/// indents the whole header moves the rule with the title, and the rule must
+/// not move. A card-padded pane gets the same effect from its frame and keeps
+/// calling [`pane_header`], which is this at inset zero.
+pub fn pane_header_inset<R>(
+    ui: &mut Ui,
+    title: &str,
+    count: Option<&str>,
+    inset: f32,
+    actions: impl FnOnce(&mut Ui) -> R,
+) -> InnerResponse<R> {
     // The width is read ONCE, before the band is allocated. A band takes the
     // full available width, so re-reading it afterwards asks a horizontal
     // layout for the air its own first child already used — which is zero, and
@@ -499,6 +517,8 @@ pub fn pane_header<R>(
         // The title and its count chip are one mark, not two: the gap between
         // them is named below rather than left to item spacing.
         ui.spacing_mut().item_spacing.x = 0.0;
+        // Spacing is zeroed first, so the inset is exactly `inset`.
+        ui.add_space(inset);
         let (font, ink) = pane_title();
         ui.label(RichText::new(title).font(font).color(ink));
         if let Some(count) = count {

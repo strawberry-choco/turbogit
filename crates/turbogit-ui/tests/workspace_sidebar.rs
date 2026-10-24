@@ -1521,3 +1521,56 @@ fn the_sidebar_group_sections_use_the_shared_pane_header() {
          paints a structural hairline in the rail: {rail_rules:?}"
     );
 }
+
+/// The rail's non-row content clears the rail's edges: the filter field, the
+/// two section titles and the section's action stop one rail inset short of
+/// the border on the side they read from. The rows and their bands are
+/// deliberately exempt — a full-bleed band is the rail's own geometry — so
+/// this reaches only the content items, by rect, not by pixel count.
+#[test]
+fn the_rails_non_row_content_clears_the_rails_edges() {
+    use turbogit_ui::ui::sidebar::RAIL_INSET;
+    let (project, alpha, lib) = two_group_project("inset");
+    let state = app_state(&project, &[alpha, lib]);
+    let mut h = harness(state);
+    settle(&mut h);
+
+    let rail = filled_rects(&h)
+        .into_iter()
+        .find(|(rect, color)| {
+            *color == Palette::SIDEBAR
+                && (rect.width() - turbogit_ui::ui::sidebar::SIDEBAR_WIDTH).abs() < 0.5
+        })
+        .map(|(rect, _)| rect)
+        .expect("the rail's own surface");
+
+    for title in ["SMART GROUPS", "PROJECTS"] {
+        let galley = painted_galleys(&h)
+            .into_iter()
+            .find(|g| g.text == title)
+            .unwrap_or_else(|| panic!("`{title}` paints in the rail"));
+        assert!(
+            galley.rect.left() >= rail.left() + RAIL_INSET - 0.5,
+            "`{title}` clears the rail's left edge by the rail inset: galley \
+             {:?}, rail {rail:?}",
+            galley.rect
+        );
+    }
+
+    let search = h.get_by_label("Filter repos / branches…");
+    assert!(
+        search.rect().left() >= rail.left() + RAIL_INSET - 0.5
+            && search.rect().right() <= rail.right() - RAIL_INSET + 0.5,
+        "the filter field clears both rail edges by the rail inset: {:?}, \
+         rail {rail:?}",
+        search.rect()
+    );
+
+    let new_rule = h.get_by_label("New rule");
+    assert!(
+        new_rule.rect().right() <= rail.right() - RAIL_INSET + 0.5,
+        "the section action clears the rail's right edge by the rail inset: \
+         {:?}, rail {rail:?}",
+        new_rule.rect()
+    );
+}

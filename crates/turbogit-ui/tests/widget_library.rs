@@ -1915,23 +1915,25 @@ fn the_tool_window_header_is_retired_from_the_shared_widget_surface() {
 /// A duplicated header that reuses `PANE_HEADER_HEIGHT` or `pane_title()` is a
 /// second consumer of the one definition and fails here by name. A duplicated
 /// header that invents its own numbers is a second *decision*, and the rendered
-/// ratchet is what catches that one.
+/// ratchet is what catches that one. `pane_header` delegates to
+/// `pane_header_inset` (the one band painter, with the full-bleed surfaces'
+/// title knob), so the painter's name is what appears here.
 #[test]
 fn one_band_height_and_one_title_treatment_own_every_pane_header() {
     assert_eq!(
         srcscan::items_naming(CONTAINERS_SRC, "PANE_HEADER_HEIGHT"),
-        ["PANE_HEADER_HEIGHT", "pane_header"],
+        ["PANE_HEADER_HEIGHT", "pane_header_inset"],
         "the pane header's band height is declared once and read by the one function \
          that paints a band; a second reader is a second header"
     );
     assert_eq!(
         srcscan::fns_using(CONTAINERS_SRC, "PANE_HEADER_HEIGHT"),
-        ["pane_header"],
+        ["pane_header_inset"],
         "only the one pane header may size a band"
     );
     assert_eq!(
         srcscan::fns_using(CONTAINERS_SRC, "pane_title"),
-        ["column_header", "pane_header"],
+        ["column_header", "pane_header_inset"],
         "a pane title and a column label are the same tracked mark: the one \
          `pane_title()` decides the face and the ink, exactly these two read it, \
          and a third reader is a fourth thing wearing the type"
