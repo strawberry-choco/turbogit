@@ -29,7 +29,7 @@ use test_support::git_seed::{git, repo_with_one_commit, repo_with_origin};
 use turbogit_app::operation::Operation;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
-use turbogit_domain::model::{RootId, VcsSettings};
+use turbogit_domain::model::{IncomingCheckInterval, RootId, VcsSettings};
 use turbogit_engine_api::GitExecutor;
 
 // ---------------------------------------------------------------- helpers --
@@ -106,6 +106,10 @@ fn tick_and_settle(state: &mut AppState, at: Instant) {
 fn poll_settings() -> VcsSettings {
     VcsSettings {
         incoming_poll: true,
+        // Pinned, not defaulted: these tests measure the interval mechanics
+        // against concrete tick offsets (15 / 31 minutes), and the default
+        // interval is the settings surface's choice, not theirs.
+        incoming_interval: IncomingCheckInterval::Min15,
         ..VcsSettings::default()
     }
 }
