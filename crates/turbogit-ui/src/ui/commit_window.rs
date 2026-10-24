@@ -412,7 +412,8 @@ fn local_changes_body(ui: &mut Ui, state: &mut AppState) {
 
 /// Layout helper for the two-zone Commit window (redesign 03): the left
 /// pane gets the fixed [`COMMIT_PANEL_WIDTH`], the right pane (diff
-/// preview + message editor) takes the flexible remainder.
+/// preview + message editor) takes the flexible remainder, one
+/// [`crate::theme::PANEL_PADDING`] to the right of it.
 fn two_zone(
     ui: &mut Ui,
     state: &mut AppState,
@@ -424,7 +425,10 @@ fn two_zone(
         avail.min,
         Pos2::new(avail.min.x + COMMIT_PANEL_WIDTH, avail.max.y),
     );
-    let right_rect = Rect::from_min_max(Pos2::new(left_rect.max.x, avail.min.y), avail.max);
+    let right_rect = Rect::from_min_max(
+        Pos2::new(left_rect.max.x + crate::theme::PANEL_PADDING, avail.min.y),
+        avail.max,
+    );
     let mut left_ui = ui.new_child(
         UiBuilder::new()
             .max_rect(left_rect)
@@ -647,65 +651,158 @@ fn stash_row(ui: &mut Ui, state: &mut AppState, stash: &turbogit_domain::model::
 // ------------------------------------------------------- changelist pane --
 
 fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
-    // Issue 07: one set of commit controls — the message box + Amend, then the
-    // single action row (primary `Commit ▾` plus grey `Shelve…` / `Stash…`).
-    // Redesign Phase 1/2: they share one bordered card, which is what groups
-    // them now that the heading and separators are gone, and the action row is
-    // that card's footer.
-    widgets::card(ui, widgets::CardFrame::default(), |ui| {
-        commit_message_box(ui, state);
-        recent_messages_row(ui, state);
-        // The mockup rules the footer off from the message controls above it:
-        // the action row is the card's footer, and it is where the card's third
-        // part — the one Commit control — lives.
-        ui.separator();
-        commit_action_row(ui, state);
-    });
+    // A conflicted root's resolution tools render beneath this body
+    // (`commit_window::show`), so the cards keep their content height and the
+    // tools own the pane's remaining room — a bottom-docked card would push
+    // them past the pane's clip. Without conflicts the commit card docks at
+    // the pane's bottom edge and the changes list absorbs the height above it.
+    let conflicted = state
+        .selected_root
+        .as_ref()
+        .and_then(|id| state.multi.by_id(id))
+        .is_some_and(|r| !r.status.conflicted.is_empty());
+    if conflicted {
+        widgets::card(ui, widgets::CardFrame::default(), |ui| {
+            changes_card_body(ui, state, false);
+        });
+        // The flow already adds `ITEM_SPACING.y`; one more spacing-sized step
+        // makes the gap between the cards a full `PANEL_PADDING`.
+        ui.add_space(crate::theme::PANEL_PADDING - crate::theme::ITEM_SPACING.y);
+        widgets::card(ui, widgets::CardFrame::default(), |ui| {
+            commit_card_body(ui, state);
+        });
+        return;
+    }
 
+    let avail = ui.available_rect_before_wrap();
+    // The commit card docks at the pane's bottom edge and the changes card is
+    // the pane's top with the rest: the list is the surface the developer
+    // scans, so it is the one that absorbs the pane's height. One
+    // `PANEL_PADDING` of the pane separates the two cards.
+    //
+    // The dock is sized by the card's height, and egui only knows that height
+    // after laying the card out — a single-pass layout cannot dock-and-measure
+    // in the same frame. So the dock reads the height the card measured on the
+    // previous frame, the same one-frame-old trade egui's own content-sized
+    // regions make; the real render below writes it back. The height only
+    // moves when the recent-messages row appears or disappears.
+    let dock_height_id = egui::Id::new("commit_card_dock_height");
+    let dock_height = ui
+        .ctx()
+        .memory(|m| m.data.get_temp::<f32>(dock_height_id))
+        .unwrap_or(0.0);
+    let dock_rect = Rect::from_min_max(
+        Pos2::new(avail.min.x, (avail.max.y - dock_height).max(avail.min.y)),
+        avail.max,
+    );
+    let changes_rect = Rect::from_min_max(
+        avail.min,
+        Pos2::new(
+            avail.max.x,
+            (dock_rect.min.y - crate::theme::PANEL_PADDING).max(avail.min.y),
+        ),
+    );
+    let mut changes_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(changes_rect)
+            .layout(Layout::top_down(Align::Min)),
+    );
     // Redesign Phase 3: the file list is its own card, headed by the shared pane
     // header (R7), so the three live controls read as acting on this list rather
     // than as commit-box chrome.
-    widgets::card(ui, widgets::CardFrame::default(), |ui| {
-        changes_card_header(ui, state);
-
-        let Some(root_id) = state.selected_root.clone() else {
-            ui.colored_label(Color32::GRAY, "Select a repository to see changes.");
-            return;
-        };
-        if state.multi.by_id(&root_id).is_none() {
-            return;
-        }
-
-        // Focus = expand (issue 04): whenever the selected root moves, manual
-        // expansions reset so only the newly focused repo's files are visible.
-        // Normalized before the buckets borrow the status snapshots (plan §1.4).
-        if state.ui.changes_focus != state.selected_root {
-            state.ui.changes_focus = state.selected_root.clone();
-            state.ui.changes_expanded.clear();
-        }
-
-        let (buckets, no_match) = filter_buckets(state, change_buckets(state));
-        // **This site produces the empty state's words and does not paint it.** The
-        // sentence is the *filter's* answer — the clean-tree statement when nothing matched,
-        // and the filter's own "nothing matches <query>" when a query excluded
-        // everything — so the wording stays here. Moving the paint up to this scope
-        // would make the tree unable to report "nothing painted", which is the fact
-        // that decides whether the sentence appears at all.
-        //
-        // The clean-tree wording is the reference's `stage.default.status` (ticket
-        // 19): an empty list and a sentence are not the same information. It
-        // inherits the old sentence's one weakness — it is a claim about the last
-        // refresh, so it can appear for a frame before a scan lands.
-        let empty_text = if no_match.is_empty() {
-            "Nothing to commit, working tree is clean."
-        } else {
-            &no_match
-        };
-        let mut actions = Vec::new();
-        let mut order = Vec::new();
-        changes_tree(ui, state, &buckets, empty_text, &mut actions, &mut order);
-        apply_actions(state, actions, &order);
+    widgets::card(&mut changes_ui, widgets::CardFrame::default(), |ui| {
+        changes_card_body(ui, state, true);
     });
+
+    // The docked commit card, sized to its own content; the height it measures
+    // here docks it next frame.
+    let mut dock_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(dock_rect)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    let commit_card = widgets::card(&mut dock_ui, widgets::CardFrame::default(), |ui| {
+        commit_card_body(ui, state);
+    })
+    .response
+    .rect;
+    ui.ctx()
+        .memory_mut(|m| m.data.insert_temp(dock_height_id, commit_card.height()));
+
+    // The dock reaches the pane's bottom edge, so the pane's used height is the
+    // whole reserved rect; `two_zone`'s flow advance reads it from here.
+    ui.advance_cursor_after_rect(Rect::from_min_size(
+        avail.min,
+        Vec2::new(avail.width(), avail.height()),
+    ));
+}
+
+/// The commit card's controls: the message box + Amend, then the single action
+/// row (primary `Commit ▾` plus grey `Shelve…` / `Stash…`). They share one
+/// bordered card (redesign Phase 1/2), which is what groups them now that the
+/// heading and separators are gone, and the action row is that card's footer.
+fn commit_card_body(ui: &mut Ui, state: &mut AppState) {
+    commit_message_box(ui, state);
+    recent_messages_row(ui, state);
+    // The mockup rules the footer off from the message controls above it:
+    // the action row is the card's footer, and it is where the card's third
+    // part — the one Commit control — lives.
+    ui.separator();
+    commit_action_row(ui, state);
+}
+
+/// The changes card's body: the shared pane header (R7) over the filter and the
+/// one tree. `fills` says whether the tree claims the card's whole remaining
+/// height (the docked arrangement) or hugs its content (the conflicted one,
+/// where the resolution tools beneath need the room).
+fn changes_card_body(ui: &mut Ui, state: &mut AppState, fills: bool) {
+    changes_card_header(ui, state);
+
+    let Some(root_id) = state.selected_root.clone() else {
+        ui.colored_label(Color32::GRAY, "Select a repository to see changes.");
+        return;
+    };
+    if state.multi.by_id(&root_id).is_none() {
+        return;
+    }
+
+    // Focus = expand (issue 04): whenever the selected root moves, manual
+    // expansions reset so only the newly focused repo's files are visible.
+    // Normalized before the buckets borrow the status snapshots (plan §1.4).
+    if state.ui.changes_focus != state.selected_root {
+        state.ui.changes_focus = state.selected_root.clone();
+        state.ui.changes_expanded.clear();
+    }
+
+    let (buckets, no_match) = filter_buckets(state, change_buckets(state));
+    // **This site produces the empty state's words and does not paint it.** The
+    // sentence is the *filter's* answer — the clean-tree statement when nothing matched,
+    // and the filter's own "nothing matches <query>" when a query excluded
+    // everything — so the wording stays here. Moving the paint up to this scope
+    // would make the tree unable to report "nothing painted", which is the fact
+    // that decides whether the sentence appears at all.
+    //
+    // The clean-tree wording is the reference's `stage.default.status` (ticket
+    // 19): an empty list and a sentence are not the same information. It
+    // inherits the old sentence's one weakness — it is a claim about the last
+    // refresh, so it can appear for a frame before a scan lands.
+    let empty_text = if no_match.is_empty() {
+        "Nothing to commit, working tree is clean."
+    } else {
+        &no_match
+    };
+    let mut actions = Vec::new();
+    let mut order = Vec::new();
+    changes_tree(
+        ui,
+        state,
+        &buckets,
+        empty_text,
+        fills,
+        &mut actions,
+        &mut order,
+    );
+    apply_actions(state, actions, &order);
 }
 
 /// The one tree (issue 04, visual doc §3): every repository renders as a
@@ -717,24 +814,28 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
 /// group below.
 ///
 /// `order` collects one [`RowSlot`] per painted row, in this pass's paint order.
+/// `fills` says whether the tree claims the card's whole remaining height (the
+/// docked arrangement, where the list absorbs the pane) or hugs its content
+/// (the conflicted one, which leaves the room to the resolution tools beneath).
 fn changes_tree(
     ui: &mut Ui,
     state: &AppState,
     buckets: &[Bucket<'_>],
     empty_text: &str,
+    fills: bool,
     actions: &mut Vec<RowAction>,
     order: &mut Vec<RowSlot>,
 ) {
-    // Height-capped: the tree is the last region inside its card, so it fills
-    // the rest of the pane rather than growing the card past the window
-    // (redesign risk R1 — the action row it used to reserve room for now
-    // heads the card above it). Uses the available rect instead of the capped
-    // pane height so sections rendered after the two-zone body (e.g. conflict
-    // resolution tools) keep real geometry.
+    // Fills the rest of its card rather than hugging its content (task 3): the
+    // commit card is docked at the pane's bottom edge, so the list is the side
+    // that absorbs the pane's height, short list or not. Uses the available
+    // rect instead of the capped pane height so sections rendered after the
+    // two-zone body (e.g. conflict resolution tools) keep real geometry.
     let remaining = ui.available_rect_before_wrap();
     let max_h = remaining.height().max(crate::theme::FILE_ROW_HEIGHT);
     egui::ScrollArea::vertical()
         .id_salt("changes_tree")
+        .auto_shrink(!fills)
         .max_height(max_h)
         .show(ui, |ui| {
             let mut painted = false;

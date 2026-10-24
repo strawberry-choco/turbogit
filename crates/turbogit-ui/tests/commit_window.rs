@@ -934,45 +934,56 @@ fn commit_window_layout_is_fixed_panel_plus_flexible_preview() {
         turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH
     );
 
-    // …and the preview zone starts exactly one column to its right. The zone
-    // names itself by the previewed file once a row is selected.
+    // …and the preview zone starts exactly one column and one panel padding to
+    // its right. The zone names itself by the previewed file once a row is
+    // selected.
     let path = h.get_by_label("Previewing base.txt").rect();
     let preview = card_rect(&h, path.center());
-    let expected_x = changes_card.left() + turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH;
+    let expected_x = changes_card.left()
+        + turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH
+        + turbogit_ui::theme::PANEL_PADDING;
     assert!(
         (preview.left() - expected_x).abs() < 0.5,
-        "the diff preview must start at the fixed commit panel's edge \
-         (x={expected_x}), got x={}",
+        "the diff preview must start one panel padding right of the fixed commit \
+         panel (x={expected_x}), got x={}",
         preview.left()
     );
 }
 
 #[test]
-fn commit_message_box_and_amend_sit_at_the_top_of_the_commit_panel() {
-    // Issue 07: one set of commit controls for the whole view. The single
-    // commit message box + Amend option sit at the TOP of the fixed commit
-    // panel — above the tree toolbar, inside the panel's width — instead of
-    // at the bottom of the preview pane.
+fn the_commit_card_docks_under_the_changes_list() {
+    // Task 3: the changes card is the pane's top and fills the space above it;
+    // the commit card docks at the pane's bottom edge, one PANEL_PADDING below
+    // the changes card.
     let parent = tempfile::tempdir().unwrap();
-    let repo = temp_repo(parent.path(), "msg-top-repo");
+    let repo = temp_repo(parent.path(), "msg-dock-repo");
     std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
 
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    let panel_right = turbogit_ui::ui::sidebar::SIDEBAR_WIDTH
-        + turbogit_ui::ui::commit_window::COMMIT_PANEL_WIDTH;
-    let changes_origin = changes_title_galley(&h).pos;
-
+    let changes_card = card_rect(&h, changes_title_galley(&h).pos);
     let msg_origin =
         galley_origin(&h, "Commit message:").expect("the commit message label must paint");
+    let commit_card = card_rect(&h, msg_origin);
+
     assert!(
-        msg_origin.x < panel_right && msg_origin.y < changes_origin.y,
-        "the message box must sit at the top of the fixed commit panel, \
-         inside the panel width (x<{panel_right}) and above the changes header \
-         (y<{}), got x={} y={}",
-        changes_origin.y,
-        msg_origin.x,
-        msg_origin.y
+        changes_card.top() < commit_card.top(),
+        "the changes card is the pane's top and the commit card docks beneath it: \
+         changes {changes_card:?}, commit {commit_card:?}"
+    );
+    assert!(
+        (commit_card.top() - changes_card.bottom() - turbogit_ui::theme::PANEL_PADDING).abs() < 0.5,
+        "exactly one panel padding separates the cards: changes {changes_card:?}, \
+         commit {commit_card:?}"
+    );
+
+    // The commit card still holds its whole control set: the message well, the
+    // Amend option, and the action row footer.
+    let amend_origin =
+        galley_origin(&h, "Amend").expect("the Amend option must paint with the message box");
+    assert!(
+        commit_card.contains(amend_origin),
+        "Amend rides the docked commit card: card {commit_card:?}, amend {amend_origin:?}"
     );
 
     // Exactly one subscriber: no per-repo commit controls anywhere.
@@ -984,15 +995,6 @@ fn commit_message_box_and_amend_sit_at_the_top_of_the_commit_panel() {
             .count(),
         1,
         "exactly one commit message box must paint"
-    );
-
-    // The Amend option travels with the message box, not at the bottom.
-    let amend_origin =
-        galley_origin(&h, "Amend").expect("the Amend option must paint with the message box");
-    assert!(
-        amend_origin.y < changes_origin.y,
-        "Amend must sit above the changes header, got y={}",
-        amend_origin.y
     );
 }
 
@@ -3324,28 +3326,28 @@ fn commit_control_parts(h: &Harness<'_, AppState>) -> (egui::Rect, egui::Rect, e
 /// and the failure worth reporting is "the list has no room left", not "the
 /// heading is something else".
 #[track_caller]
-fn changes_card_below(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
-    let mut below: Vec<egui::Rect> = painted_rects(h)
+fn changes_card_above(h: &Harness<'_, AppState>, card: egui::Rect) -> egui::Rect {
+    let mut above: Vec<egui::Rect> = painted_rects(h)
         .into_iter()
         .filter(|(rect, fill, _, radius)| {
             *fill == CARD_FILL
                 && *radius == egui::CornerRadius::same(turbogit_ui::theme::CARD_RADIUS)
                 && (rect.width() - COMMIT_PANEL_WIDTH).abs() < 0.5
-                && rect.top() >= card.bottom() - 1.0
+                && rect.bottom() <= card.top() + 1.0
         })
         .map(|(rect, _, _, _)| rect)
         .collect();
     assert_eq!(
-        below.len(),
+        above.len(),
         1,
-        "the file list's own card must still be painted in the column below the \
-         commit card, which now ends at y={:.1}. Found {below:?}. A message well \
-         that grows until the file list is off the screen has solved the message at \
-         the list's expense, and the list is what the well shares the fixed column \
-         with.",
+        "the file list's own card must still be painted in the column above the \
+         commit card, which is docked with its bottom at y={:.1}. Found {above:?}. \
+         A message well that grows until the file list is off the screen has \
+         solved the message at the list's expense, and the list is what the well \
+         shares the fixed column with.",
         card.bottom()
     );
-    below.remove(0)
+    above.remove(0)
 }
 
 /// The commit window's left column: the fixed [`COMMIT_PANEL_WIDTH`]-wide pane
@@ -3585,7 +3587,7 @@ fn the_well_is_about_76px_and_the_file_list_still_gets_rows() {
     let h = harness(app_state(std::slice::from_ref(&repo.path)));
     let card = commit_card(&h);
     let well = message_well(&h, card);
-    let changes = changes_card_below(&h, card);
+    let changes = changes_card_above(&h, card);
     let column_bottom = commit_column_bottom(&h);
 
     assert!(
