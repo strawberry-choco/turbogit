@@ -588,13 +588,12 @@ fn a_subgroup_a_section_and_a_row_are_distinguishable_by_geometry() {
     );
 }
 
-/// One nesting level hangs its children one icon's width tighter than the shared
-/// tree step. Every row in this tree leads with an icon, so the base step hangs
-/// past its own parent's glyph; the trim is measured off the painted frame so a
-/// change to either metric shows up here rather than in a screenshot review.
+/// One nesting level hangs its children exactly one icon's width. Every row in
+/// this tree leads with an icon, so a level costs one icon and the child's icon
+/// lands where its parent's ends; the step is measured off the painted frame so
+/// a change to either metric shows up here rather than in a screenshot review.
 #[test]
-fn a_nested_level_hangs_one_icon_tighter_than_the_shared_tree_step() {
-    use turbogit_ui::theme::{TYPE_BODY, data_font};
+fn a_nested_level_hangs_one_icon_width() {
     use turbogit_ui::ui::components::KIT_ICON;
 
     let mut fx = Fixture::alpha_only();
@@ -615,19 +614,9 @@ fn a_nested_level_hangs_one_icon_tighter_than_the_shared_tree_step() {
         .expect("a row nested one level deep");
     let step = child.pos.x - base.pos.x;
 
-    // `theme::two_space_indent` × `INDENT_STEPS_PER_LEVEL`, re-measured here
-    // rather than called: the harness's own pixels-per-point is what this frame
-    // laid the tree out at, and the painted x values are in the same points.
-    let two_space = h.ctx.fonts_mut(|f| {
-        f.layout_no_wrap("  ".to_owned(), data_font(TYPE_BODY), Color32::WHITE)
-            .size()
-            .x
-    });
-    let shared = two_space * 2.0;
     assert!(
-        (step - (shared - KIT_ICON)).abs() < 0.6,
-        "a level hangs the shared tree step minus one icon width: step {step}, \
-         shared {shared}, two-space {two_space}"
+        (step - KIT_ICON).abs() < 0.6,
+        "a level hangs exactly one icon width: step {step}, KIT_ICON {KIT_ICON}"
     );
 }
 

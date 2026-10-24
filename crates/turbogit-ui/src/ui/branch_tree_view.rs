@@ -38,7 +38,7 @@ use turbogit_app::state::TreeState;
 use turbogit_domain::model::{Branch, BranchKind, RootId};
 
 use crate::theme::{
-    Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_SECTION, chrome_font, data_font, indent_step,
+    Palette, TYPE_BODY, TYPE_CHIP, TYPE_CONTROL, TYPE_SECTION, chrome_font, data_font,
 };
 use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches::{branch_matches, matches_query, row_meta};
@@ -721,9 +721,9 @@ fn paint_nodes(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    // One icon's width off the shared tree step: this tree's rows already lead
-    // with an icon, so the base two-space pair over-hangs its own parent.
-    let step = indent_step(ui) - KIT_ICON;
+    // A level hangs one icon's width rather than the shared tree step: rows
+    // here lead with an icon, so a level costs exactly one icon.
+    let step = KIT_ICON;
     for n in nodes {
         match n {
             BranchNode::Leaf(l) => {
