@@ -2708,10 +2708,9 @@ fn the_column_header_row_underlines_itself_once_in_the_structural_tone() {
 /// R1 gives `Palette::BRAND` three jobs in the whole app: a view's single
 /// primary action button, the active tab underline, and a selected row's rail.
 /// Only the first two can appear here. These harnesses render a pane alone in
-/// a central panel with no shell, but the Changes pane has carried its own
-/// sub-tab strip since it moved onto the shared tab view, so its active tab
-/// paints the accent underline; the partition below reads it out beside the
-/// rails. Every remaining brand-filled rect in one of these four frames is a
+/// a central panel with no shell, but the Changes pane carries its own
+/// sub-tab strip, whose active tab paints the accent underline; the
+/// partition below reads it out beside the rails. Every remaining brand-filled rect in one of these four frames is a
 /// primary action button, and a pane has at most one of them. That is the whole
 /// of R1's second row, stated per pane rather than as a claim about the app:
 /// the number is written down, so a second blue in a pane is a failing

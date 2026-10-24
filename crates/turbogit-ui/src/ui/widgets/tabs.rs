@@ -64,12 +64,6 @@ const TAB_ICON_SIZE: f32 = 14.0;
 /// declaration: a local `2.0` here would be a second definition of the accent's
 /// thickness that could drift from the row's, and the underline would quietly
 /// stop matching the rail it is the horizontal twin of.
-///
-/// Note what that sharing does *not* claim: it does not make this a rail site.
-/// A rail is a 2 px vertical bar at a row's **leading edge**, and this is a 2 px
-/// horizontal rule at a tab's **bottom edge**: same width dimension, same
-/// colour, different geometry, and routing it through
-/// `components::paint_rail` would paint a vertical bar.
 const TAB_SELECTION_RULE: f32 = crate::theme::RAIL_WIDTH;
 
 const ACTIVE_TAB_INK: Color32 = Palette::INK;
@@ -205,9 +199,6 @@ fn paint_strip<'a, T, C>(
         let galley = ui
             .painter()
             .layout_no_wrap(label.clone(), font.clone(), Color32::WHITE);
-        // The rect leads its content by ICON_LEAD and trails it by the same
-        // (together ITEM_LEAD); an icon inserts itself with one gap into that
-        // lead, an end icon with one gap after the label.
         let icon_w = match item.icon {
             Some(_) => TAB_ICON_SIZE + ICON_LABEL_GAP,
             None => 0.0,

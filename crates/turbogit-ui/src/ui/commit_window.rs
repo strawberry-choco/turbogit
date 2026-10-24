@@ -300,7 +300,6 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         state,
         &SUB_TAB_ITEMS,
         active,
-        // Session-only selection, no side effects.
         |state, tab| state.ui.commit_subtab = tab,
         |_, _| {},
         // Reads the state fresh, not the `active` snapshot: the assignment above
@@ -714,8 +713,6 @@ fn changelist_pane(ui: &mut Ui, state: &mut AppState) {
         changes_card_body(ui, state, true);
     });
 
-    // The docked commit card, sized to its own content; the height it measures
-    // here docks it next frame.
     let mut dock_ui = ui.new_child(
         UiBuilder::new()
             .max_rect(dock_rect)

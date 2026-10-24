@@ -2956,12 +2956,11 @@ fn no_file_under_ui_answers_pluralisation_for_itself() {
 /// The shell's structural edges are **direct** calls on the shared painter.
 ///
 /// The shell paints exactly one edge rule: the status bar's. The tab strip's
-/// went the same way until the strip moved onto the shared tab view widget
-/// (`ui/widgets/tabs.rs`) — the edge rule went with it, and is that widget's
-/// own direct call on the same painter. What this suite pins here is the
-/// shell-side half: the status bar's call is direct, and the private wrapper
-/// whose whole job was to fix the tone to [`Palette::LINE`] — one forwarding
-/// call, one caller — stays gone.
+/// rule is the shared tab view widget's own direct call
+/// (`ui/widgets/tabs.rs`). What this suite pins here is the shell-side half:
+/// the status bar's call is direct, and the private wrapper whose whole job
+/// was to fix the tone to [`Palette::LINE`] — one forwarding call, one
+/// caller — stays gone.
 ///
 /// The reader choice is load-bearing: a plain `fn` at column 0 **is** read by
 /// `top_level_items`, whose head list is `pub fn` / `fn` / `pub const` /
@@ -2981,8 +2980,7 @@ fn the_shell_has_no_private_alias_for_the_edge_painter() {
     );
 
     // One edge, one direct call — the number is the claim. The tab strip's
-    // second call lives in `ui/widgets/tabs.rs` now, beside the painter it
-    // moved onto.
+    // call lives in `ui/widgets/tabs.rs`.
     let calls: Vec<usize> = shell
         .lines()
         .enumerate()
