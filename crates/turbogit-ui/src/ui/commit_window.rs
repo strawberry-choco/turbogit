@@ -38,18 +38,17 @@
 //! Design system v2: the changes card is headed by the one shared pane header
 //! ([`widgets::pane_header`]) — a tracked title, a count chip for the *file*
 //! count, a right-aligned action slot, one hairline — and its action slot holds
-//! three controls (refresh, rollback, expand/collapse-all) rather than five. The
-//! two that cannot act (commit options, group by) live in the header's overflow
-//! menu as visibly inert rows, reachable and honest (ADR-0010). The file filter
-//! is the card's first content row, under the hairline, at the full inner width.
+//! three controls (refresh, rollback, expand/collapse-all). The one that cannot
+//! act (group by) lives in the header's overflow menu as a visibly inert row,
+//! reachable and honest (ADR-0010). The file filter is the card's first content
+//! row, under the hairline, at the full inner width.
 //!
 //! The **commit card** above the list is three controls, not six: the message
 //! well (about 76 pt, on the raised-on-card fill because the card is a
-//! content-surface card), one meta row carrying the subject counter, Amend,
-//! Template and Clear, and one content-width Commit control with its chevron
-//! *inside* it across a single 1 px rule. The commit panel's width is
-//! unchanged in both cases: the fix was removing the constraints inside the
-//! column, not widening the column.
+//! content-surface card), one meta row carrying Amend, and one content-width
+//! Commit control with its chevron *inside* it across a single 1 px rule. The
+//! commit panel's width is unchanged in both cases: the fix was removing the
+//! constraints inside the column, not widening the column.
 
 use crate::theme::Palette;
 use crate::ui::changes_selection::{self, ClickKind, RowSlot};
@@ -2092,8 +2091,8 @@ fn amend_checkbox_at(ui: &mut Ui, rect: Rect, amend: &mut bool) -> egui::Respons
 const AMEND_LABEL: &str = "Amend";
 
 /// Width [`meta_button`] gives `label`: its horizontal padding either side plus
-/// the measured text. Measured, never estimated — the meta row places three of
-/// these from the row's trailing edge, so a wrong width overlaps the counter.
+/// the measured text. Measured, never estimated — the recent-message row fills
+/// a wrapped line with these, so a wrong width stacks the row's items wrongly.
 fn meta_button_width(ui: &Ui, label: &str) -> f32 {
     2.0 * META_BUTTON_PAD_X
         + ui.painter()
