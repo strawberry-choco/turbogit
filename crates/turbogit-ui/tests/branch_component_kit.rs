@@ -1970,7 +1970,7 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
         "the 2px *radius* role stays its own declaration"
     );
 
-    // Who reads it. Exactly four files may name it, and each for a stated
+    // Who reads it. Exactly three files may name it, and each for a stated
     // reason:
     //
     // - `theme.rs` defines it.
@@ -1986,7 +1986,7 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     //   painter, and this ratchet pins the set of *readers of the width*, not a
     //   set of painters.
     //
-    // A fifth file is a second opinion about how thick the accent is, which is
+    // A fourth file is a second opinion about how thick the accent is, which is
     // the drift the token exists to prevent.
     let naming: Vec<String> = srcscan::rust_files(Path::new(CRATE_SRC))
         .into_iter()
@@ -2004,7 +2004,6 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
         .collect();
     let mut expected = vec![
         "components.rs".to_owned(),
-        "shell.rs".to_owned(),
         "tabs.rs".to_owned(),
         "theme.rs".to_owned(),
     ];
@@ -2013,19 +2012,18 @@ fn the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter() {
     found.sort();
     assert_eq!(
         found, expected,
-        "exactly four files may name RAIL_WIDTH: theme.rs, which defines it; \
+        "exactly three files may name RAIL_WIDTH: theme.rs, which defines it; \
          components.rs, the one rail painter that consumes it; and tabs.rs, whose \
          tab underline is the accent's other 2px job and reads the same width \
-         dimension. A fifth is a second definition of the width under another \
+         dimension. A fourth is a second definition of the width under another \
          name — or a rail that grew one."
     );
     // The third reader really does read the *token*, not a literal that happens
     // to equal it: this is the distinction the comment above turns on, and it is
     // the mutation that a hand-rolled rail would introduce.
-    let shell = srcscan::code_lines(Path::new(CRATE_SRC).join("ui/shell.rs"));
+    let tabs = srcscan::code_lines(Path::new(CRATE_SRC).join("ui/widgets/tabs.rs"));
     assert!(
-        shell
-            .iter()
+        tabs.iter()
             .any(|line| line.contains("crate::theme::RAIL_WIDTH")),
         "the tab underline must take its width from theme::RAIL_WIDTH: two 2px \
          accents that are one decision cannot be two literals"
@@ -2953,18 +2951,17 @@ fn no_file_under_ui_answers_pluralisation_for_itself() {
     );
 }
 
-// --- Shell edges: two rules, both direct calls on the one shared painter --------
+// --- Shell edges: direct calls on the one shared painter, no private alias ------
 
-/// The shell's two structural edges are two **direct** calls on the shared
-/// painter.
+/// The shell's structural edges are **direct** calls on the shared painter.
 ///
-/// The shell paints exactly two edge rules. The tab strip's went straight to
-/// [`widgets::edge_rule`]; the status bar's went through a private wrapper
-/// whose whole job was to fix the tone to [`Palette::LINE`]. Same call, two
-/// spellings, one of them with a single caller — so the count of
-/// `edge_rule` call sites dropping from three to two is the concentration
-/// asserted as a number: the wrapper's forwarding call is gone, and what is
-/// left is the tab strip's and the status bar's.
+/// The shell paints exactly one edge rule: the status bar's. The tab strip's
+/// went the same way until the strip moved onto the shared tab view widget
+/// (`ui/widgets/tabs.rs`) — the edge rule went with it, and is that widget's
+/// own direct call on the same painter. What this suite pins here is the
+/// shell-side half: the status bar's call is direct, and the private wrapper
+/// whose whole job was to fix the tone to [`Palette::LINE`] — one forwarding
+/// call, one caller — stays gone.
 ///
 /// The reader choice is load-bearing: a plain `fn` at column 0 **is** read by
 /// `top_level_items`, whose head list is `pub fn` / `fn` / `pub const` /
@@ -2983,7 +2980,9 @@ fn the_shell_has_no_private_alias_for_the_edge_painter() {
          eventually loses"
     );
 
-    // Two edges, two direct calls — the number is the claim.
+    // One edge, one direct call — the number is the claim. The tab strip's
+    // second call lives in `ui/widgets/tabs.rs` now, beside the painter it
+    // moved onto.
     let calls: Vec<usize> = shell
         .lines()
         .enumerate()
@@ -2992,9 +2991,9 @@ fn the_shell_has_no_private_alias_for_the_edge_painter() {
         .collect();
     assert_eq!(
         calls.len(),
-        2,
-        "the shell must call `widgets::edge_rule` exactly twice, both direct. \
-         Found {calls:?} — three is the wrapper's forwarding call coming back, \
-         one is an edge losing its shared tone."
+        1,
+        "the shell must call `widgets::edge_rule` exactly once, direct. \
+         Found {calls:?} — two is a second edge spelling creeping back in, \
+         zero is the status bar's edge losing its shared tone."
     );
 }

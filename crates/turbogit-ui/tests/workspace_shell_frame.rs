@@ -44,6 +44,7 @@ use test_support::harness::{
 use turbogit_app::state::AppState;
 use turbogit_ui::theme::{Palette, RAIL_WIDTH, RepoState};
 use turbogit_ui::ui::shell;
+use turbogit_ui::ui::widgets::TAB_STRIP_HEIGHT;
 
 /// Create an initialized temp repository with one base commit on the
 /// default branch plus an `origin` remote so upstream tracking reads
@@ -276,7 +277,7 @@ fn tab_strip_band(harness: &Harness<'_, AppState>) -> Rect {
     let viewport = harness.ctx.content_rect();
     Rect::from_center_size(
         egui::pos2(viewport.center().x, centre.y),
-        egui::vec2(viewport.width(), shell::TAB_STRIP_HEIGHT),
+        egui::vec2(viewport.width(), TAB_STRIP_HEIGHT),
     )
 }
 

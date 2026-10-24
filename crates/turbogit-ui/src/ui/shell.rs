@@ -11,55 +11,23 @@
 //! `/` file-filter focus behind a three-tier input gate (dialogs → popups →
 //! focused text fields) — see [`handle_shortcuts`].
 
-use std::sync::Arc;
-
-use egui::Galley;
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Frame, Key, Layout, Margin, Panel, Pos2,
-    Rect, RichText, Sense, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, Frame, Key, Layout, Margin, Panel, Pos2, Rect, RichText, Ui, UiBuilder,
+    WidgetInfo, WidgetType,
 };
 
 use super::components;
-use super::icons::{self, Icon};
+use super::icons::Icon;
 use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::root_caches::{Affected, LogRead};
 use turbogit_app::state::{AppState, Dialog, Tab};
 // --- Spec metrics (§4.2 fixed heights) --------------------------------------
-/// Tab strip height (`.tg-tabs`). The strip is the content area's topmost
-/// chrome since the repo header was deleted, so this band now sits flush
-/// against the top window edge.
-pub const TAB_STRIP_HEIGHT: f32 = 32.0;
-/// Single tab item height.
-pub const TAB_ITEM_HEIGHT: f32 = 31.0;
 /// Status bar height.
 pub const STATUS_BAR_HEIGHT: f32 = 24.0;
 /// Minimum work-area width at which the workspace sidebar renders
 /// (issue #05): below it the log's minimum pane sizes cannot hold.
 pub const MIN_SIDEBAR_WINDOW_WIDTH: f32 = 1000.0;
-
-const TAB_ICON_SIZE: f32 = 14.0; // §6.2 tab icons
-const TAB_TEXT: f32 = crate::theme::TYPE_CONTROL;
-/// The active tab's accent underline, in px.
-///
-/// **The rail width, read from the token layer** — the same 2 px
-/// [`crate::theme::RAIL_WIDTH`] a selected row's leading rail is, and the second
-/// of R1's two non-button jobs for `BRAND`. The two numbers are one number, so
-/// they are read from one declaration: a local `2.0` here would be a second
-/// definition of the accent's thickness that could drift from the row's, and the
-/// underline would quietly stop matching the rail it is the horizontal twin of.
-///
-/// `tests/branch_component_kit.rs::the_rail_width_is_defined_in_the_token_layer_and_consumed_by_one_painter`
-/// pins the set of files that may **name** `RAIL_WIDTH` to exactly three — the
-/// token layer that defines it, `components.rs` (the one rail painter), and this
-/// module — so the reading is recorded rather than invisible. Note what that
-/// ratchet does *not* claim: it does not make this a rail site. A rail is a 2 px
-/// vertical bar at a row's **leading edge**, and this is a 2 px horizontal rule
-/// at a tab's **bottom edge**: same width dimension, same colour, different
-/// geometry, and routing it through `components::paint_rail` would paint a
-/// vertical bar. What the two share is the *width*, which is why they share the
-/// token; what they do not share is the painter.
-const TAB_SELECTION_RULE: f32 = crate::theme::RAIL_WIDTH;
 
 /// Compose the whole shell: frozen shortcuts, the shell frame regions
 /// (center tabs / status bar) around the workspace sidebar, then the
@@ -153,20 +121,6 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     Pos2::new(sidebar_rect.max.x, work_rect.min.y),
                     work_rect.max,
                 );
-                // The tab strip took the deleted header's place at the top of
-                // the content column: it starts at the sidebar's right edge and
-                // is flush with the window's top edge.
-                let tabs_rect = Rect::from_min_max(
-                    right_rect.min,
-                    Pos2::new(right_rect.max.x, right_rect.min.y + TAB_STRIP_HEIGHT),
-                );
-                let content_rect = Rect::from_min_max(
-                    Pos2::new(right_rect.min.x, tabs_rect.max.y),
-                    right_rect.max,
-                );
-                // The tool window takes the full content width — there is no
-                // third metadata column beside it (local-changes redesign 03).
-                let tool_rect = content_rect;
 
                 let mut sidebar_ui = ui.new_child(
                     UiBuilder::new()
@@ -177,20 +131,47 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     super::sidebar::show(&mut sidebar_ui, state);
                 }
                 ui.advance_cursor_after_rect(sidebar_rect);
-                let mut tabs_ui = ui.new_child(
+                // The tab strip took the deleted header's place at the top of
+                // the content column: it starts at the sidebar's right edge and
+                // is flush with the window's top edge. The strip and the tool
+                // window below it are one `tab_view` over the whole right
+                // column — the component splits the band from the body, so the
+                // shell never computes a strip internal.
+                let mut column_ui = ui.new_child(
                     UiBuilder::new()
-                        .max_rect(tabs_rect)
+                        .max_rect(right_rect)
                         .layout(Layout::top_down(Align::Min)),
                 );
-                render_tab_strip(&mut tabs_ui, state);
-                ui.advance_cursor_after_rect(tabs_rect);
-                let mut tool_ui = ui.new_child(
-                    UiBuilder::new()
-                        .max_rect(tool_rect)
-                        .layout(Layout::top_down(Align::Min)),
+                let tabs = shell_tabs(state);
+                let active = state.ui.tab;
+                widgets::tab_view(
+                    &mut column_ui,
+                    state,
+                    &tabs,
+                    active,
+                    switch_tab,
+                    |ui, state| {
+                        // The end region lays out right-to-left: the first
+                        // widget added lands at its right edge, so the visual
+                        // order (shortcuts, then settings) is unchanged.
+                        let settings = widgets::icon_button(ui, Icon::SETTINGS);
+                        settings.widget_info(|| {
+                            WidgetInfo::labeled(WidgetType::Button, true, "Open settings")
+                        });
+                        if settings.clicked() {
+                            state.ui.settings_open = true;
+                        }
+                        let shortcuts = widgets::icon_button(ui, Icon::KEYBOARD);
+                        shortcuts.widget_info(|| {
+                            WidgetInfo::labeled(WidgetType::Button, true, "Show shortcuts")
+                        });
+                        if shortcuts.clicked() {
+                            state.ui.shortcuts_open = true;
+                        }
+                    },
+                    show_tool_window,
                 );
-                show_tool_window(&mut tool_ui, state);
-                ui.advance_cursor_after_rect(tool_rect);
+                ui.advance_cursor_after_rect(right_rect);
                 let mut activity_ui = ui.new_child(
                     UiBuilder::new()
                         .max_rect(activity_rect)
@@ -490,183 +471,59 @@ fn switch_tab(state: &mut AppState, tab: Tab) {
 
 // --- Shared painting helpers ---------------------------------------------------
 
-// --- Tab strip ---------------------------------------------------------------------
-
 /// Shell tabs in strip order (issue #03). The legacy History tab was
 /// deleted in issue #19 (file history lives in Git Log's path-scoped
 /// view), and Settings left the strip in issue #16: it is a gear-only
 /// modal now (spec §9.1 correction). Branches is unimplemented in v1 and
 /// renders a labeled placeholder pane (ADR-0008); Worktrees / Submodules
 /// are real browsers since issue 14, with live count badges.
-const SHELL_TABS: [(Tab, Icon, &str); 5] = [
-    (Tab::Commit, Icon::GIT_COMMIT, "Changes"),
-    (Tab::Log, Icon::GIT_BRANCH, "Log"),
-    (Tab::Branches, Icon::GIT_BRANCH, "Branches"),
-    (Tab::Worktrees, Icon::FOLDER, "Worktrees"),
-    (Tab::Submodules, Icon::FOLDER_GIT, "Submodules"),
+const SHELL_TAB_ITEMS: [widgets::TabItem<'static, Tab>; 5] = [
+    widgets::TabItem {
+        id: Tab::Commit,
+        title: "Changes",
+        icon: Some(Icon::GIT_COMMIT),
+        end_icon: None,
+        badge: None,
+    },
+    widgets::TabItem {
+        id: Tab::Log,
+        title: "Log",
+        icon: Some(Icon::GIT_BRANCH),
+        end_icon: None,
+        badge: None,
+    },
+    widgets::TabItem {
+        id: Tab::Branches,
+        title: "Branches",
+        icon: Some(Icon::GIT_BRANCH),
+        end_icon: None,
+        badge: None,
+    },
+    widgets::TabItem {
+        id: Tab::Worktrees,
+        title: "Worktrees",
+        icon: Some(Icon::FOLDER),
+        end_icon: None,
+        badge: None,
+    },
+    widgets::TabItem {
+        id: Tab::Submodules,
+        title: "Submodules",
+        icon: Some(Icon::FOLDER_GIT),
+        end_icon: None,
+        badge: None,
+    },
 ];
 
-/// Tab strip (32px, bare BG, bottom border LINE): icon + label entries.
-/// Since the repo header above it was deleted the strip is the content
-/// area's **topmost** chrome — it sits flush against the top window edge
-/// — so it is treated as a top band rather than as a hanging tab row:
-///
-/// - The strip keeps bare `Palette::BG` and gains **no** top hairline. Its
-///   top edge *is* the window edge, and a rule there would frame the
-///   window inside itself. The content column therefore reads as one
-///   continuous surface from the tab strip down through the tool window,
-///   with the single bottom `LINE` edge carrying all of the
-///   chrome-from-content information (spec §6.2).
-/// - The active tab is no longer a floating pill inset from the strip's
-///   top/bottom. A pill needs surrounding air to read as a pill; with the
-///   header gone there is no air above it, so it would read as a detached
-///   chip jammed against the window frame. It is now a full-strip-height
-///   band anchored to the top edge — a 2px `BRAND` underline along its own
-///   bottom edge, with the label and its icon one step brighter than every
-///   inactive tab's.
-///
-/// **Those two marks and no others.** The band used to also carry a raised
-/// `SURFACE_2` fill, which made the active tab a *second* selection vocabulary
-/// beside the sidebar's — a filled slab here, a fill-plus-rail there, for the
-/// same fact. R1 gives `BRAND` three jobs in the whole app and the underline is
-/// one of them; a raised fill behind a tab is a fourth way of saying "this one"
-/// that no other surface in the app uses, and it is also the wrong rung of the
-/// raised ladder (the strip sits on `BG`, where raised is `SURFACE`, not
-/// `SURFACE_2` — R5). The underline overwrites the strip's `LINE` across the
-/// active tab's own width, so the selection underline and the divider read as
-/// one edge, which is why the two together need no second rule.
-fn render_tab_strip(ui: &mut Ui, state: &mut AppState) {
-    let width = ui.available_width();
-    let (strip, _) = ui.allocate_exact_size(Vec2::new(width, TAB_STRIP_HEIGHT), Sense::hover());
-    widgets::edge_rule(ui.painter(), strip, widgets::Edge::Bottom, Palette::LINE);
-
-    let font = FontId::new(TAB_TEXT, FontFamily::Proportional);
-    let mut x = strip.left() + 4.0;
-    for (tab, icon, label) in SHELL_TABS {
-        // Live count badge (issue 14, screen 01 "Worktrees 3"): appended to
-        // the label galley when the focused root's cached list carries a
-        // non-zero count — data the fetch-on-miss trigger keeps filled.
-        let label = match tab_badge_count(state, tab) {
-            Some(n) => format!("{label} {n}"),
-            None => label.to_string(),
-        };
-        let galley = ui
-            .painter()
-            .layout_no_wrap(label.clone(), font.clone(), Color32::WHITE);
-        let content_w = TAB_ICON_SIZE + 6.0 + galley.size().x;
-        // The row is the spec's 31px tab height and is the click target;
-        // `tab_item` paints its underline over the full 32px strip below, so
-        // the rule reaches the divider with no unclaimed sliver.
-        let rect = Rect::from_min_size(
-            Pos2::new(x, strip.top()),
-            Vec2::new(24.0 + content_w, TAB_ITEM_HEIGHT),
-        );
-        tab_item(ui, state, rect, tab, icon, &label, galley);
-        x += rect.width() + 2.0;
+/// The per-frame tab list: the const vocabulary with this frame's live badge
+/// counts filled in (issue 14). `TabItem` is `Copy`, so this is a table copy
+/// plus a badge fill, not a rebuild.
+fn shell_tabs(state: &AppState) -> [widgets::TabItem<'static, Tab>; 5] {
+    let mut tabs = SHELL_TAB_ITEMS;
+    for item in tabs.iter_mut() {
+        item.badge = tab_badge_count(state, item.id);
     }
-
-    // Measured from the strip's right edge inward, the way the status bar's
-    // right cluster is: a cluster laid out from the left of whatever the tabs
-    // leave over cannot hold its right edge.
-    let cluster_w = widgets::ICON_BUTTON_SIZE * 2.0 + ui.spacing().item_spacing.x;
-    let cluster = Rect::from_min_max(
-        Pos2::new(strip.right() - 8.0 - cluster_w, strip.top()),
-        Pos2::new(strip.right() - 8.0, strip.bottom()),
-    );
-    let mut actions = ui.new_child(
-        UiBuilder::new()
-            .max_rect(cluster)
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    let shortcuts = widgets::icon_button(&mut actions, Icon::KEYBOARD);
-    shortcuts.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Show shortcuts"));
-    if shortcuts.clicked() {
-        state.ui.shortcuts_open = true;
-    }
-    let settings = widgets::icon_button(&mut actions, Icon::SETTINGS);
-    settings.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Open settings"));
-    if settings.clicked() {
-        state.ui.settings_open = true;
-    }
-}
-
-/// The ink an active tab's label and icon paint, and an inactive tab's.
-///
-/// Two ramp steps, and both are legal where they land: the strip's own fill is
-/// `Palette::BG`, on which `INK` measures 12.59:1 and `INK_3` measures 5.02:1.
-/// With the raised band gone there is no raised surface under either label, so
-/// the muted step is legal again on the active tab too — which is the point of
-/// removing the band rather than keeping it and merely adding the underline.
-/// The active tab is the *brightest* ink in the strip and the inactive tabs are
-/// the muted one: "which tool window am I in" is a reading-order question, and
-/// the ramp is the answer to that.
-const ACTIVE_TAB_INK: Color32 = Palette::INK;
-const INACTIVE_TAB_INK: Color32 = Palette::INK_3;
-
-fn tab_item(
-    ui: &mut Ui,
-    state: &mut AppState,
-    rect: Rect,
-    tab: Tab,
-    icon: Icon,
-    label: &str,
-    galley: Arc<Galley>,
-) {
-    let id = ui.auto_id_with(("shell_tab", label));
-    let response = ui.interact(rect, id, Sense::click());
-    let active = state.ui.tab == tab;
-    let painter = ui.painter().clone();
-    // The band is the row's column over the *whole* strip (`rect.top()` is the
-    // strip's top edge — the caller places it there), anchored to the window
-    // frame rather than floating inside the band.
-    let band = Rect::from_min_max(
-        Pos2::new(rect.left(), rect.top()),
-        Pos2::new(rect.right(), rect.top() + TAB_STRIP_HEIGHT),
-    );
-    if active {
-        // The accent underline, the shared width, on the band's bottom edge —
-        // the same measure and weight the sidebar's active-row rail uses, so
-        // "selected" is one idea across the shell rather than two. It overwrites
-        // the strip's `LINE` divider across the tab's own width, so the
-        // selection mark and the divider read as one edge.
-        let rule = Rect::from_min_max(
-            Pos2::new(band.left(), band.bottom() - TAB_SELECTION_RULE),
-            Pos2::new(band.right(), band.bottom()),
-        );
-        painter.rect_filled(rule, CornerRadius::ZERO, Palette::BRAND);
-    } else if response.hovered() {
-        // Hover is a pointer state, not a selection: a quiet wash on `BG`, so
-        // a hovered-but-inactive tab never reads as the selected one — it has
-        // no underline and its label stays at the muted step.
-        painter.rect_filled(
-            band,
-            CornerRadius::ZERO,
-            widgets::tint_over_bg(Palette::INK, 0.08),
-        );
-    }
-
-    let ink = if active {
-        ACTIVE_TAB_INK
-    } else {
-        INACTIVE_TAB_INK
-    };
-    let cy = rect.center().y;
-    let mut cx = rect.left() + 12.0;
-    icons::centered_icon(
-        ui,
-        icon,
-        Pos2::new(cx + TAB_ICON_SIZE / 2.0, cy),
-        TAB_ICON_SIZE,
-        ink,
-    );
-    cx += TAB_ICON_SIZE + 6.0;
-    painter.galley_with_override_text_color(Pos2::new(cx, cy - galley.size().y / 2.0), galley, ink);
-
-    widgets::focus_ring(ui, &response);
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, label));
-    if response.clicked() {
-        switch_tab(state, tab);
-    }
+    tabs
 }
 
 // --- Status bar -----------------------------------------------------------------------
