@@ -1583,7 +1583,7 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
     // menu is closed.
     assert!(
         h.query_by_label("Commit options").is_none(),
-        "commit options paints no button in the header — it is a menu row now"
+        "commit options is retired — it paints nowhere in the changes header"
     );
     assert!(
         h.query_by_label("Group by").is_none(),
@@ -1621,13 +1621,13 @@ fn the_changes_header_is_the_shared_pane_header_with_three_controls() {
     assert_not_painted(&h, "Unstage selected");
 }
 
-/// **The two that cannot act moved into the header's overflow menu, where they
-/// stay reachable and stay honestly inert.**
+/// **The control that cannot act moved into the header's overflow menu, where
+/// it stays reachable and stays honestly inert.**
 ///
 /// "Visibly inert" is asserted three ways, all from what the frame produced: the
 /// accessibility node is `is_disabled()`, the label's paint-time ink is 45 % of
 /// `INK` (the shared disabled treatment), and the reason is reachable on hover.
-/// "Inert" is then asserted the strong way — pressing either changes *nothing*,
+/// "Inert" is then asserted the strong way — pressing it changes *nothing*,
 /// across every field a control could have reached, and leaves the repository
 /// alone.
 ///
@@ -1641,8 +1641,9 @@ fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
 
     let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
 
-    // The `advanced options…` link is still gone (issue 07), and the gear lives
-    // in the menu rather than in the header.
+    // The `advanced options…` link is still gone (issue 07), the gear lives
+    // in the menu rather than in the header, and the retired `Commit options`
+    // placeholder is gone from the menu entirely.
     assert_not_painted(&h, "Advanced options");
     assert!(h.query_by_label("Commit options").is_none());
     assert!(h.query_by_label("Group by").is_none());
@@ -1653,10 +1654,7 @@ fn the_inert_header_controls_are_inert_overflow_items_that_dispatch_nothing() {
     h.get_by_label("Changes header overflow").click();
     h.run();
 
-    let items: [(&str, &str); 2] = [
-        ("Commit options", "No commit-options surface yet (ADR-0010)"),
-        ("Group by", "No grouping surface yet (ADR-0010)"),
-    ];
+    let items: [(&str, &str); 1] = [("Group by", "No grouping surface yet (ADR-0010)")];
     let mut item_rects = Vec::new();
     for (label, _) in items {
         let node = h.get_by_label(label);

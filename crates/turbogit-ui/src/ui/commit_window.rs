@@ -1637,31 +1637,21 @@ fn recent_messages_row(ui: &mut Ui, state: &mut AppState) {
 /// pane like the worktrees and submodules panes, so it says itself in upper.
 const CHANGES_PANE_TITLE: &str = "CHANGES";
 
-/// The two changes-header controls that cannot do anything yet, and why.
+/// The changes-header control that cannot do anything yet, and why.
 ///
 /// ADR-0010's rule is that a flow which has not shipped stays *reachable* and
 /// stays honestly inert, and this codebase's rendering of "reachable but cannot
 /// act" is a **disabled menu row**: painted, dimmed to 45 % ink, `is_disabled()`
-/// in the accessibility tree, carrying its reason on hover. So both entries here
-/// are `enabled: false` and neither has a `clicked` arm anywhere near it —
-/// pressing one dispatches no operation, opens no dialog, and calls no git.
+/// in the accessibility tree, carrying its reason on hover. So the entry here
+/// is `enabled: false` and has no `clicked` arm anywhere near it — pressing it
+/// dispatches no operation, opens no dialog, and calls no git.
 ///
 /// That is the whole point of the shape: an enabled-looking control that cannot
 /// do anything *and cannot be read* is noise, and the previous version of this
 /// header was five of them. The scope gap is recorded in this table rather than
 /// hidden, and it is the same gap the spec keeps out of scope.
-const INERT_HEADER_ACTIONS: [(Icon, &str, &str); 2] = [
-    (
-        Icon::SETTINGS,
-        "Commit options",
-        "No commit-options surface yet (ADR-0010)",
-    ),
-    (
-        Icon::LAYERS,
-        "Group by",
-        "No grouping surface yet (ADR-0010)",
-    ),
-];
+const INERT_HEADER_ACTIONS: [(Icon, &str, &str); 1] =
+    [(Icon::LAYERS, "Group by", "No grouping surface yet (ADR-0010)")];
 
 /// The changes card's header strip: the shared pane header (R7) — a 9px tracked
 /// title, the *file* count as a count chip beside it, a right-aligned action
@@ -1669,11 +1659,10 @@ const INERT_HEADER_ACTIONS: [(Icon, &str, &str); 2] = [
 ///
 /// **Three controls, and the trigger that opens the fourth thing.** The action
 /// slot holds the three that do something: refresh, rollback (through the
-/// destructive confirm), and the expand/collapse-all chevron. The two that
-/// cannot — commit options and group by — are in
-/// [`changes_header_overflow`], reachable and inert. The `⋯` that opens that
-/// menu is the one non-control in the band: an affordance for the two rows that
-/// left it, not a fourth thing this pane can do.
+/// destructive confirm), and the expand/collapse-all chevron. The one that
+/// cannot — group by — is in [`changes_header_overflow`], reachable and inert.
+/// The `⋯` that opens that menu is the one non-control in the band: an
+/// affordance for the row that left it, not a fourth thing this pane can do.
 ///
 /// Removing the icons is also what un-squeezes the filter below, which now has
 /// a row of its own under the hairline at the card's full inner width. The
@@ -1759,14 +1748,14 @@ fn changes_card_header(ui: &mut Ui, state: &mut AppState) {
     file_filter_row(ui, state);
 }
 
-/// The changes header's overflow menu (ADR-0010): the two controls that cannot
-/// act, as two **visibly inert** rows — rendered at the shared 45 %-ink
+/// The changes header's overflow menu (ADR-0010): the one control that cannot
+/// act, as a **visibly inert** row — rendered at the shared 45 %-ink
 /// disabled state, `is_disabled()` in the accessibility tree, and carrying
 /// [`INERT_HEADER_ACTIONS`]' reason on hover.
 ///
-/// Every row is gated, so the menu has no arm that could dispatch: pressing
-/// either item changes no state at all, which is the stronger claim than "it
-/// is wired to a no-op" because there is nothing to wire.
+/// The row is gated, so the menu has no arm that could dispatch: pressing it
+/// changes no state at all, which is the stronger claim than "it is wired to a
+/// no-op" because there is nothing to wire.
 ///
 /// The 1px stroke the menu frame keeps is R2 saying *this floats*, not a missed
 /// rule — the only surfaces allowed a hairline are the ones that do.
