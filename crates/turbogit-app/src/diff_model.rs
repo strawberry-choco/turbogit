@@ -103,12 +103,9 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
     };
 
     for file in &patch.files {
-        // A pane showing exactly one file section has no plumbing block: the
-        // pane's own chrome names the file, so git's header lines would only
-        // repeat it. Multi-file patches keep every row — there the section
-        // headers are what tell the sections apart. Hunk-body numbering is
-        // untouched either way: it resets from each hunk's own span, never
-        // from the header rows the walk advances past.
+        // A single-file pane's own chrome names the file, so its section keeps
+        // no plumbing block; a multi-file patch's headers are what tell its
+        // sections apart, so every row stays.
         if patch.files.len() > 1 {
             meta(file.section_header_line(), &mut rows);
             for header in &file.headers {
@@ -707,8 +704,7 @@ mod tests {
         assert!(model.pure_rename());
         assert_eq!(pane_kind(&scan_files(text)), PaneKind::Text);
         assert_eq!(model.hunk_count(), 0);
-        // One file section: the plumbing is suppressed, so the synthesized
-        // rename header is the section's only row.
+        // The synthesized rename header is the section's only row.
         assert_eq!(model.display.len(), 1);
         let DisplayRow::Full(row) = &model.display[0] else {
             panic!("rename header must be a full-width row");
@@ -748,18 +744,13 @@ mod tests {
             DiffPolicies::default(),
         );
         assert_eq!(model.hunk_count(), 1);
-        // One file section: the plumbing is suppressed and the synthesized
-        // rename header leads as display row 0, so the hunk header is the very
-        // next row — the slot the per-frame paint plan aims hunk navigation at
-        // (issue 20).
+        // The synthesized rename header leads as display row 0, so the hunk
+        // header follows directly: the slot hunk navigation aims at (issue 20).
         assert_eq!(model.hunk_first_display[0], 1);
     }
 
-    /// The rule is a fact about the display model, not the painter: a pane
-    /// showing exactly one file section has no plumbing block, because the
-    /// pane's own chrome names the file. Every spelling git's header block can
-    /// take is asserted gone, and the hunk bodies keep their span-derived
-    /// gutter numbers.
+    /// A single-file section keeps none of git's header block, in any spelling
+    /// it takes, and its hunk bodies keep their span-derived gutter numbers.
     #[test]
     fn diff_single_file_sections_drop_their_plumbing_rows() {
         let text = "diff --git a/added.txt b/added.txt\n\
@@ -784,8 +775,7 @@ mod tests {
             "git's header block is gone in every spelling: {:?}",
             rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>()
         );
-        // Numbering derives from the hunk span, not from the header rows the
-        // walk used to advance past: the 1-based new-side numbers stand.
+        // The new-side gutter numbers still derive from the hunk span.
         let body: Vec<(RowKind, usize, usize)> = rows
             .iter()
             .filter(|r| r.text == "one" || r.text == "two")

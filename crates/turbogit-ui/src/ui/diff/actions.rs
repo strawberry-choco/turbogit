@@ -124,9 +124,8 @@ pub(super) fn diff_options_menu(ui: &mut Ui, state: &mut AppState) -> bool {
 // --- toolbar widgets ---------------------------------------------------------
 
 /// The toolbar's **Diff options** trigger and its popup menu (`⌃⇧D`): the
-/// viewer's two five-value policies. One menu rather than two inline controls
-/// because the two questions are decided together — a reviewer and the code they
-/// are reviewing agree on what changed only once both have an answer.
+/// viewer's two five-value policies, one menu because the two questions are
+/// decided together.
 ///
 /// `⌃⇧D` opens this from the keyboard by arming [`AppState`]'s
 /// `diff_options_open` flag, and the popup's own close — a click outside, or
@@ -145,8 +144,8 @@ pub(super) fn diff_options_button(ui: &mut Ui, state: &mut AppState) {
         Some(shown) => policies_changed = shown.inner,
     }
     if policies_changed {
-        // A policy is presentation the reader agrees on, and the agreement has to
-        // survive the session it was picked in.
+        // Policies are presentation the reader agreed on, so they survive the
+        // session.
         state.save_durable_ui();
     }
 }

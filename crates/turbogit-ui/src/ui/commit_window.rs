@@ -1801,11 +1801,6 @@ fn changes_header_overflow(trigger: &egui::Response) {
 // --------------------------------------------- preview + editor pane ------
 
 fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
-    // Redesign Phase 4 (mockup): the preview is a full-height card whose
-    // header states what is previewed, so the selection→preview link reads
-    // off the frame instead of hiding in the empty state. The card body is
-    // the diff pane, and the pane's toolbar carries the mode, the `+N −M`
-    // counts and the hunk nav (spec story 23).
     widgets::card(ui, widgets::CardFrame::default(), |ui| {
         let preview = state.ui.preview_change.clone();
         preview_header(ui, state, preview.as_ref());
@@ -1824,14 +1819,12 @@ fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// The preview card's header strip (issue 06, design doc §5; redesign Phase
-/// 4): the zone title, then the previewed file's path, with the prev/next
-/// change navigation right-aligned. Renders from `ui.preview_change` every
-/// frame, so selecting a row updates the header immediately. The nav buttons
+/// The preview card's header strip: the zone title, then the previewed file's
+/// path, with the prev/next change navigation right-aligned. The nav buttons
 /// retarget the preview to the adjacent changed file — the same path a
 /// file-row click uses, so the diff read loads the new diff. The mode, the
 /// counts and the comparison controls belong to the diff toolbar the body
-/// renders, and the header does not restate them.
+/// renders; the header does not restate them.
 fn preview_header(ui: &mut Ui, state: &mut AppState, change: Option<&ChangeRef>) {
     widgets::card_header(ui, |ui| {
         ui.horizontal(|ui| {
