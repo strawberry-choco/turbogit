@@ -120,7 +120,7 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     });
 }
 
-/// The header's title chip — the chevron and the ACTIVITY label inside one
+/// The header's title chip — the chevron and the LOG label inside one
 /// interactive rect, so the glyph a user aims at is the glyph that responds.
 ///
 /// History worth keeping: the old toggle allocated the click target and then
@@ -134,9 +134,9 @@ fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
 
     let expanded = state.ui.activity.expanded;
     let (label, icon) = if expanded {
-        ("Collapse activity", Icon::CHEVRON_DOWN)
+        ("Collapse log", Icon::CHEVRON_DOWN)
     } else {
-        ("Expand activity", Icon::CHEVRON_RIGHT)
+        ("Expand log", Icon::CHEVRON_RIGHT)
     };
 
     // Hover-tint slot: filled after the chip rect is known but written back
@@ -147,7 +147,7 @@ fn render_title_chip(ui: &mut Ui, state: &mut AppState) {
     icons::centered_icon(ui, icon, icon_rect.center(), ICON_SIZE, Palette::INK_2);
 
     let text = ui.label(
-        RichText::new("ACTIVITY")
+        RichText::new("LOG")
             .strong()
             .font(FontId::new(HEADER_TEXT, FontFamily::Proportional))
             .color(Palette::INK_3),

@@ -70,7 +70,7 @@ fn plant(harness: &mut Harness<'_, turbogit_app::state::AppState>, entries: Vec<
 // --- tests ---------------------------------------------------------------------
 
 /// Contract: the expanded panel paints each entry's timestamp, repo, and
-/// human-readable outcome; the header carries the ACTIVITY title and the
+/// human-readable outcome; the header carries the LOG title and the
 /// filter/clear controls.
 #[test]
 fn panel_paints_entries_with_timestamp_repo_and_outcome() {
@@ -90,7 +90,7 @@ fn panel_paints_entries_with_timestamp_repo_and_outcome() {
         ],
     );
 
-    assert_painted(&harness, "ACTIVITY");
+    assert_painted(&harness, "LOG");
     assert_painted(&harness, "Fetch from origin");
     assert_painted(&harness, "Push origin/main: rejected");
     assert_painted(&harness, "alpha");
@@ -123,7 +123,7 @@ fn empty_feed_paints_a_hint() {
     let mut harness = activity_harness(project);
     harness.state_mut().ui.activity.expanded = true;
     settle_quiet(&mut harness);
-    assert_painted(&harness, "ACTIVITY");
+    assert_painted(&harness, "LOG");
     assert_painted(&harness, "No activity yet");
 }
 
@@ -146,17 +146,17 @@ fn collapse_and_expand_retain_entries() {
     assert!(harness.state().ui.activity.expanded);
     assert_painted(&harness, "Fetch from origin");
 
-    harness.get_by_label("Collapse activity").click();
+    harness.get_by_label("Collapse log").click();
     settle_quiet(&mut harness);
     assert!(!harness.state().ui.activity.expanded);
     assert_not_painted(&harness, "Fetch from origin");
     // Collapsed header strip is still visible.
-    assert_painted(&harness, "ACTIVITY");
+    assert_painted(&harness, "LOG");
 
     // The entries survive the collapse (session-durable feed).
     assert_eq!(harness.state().ui.activity.entries.len(), 1);
 
-    harness.get_by_label("Expand activity").click();
+    harness.get_by_label("Expand log").click();
     settle_quiet(&mut harness);
     assert!(harness.state().ui.activity.expanded);
     assert_painted(&harness, "Fetch from origin");
@@ -261,7 +261,7 @@ fn toggle_hit_target_contains_the_painted_chevron() {
     let mut harness = activity_harness(project);
     settle_quiet(&mut harness);
 
-    let hit = harness.get_by_label("Expand activity").rect();
+    let hit = harness.get_by_label("Expand log").rect();
 
     // The chevron is the only INK_2-stroked glyph near the toggle; require
     // its painted bbox to sit inside the interactive rect, not beside it.
@@ -350,9 +350,9 @@ fn title_control_hover_fill_and_focus_ring_share_one_radius() {
 
     // Focus, then hover, so the fill and the ring are both in one frame's
     // painted output and can be read off the same `FullOutput`.
-    harness.get_by_label("Expand activity").focus();
+    harness.get_by_label("Expand log").focus();
     settle_quiet(&mut harness);
-    let hit = harness.get_by_label("Expand activity").rect();
+    let hit = harness.get_by_label("Expand log").rect();
     harness.event(egui::Event::PointerMoved(hit.center()));
     settle_quiet(&mut harness);
 
