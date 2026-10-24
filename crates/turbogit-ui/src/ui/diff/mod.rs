@@ -28,12 +28,19 @@
 //!   changed row is always a line toggle and an addition always takes a
 //!   char-range drag.
 //! - **Hunk navigation** ‹ n/N › steps between parsed hunks.
+//! - **A single-file pane has no plumbing block** (spec story 23): when the
+//!   patch holds exactly one file section, the model emits none of git's
+//!   header lines — no `diff --git`, no `index`, no `---`/`+++`, no mode
+//!   lines — because the pane's own chrome names the file. Multi-file patches
+//!   keep every row: there the section headers are what tell the sections
+//!   apart.
 //! - **Per-file statistics on the file row, the policies menu on the toolbar**
-//!   (spec story 23): a file section's `+N −M` change counts paint on the
-//!   section's file row, and the **Diff options** menu (`⌃⇧D`) holding the
-//!   viewer's two five-value policies — which whitespace differences count as a
-//!   change at all, and how finely a change is highlighted — paints on the
-//!   toolbar. The policies are folded into the display model when the diff
+//!   (spec story 23): a multi-file section's `+N −M` change counts paint on
+//!   its file row; a single-file pane's one pair paints on the toolbar, which
+//!   has no file row to carry it. The **Diff options** menu (`⌃⇧D`) holding
+//!   the viewer's two five-value policies — which whitespace differences count
+//!   as a change at all, and how finely a change is highlighted — paints on
+//!   the toolbar. The policies are folded into the display model when the diff
 //!   settles (ADR-0014) and are part of what the keyed read is keyed on; they
 //!   change no byte of the patch partial staging composes from. The toolbar is
 //!   painted in every state of the comparison — settled, empty, still computing

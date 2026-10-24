@@ -316,7 +316,25 @@ pub fn render_diff(
         _ => 0,
     };
 
-    // Toolbar chrome (spec §8.4): view mode · hunk nav · diff options.
+    // Per-frame paint plan (issue 20): collapsed hunks drop their body rows
+    // from the virtualized stream, so both modes page over filtered slot
+    // lists built in one O(model) walk. Side-by-side slots are display
+    // indices; unified slots are (display index, member) with a Pair member
+    // flattened into one slot per underlying row (ADR-0014 paging, now over
+    // the filtered stream). Computed before the toolbar because the toolbar
+    // reads a single-file pane's `+N −M` pair from it, and only where a plan
+    // can be used: every other verdict or pane kind stops the rows, and with
+    // them everything the plan pages.
+    let plan = match &verdict {
+        Read::Fresh(diff)
+            if view_failure.is_none() && pane_kind(&diff.model.files) == PaneKind::Text =>
+        {
+            Some(paint_plan(state, &diff.model, change, staging_live))
+        }
+        _ => None,
+    };
+
+    // Toolbar chrome (spec §8.4): view mode · counts · hunk nav · diff options.
     // Wrapped so narrow panes (commit preview) push a control to a second row
     // instead of clipping it out of reach. The whole row is pane chrome: it
     // paints before the verdict is consulted, so the controls are on screen in
@@ -328,6 +346,31 @@ pub fn render_diff(
         let selected = if state.ui.diff_side_by_side { 0 } else { 1 };
         if let Some(idx) = widgets::segmented_control(ui, &["Side-by-Side", "Unified"], selected) {
             state.ui.diff_side_by_side = idx == 0;
+        }
+        // A single-file pane has no file row to carry the counts (the model
+        // suppresses the section's plumbing), so the toolbar states them; a
+        // multi-file patch keeps its counts on the file rows. The labels
+        // `extend` because a wrapped-layout label lays its galley out from the
+        // ROW's left edge with a leading space — a statistic that never wraps
+        // wants its own cursor position, not the row's.
+        if let Some((added, removed)) = plan.as_ref().and_then(PaintPlan::toolbar_counts) {
+            let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("+{added}"))
+                        .font(stat_font.clone())
+                        .color(Palette::DIFF_ADD_ACCENT),
+                )
+                .extend(),
+            );
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("\u{2212}{removed}"))
+                        .font(stat_font)
+                        .color(Palette::DIFF_DEL_ACCENT),
+                )
+                .extend(),
+            );
         }
         ui.add_space(gap);
         hunk_nav(ui, state, total_hunks);
@@ -423,13 +466,9 @@ pub fn render_diff(
     let status = granular::preview_status(state, change.as_ref());
 
     let side_by_side = state.ui.diff_side_by_side;
-    // Per-frame paint plan (issue 20): collapsed hunks drop their body rows
-    // from the virtualized stream, so both modes page over filtered slot
-    // lists built in one O(model) walk. Side-by-side slots are display
-    // indices; unified slots are (display index, member) with a Pair member
-    // flattened into one slot per underlying row (ADR-0014 paging, now over
-    // the filtered stream).
-    let plan = paint_plan(state, model, change, staging_live);
+    // The plan above is `Some` in exactly the states that reach here: a
+    // settled, text, non-failed verdict — the only shape with rows to page.
+    let plan = plan.expect("a settled text diff computed the paint plan");
     let total_rows = if side_by_side {
         plan.sbs.len()
     } else {
@@ -581,6 +620,16 @@ impl PaintPlan {
             .map_or((0, 0), |f| (f.added, f.removed))
     }
 
+    /// The toolbar's `+N −M` pair: the one section's totals, when the pane
+    /// shows exactly one file section. `None` for a multi-file patch, whose
+    /// counts stay on their file rows.
+    fn toolbar_counts(&self) -> Option<(usize, usize)> {
+        match &self.file_rows[..] {
+            [only] => Some((only.added, only.removed)),
+            _ => None,
+        }
+    }
+
     /// The oracle's answer for one row of the display model.
     fn staged(&self, display: usize, kind: RowKind) -> Option<bool> {
         self.staging
@@ -598,10 +647,12 @@ impl PaintPlan {
 /// Walk the display model once, filtering collapsed hunks' bodies out of
 /// both slot streams (issue 20). Meta rows between sections stay visible —
 /// they belong to no hunk body. The same walk totals each file section's
-/// changed lines for the file row, which is why the counts are carried here
-/// rather than recomputed per row (ticket 12), and the same walk asks the
-/// per-line oracle about every changed row once, which is why staged-ness is
-/// painted from a resolved frame rather than a lookup per painted line.
+/// changed lines for its file row — or, when the model holds exactly one
+/// file section, for the toolbar, whose virtual section the walk opens up
+/// front — which is why the counts are carried here rather than recomputed
+/// per row (ticket 12), and the same walk asks the per-line oracle about
+/// every changed row once, which is why staged-ness is painted from a
+/// resolved frame rather than a lookup per painted line.
 fn paint_plan(
     state: &AppState,
     model: &DiffModel,
@@ -634,6 +685,17 @@ fn paint_plan(
     // it — a file row opens its section, so the section's totals are only
     // complete when the NEXT file row (or the end of the model) arrives.
     let mut open: Option<FileRowStats> = None;
+    // A single-file pane has no file row in the stream to open its section —
+    // the model suppresses the plumbing block — so the walk opens a virtual
+    // one up front. Its display index matches no row, and its totals are what
+    // [`PaintPlan::toolbar_counts`] hands the toolbar.
+    if model.files.len() == 1 {
+        open = Some(FileRowStats {
+            display: usize::MAX,
+            added: 0,
+            removed: 0,
+        });
+    }
     let close = |plan: &mut PaintPlan, open: &mut Option<FileRowStats>| {
         if let Some(section) = open.take() {
             plan.file_rows.push(section);

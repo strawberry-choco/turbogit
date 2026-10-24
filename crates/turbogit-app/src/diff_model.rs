@@ -103,37 +103,45 @@ fn rows_from(patch: &Patch) -> Vec<Row> {
     };
 
     for file in &patch.files {
-        meta(file.section_header_line(), &mut rows);
-        for header in &file.headers {
-            // Which of these the viewer paints as section metadata is a fact
-            // about the header, not about the text it renders to.
-            let painted_as_meta = matches!(
-                header,
-                PatchHeaderLine::Index { .. }
-                    | PatchHeaderLine::Sources { .. }
-                    | PatchHeaderLine::NewFile { .. }
-                    | PatchHeaderLine::Binary
-            );
-            for line in header.lines(file) {
-                if painted_as_meta {
-                    meta(line, &mut rows);
-                    continue;
+        // A pane showing exactly one file section has no plumbing block: the
+        // pane's own chrome names the file, so git's header lines would only
+        // repeat it. Multi-file patches keep every row — there the section
+        // headers are what tell the sections apart. Hunk-body numbering is
+        // untouched either way: it resets from each hunk's own span, never
+        // from the header rows the walk advances past.
+        if patch.files.len() > 1 {
+            meta(file.section_header_line(), &mut rows);
+            for header in &file.headers {
+                // Which of these the viewer paints as section metadata is a fact
+                // about the header, not about the text it renders to.
+                let painted_as_meta = matches!(
+                    header,
+                    PatchHeaderLine::Index { .. }
+                        | PatchHeaderLine::Sources { .. }
+                        | PatchHeaderLine::NewFile { .. }
+                        | PatchHeaderLine::Binary
+                );
+                for line in header.lines(file) {
+                    if painted_as_meta {
+                        meta(line, &mut rows);
+                        continue;
+                    }
+                    // A header the row model does not name — a similarity percent, a
+                    // rename pair, a mode change — reaches the viewer as an ordinary
+                    // line, advancing both gutters like the context it sits among.
+                    rows.push(Row {
+                        kind: RowKind::Context,
+                        text: line,
+                        hunk: enclosing,
+                        line_ord: 0,
+                        old_no,
+                        new_no,
+                        span: None,
+                        highlight: Highlight::Off,
+                    });
+                    old_no += 1;
+                    new_no += 1;
                 }
-                // A header the row model does not name — a similarity percent, a
-                // rename pair, a mode change — reaches the viewer as an ordinary
-                // line, advancing both gutters like the context it sits among.
-                rows.push(Row {
-                    kind: RowKind::Context,
-                    text: line,
-                    hunk: enclosing,
-                    line_ord: 0,
-                    old_no,
-                    new_no,
-                    span: None,
-                    highlight: Highlight::Off,
-                });
-                old_no += 1;
-                new_no += 1;
             }
         }
 
@@ -699,8 +707,9 @@ mod tests {
         assert!(model.pure_rename());
         assert_eq!(pane_kind(&scan_files(text)), PaneKind::Text);
         assert_eq!(model.hunk_count(), 0);
-        // The rename header leads the section's meta rows.
-        assert_eq!(model.display.len(), 5);
+        // One file section: the plumbing is suppressed, so the synthesized
+        // rename header is the section's only row.
+        assert_eq!(model.display.len(), 1);
         let DisplayRow::Full(row) = &model.display[0] else {
             panic!("rename header must be a full-width row");
         };
@@ -739,10 +748,85 @@ mod tests {
             DiffPolicies::default(),
         );
         assert_eq!(model.hunk_count(), 1);
-        // The rename header leads as display row 0; the hunk header follows
-        // it — the slot the per-frame paint plan aims hunk navigation at
+        // One file section: the plumbing is suppressed and the synthesized
+        // rename header leads as display row 0, so the hunk header is the very
+        // next row — the slot the per-frame paint plan aims hunk navigation at
         // (issue 20).
-        assert_eq!(model.hunk_first_display[0], 7);
+        assert_eq!(model.hunk_first_display[0], 1);
+    }
+
+    /// The rule is a fact about the display model, not the painter: a pane
+    /// showing exactly one file section has no plumbing block, because the
+    /// pane's own chrome names the file. Every spelling git's header block can
+    /// take is asserted gone, and the hunk bodies keep their span-derived
+    /// gutter numbers.
+    #[test]
+    fn diff_single_file_sections_drop_their_plumbing_rows() {
+        let text = "diff --git a/added.txt b/added.txt\n\
+                    new file mode 100644\n\
+                    index 0000000..3b18e51\n\
+                    --- /dev/null\n\
+                    +++ b/added.txt\n\
+                    @@ -0,0 +1,2 @@\n\
+                    +one\n\
+                    +two\n";
+        let rows = parse(text);
+        assert!(
+            rows.iter().all(|r| r.kind != RowKind::Meta),
+            "no meta row survives a single-file section"
+        );
+        assert!(
+            !rows.iter().any(|r| {
+                ["diff --git ", "new file mode ", "index ", "--- ", "+++ "]
+                    .iter()
+                    .any(|prefix| r.text.starts_with(prefix))
+            }),
+            "git's header block is gone in every spelling: {:?}",
+            rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>()
+        );
+        // Numbering derives from the hunk span, not from the header rows the
+        // walk used to advance past: the 1-based new-side numbers stand.
+        let body: Vec<(RowKind, usize, usize)> = rows
+            .iter()
+            .filter(|r| r.text == "one" || r.text == "two")
+            .map(|r| (r.kind, r.old_no, r.new_no))
+            .collect();
+        assert_eq!(
+            body,
+            vec![(RowKind::Add, 0, 1), (RowKind::Add, 0, 2)],
+            "1-based new-side numbers, from the span"
+        );
+    }
+
+    #[test]
+    fn diff_multi_file_patches_keep_every_plumbing_row() {
+        let text = "diff --git a/one.txt b/one.txt\n\
+                    index 1111111..2222222 100644\n\
+                    --- a/one.txt\n\
+                    +++ b/one.txt\n\
+                    @@ -1 +1 @@\n\
+                    -a\n\
+                    +b\n\
+                    diff --git a/two.txt b/two.txt\n\
+                    index 3333333..4444444 100644\n\
+                    --- a/two.txt\n\
+                    +++ b/two.txt\n\
+                    @@ -1 +1 @@\n\
+                    -c\n\
+                    +d\n";
+        let rows = parse(text);
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.text.starts_with("diff --git "))
+                .count(),
+            2,
+            "every section keeps its opening line"
+        );
+        assert_eq!(
+            rows.iter().filter(|r| r.text.starts_with("--- ")).count(),
+            2,
+            "the source pairs stay in a multi-file patch"
+        );
     }
 
     #[test]

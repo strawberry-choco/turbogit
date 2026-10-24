@@ -23,8 +23,9 @@
 //!   settings of one shared primitive and keep their labels and enabled flags
 //! - no surface offers a comparison-axis chip group: the pane answers one fixed
 //!   read, so `Repo`, `Staged` and `Local` never appear as mode selectors
-//! - the add/remove counts paint on the file row, and the diff options menu's
-//!   trigger on the toolbar
+//! - a single-file pane shows no plumbing rows and counts on the toolbar; a
+//!   multi-file patch's sections keep their counts on the file rows
+//! - the diff options menu's trigger paints on the toolbar row, in every state
 //! - the file row's band height and its label origin are the row shell's
 //! - the synthesised rename header is one muted band across the row
 //!
@@ -157,6 +158,22 @@ fn repo_two_commits() -> (tempfile::TempDir, PathBuf) {
     let mut edited = base;
     edited[2] = "SECOND".to_string();
     write_file(&repo, "hist.txt", &format!("{}\n", edited.join("\n")));
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c2"]);
+    (tmp, repo)
+}
+
+/// A commit that changes TWO files, so its patch carries two sections — the
+/// shape where file rows exist and carry their own counts, unlike the
+/// single-file panes whose plumbing the model suppresses.
+fn repo_two_file_commit() -> (tempfile::TempDir, PathBuf) {
+    let (tmp, repo) = init_repo();
+    write_file(&repo, "one.txt", "alpha\nbeta\n");
+    write_file(&repo, "two.txt", "gamma\ndelta\n");
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "c1"]);
+    write_file(&repo, "one.txt", "alpha\nBETA\n");
+    write_file(&repo, "two.txt", "gamma\nDELTA\n");
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "c2"]);
     (tmp, repo)
@@ -1049,71 +1066,83 @@ fn hovered_file_row(harness: &mut Harness<'_, AppState>) -> (Rect, Pos2) {
     (band, point)
 }
 
-/// Contract: the statistics sit with the thing they describe, and the controls
-/// sit with the pane. The counts paint **on the file row** and the diff viewer's
-/// settings menu on **the toolbar** — the toolbar row is pane chrome, present in
-/// every state the pane can be in, which is where a control that decides what
-/// counts as a difference belongs.
+/// Contract: a pane showing exactly one file section has **no plumbing block** —
+/// the pane's own chrome names the file, so git's header lines would only repeat
+/// it — and its counts paint on the **toolbar**, which has no file row to carry
+/// them. The settings menu's trigger is on the same toolbar row, pane chrome
+/// present in every state the pane can be in.
 ///
-/// Scoped by position, never by string: a `+1` is a perfectly ordinary thing for
-/// another surface on screen to be painting (the commit window's preview card
-/// header is still a legitimate place for it), so the question is not "how many
-/// `+1`s are on screen" but "where are they".
+/// Scoped by position, never by string: a `+2` is a perfectly ordinary thing for
+/// another surface on screen to be painting, so the question is not "how many
+/// `+2`s are on screen" but "where are they".
 #[test]
-fn the_file_row_carries_the_counts_and_the_toolbar_the_menu() {
+fn a_single_file_pane_shows_no_plumbing_and_counts_on_the_toolbar() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("file.txt"));
 
-    let (band, _) = hovered_file_row(&mut h);
+    // No plumbing row survives, in any spelling git's header block takes.
+    let plumbing: Vec<_> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| {
+            [
+                "diff --git ",
+                "index ",
+                "--- ",
+                "+++ ",
+                "new file mode ",
+                "old mode ",
+                "new mode ",
+            ]
+            .iter()
+            .any(|prefix| g.text.starts_with(prefix))
+        })
+        .collect();
+    assert!(
+        plumbing.is_empty(),
+        "a single-file pane paints no git plumbing: {plumbing:?}"
+    );
 
     // The counts: this file's two additions and two deletions — the staged half
-    // and the unstaged one, because the read is HEAD-based — in the stats accents,
-    // inside the file row's band, and not in the toolbar.
+    // and the unstaged one, because the read is HEAD-based — in the stats
+    // accents, on the toolbar row right of the mode control. Scoped to the
+    // toolbar's row band, never by count: the preview card's own header still
+    // legitimately paints a `+2` of its own.
+    let row = toolbar_row(&h);
     for (text, ink) in [
         ("+2", Palette::DIFF_ADD_ACCENT),
         ("\u{2212}2", Palette::DIFF_DEL_ACCENT),
     ] {
-        let galleys: Vec<_> = painted_galleys(&h)
+        let on_toolbar: Vec<_> = painted_galleys(&h)
             .into_iter()
-            .filter(|g| g.text == text)
-            .collect();
-        let on_row: Vec<_> = galleys
-            .iter()
-            .filter(|g| band.contains(g.rect.center()))
+            .filter(|g| {
+                g.text == text
+                    && g.rect.center().y >= row.top() - EPS
+                    && g.rect.center().y <= row.bottom() + EPS
+            })
             .collect();
         assert_eq!(
-            on_row.len(),
+            on_toolbar.len(),
             1,
-            "`{text}` is the file row's own statistic and must paint on the file \
-             row exactly once: {on_row:?} of {galleys:?}"
+            "`{text}` is the pane's one change-size statistic on the toolbar: \
+             {on_toolbar:?}"
         );
-        assert_eq!(on_row[0].color, ink, "`{text}` keeps its stats accent");
+        assert_eq!(on_toolbar[0].color, ink, "`{text}` keeps its stats accent");
         assert!(
-            galleys
-                .iter()
-                .all(|g| !toolbar_row(&h).contains(g.rect.center())),
-            "the diff toolbar does not paint the file's statistics: `{text}` at {:?}",
-            galleys
-                .iter()
-                .find(|g| toolbar_row(&h).contains(g.rect.center()))
-                .map(|g| g.rect)
+            on_toolbar[0].rect.left() > row.right(),
+            "`{text}` sits right of the mode control: {:?} against {row:?}",
+            on_toolbar[0].rect
         );
     }
 
     // The menu's trigger: one control, on the toolbar row beside the mode
-    // control, nowhere on the file row.
+    // control.
     let toggles: Vec<Rect> = h
         .get_all_by_label("Diff options")
         .map(|n| n.rect())
         .collect();
-    assert_eq!(
-        toggles.len(),
-        1,
-        "exactly one trigger paints, and the file row no longer carries one"
-    );
-    let row = toolbar_row(&h);
+    assert_eq!(toggles.len(), 1, "exactly one trigger paints");
     assert!(
         toggles[0].center().y >= row.top() - EPS && toggles[0].center().y <= row.bottom() + EPS,
         "the policy menu belongs on the toolbar's row: {:?} against {row:?}",
@@ -1125,10 +1154,60 @@ fn the_file_row_carries_the_counts_and_the_toolbar_the_menu() {
          {:?} against {row:?}",
         toggles[0]
     );
-    assert!(
-        !band.intersects(toggles[0]),
-        "the trigger moved off the file row onto the toolbar: {toggles:?}"
+}
+
+/// Contract: a multi-file patch keeps every section's plumbing row, and each
+/// section's counts paint on **its own file row** — the toolbar states no pair
+/// for a patch it cannot summarize in one.
+#[test]
+fn multi_file_sections_keep_their_counts_on_the_file_rows() {
+    let (_tmp, repo) = repo_two_file_commit();
+    let mut h = commit_diff_harness(&repo);
+    settle(&mut h);
+
+    let file_labels: Vec<_> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| g.text.starts_with("diff --git "))
+        .collect();
+    assert_eq!(
+        file_labels.len(),
+        2,
+        "both sections keep their opening line: {:?}",
+        file_labels
+            .iter()
+            .map(|g| g.text.as_str())
+            .collect::<Vec<_>>()
     );
+
+    // Each file row carries its own +1 −1, on the file row's band (the label's
+    // y), and the toolbar paints no counts at all.
+    let row = toolbar_row(&h);
+    for stat in ["+1", "\u{2212}1"] {
+        let galleys: Vec<_> = painted_galleys(&h)
+            .into_iter()
+            .filter(|g| g.text == stat)
+            .collect();
+        assert_eq!(
+            galleys.len(),
+            2,
+            "one `{stat}` per section, both on their file rows: {galleys:?}"
+        );
+        for label in &file_labels {
+            let on_row = galleys
+                .iter()
+                .find(|g| (g.rect.center().y - label.rect.center().y).abs() <= EPS);
+            assert!(
+                on_row.is_some(),
+                "the section opening at {:?} carries its own `{stat}`: {galleys:?}",
+                label.text
+            );
+            assert!(
+                !row.contains(on_row.unwrap().rect.center()),
+                "the toolbar paints no per-file statistic: {stat:?} at {:?}",
+                on_row.unwrap().rect
+            );
+        }
+    }
 }
 
 /// The toolbar's row band, by the view-mode control's own track: the track is
@@ -1143,17 +1222,17 @@ fn toolbar_row(harness: &Harness<'_, AppState>) -> Rect {
 }
 
 /// Contract: the file row's height and leading padding are the ROW SHELL's,
-/// after the new occupants are added. The band it paints under the pointer is
+/// after the new occupant was added. The band it paints under the pointer is
 /// the same band every other diff row paints — the same height, the same full
 /// width — and its label starts at the same text origin as the changed rows'
 /// text. The occupant that would be hand-placed instead (a taller row, or a
-/// second text origin) breaks one of these two.
+/// second text origin) breaks one of these two. Filed against a multi-file
+/// patch, the only shape that still has file rows.
 #[test]
 fn the_file_row_takes_its_geometry_from_the_row_shell() {
-    let (_tmp, repo) = repo_mixed();
-    let mut h = diff_harness(&repo);
+    let (_tmp, repo) = repo_two_file_commit();
+    let mut h = commit_diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
     // The staged added row is the one that wears `DIFF_ADD_BG`; the unstaged row
@@ -1243,12 +1322,12 @@ fn the_rename_header_reads_as_one_muted_band() {
 /// top of a row's own click targets. This is the failure mode the placement
 /// risks — a trailing zone hung at the wrong coordinate silently eats a
 /// changed row's click — so it is asserted against every band the rows paint.
+/// Filed against a multi-file patch, the only shape that still has file rows.
 #[test]
 fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
-    let (_tmp, repo) = repo_mixed();
-    let mut h = diff_harness(&repo);
+    let (_tmp, repo) = repo_two_file_commit();
+    let mut h = commit_diff_harness(&repo);
     settle(&mut h);
-    open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
     let changed: Vec<Rect> = filled_rects(&h)
@@ -1264,8 +1343,7 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     assert_eq!(
         changed.len(),
         4,
-        "the staged pair and the unstaged pair are all on screen, each on its own \
-         band: {changed:?}"
+        "each section's one pair is on screen, every row on its own band: {changed:?}"
     );
     for row in &changed {
         assert!(
@@ -1273,21 +1351,6 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
             "the file row's own band overlaps a changed row's band {row:?}: {band:?}"
         );
     }
-
-    // The row's own protocol still answers: a changed-line click stages that
-    // line, and git says so. Stepped, not run: the staging op repaints, and
-    // this harness's run budget is kittest's default four. The row is addressed by
-    // the label a changed line carries, its text and the state the per-line oracle
-    // answers for it, which is `unstaged` right up until this click.
-    h.get_by_label("GAMMA (unstaged)").click();
-    assert!(
-        wait_until(15_000, || {
-            h.step();
-            git(&repo, &["diff", "--cached"]).contains("+GAMMA")
-        }),
-        "the clicked line must reach the index, got:\n{}",
-        git(&repo, &["diff", "--cached"])
-    );
 }
 
 /// The diff actions module's own source, read at compile time — the ratchet
