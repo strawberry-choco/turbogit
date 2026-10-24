@@ -85,15 +85,18 @@ fn app_state(project_dir: &Path, roots: &[PathBuf]) -> AppState {
 ///
 /// `shell::MIN_SIDEBAR_WINDOW_WIDTH` is 1000, but the shell measures its work
 /// rect *inside* the window frame, so the outer width that clears the
-/// threshold is higher than the constant: measured on the real render, the rail
-/// first paints between 1030 and 1040. A suite that assumed "the 1024 default
-/// shows the sidebar" would have asserted against nothing — which is the
+/// threshold is higher than the constant. The shell's central panel no longer
+/// carries an inner margin (the frame is flush with the window edge), so the
+/// harness's only inset is kittest's own outer panel: measured on the real
+/// render, the rail first paints at 1016 = 1000 + 16. A suite that assumed a
+/// width without measuring would have asserted against nothing — which is the
 /// vacuous-pass trap this ticket's criterion names, and why the number is
 /// measured here rather than reasoned about.
-pub const SIDEBAR_VISIBLE_FROM: f32 = 1040.0;
+pub const SIDEBAR_VISIBLE_FROM: f32 = 1016.0;
 
 /// The width the acceptance criterion is about: the headless harness's own
-/// documented default, where the shell renders *without* the rail.
+/// documented default — now *above* the rail's threshold, so the sidebar
+/// renders there.
 const HARNESS_DEFAULT: (f32, f32) = (1024.0, 768.0);
 
 /// A size wide of the rail's threshold, so the sidebar is really on screen.
@@ -834,12 +837,11 @@ fn the_status_bar_counters_read_the_one_repository_state_colour_map() {
 #[test]
 fn the_shell_renders_at_the_harness_default_size_without_clipping() {
     // The headless harness's documented default, 1024×768, and the size the
-    // criterion is about. **The rail is not on screen here** — measured, not
-    // assumed: the shell measures its work rect inside the window frame, so
-    // `MIN_SIDEBAR_WINDOW_WIDTH`'s 1000 needs an outer width above 1030 (see
-    // `SIDEBAR_VISIBLE_FROM`). This test is about the shell fitting its own
-    // default; [`the_harness_renders_the_sidebar_at_a_width_that_shows_it`] is
-    // about the rail. Splitting them is what keeps neither vacuous.
+    // criterion is about. The rail renders here now (see
+    // `SIDEBAR_VISIBLE_FROM`); this test is about the shell fitting its own
+    // default, and
+    // [`the_harness_renders_the_sidebar_at_a_width_that_shows_it`] is about
+    // the rail. Splitting them is what keeps neither vacuous.
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -899,12 +901,15 @@ fn the_shell_renders_at_the_harness_default_size_without_clipping() {
 /// with painted geometry rather than with a label that might be matching
 /// something else.
 ///
-/// Its own test because the failure it guards is a *vacuous* one: at the
-/// default 1024 the rail is not on screen, so "PROJECTS is not painted" and
-/// "the selected row has a rail" both succeed for the wrong reason. Widening
-/// the harness past the measured threshold is what makes every sidebar
-/// assertion in the workspace mean something, and asserting the rail's own
-/// surface here is what proves the widening worked.
+/// Its own test because the failure it guards is a *vacuous* one: a width at
+/// or below the rail's threshold renders no sidebar, so "PROJECTS is not
+/// painted" and "the selected row has a rail" both succeed for the wrong
+/// reason. Widening the harness past the measured threshold is what makes
+/// every sidebar assertion in the workspace mean something, and asserting the
+/// rail's own surface here is what proves the widening worked. The default
+/// 1024 now clears the threshold (the shell's central panel stopped insetting
+/// the work area), so the boundary is measured twenty points either side of
+/// `SIDEBAR_VISIBLE_FROM` instead.
 #[test]
 fn the_harness_renders_the_sidebar_at_a_width_that_shows_it() {
     let parent = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -957,9 +962,12 @@ fn the_harness_renders_the_sidebar_at_a_width_that_shows_it() {
     // The threshold itself, from both sides, so the constant above is pinned
     // against the real render rather than against a note in a comment. The
     // narrow side is stated as "below `SIDEBAR_VISIBLE_FROM`", not as a
-    // specific number: the claim is that this harness size shows the rail and
-    // the default does not, and the boundary between them is the shell's
-    // business, not this suite's.
+    // specific number: the claim is that this harness size shows the rail,
+    // twenty points below the measured threshold does not, and the boundary
+    // between them is the shell's business, not this suite's. The default
+    // size itself now clears the threshold too (the shell's central panel no
+    // longer insets the work area), which is why the rail shows at 1024 and
+    // the boundary is measured 20 points either side.
     let mut narrow = harness_at(
         {
             let mut s = app_state(&project_dir, std::slice::from_ref(&repo));
@@ -971,10 +979,10 @@ fn the_harness_renders_the_sidebar_at_a_width_that_shows_it() {
     );
     settle(&mut narrow);
     assert!(
-        !filled_rects(&narrow)
+        filled_rects(&narrow)
             .iter()
             .any(|(_, c)| *c == Palette::SIDEBAR),
-        "the default width is below the rail's threshold — if this ever changes, \
+        "the default width clears the rail's threshold — if this ever changes, \
          `SIDEBAR_VISIBLE_FROM` and the no-clip test above need re-measuring"
     );
     let mut just_under = harness_at(

@@ -45,7 +45,10 @@ fn workspace(tmp: &Path) -> (PathBuf, PathBuf) {
 
 fn shell(project_dir: &Path, roots: &[PathBuf]) -> Harness<'static, AppState> {
     let state = AppState::for_roots(project_dir, roots);
-    shell_harness_over(state, Vec2::new(1024.0, 900.0))
+    // 1008, not 1024: kittest's outer panel carries the shell's old 8px
+    // inset, so 1024 would now flip the workspace sidebar on and shift every
+    // row index this suite clicks.
+    shell_harness_over(state, Vec2::new(1008.0, 900.0))
 }
 
 /// Expand a root's collapsed group so its rows become clickable. Only the

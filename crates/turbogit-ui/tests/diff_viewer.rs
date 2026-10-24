@@ -244,7 +244,10 @@ fn diff_harness(repo: &Path) -> Harness<'static, AppState> {
     // Tall enough that the shell frame (issue #03: center tabs + status bar —
     // nothing claims the top edge) leaves the preview column room for the
     // tallest comparison diff plus the message editor below it.
-    shell_harness_over(state, egui::vec2(1024.0, 900.0))
+    // 1008, not 1024: kittest's outer panel carries the shell's old 8px
+    // inset, so 1024 would now flip the workspace sidebar on and squeeze the
+    // diff preview below the width the counters were painted at.
+    shell_harness_over(state, egui::vec2(1008.0, 900.0))
 }
 
 #[test]
@@ -1028,7 +1031,7 @@ fn commit_diff_harness(repo: &Path) -> Harness<'static, AppState> {
         },
         state,
     );
-    harness.set_size(egui::vec2(1024.0, 900.0));
+    harness.set_size(egui::vec2(1008.0, 900.0));
     harness
 }
 

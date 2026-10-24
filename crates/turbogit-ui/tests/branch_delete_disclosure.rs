@@ -382,13 +382,15 @@ fn the_unmerged_link_and_the_restore_control_are_not_the_same_kind_of_control() 
     );
 
     // Across the whole notification band — the extent its own three parts
-    // occupy, and no further — there is no accent rect at all. Scoped to the
-    // band because the shell wears the accent elsewhere in the frame, and an
-    // unscoped count would be measuring the toolbar.
+    // occupy — there is no accent rect at all. Scoped to the band because the
+    // shell wears the accent elsewhere in the frame, and an unscoped count
+    // would be measuring the toolbar. Contained, not intersecting: the
+    // notification floats directly beneath the tool tab strip's own accent
+    // marks, and a proximity scan reads chrome as notification.
     let band = said.union(link).union(undo).expand(6.0);
     let accents: Vec<_> = filled_rects(&harness)
         .iter()
-        .filter(|(r, c)| *c == Palette::ACCENT && band.intersects(*r))
+        .filter(|(r, c)| *c == Palette::ACCENT && band.contains_rect(*r))
         .cloned()
         .collect();
     assert!(

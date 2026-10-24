@@ -100,7 +100,15 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
         render_status_bar(ui, state, status_hint.as_deref());
     }
 
-    egui::CentralPanel::default().show(ui, |ui| {
+    // The central panel carries egui's stock central-panel frame minus the
+    // default 8px inner margin: the shell's regions lay out their own edges
+    // (tab strip flush with the top, sidebar on the left, status bar at the
+    // bottom), so an inset here would read as a floating island of content
+    // inside the window.
+    let shell_frame = egui::Frame::central_panel(ui.style()).inner_margin(Margin::ZERO);
+    egui::CentralPanel::default()
+        .frame(shell_frame)
+        .show(ui, |ui| {
         if state.show_welcome() {
             // Welcome page: no project is open, so the tool-window tab strip
             // (Changes / Log / Branches / Worktrees / Submodules) is dead

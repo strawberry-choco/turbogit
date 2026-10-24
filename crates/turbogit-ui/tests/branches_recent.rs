@@ -129,6 +129,8 @@ fn recent_group_caps_at_five_rows_above_local() {
     // The cap: r7..r3 (newest first) each have a row ABOVE the Local header —
     // their Recent copy — and r2, r1 have none.
     let local = header_rect(&harness, "Local");
+    let mut prev_top: Option<f32> = None;
+    let mut prev_name = "";
     for (i, name) in ["r7", "r6", "r5", "r4", "r3"].iter().enumerate() {
         let rects = row_rects(&harness, name);
         assert_eq!(
@@ -138,16 +140,19 @@ fn recent_group_caps_at_five_rows_above_local() {
         );
         let above = rects.iter().filter(|r| r.max.y <= local.min.y).count();
         assert_eq!(above, 1, "{name} (recent slot {i}) has one row above Local");
-        // Recency order within the group: newer rows sit higher.
-        if i > 0 {
-            let prev = ["r7", "r6", "r5", "r4"][i - 1];
-            let newer = galley_origin(&harness, prev).unwrap();
-            let older = galley_origin(&harness, name).unwrap();
+        // Recency order within the group: newer rows sit higher. Compared on
+        // this name's own row rects, not a galley search: branch names also
+        // paint outside this tab (the sidebar's current-branch label), and a
+        // whole-window galley match would order against that.
+        let row = rects.iter().find(|r| r.max.y <= local.min.y).unwrap();
+        if let Some(prev_top) = prev_top {
             assert!(
-                newer.y < older.y,
-                "{prev} (checked out more recently) must sit above {name}"
+                prev_top < row.top(),
+                "{prev_name} (checked out more recently) must sit above {name}"
             );
         }
+        prev_top = Some(row.top());
+        prev_name = name;
     }
     for name in ["r2", "r1"] {
         let rects = row_rects(&harness, name);

@@ -112,7 +112,12 @@ fn branches_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
         },
         state,
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
+    // 1008, not 1024: kittest's own outer panel carries the shell's old 8px
+    // inset, so a 1024 harness would now hand the tool window 1008px of work
+    // width and flip the sidebar on, re-laying-out every surface this suite
+    // measured. 1008 keeps the tool window at the width the assertions were
+    // calibrated against.
+    harness.set_size(egui::vec2(1008.0, 768.0));
     harness
 }
 
@@ -1792,7 +1797,12 @@ fn two_repo_harness(project_dir: PathBuf) -> Harness<'static, AppState> {
         },
         state,
     );
-    harness.set_size(egui::vec2(1024.0, 768.0));
+    // 1008, not 1024: kittest's own outer panel carries the shell's old 8px
+    // inset, so a 1024 harness would now hand the tool window 1008px of work
+    // width and flip the sidebar on, re-laying-out every surface this suite
+    // measured. 1008 keeps the tool window at the width the assertions were
+    // calibrated against.
+    harness.set_size(egui::vec2(1008.0, 768.0));
     harness
 }
 
