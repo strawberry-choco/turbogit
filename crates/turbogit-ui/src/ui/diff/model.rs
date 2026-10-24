@@ -16,14 +16,13 @@ pub(crate) use turbogit_app::diff_model::{
 /// section's own opening line, `PatchFile::section_header_line()`.
 ///
 /// The file row is the one row that describes a *file* rather than a line of
-/// the change, and it is where the pane's per-file statistics and the
-/// comparison toggle live (spec story 23), so the painters have to be able to
-/// name it. The row model does not carry a `FileHeader` kind — that lives in
-/// `turbogit-app`'s display model, outside the diff painter's file — so the
-/// name is read off the one string the parser produced, and both spellings the
-/// section header can take are matched. A code line that happens to begin
-/// `diff --git ` is a `Context` row, not a `Meta` one, and cannot be mistaken
-/// for a file row by this check.
+/// the change, and it is where the pane's per-file statistics live (spec story
+/// 23), so the painters have to be able to name it. The row model does not
+/// carry a `FileHeader` kind — that lives in `turbogit-app`'s display model,
+/// outside the diff painter's file — so the name is read off the one string the
+/// parser produced, and both spellings the section header can take are matched.
+/// A code line that happens to begin `diff --git ` is a `Context` row, not a
+/// `Meta` one, and cannot be mistaken for a file row by this check.
 pub(super) fn is_file_row(row: &Row) -> bool {
     row.kind == RowKind::Meta
         && (row.text.starts_with("diff --git ") || row.text.starts_with("diff --cc "))

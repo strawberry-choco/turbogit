@@ -1,7 +1,7 @@
 //! Diff rendering: the virtualized entry point plus the unified and
 //! side-by-side row painters (spec §8.4, ADR-0014).
 use super::actions::{
-    commit_current_hunk, diff_options_menu, hunk_gutter_actions, hunk_header_extras, hunk_nav,
+    commit_current_hunk, diff_options_button, hunk_gutter_actions, hunk_header_extras, hunk_nav,
 };
 use super::model::{
     DiffModel, DisplayRow, Highlight, NUM_W, PANE_HEADER_H, PaneKind, ROW_H, Row, RowKind, SIGN_W,
@@ -316,9 +316,11 @@ pub fn render_diff(
         _ => 0,
     };
 
-    // Toolbar chrome (spec §8.4): view mode · hunk nav.
+    // Toolbar chrome (spec §8.4): view mode · hunk nav · diff options.
     // Wrapped so narrow panes (commit preview) push a control to a second row
-    // instead of clipping it out of reach.
+    // instead of clipping it out of reach. The whole row is pane chrome: it
+    // paints before the verdict is consulted, so the controls are on screen in
+    // every state the pane can be in — waiting, failed, empty, binary, image.
     ui.horizontal_wrapped(|ui| {
         // The toolbar's own item rhythm is the gap between its groups: the
         // frames are the separation, so there is no rule painted between them.
@@ -329,6 +331,8 @@ pub fn render_diff(
         }
         ui.add_space(gap);
         hunk_nav(ui, state, total_hunks);
+        ui.add_space(gap);
+        diff_options_button(ui, state);
     });
 
     // The verdict is the whole paint contract: which of these four the
@@ -336,12 +340,12 @@ pub fn render_diff(
     // to forget to check and no error field that can describe some other
     // comparison (ADR-0021).
     //
-    // Every state that is not `Fresh` still paints the file row, because the
-    // file row is where the pane's comparison toggle lives: a comparison that
-    // came back empty, is still computing, or failed must not take the control
-    // that produces it off screen along with the rows it would apply to.
+    // Every state that is not `Fresh` still paints the file header: it names
+    // the file the pane is holding while the rows that would name it are
+    // absent. The toolbar above is painted in every state, so the comparison
+    // toggle never leaves the screen with the rows it applies to.
     if let Some(message) = &view_failure {
-        file_header(ui, state, change);
+        file_header(ui, change);
         widgets::keyed_read_presentation(
             ui,
             widgets::KeyedReadPresentation::Failed(message.as_str()),
@@ -351,12 +355,12 @@ pub fn render_diff(
     let diff = match verdict {
         Read::Fresh(diff) => diff,
         Read::Empty => {
-            file_header(ui, state, change);
+            file_header(ui, change);
             ui.label("(no differences)");
             return;
         }
         Read::Waiting => {
-            file_header(ui, state, change);
+            file_header(ui, change);
             widgets::keyed_read_presentation(
                 ui,
                 widgets::KeyedReadPresentation::Waiting("Computing diff…"),
@@ -364,7 +368,7 @@ pub fn render_diff(
             return;
         }
         Read::Failed(message) => {
-            file_header(ui, state, change);
+            file_header(ui, change);
             widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Failed(&message));
             return;
         }
@@ -1097,7 +1101,6 @@ fn paint_full_width_row(
     match row.kind {
         RowKind::Meta if is_file_row(row) => file_row(
             ui,
-            state,
             rect,
             &row.text,
             plan.file_counts(display),
@@ -1332,20 +1335,17 @@ fn header_band(ui: &mut Ui, width: f32, label: &str) {
 }
 
 /// The file row (spec story 23): a file section's own opening line, carrying
-/// the statistics that describe that file and the comparison toggle that drives
-/// it.
+/// the statistics that describe that file.
 ///
 /// **The geometry here is the row shell's, not this function's.** The band is
 /// the `ROW_H` band the caller allocated and the label sits at the shell's
 /// [`TEXT_X`], exactly where every other row in this stream puts its text — the
-/// two new occupants are placed *from that one rect*, right-aligned inside it,
-/// and the row's own fill is the one row-fill decision
-/// ([`widgets::paint_row`]). A file row is therefore a row like any other, and
-/// gaining two occupants cannot give it a second selection treatment, a second
-/// height, or a second text origin.
+/// counts are placed *from that one rect*, right-aligned inside it, and the
+/// row's own fill is the one row-fill decision ([`widgets::paint_row`]). A file
+/// row is therefore a row like any other, and gaining its occupant cannot give
+/// it a second selection treatment, a second height, or a second text origin.
 fn file_row(
     ui: &mut Ui,
-    state: &mut AppState,
     rect: &Rect,
     label: &str,
     (added, removed): (usize, usize),
@@ -1361,10 +1361,10 @@ fn file_row(
         Palette::INK_3,
         font,
     );
-    // The trailing zone, hung off the row shell's rect: the change counts and
-    // then the toggle, right-to-left so the toggle is the one control that
-    // always sits at the row's trailing edge. It is a child `Ui` over the
-    // already-allocated rect, so nothing here can change the row's height.
+    // The trailing zone, hung off the row shell's rect: the change counts,
+    // right-aligned so they sit at the row's trailing edge. It is a child `Ui`
+    // over the already-allocated rect, so nothing here can change the row's
+    // height.
     let trailing = Rect::from_min_max(
         Pos2::new(rect.left(), rect.top()),
         Pos2::new(rect.right() - crate::theme::BUTTON_PADDING.x, rect.bottom()),
@@ -1374,31 +1374,8 @@ fn file_row(
             .max_rect(trailing)
             .layout(Layout::right_to_left(Align::Center)),
     );
-    // The diff viewer's settings menu (`⌃⇧D`) takes the trailing slot. A lone
-    // "Ignore whitespace" checkbox there would ask one of the ten questions
-    // answered here, and ask it of `git` rather than of the view. `⌃⇧D` opens this
-    // from the keyboard by arming the flag the shell sets.
-    let trigger = zone.button(
-        RichText::new("Diff options").font(crate::theme::chrome_font(crate::theme::TYPE_BODY)),
-    );
-    let mut popup = egui::Popup::menu(&trigger);
-    if state.ui.diff_options_open {
-        popup = popup.open(true);
-    }
-    let mut policies_changed = false;
-    match popup.show(|menu| diff_options_menu(menu, state)) {
-        // The popup closed itself — by a click outside or by `Escape` — so the
-        // keyboard route's arm goes with it, and `⌃⇧D` toggles cleanly next time.
-        None => state.ui.diff_options_open = false,
-        Some(shown) => policies_changed = shown.inner,
-    }
-    if policies_changed {
-        // A policy is presentation the reader agrees on, and the agreement has to
-        // survive the session it was picked in.
-        state.save_durable_ui();
-    }
-    // The same `+N −M` stats treatment the commit window's preview header uses,
-    // in the same accents: the counts are statistics, not diff row content.
+    // The same `+N −M` stats treatment the toolbar's own counts use, in the
+    // same accents: the counts are statistics, not diff row content.
     let stat_font = crate::theme::chrome_font(crate::theme::TYPE_BODY);
     zone.label(
         RichText::new(format!("\u{2212}{removed}"))
@@ -1413,11 +1390,10 @@ fn file_row(
 }
 
 /// The pane's header for one file, painted in every state of the comparison —
-/// settled or not. It is the file row with a label that names the file even
-/// when there is no `diff --git` line to show, and `+0 −0` for a comparison
-/// with nothing in it, because the toggle it carries has to be reachable in every
-/// state the comparison can be in.
-fn file_header(ui: &mut Ui, state: &mut AppState, change: &Option<ChangeRef>) {
+/// settled or not. While the read is waiting, failed or empty, and the rows
+/// that would name the file are absent, this row is the only thing on the pane
+/// that says which file was asked for.
+fn file_header(ui: &mut Ui, change: &Option<ChangeRef>) {
     let Some(change) = change else {
         return;
     };
@@ -1426,7 +1402,7 @@ fn file_header(ui: &mut Ui, state: &mut AppState, change: &Option<ChangeRef>) {
     let label = change
         .path
         .display_name_lossy_or(&change.path.display().to_string());
-    file_row(ui, state, &rect, &label, (0, 0), &mono_font(), false);
+    file_row(ui, &rect, &label, (0, 0), &mono_font(), false);
 }
 
 /// Paint the rename-header row as **one muted band** across the whole row —

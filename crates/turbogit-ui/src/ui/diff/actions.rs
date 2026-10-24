@@ -7,7 +7,8 @@ use crate::ui::components;
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use egui::{
-    Color32, CornerRadius, Pos2, Rect, Response, RichText, Sense, Ui, Vec2, WidgetInfo, WidgetType,
+    Color32, CornerRadius, Popup, Pos2, Rect, Response, RichText, Sense, Ui, Vec2, WidgetInfo,
+    WidgetType,
 };
 use turbogit_app::granular;
 use turbogit_app::keyed_read::DiffTarget;
@@ -133,6 +134,34 @@ pub(super) fn diff_options_menu(ui: &mut Ui, state: &mut AppState) -> bool {
 }
 
 // --- toolbar widgets ---------------------------------------------------------
+
+/// The toolbar's **Diff options** trigger and its popup menu (`⌃⇧D`): the
+/// viewer's two five-value policies. One menu rather than two inline controls
+/// because the two questions are decided together — a reviewer and the code they
+/// are reviewing agree on what changed only once both have an answer.
+///
+/// `⌃⇧D` opens this from the keyboard by arming [`AppState`]'s
+/// `diff_options_open` flag, and the popup's own close — a click outside, or
+/// `Escape` — takes the arm back, so the keyboard route toggles cleanly.
+pub(super) fn diff_options_button(ui: &mut Ui, state: &mut AppState) {
+    let trigger = ui.button(
+        RichText::new("Diff options").font(crate::theme::chrome_font(crate::theme::TYPE_BODY)),
+    );
+    let mut popup = Popup::menu(&trigger);
+    if state.ui.diff_options_open {
+        popup = popup.open(true);
+    }
+    let mut policies_changed = false;
+    match popup.show(|menu| diff_options_menu(menu, state)) {
+        None => state.ui.diff_options_open = false,
+        Some(shown) => policies_changed = shown.inner,
+    }
+    if policies_changed {
+        // A policy is presentation the reader agrees on, and the agreement has to
+        // survive the session it was picked in.
+        state.save_durable_ui();
+    }
+}
 
 /// Hunk navigation ‹ n/N › (spec §8.4). Stepping clamps to [0, total):
 /// Previous never goes above the first hunk, Next never past the last.

@@ -28,15 +28,17 @@
 //!   changed row is always a line toggle and an addition always takes a
 //!   char-range drag.
 //! - **Hunk navigation** ‹ n/N › steps between parsed hunks.
-//! - **The file row carries its own statistics** (spec story 23): a file
-//!   section's `+N −M` change counts, and the **Diff options** menu (`⌃⇧D`) holding
-//!   the viewer's two five-value policies — which whitespace differences count as a
-//!   change at all, and how finely a change is highlighted. They are folded into
-//!   the display model when the diff settles (ADR-0014) and are part of what the
-//!   keyed read is keyed on; they change no byte of the patch partial staging
-//!   composes from. The row is painted in every state of the comparison — settled,
-//!   empty, still computing or failed — so the control that decides what counts as
-//!   a difference does not disappear with it.
+//! - **Per-file statistics on the file row, the policies menu on the toolbar**
+//!   (spec story 23): a file section's `+N −M` change counts paint on the
+//!   section's file row, and the **Diff options** menu (`⌃⇧D`) holding the
+//!   viewer's two five-value policies — which whitespace differences count as a
+//!   change at all, and how finely a change is highlighted — paints on the
+//!   toolbar. The policies are folded into the display model when the diff
+//!   settles (ADR-0014) and are part of what the keyed read is keyed on; they
+//!   change no byte of the patch partial staging composes from. The toolbar is
+//!   painted in every state of the comparison — settled, empty, still computing
+//!   or failed — so the control that decides what counts as a difference does
+//!   not disappear with it.
 //! - Add/del lines paint token-exact backgrounds (`DIFF_ADD_BG` /
 //!   `DIFF_DEL_BG`) with muted `INK_3` gutter numbers; hunk headers sit on
 //!   SURFACE (spec §2.3). None of the diff pair, the added/removed accent pair

@@ -23,8 +23,8 @@
 //!   settings of one shared primitive and keep their labels and enabled flags
 //! - no surface offers a comparison-axis chip group: the pane answers one fixed
 //!   read, so `Repo`, `Staged` and `Local` never appear as mode selectors
-//! - the add/remove counts and the whitespace toggle paint on the file row, and
-//!   the toolbar paints neither
+//! - the add/remove counts paint on the file row, and the diff options menu's
+//!   trigger on the toolbar
 //! - the file row's band height and its label origin are the row shell's
 //! - the synthesised rename header is one muted band across the row
 //!
@@ -239,6 +239,10 @@ fn diff_renders_its_keyed_read_waiting_message_through_the_shared_presenter() {
     ));
     harness.step();
     assert_painted(&harness, "Computing diff…");
+    // The toolbar is pane chrome: its controls are on screen while the read is
+    // still computing, so the comparison toggle never waits on the rows.
+    assert_painted(&harness, "Diff options");
+    assert_painted(&harness, "Side-by-Side");
 }
 
 #[test]
@@ -266,6 +270,8 @@ fn diff_renders_its_keyed_read_failure_message_through_the_shared_presenter() {
         .expect("send diff failure");
     harness.step();
     assert_painted(&harness, "diff read failed");
+    // The toolbar is pane chrome: its controls survive a failed read too.
+    assert_painted(&harness, "Diff options");
 }
 
 /// Step frames until painted output AND the diff read's activity stabilize
@@ -502,7 +508,7 @@ fn whitespace_policy_stops_painting_the_line_pair_it_calls_equal() {
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("ws.txt"));
 
-    // The menu the five values live in replaces the checkbox, on the file row.
+    // The menu the five values live in replaces the checkbox, on the toolbar.
     assert_painted(&h, "Diff options");
     assert_eq!(h.state().ui.diff_policies.whitespace, DiffWhitespace::None);
     assert_painted(&h, "gamma");
@@ -1017,7 +1023,7 @@ fn a_commit_pair_prints_its_own_revisions_in_the_pane_headers() {
 }
 
 /// The file row is a row of the row shell's height and the row shell's text
-/// origin, and gaining the statistics and the toggle did not change either.
+/// origin, and gaining the statistics did not change either.
 /// Its fill is the one row-fill decision, so a file row is not a second
 /// selection treatment.
 fn hovered_file_row(harness: &mut Harness<'_, AppState>) -> (Rect, Pos2) {
@@ -1043,23 +1049,24 @@ fn hovered_file_row(harness: &mut Harness<'_, AppState>) -> (Rect, Pos2) {
     (band, point)
 }
 
-/// Contract: the statistics sit with the thing they describe. The counts and the
-/// diff viewer's settings menu paint **on the file row**, and the diff pane's
-/// toolbar paints neither of them any more.
+/// Contract: the statistics sit with the thing they describe, and the controls
+/// sit with the pane. The counts paint **on the file row** and the diff viewer's
+/// settings menu on **the toolbar** — the toolbar row is pane chrome, present in
+/// every state the pane can be in, which is where a control that decides what
+/// counts as a difference belongs.
 ///
 /// Scoped by position, never by string: a `+1` is a perfectly ordinary thing for
 /// another surface on screen to be painting (the commit window's preview card
 /// header is still a legitimate place for it), so the question is not "how many
 /// `+1`s are on screen" but "where are they".
 #[test]
-fn the_file_row_carries_the_counts_and_the_diff_options_menu() {
+fn the_file_row_carries_the_counts_and_the_toolbar_the_menu() {
     let (_tmp, repo) = repo_mixed();
     let mut h = diff_harness(&repo);
     settle(&mut h);
     open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
-    let toolbar = axis_span(&h);
 
     // The counts: this file's two additions and two deletions — the staged half
     // and the unstaged one, because the read is HEAD-based — in the stats accents,
@@ -1084,16 +1091,19 @@ fn the_file_row_carries_the_counts_and_the_diff_options_menu() {
         );
         assert_eq!(on_row[0].color, ink, "`{text}` keeps its stats accent");
         assert!(
-            galleys.iter().all(|g| !toolbar.contains(g.rect.center())),
-            "the diff toolbar no longer paints the statistics: `{text}` at {:?}",
             galleys
                 .iter()
-                .find(|g| toolbar.contains(g.rect.center()))
+                .all(|g| !toolbar_row(&h).contains(g.rect.center())),
+            "the diff toolbar does not paint the file's statistics: `{text}` at {:?}",
+            galleys
+                .iter()
+                .find(|g| toolbar_row(&h).contains(g.rect.center()))
                 .map(|g| g.rect)
         );
     }
 
-    // The menu's trigger: one control, on the file row, nowhere in the toolbar.
+    // The menu's trigger: one control, on the toolbar row beside the mode
+    // control, nowhere on the file row.
     let toggles: Vec<Rect> = h
         .get_all_by_label("Diff options")
         .map(|n| n.rect())
@@ -1101,17 +1111,35 @@ fn the_file_row_carries_the_counts_and_the_diff_options_menu() {
     assert_eq!(
         toggles.len(),
         1,
-        "the toolbar no longer paints the trigger; exactly one control remains"
+        "exactly one trigger paints, and the file row no longer carries one"
     );
+    let row = toolbar_row(&h);
     assert!(
-        band.contains(toggles[0].center()),
-        "the policy menu belongs to the file row: {:?} is outside {band:?}",
+        toggles[0].center().y >= row.top() - EPS && toggles[0].center().y <= row.bottom() + EPS,
+        "the policy menu belongs on the toolbar's row: {:?} against {row:?}",
         toggles[0]
     );
     assert!(
-        !toolbar.intersects(toggles[0]),
-        "the trigger moved off the toolbar onto the file row: {toggles:?}"
+        toggles[0].left() > row.right(),
+        "the trigger sits right of the mode control, the row's trailing end: \
+         {:?} against {row:?}",
+        toggles[0]
     );
+    assert!(
+        !band.intersects(toggles[0]),
+        "the trigger moved off the file row onto the toolbar: {toggles:?}"
+    );
+}
+
+/// The toolbar's row band, by the view-mode control's own track: the track is
+/// painted on the toolbar row, so its y-range is the row's.
+fn toolbar_row(harness: &Harness<'_, AppState>) -> Rect {
+    let mode = harness.get_by_label("Unified").rect();
+    filled_rects(harness)
+        .into_iter()
+        .find(|(r, c)| *c == Palette::SURFACE_2 && r.contains(mode.center()))
+        .map(|(r, _)| r)
+        .expect("the view-mode control paints its own track")
 }
 
 /// Contract: the file row's height and leading padding are the ROW SHELL's,
@@ -1211,7 +1239,7 @@ fn the_rename_header_reads_as_one_muted_band() {
     );
 }
 
-/// Contract: the file row gained two occupants, and neither of them landed on
+/// Contract: the file row gained a trailing occupant, and it did not land on
 /// top of a row's own click targets. This is the failure mode the placement
 /// risks — a trailing zone hung at the wrong coordinate silently eats a
 /// changed row's click — so it is asserted against every band the rows paint.
@@ -1223,7 +1251,6 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
     open_preview(&mut h, &repo, &repo.join("file.txt"));
 
     let (band, _) = hovered_file_row(&mut h);
-    let toggle = h.get_by_label("Diff options").rect();
     let changed: Vec<Rect> = filled_rects(&h)
         .into_iter()
         .filter(|(_, c)| {
@@ -1240,13 +1267,6 @@ fn the_file_rows_occupants_do_not_overlap_the_rows_own_click_targets() {
         "the staged pair and the unstaged pair are all on screen, each on its own \
          band: {changed:?}"
     );
-    for row in &changed {
-        assert!(
-            !row.intersects(toggle),
-            "the file row's menu trigger sits on a changed row's band {row:?} and \
-             would swallow its click: {toggle:?}"
-        );
-    }
     for row in &changed {
         assert!(
             !row.intersects(band),
