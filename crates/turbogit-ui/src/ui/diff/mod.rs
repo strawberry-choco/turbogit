@@ -71,7 +71,7 @@ mod model;
 mod panes;
 mod view;
 
-pub(crate) use actions::{preview_caret_line, preview_hunk_count, preview_line_counts};
+pub(crate) use actions::{preview_caret_line, preview_hunk_count};
 pub use view::render_diff;
 pub use view::show_diff;
 

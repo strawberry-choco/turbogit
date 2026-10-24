@@ -9,7 +9,7 @@
 //! measured in, and the diff family's monospaced face.
 
 pub(crate) use turbogit_app::diff_model::{
-    DiffModel, DisplayRow, FileMeta, Highlight, PaneKind, Row, RowKind, line_counts, pane_kind,
+    DiffModel, DisplayRow, FileMeta, Highlight, PaneKind, Row, RowKind, pane_kind,
 };
 
 /// Whether `row` is a **file row**: the `Meta` row the parser emits for a file

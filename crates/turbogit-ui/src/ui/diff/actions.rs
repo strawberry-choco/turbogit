@@ -1,7 +1,7 @@
 //! Diff actions and toolbar widgets: hunk/line staging dispatch,
 //! the mode and hunk-nav toolbar, and the gutter stage buttons (spec R2).
 
-use super::model::{DisplayRow, RowKind, line_counts, mono_font};
+use super::model::{DisplayRow, RowKind, mono_font};
 use crate::theme::Palette;
 use crate::ui::components;
 use crate::ui::icons::{self, Icon};
@@ -30,18 +30,6 @@ pub(crate) fn preview_hunk_count(state: &AppState) -> usize {
     state
         .peek(preview_target(state, &change))
         .map_or(0, |diff| diff.model.hunk_count())
-}
-
-/// (added, removed) changed-line counts of the diff the Commit window's
-/// preview would render right now — the header's `+N −M` change-size stats
-/// (issue 06, design doc §5). `(0, 0)` while nothing is selected, still
-/// loading, errored, or the text parses to no rows (binary). Reads the display
-/// model the diff value carries, so the header never reparses the patch text
-/// per frame.
-pub(crate) fn preview_line_counts(state: &AppState, change: &ChangeRef) -> (usize, usize) {
-    state
-        .peek(preview_target(state, change))
-        .map_or((0, 0), |diff| line_counts(&diff.model))
 }
 
 /// The commit window's preview target for `change`: the repository is the one the

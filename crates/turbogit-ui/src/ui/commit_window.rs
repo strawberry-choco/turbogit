@@ -63,7 +63,6 @@ use egui::{
     Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::{Path, PathBuf};
-use turbogit_app::granular;
 use turbogit_app::root_caches::Affected;
 use turbogit_app::shell_writes;
 use turbogit_app::state::{AppState, CommitSubTab, Dialog, PendingConfirm, Toast};
@@ -1103,18 +1102,6 @@ fn status_color(c: &Change) -> Color32 {
     }
 }
 
-/// The preview header's status pill tint: the same change-kind colour the file
-/// row's badge letter wears, resolved through the same [`status_color`] so the
-/// pill and the letter cannot drift. `Modified` is the fallback for a path the
-/// status no longer lists, matching `granular::preview_status`'s own.
-fn preview_status_tint(state: &AppState, change: &ChangeRef) -> Color32 {
-    state
-        .multi
-        .by_id(&change.root)
-        .and_then(|root| root.resolve_change(&change.path))
-        .map_or(Palette::STATUS_MODIFIED, status_color)
-}
-
 /// Row text split for the `[filename] … [dim location]` layout (issue 05):
 /// `("app.rs", Some("src/"))` for `src/app.rs`; files at the repo root have
 /// no location to paint (`None`). The location renders dim after the name —
@@ -1815,17 +1802,15 @@ fn changes_header_overflow(trigger: &egui::Response) {
 
 fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
     // Redesign Phase 4 (mockup): the preview is a full-height card whose
-    // header states what is previewed and in which mode, so the
-    // selection→preview link reads off the frame instead of hiding in the
-    // empty state. The card body is the diff pane, and the pane's **file row**
-    // carries the `+N −M` counts (spec story 23) — and the header carries them
-    // too. See [`diff_stats`] for why the header's copy is deliberate.
+    // header states what is previewed, so the selection→preview link reads
+    // off the frame instead of hiding in the empty state. The card body is
+    // the diff pane, and the pane's toolbar carries the mode, the `+N −M`
+    // counts and the hunk nav (spec story 23).
     widgets::card(ui, widgets::CardFrame::default(), |ui| {
         let preview = state.ui.preview_change.clone();
         preview_header(ui, state, preview.as_ref());
         match preview {
             Some(change) => {
-                diff_stats(ui, state, &change);
                 let root = change.root.clone();
                 crate::ui::diff::render_diff(ui, state, &root, &None, &None, &Some(change));
             }
@@ -1840,21 +1825,13 @@ fn preview_and_editor_pane(ui: &mut Ui, state: &mut AppState) {
 }
 
 /// The preview card's header strip (issue 06, design doc §5; redesign Phase
-/// 4): the zone title, then the previewed file's path and its status pill,
-/// with the active diff mode and the prev/next change navigation
-/// right-aligned. Renders from `ui.preview_change` every frame, so selecting a
-/// row updates the header immediately. The nav buttons retarget the preview to
-/// the adjacent changed file — the same path a file-row click uses, so
-/// the diff read loads the new diff. The interactive mode toggle, hunk nav and
-/// whitespace switches stay in the diff toolbar below (issue 06 checklist);
-/// the mode pill here only states which mode that toolbar currently shows.
-///
-/// The `+N −M` pair prints twice in this card — here and on the diff pane's own
-/// file row — and it is the **same pair** both times. That duplication is the
-/// card header's job (see [`diff_stats`]); what must never happen is one copy
-/// drifting from the other, and this is the ratchet for that: both readings are
-/// taken from the painted frame, and every `+N` / `−M` pair in the preview card
-/// has to be the same pair.
+/// 4): the zone title, then the previewed file's path, with the prev/next
+/// change navigation right-aligned. Renders from `ui.preview_change` every
+/// frame, so selecting a row updates the header immediately. The nav buttons
+/// retarget the preview to the adjacent changed file — the same path a
+/// file-row click uses, so the diff read loads the new diff. The mode, the
+/// counts and the comparison controls belong to the diff toolbar the body
+/// renders, and the header does not restate them.
 fn preview_header(ui: &mut Ui, state: &mut AppState, change: Option<&ChangeRef>) {
     widgets::card_header(ui, |ui| {
         ui.horizontal(|ui| {
@@ -1877,66 +1854,13 @@ fn preview_header(ui: &mut Ui, state: &mut AppState, change: Option<&ChangeRef>)
                 path_resp.widget_info(|| {
                     WidgetInfo::labeled(WidgetType::Label, true, format!("Previewing {path_text}"))
                 });
-                let status = granular::preview_status(state, Some(change));
-                pill(
-                    ui,
-                    status_chip_label(status),
-                    preview_status_tint(state, change),
-                );
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if let Some(change) = change {
                     change_nav(ui, state, change);
                 }
-                let mode = if state.ui.diff_side_by_side {
-                    "Side-by-side diff"
-                } else {
-                    "Unified diff"
-                };
-                pill(ui, mode, Palette::INK_2);
             });
         });
-    });
-}
-
-/// The `+N −M` change-size stats, in the preview card's body under the header
-/// strip and above the diff. Counts land once the async diff text is cached, so
-/// they read 0 while loading.
-///
-/// **The header keeps a copy on purpose, and this is where that is recorded.**
-///
-/// Ticket 12 moved the counts onto the diff pane's own file row, so the same
-/// two numbers now paint twice in this card: here, in the card's summary strip,
-/// and there, on the file row. Deleting this copy looks like the obvious
-/// de-duplication, and it would be wrong for one reason: **the header is the
-/// card's persistent identity row.** It already restates the previewed file's
-/// name and its status, both of which the file row prints as well, and that
-/// restatement is the header's job — it is what tells a reader which file they
-/// are looking at after two hundred lines of diff have scrolled the file row
-/// off the top. Size is part of that identity, and it is the one part of it the
-/// scroller takes away first. A card that could only name the file while the
-/// name was on screen would be a worse card.
-///
-/// So the duplication is the header doing the header's job, and the invariant
-/// that makes it safe is that **both copies are the same number**: the header's
-/// and the file row's are read from one source (`preview_line_counts` here, the
-/// same display model in the diff pane), and
-/// `tests/commit_window.rs` asserts the two agree. What is forbidden is one
-/// copy drifting from the other, which is a different defect and a real one.
-fn diff_stats(ui: &mut Ui, state: &AppState, change: &ChangeRef) {
-    let (added, removed) = crate::ui::diff::preview_line_counts(state, change);
-    let stat_font = FontId::new(crate::theme::TYPE_BODY, FontFamily::Proportional);
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(format!("+{added}"))
-                .font(stat_font.clone())
-                .color(Palette::DIFF_ADD_ACCENT),
-        );
-        ui.label(
-            RichText::new(format!("\u{2212}{removed}"))
-                .font(stat_font)
-                .color(Palette::DIFF_DEL_ACCENT),
-        );
     });
 }
 
@@ -1958,47 +1882,6 @@ fn change_nav(ui: &mut Ui, state: &mut AppState, change: &ChangeRef) {
     prev.widget_info(|| WidgetInfo::labeled(WidgetType::Button, prev_enabled, "Previous change"));
     if prev_enabled && prev.clicked() {
         state.ui.preview_change = current.and_then(|i| files.get(i - 1)).cloned();
-    }
-}
-
-/// A small non-interactive pill: `label` centred on a `SURFACE_3` roundel,
-/// tinted with `tint`. The preview header uses it for the change status
-/// (issue 06, design doc §5 — tinted with the row's status colour, the same
-/// mapping the file rows use) and for the active diff mode, so neither
-/// pretends to be a button.
-fn pill(ui: &mut Ui, label: &str, tint: Color32) {
-    // The shared chip height at the compact-density padding: this roundel is a
-    // quiet label, not a control, so it takes the compact padding rather than
-    // a control's (conformance issue 05).
-    let pad_x = crate::theme::DENSITY_COMPACT_BUTTON.x;
-    let galley = ui.painter().layout_no_wrap(
-        label.to_owned(),
-        FontId::new(crate::theme::TYPE_CONTROL, FontFamily::Proportional),
-        tint,
-    );
-    let geometry = widgets::ChipGeometry {
-        height: widgets::CHIP_HEIGHT,
-        pad_x,
-        radius: widgets::CHIP_GEOMETRY.radius,
-    };
-    let size = geometry.size(&galley);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    geometry.paint(ui.painter(), rect, galley, Palette::SURFACE_3, tint);
-    let resp = ui.interact(rect, ui.auto_id_with(("pill", label)), Sense::hover());
-    resp.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, label));
-}
-
-/// Full-word status label for the diff header chip.
-fn status_chip_label(status: ChangeStatus) -> &'static str {
-    match status {
-        ChangeStatus::Modified => "Modified",
-        ChangeStatus::Added => "Added",
-        ChangeStatus::Deleted => "Deleted",
-        ChangeStatus::Renamed => "Renamed",
-        ChangeStatus::Copied => "Copied",
-        ChangeStatus::Unversioned => "Unversioned",
-        ChangeStatus::Ignored => "Ignored",
-        ChangeStatus::Conflicted => "Conflicted",
     }
 }
 

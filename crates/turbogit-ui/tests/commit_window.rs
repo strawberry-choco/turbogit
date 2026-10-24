@@ -1153,10 +1153,11 @@ fn diff_preview_reflects_selected_file() {
 }
 
 #[test]
-fn diff_header_shows_path_status_chip_stats_and_nav_on_selection() {
+fn diff_header_shows_path_and_nav_on_selection() {
     // Issue 06 (design doc §5): selecting a changed file paints the preview
-    // header — the path, a `Modified` status chip, `+N −M` change-size
-    // stats, and prev/next change navigation over the changed files.
+    // header — the path and prev/next change navigation over the changed
+    // files. The header carries nothing else: status and mode are facts the
+    // changelist row and the diff toolbar already state.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "header-repo");
     // 1 removed / 2 added: a middle line becomes two (verified against git:
@@ -1175,20 +1176,27 @@ fn diff_header_shows_path_status_chip_stats_and_nav_on_selection() {
     h.get_by_label("base.txt").click();
     h.run();
 
-    // Path, status chip, and nav paint immediately on selection.
+    // Path and nav paint immediately on selection.
     h.get_by_label("Previewing base.txt");
-    assert_painted(&h, "Modified");
     h.get_by_label("Previous change");
     h.get_by_label("Next change");
 
-    // The `+2 −1` stats land once the async diff is computed.
+    // The status pill and the mode pill are gone from the header; the mode
+    // lives on the diff toolbar's segmented control, spelled `Unified`.
+    assert_not_painted(&h, "Modified");
+    assert_not_painted(&h, "Unified diff");
+    assert_not_painted(&h, "Side-by-side diff");
+
+    // The `+2 −1` counts land once the async diff is computed, on the diff
+    // toolbar the header no longer duplicates.
     assert!(
         wait_until(15_000, || {
             h.run();
             let text = painted_text(&h).join("\n");
             text.contains("+2") && text.contains("\u{2212}1")
         }),
-        "the header must show the +2 −1 change-size stats once the diff is computed"
+        "the diff toolbar must show the +2 −1 change-size stats once the diff \
+         is computed"
     );
 }
 
@@ -2281,10 +2289,13 @@ fn the_file_filter_gets_its_own_full_width_row_under_the_header() {
 }
 
 #[test]
-fn preview_is_a_card_headered_by_the_path_status_and_diff_mode() {
+fn preview_is_a_card_headered_by_the_path_and_navigation() {
     // Redesign Phase 4 (mockup): the flat "Preview" heading becomes a
-    // full-height card whose header states what is being previewed and in
-    // which mode — the selection→preview link the empty state used to hide.
+    // full-height card whose header states what is being previewed, with the
+    // prev/next navigation beside it — the selection→preview link the empty
+    // state used to hide. Status and mode pills are deliberately absent: the
+    // changelist row already carries the status letter and the diff toolbar
+    // carries the mode.
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "card-preview-repo");
     std::fs::write(repo.path.join("base.txt"), "a\nb\nc\n").unwrap();
@@ -2306,7 +2317,7 @@ fn preview_is_a_card_headered_by_the_path_status_and_diff_mode() {
         "the previewed path must sit inside the preview card {card:?}, got {path:?}"
     );
 
-    for label in ["Modified", "Unified diff", "Previous change", "Next change"] {
+    for label in ["Previous change", "Next change"] {
         let rect = h.get_by_label(label).rect();
         assert!(
             card.contains_rect(rect),
@@ -2319,6 +2330,11 @@ fn preview_is_a_card_headered_by_the_path_status_and_diff_mode() {
             rect.center().y
         );
     }
+
+    // The header states the file and nothing else.
+    assert_not_painted(&h, "Modified");
+    assert_not_painted(&h, "Unified diff");
+    assert_not_painted(&h, "Side-by-side diff");
 }
 
 #[test]
@@ -3841,18 +3857,16 @@ fn a_typed_message_is_editable_counted_and_commits() {
     );
 }
 
-/// **The `+N −M` pair prints twice in the preview card and both copies are the
-/// same pair.**
+/// **The preview card paints one `+N −M` pair, and it is the file's true
+/// count.**
 ///
-/// Ticket 12 moved the counts onto the diff pane's file row, so this card paints
-/// them in its summary strip *and* on the file row. The duplication is
-/// deliberate (see `diff_stats` in `commit_window.rs`): the header is the card's
-/// persistent identity row, and it already restates the file's name and status,
-/// which the file row prints too. What is forbidden is the two copies
-/// **disagreeing** — a header that says `+2 −1` over a file row that says
-/// `+1 −0` is a real defect, and nothing in either view would catch it.
+/// Ticket 12 put the counts on the diff pane, and the header used to keep a
+/// second copy as its "identity row" restatement. The header no longer
+/// restates: the card's one pair paints on the diff toolbar, read from the same
+/// display model the rows are paged from, so a second copy could only ever be a
+/// stale one.
 #[test]
-fn the_preview_cards_two_line_count_copies_agree() {
+fn the_preview_card_paints_one_change_size_pair() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "card-counts");
     std::fs::write(repo.path.join("base.txt"), "a\nb\nc\n").unwrap();
@@ -3870,11 +3884,12 @@ fn the_preview_cards_two_line_count_copies_agree() {
             let text = painted_text(&h);
             text.iter().any(|t| t.contains("+2")) && text.iter().any(|t| t.contains("\u{2212}1"))
         }),
-        "both copies of the change-size stats must paint once the diff lands: {:?}",
+        "the change-size stats must paint once the diff lands: {:?}",
         painted_text(&h)
     );
 
-    // Every painted `+N` / `−M` pair in the preview card must be the same pair.
+    // The card holds exactly one `+N` / `−M` pair — the toolbar's — and it is
+    // the file's own count.
     let card = card_rect(
         &h,
         galley_origin(&h, "Preview").expect("the preview heading"),
@@ -3900,40 +3915,14 @@ fn the_preview_cards_two_line_count_copies_agree() {
         .filter(|(t, _)| t.starts_with('\u{2212}'))
         .map(|(t, _)| t.as_str())
         .collect();
-    assert!(
-        added.len() >= 2 && removed.len() >= 2,
-        "the pair is painted in the card's summary strip AND on the file row, so \
-         both copies must be there: added={added:?} removed={removed:?} pairs={pairs:?}"
+    assert_eq!(
+        added,
+        ["+2"],
+        "the card paints exactly one `+N`, the file's own count: {pairs:?}"
     );
-    for t in &added {
-        assert_eq!(
-            *t, "+2",
-            "every `+N` in the preview card is the same file's count: {added:?}"
-        );
-    }
-    for t in &removed {
-        assert_eq!(
-            *t, "\u{2212}1",
-            "every `−M` in the preview card is the same file's count: {removed:?}"
-        );
-    }
-    // And the two copies are on different rows, which is what makes them a
-    // summary strip and a file row rather than one pair drawn twice by accident.
-    let header_copy = pairs
-        .iter()
-        .filter(|(t, _)| t.starts_with('+'))
-        .map(|(_, r)| r)
-        .min_by(|a, b| a.top().partial_cmp(&b.top()).expect("finite top"))
-        .expect("the header's copy");
-    let row_copy = pairs
-        .iter()
-        .filter(|(t, _)| t.starts_with('+'))
-        .map(|(_, r)| r)
-        .max_by(|a, b| a.top().partial_cmp(&b.top()).expect("finite top"))
-        .expect("the file row's copy");
-    assert!(
-        row_copy.top() > header_copy.bottom() + 8.0,
-        "the two copies sit on different rows: header {header_copy:?} vs file row \
-         {row_copy:?}"
+    assert_eq!(
+        removed,
+        ["\u{2212}1"],
+        "the card paints exactly one `−M`, the file's own count: {pairs:?}"
     );
 }
