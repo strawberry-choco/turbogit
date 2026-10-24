@@ -813,9 +813,9 @@ pub enum CleanTreeMethod {
 /// screen 11). Only meaningful while `VcsSettings::incoming_poll` is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum IncomingCheckInterval {
-    #[default]
     Min15,
     Min30,
+    #[default]
     Min60,
 }
 

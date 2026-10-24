@@ -628,13 +628,13 @@ fn incoming_check_is_a_toggle_with_an_interval_selector() {
     open_update_method(&mut harness);
 
     // Screen 11: the Incoming check row is a checkbox plus an interval
-    // selector, off by default and defaulting to every 15 minutes.
+    // selector, off by default and defaulting to one hour.
     let draft = harness.state().ui.settings_draft.as_ref().unwrap();
     assert!(!draft.incoming_poll, "incoming check ships disabled");
     assert_eq!(
         draft.incoming_interval,
-        IncomingCheckInterval::Min15,
-        "the interval selector defaults to Every 15 minutes"
+        IncomingCheckInterval::Min60,
+        "the interval selector defaults to Every hour"
     );
     assert!(
         harness
@@ -642,7 +642,7 @@ fn incoming_check_is_a_toggle_with_an_interval_selector() {
             .is_some(),
         "the toggle must be queryable by its own label"
     );
-    assert_painted(&harness, "Every 15 minutes");
+    assert_painted(&harness, "Every hour");
 }
 
 #[test]
@@ -655,7 +655,7 @@ fn incoming_check_edits_persist_on_apply() {
     harness.get_by_label("Check for incoming commits").click();
     settle(&mut harness);
     // The interval combo is identified by its current value, not a label.
-    harness.get_by_value("Every 15 minutes").click();
+    harness.get_by_value("Every hour").click();
     settle(&mut harness);
     harness.get_by_label("Every 30 minutes").click();
     settle(&mut harness);
