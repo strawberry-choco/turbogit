@@ -245,12 +245,24 @@ pub trait GitExecutor: Send + Sync {
         force: bool,
     ) -> TgResult<String>;
 
-    /// `git commit` (optionally `--amend`).
-    fn commit(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId>;
+    /// `git commit` (optionally `--amend`, `--no-verify`).
+    fn commit(
+        &self,
+        root: &Path,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+    ) -> TgResult<CommitId>;
 
     /// Commit only what is already staged in the index (no `-a`). Used for
     /// partial (selected-files / selected-hunks) commits.
-    fn commit_index(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId>;
+    fn commit_index(
+        &self,
+        root: &Path,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+    ) -> TgResult<CommitId>;
 
     /// `git merge`.
     fn merge(&self, root: &Path, target: &str, opts: &MergeOpts) -> TgResult<()>;

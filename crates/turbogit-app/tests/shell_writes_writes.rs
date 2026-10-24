@@ -211,6 +211,7 @@ fn committing_the_index_lands_and_an_amend_rewrites_the_last_commit() {
         root: root.clone(),
         message: "add a file".into(),
         amend: false,
+        no_verify: false,
     };
     assert_eq!(op.label(), "Commit");
     state.dispatch(op);
@@ -225,6 +226,7 @@ fn committing_the_index_lands_and_an_amend_rewrites_the_last_commit() {
         root: root.clone(),
         message: "add a file, amended".into(),
         amend: true,
+        no_verify: false,
     };
     assert_eq!(op.label(), "Commit");
     state.dispatch(op);
@@ -264,6 +266,7 @@ fn committing_takes_the_index_and_leaves_an_unstaged_file_out() {
         root: root.clone(),
         message: "index only".into(),
         amend: false,
+        no_verify: false,
     };
     state.dispatch(op);
     state.drain_events();

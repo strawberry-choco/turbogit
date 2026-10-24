@@ -90,6 +90,7 @@ fn one_of_every_variant() -> Vec<Operation> {
             root: r.clone(),
             message: "a subject".into(),
             amend: false,
+            no_verify: false,
         },
         Operation::drop_commit(&r, "feature", SHA, &s),
         Operation::reword_commit(&r, "feature", SHA, "a better message", &s),

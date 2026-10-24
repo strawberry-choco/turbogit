@@ -3820,3 +3820,59 @@ fn the_preview_card_paints_one_change_size_pair() {
         "the card paints exactly one `−M`, the file's own count: {pairs:?}"
     );
 }
+
+// --- the commit options menu (no-verify, one-shot) -----------------------------
+
+/// A repo whose `pre-commit` hook fails, so only a `--no-verify` commit lands.
+/// The hook is the assertion's teeth: a dispatch that lost the toggle hangs
+/// the repository at one commit and the wait below times out.
+fn hooked_repo(parent: &Path, name: &str) -> Repo {
+    let repo = temp_repo(parent, name);
+    let hook = repo.path.join(".git").join("hooks").join("pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    repo
+}
+
+#[test]
+fn commit_options_toggle_skips_hooks_and_unchecks_after_the_commit() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = hooked_repo(parent.path(), "hooked-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
+    h.state_mut().ui.commit_message = "no-verify subject".into();
+    h.run();
+
+    // The card's options menu carries the toggle; checking it arms the next
+    // commit only.
+    h.get_by_label("Commit card options").click();
+    h.run();
+    h.get_by_label("Do not run git commit hooks").click();
+    h.run();
+    assert!(
+        h.state().ui.commit_no_verify,
+        "the menu item must check the card's one-shot toggle"
+    );
+
+    commit_action_button(&h).click();
+    h.run();
+
+    assert!(
+        wait_until(15_000, || repo
+            .subjects()
+            .contains(&"no-verify subject".to_string())),
+        "the commit must land past a failing pre-commit hook, i.e. with \
+         --no-verify; got {:?}",
+        repo.subjects()
+    );
+    assert!(
+        !h.state().ui.commit_no_verify,
+        "a successful commit must uncheck the toggle"
+    );
+}

@@ -845,7 +845,7 @@ fn a_landed_commit_that_owed_an_open_opens_the_push_dialog() {
         commit_writes::set_staged(&root, Path::new("chained.txt"), true),
     );
 
-    state.dispatch_commit(&root, "the chained subject", false, true);
+    state.dispatch_commit(&root, "the chained subject", false, false, true);
     state.drain_events();
     assert!(
         !state.ui.busy,
@@ -883,7 +883,7 @@ fn a_commit_that_fails_opens_nothing_and_drops_the_ask() {
     // is empty and `git commit -m` exits 1 on "nothing to commit". The failure is
     // git's own, with no preflight or synthetic error between the dispatch and the
     // completion.
-    state.dispatch_commit(&root, "nothing is staged", false, true);
+    state.dispatch_commit(&root, "nothing is staged", false, false, true);
     state.drain_events();
 
     let entries = &state.ui.activity.entries;
@@ -969,7 +969,7 @@ fn a_plain_commit_clears_an_owed_open_instead_of_stranding_it() {
     // The ask the developer abandoned by clicking plain Commit.
     state.ui.commit_push_dialog_pending = Some(root.clone());
 
-    state.dispatch_commit(&root, "a plain subject", false, false);
+    state.dispatch_commit(&root, "a plain subject", false, false, false);
     state.drain_events();
 
     assert!(

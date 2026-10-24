@@ -452,6 +452,11 @@ pub enum Operation {
         root: RootId,
         message: String,
         amend: bool,
+        /// Skip this commit's hooks (`git commit --no-verify`). The commit
+        /// card's one-shot toggle answers for the commit it dispatches only;
+        /// settlement clears it on success, so it never outlives the commit
+        /// it armed.
+        no_verify: bool,
     },
     /// Remove ONE commit from `branch`'s history and replay everything built on
     /// top of it. A rewrite, so it carries the settings the protected-branch
@@ -1040,9 +1045,15 @@ impl Operation {
                 root,
                 message,
                 amend,
+                no_verify,
             } => {
-                let _ =
-                    turbogit_services::changes::commit_index(vcs, root.as_path(), &message, amend)?;
+                let _ = turbogit_services::changes::commit_index(
+                    vcs,
+                    root.as_path(),
+                    &message,
+                    amend,
+                    no_verify,
+                )?;
                 Ok(())
             }
             Self::DropCommit {

@@ -109,95 +109,97 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     egui::CentralPanel::default()
         .frame(shell_frame)
         .show(ui, |ui| {
-        if state.show_welcome() {
-            // Welcome page: no project is open, so the tool-window tab strip
-            // (Changes / Log / Branches / Worktrees / Submodules) is dead
-            // chrome — skip it and show only the page itself.
-            super::welcome::show(ui, state);
-        } else {
-            // The tool window, the activity log panel (issue #04), and the
-            // workspace sidebar (issue #05) share the central body with the
-            // tab strip. Reserve explicit rects: a `ui.horizontal` would size
-            // its children to one interact row, collapsing every ScrollArea
-            // inside the tool window. The sidebar claims the left edge of the
-            // work area and runs the full height of it; the tab strip starts
-            // at the sidebar's right edge and is the content column's
-            // topmost band, since the repo header above it was deleted; the
-            // activity log keeps its full-width strip at the bottom (screen
-            // 01).
-            let body = ui.available_rect_before_wrap();
-            let activity_h = if state.ui.activity.expanded {
-                super::activity_panel::ACTIVITY_HEIGHT
+            if state.show_welcome() {
+                // Welcome page: no project is open, so the tool-window tab strip
+                // (Changes / Log / Branches / Worktrees / Submodules) is dead
+                // chrome — skip it and show only the page itself.
+                super::welcome::show(ui, state);
             } else {
-                super::activity_panel::ACTIVITY_COLLAPSED_HEIGHT
-            };
-            let activity_rect =
-                Rect::from_min_max(Pos2::new(body.min.x, body.max.y - activity_h), body.max);
-            let work_rect =
-                Rect::from_min_max(body.min, Pos2::new(body.max.x, activity_rect.min.y));
-            // The sidebar is a wide-window region: below the threshold the
-            // remaining tool area can no longer hold the log's four panes at
-            // their minimum sizes (issue #23), so the rail hides and the
-            // pre-sidebar geometry holds (issue #05).
-            let sidebar_visible = work_rect.width() >= MIN_SIDEBAR_WINDOW_WIDTH;
-            let sidebar_w = if sidebar_visible {
-                super::sidebar::SIDEBAR_WIDTH
-            } else {
-                0.0
-            };
-            let sidebar_rect = Rect::from_min_max(
-                work_rect.min,
-                Pos2::new(work_rect.min.x + sidebar_w, work_rect.max.y),
-            );
-            let right_rect = Rect::from_min_max(
-                Pos2::new(sidebar_rect.max.x, work_rect.min.y),
-                work_rect.max,
-            );
-            // The tab strip took the deleted header's place at the top of
-            // the content column: it starts at the sidebar's right edge and
-            // is flush with the window's top edge.
-            let tabs_rect = Rect::from_min_max(
-                right_rect.min,
-                Pos2::new(right_rect.max.x, right_rect.min.y + TAB_STRIP_HEIGHT),
-            );
-            let content_rect =
-                Rect::from_min_max(Pos2::new(right_rect.min.x, tabs_rect.max.y), right_rect.max);
-            // The tool window takes the full content width — there is no
-            // third metadata column beside it (local-changes redesign 03).
-            let tool_rect = content_rect;
+                // The tool window, the activity log panel (issue #04), and the
+                // workspace sidebar (issue #05) share the central body with the
+                // tab strip. Reserve explicit rects: a `ui.horizontal` would size
+                // its children to one interact row, collapsing every ScrollArea
+                // inside the tool window. The sidebar claims the left edge of the
+                // work area and runs the full height of it; the tab strip starts
+                // at the sidebar's right edge and is the content column's
+                // topmost band, since the repo header above it was deleted; the
+                // activity log keeps its full-width strip at the bottom (screen
+                // 01).
+                let body = ui.available_rect_before_wrap();
+                let activity_h = if state.ui.activity.expanded {
+                    super::activity_panel::ACTIVITY_HEIGHT
+                } else {
+                    super::activity_panel::ACTIVITY_COLLAPSED_HEIGHT
+                };
+                let activity_rect =
+                    Rect::from_min_max(Pos2::new(body.min.x, body.max.y - activity_h), body.max);
+                let work_rect =
+                    Rect::from_min_max(body.min, Pos2::new(body.max.x, activity_rect.min.y));
+                // The sidebar is a wide-window region: below the threshold the
+                // remaining tool area can no longer hold the log's four panes at
+                // their minimum sizes (issue #23), so the rail hides and the
+                // pre-sidebar geometry holds (issue #05).
+                let sidebar_visible = work_rect.width() >= MIN_SIDEBAR_WINDOW_WIDTH;
+                let sidebar_w = if sidebar_visible {
+                    super::sidebar::SIDEBAR_WIDTH
+                } else {
+                    0.0
+                };
+                let sidebar_rect = Rect::from_min_max(
+                    work_rect.min,
+                    Pos2::new(work_rect.min.x + sidebar_w, work_rect.max.y),
+                );
+                let right_rect = Rect::from_min_max(
+                    Pos2::new(sidebar_rect.max.x, work_rect.min.y),
+                    work_rect.max,
+                );
+                // The tab strip took the deleted header's place at the top of
+                // the content column: it starts at the sidebar's right edge and
+                // is flush with the window's top edge.
+                let tabs_rect = Rect::from_min_max(
+                    right_rect.min,
+                    Pos2::new(right_rect.max.x, right_rect.min.y + TAB_STRIP_HEIGHT),
+                );
+                let content_rect = Rect::from_min_max(
+                    Pos2::new(right_rect.min.x, tabs_rect.max.y),
+                    right_rect.max,
+                );
+                // The tool window takes the full content width — there is no
+                // third metadata column beside it (local-changes redesign 03).
+                let tool_rect = content_rect;
 
-            let mut sidebar_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(sidebar_rect)
-                    .layout(Layout::top_down(Align::Min)),
-            );
-            if sidebar_visible {
-                super::sidebar::show(&mut sidebar_ui, state);
+                let mut sidebar_ui = ui.new_child(
+                    UiBuilder::new()
+                        .max_rect(sidebar_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                );
+                if sidebar_visible {
+                    super::sidebar::show(&mut sidebar_ui, state);
+                }
+                ui.advance_cursor_after_rect(sidebar_rect);
+                let mut tabs_ui = ui.new_child(
+                    UiBuilder::new()
+                        .max_rect(tabs_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                );
+                render_tab_strip(&mut tabs_ui, state);
+                ui.advance_cursor_after_rect(tabs_rect);
+                let mut tool_ui = ui.new_child(
+                    UiBuilder::new()
+                        .max_rect(tool_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                );
+                show_tool_window(&mut tool_ui, state);
+                ui.advance_cursor_after_rect(tool_rect);
+                let mut activity_ui = ui.new_child(
+                    UiBuilder::new()
+                        .max_rect(activity_rect)
+                        .layout(Layout::top_down(Align::Min)),
+                );
+                super::activity_panel::show(&mut activity_ui, state);
+                ui.advance_cursor_after_rect(activity_rect);
             }
-            ui.advance_cursor_after_rect(sidebar_rect);
-            let mut tabs_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(tabs_rect)
-                    .layout(Layout::top_down(Align::Min)),
-            );
-            render_tab_strip(&mut tabs_ui, state);
-            ui.advance_cursor_after_rect(tabs_rect);
-            let mut tool_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(tool_rect)
-                    .layout(Layout::top_down(Align::Min)),
-            );
-            show_tool_window(&mut tool_ui, state);
-            ui.advance_cursor_after_rect(tool_rect);
-            let mut activity_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(activity_rect)
-                    .layout(Layout::top_down(Align::Min)),
-            );
-            super::activity_panel::show(&mut activity_ui, state);
-            ui.advance_cursor_after_rect(activity_rect);
-        }
-    });
+        });
 
     // While an async op or a keyed read is in flight, keep frames coming so its
     // completion (OpCompleted → refresh → reload, or a settled cache value)

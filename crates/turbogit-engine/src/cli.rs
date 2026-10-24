@@ -1395,10 +1395,19 @@ impl GitExecutor for CliExecutor {
         Ok(stderr)
     }
 
-    fn commit(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId> {
+    fn commit(
+        &self,
+        root: &Path,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+    ) -> TgResult<CommitId> {
         let mut a: Vec<String> = vec!["commit".to_string(), "-a".to_string()];
         if amend {
             a.push("--amend".to_string());
+        }
+        if no_verify {
+            a.push("--no-verify".to_string());
         }
         a.push("-m".to_string());
         a.push(message.to_string());
@@ -1474,10 +1483,19 @@ impl GitExecutor for CliExecutor {
         Ok(())
     }
 
-    fn commit_index(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId> {
+    fn commit_index(
+        &self,
+        root: &Path,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+    ) -> TgResult<CommitId> {
         let mut a: Vec<String> = vec!["commit".to_string()];
         if amend {
             a.push("--amend".to_string());
+        }
+        if no_verify {
+            a.push("--no-verify".to_string());
         }
         a.push("-m".to_string());
         a.push(message.to_string());

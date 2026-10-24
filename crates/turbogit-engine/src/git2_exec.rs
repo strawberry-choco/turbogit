@@ -1029,12 +1029,24 @@ impl GitExecutor for Git2Executor {
         self.cli.push_dry_run(root, remote, branch, force)
     }
 
-    fn commit(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId> {
-        self.cli.commit(root, message, amend)
+    fn commit(
+        &self,
+        root: &Path,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+    ) -> TgResult<CommitId> {
+        self.cli.commit(root, message, amend, no_verify)
     }
 
-    fn commit_index(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId> {
-        self.cli.commit_index(root, message, amend)
+    fn commit_index(
+        &self,
+        root: &Path,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+    ) -> TgResult<CommitId> {
+        self.cli.commit_index(root, message, amend, no_verify)
     }
 
     fn merge(&self, root: &Path, target: &str, opts: &MergeOpts) -> TgResult<()> {

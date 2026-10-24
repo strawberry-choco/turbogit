@@ -42,14 +42,16 @@ pub fn unstage_paths(vcs: &dyn GitExecutor, root: &Path, paths: &[PathBuf]) -> T
 /// then-commit arm this replaced swept in every tracked change whenever the
 /// window's own selection was empty, and the partial-staging partition existed
 /// only to protect a granular selection — which is already in the index, and is
-/// therefore this function's only input now.
+/// therefore this function's only input now. `no_verify` skips the repo's
+/// commit hooks for this one commit (`git commit --no-verify`).
 pub fn commit_index(
     vcs: &dyn GitExecutor,
     root: &Path,
     message: &str,
     amend: bool,
+    no_verify: bool,
 ) -> TgResult<CommitId> {
-    vcs.commit_index(root, message, amend)
+    vcs.commit_index(root, message, amend, no_verify)
 }
 
 /// Discard working-tree edits for the selected changes via `vcs.restore`.
@@ -71,7 +73,7 @@ mod tests {
         let engine = FakeExecutor::new();
         let root = PathBuf::from("/repo");
 
-        let id = commit_index(&engine, &root, "msg", false).unwrap();
+        let id = commit_index(&engine, &root, "msg", false, false).unwrap();
 
         assert_eq!(id, "bbbb", "the index is committed through commit_index");
         assert_eq!(
@@ -86,7 +88,7 @@ mod tests {
         let engine = FakeExecutor::new();
         let root = PathBuf::from("/repo");
 
-        commit_index(&engine, &root, "msg", false).unwrap();
+        commit_index(&engine, &root, "msg", false, false).unwrap();
 
         let calls = engine.calls.lock().unwrap().clone();
         assert_eq!(
@@ -106,7 +108,7 @@ mod tests {
         let engine = FakeExecutor::new();
         let root = PathBuf::from("/repo");
 
-        commit_index(&engine, &root, "msg", true).unwrap();
+        commit_index(&engine, &root, "msg", true, false).unwrap();
 
         assert_eq!(
             engine.calls.lock().unwrap().as_slice(),

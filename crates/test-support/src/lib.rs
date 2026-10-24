@@ -545,20 +545,32 @@ impl GitExecutor for RecordingExecutor {
         self.inner.push_dry_run(root, remote, branch, force)
     }
 
-    fn commit(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId> {
+    fn commit(
+        &self,
+        root: &Path,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+    ) -> TgResult<CommitId> {
         self.calls
             .lock()
             .expect("calls mutex")
             .push(RecordedCall::CommitAll);
-        self.inner.commit(root, message, amend)
+        self.inner.commit(root, message, amend, no_verify)
     }
 
-    fn commit_index(&self, root: &Path, message: &str, amend: bool) -> TgResult<CommitId> {
+    fn commit_index(
+        &self,
+        root: &Path,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+    ) -> TgResult<CommitId> {
         self.calls
             .lock()
             .expect("calls mutex")
             .push(RecordedCall::CommitIndex);
-        self.inner.commit_index(root, message, amend)
+        self.inner.commit_index(root, message, amend, no_verify)
     }
 
     fn merge(&self, root: &Path, target: &str, opts: &MergeOpts) -> TgResult<()> {

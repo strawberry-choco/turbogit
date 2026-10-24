@@ -412,12 +412,24 @@ impl GitExecutor for FakeExecutor {
         Ok(String::new())
     }
 
-    fn commit(&self, _root: &Path, _message: &str, _amend: bool) -> TgResult<CommitId> {
+    fn commit(
+        &self,
+        _root: &Path,
+        _message: &str,
+        _amend: bool,
+        _no_verify: bool,
+    ) -> TgResult<CommitId> {
         self.calls.lock().unwrap().push(Call::CommitAll);
         Ok("aaaa".into())
     }
 
-    fn commit_index(&self, _root: &Path, _message: &str, _amend: bool) -> TgResult<CommitId> {
+    fn commit_index(
+        &self,
+        _root: &Path,
+        _message: &str,
+        _amend: bool,
+        _no_verify: bool,
+    ) -> TgResult<CommitId> {
         self.calls.lock().unwrap().push(Call::CommitIndex);
         Ok("bbbb".into())
     }

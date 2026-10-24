@@ -538,14 +538,16 @@ fn unbacked_rows_render_disabled_and_never_persist() {
     );
     node.click();
 
-    // The CRLF-conversion radios and commit checks live on Advanced.
+    // The CRLF-conversion radios and the one remaining commit check live on
+    // Advanced. "Run git commit hooks" is not among them: it is a real
+    // control on the commit card's options menu now, per commit.
     harness.get_by_label("Advanced").click();
     settle(&mut harness);
+    assert_not_painted(&harness, "Run git commit hooks");
     for label in [
         "Convert to LF on commit",
         "Convert to CRLF on checkout",
         "No conversion",
-        "Run git commit hooks",
         "Sign-off commits",
     ] {
         let node = harness.get_by_label(label);

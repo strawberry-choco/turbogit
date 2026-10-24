@@ -2015,14 +2015,14 @@ fn message_well(ui: &mut Ui, buf: &mut String) -> egui::Response {
     out.response
 }
 
-/// **The card's one meta row: Amend, right-aligned, inside the column the
-/// ticket refused to widen.**
+/// **The card's one meta row: the options kebab on the left, Amend
+/// right-aligned.**
 ///
 /// The row is laid out against an allocated rect rather than through
-/// `ui.horizontal` because the control has to be *centred on one line*:
-/// egui's `horizontal` cross-aligns to the top, which would hang the
-/// checkbox against the row's top edge. Right-aligned keeps the row's
-/// leading edge at the card's leading edge, where the well's text starts.
+/// `ui.horizontal` because the controls have to be *centred on one line*:
+/// egui's `horizontal` cross-aligns to the top, which would hang a control
+/// against the row's top edge. The kebab leads because its menu speaks for
+/// the whole card's commit, while Amend is one input of the commit itself.
 fn commit_meta_row(ui: &mut Ui, state: &mut AppState) {
     let row_h = components::KIT_BUTTON_H;
     let width = ui.available_width();
@@ -2039,7 +2039,58 @@ fn commit_meta_row(ui: &mut Ui, state: &mut AppState) {
         ),
         &mut state.ui.amend,
     );
+    let kebab_rect = Rect::from_min_size(
+        Pos2::new(row.left(), row.center().y - META_KEBAB_SIZE / 2.0),
+        Vec2::splat(META_KEBAB_SIZE),
+    );
+    commit_options_kebab_at(ui, kebab_rect, state);
 }
+
+/// Side of the meta row's square options kebab.
+const META_KEBAB_SIZE: f32 = 24.0;
+
+/// The meta row's options kebab and its dropdown: the one place commit
+/// *policy* lives on the card. The item is checkable and one-shot by
+/// settlement — a successful commit unchecks it — so the menu states an
+/// answer for the next commit, never a standing preference.
+fn commit_options_kebab_at(ui: &mut Ui, rect: Rect, state: &mut AppState) {
+    use egui::Popup;
+    let response = ui.interact(rect, ui.auto_id_with("commit_options"), Sense::click());
+    let widget_state = widgets::WidgetState::from_response(true, &response);
+    let painter = ui.painter().clone();
+    let fill = match widget_state {
+        widgets::WidgetState::Idle => Palette::RAISED_ON_CARD,
+        widgets::WidgetState::Hovered => {
+            widgets::mix(Palette::RAISED_ON_CARD, Color32::WHITE, 0.10)
+        }
+        _ => widgets::mix(Palette::RAISED_ON_CARD, Color32::WHITE, 0.20),
+    };
+    painter.rect_filled(rect, CornerRadius::same(crate::theme::CONTROL_RADIUS), fill);
+    let ink = match widget_state {
+        widgets::WidgetState::Idle => Palette::INK_2,
+        _ => Palette::INK,
+    };
+    icons::centered_icon(ui, Icon::MORE_HORIZONTAL, rect.center(), 14.0, ink);
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, COMMIT_OPTIONS_LABEL));
+    widgets::focus_ring(ui, &response);
+
+    // The popup anchors to, and opens on, the kebab's own response — the
+    // split button's menu does the same.
+    Popup::menu(&response).show(|menu| {
+        menu.checkbox(&mut state.ui.commit_no_verify, COMMIT_NO_VERIFY_LABEL)
+            .on_hover_text(COMMIT_NO_VERIFY_HINT);
+    });
+}
+
+/// Accessible name of the commit card's options kebab. Not the retired
+/// changes-header item's name: "Commit options" is that control's spelling,
+/// and `tests/commit_window.rs` pins its absence.
+const COMMIT_OPTIONS_LABEL: &str = "Commit card options";
+/// The options menu's one item: skip this next commit's hooks.
+const COMMIT_NO_VERIFY_LABEL: &str = "Do not run git commit hooks";
+/// Why the item is safe to leave checked, stated where the check happens.
+const COMMIT_NO_VERIFY_HINT: &str =
+    "Commits with --no-verify. Unchecks itself after a successful commit.";
 
 /// The meta row's Amend control, at an already-allocated rect.
 ///
@@ -2392,6 +2443,7 @@ fn do_commit(state: &mut AppState, and_push: bool) {
     let root = state.selected_root.clone();
     let msg = state.ui.commit_message.clone();
     let amend = state.ui.amend;
+    let no_verify = state.ui.commit_no_verify;
     // Record the recent message before `msg` moves into the 'static closure
     // (plan Phase 3): no extra String clone per commit.
     if !state.ui.recent_messages.contains(&msg) {
@@ -2399,7 +2451,7 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         state.ui.recent_messages.truncate(12);
     }
     if let Some(root) = root {
-        state.dispatch_commit(&root, &msg, amend, and_push);
+        state.dispatch_commit(&root, &msg, amend, no_verify, and_push);
     }
     // Only the message well resets. The selection is "the files I am looking
     // at", and a commit says nothing about what the developer is looking at —

@@ -509,7 +509,6 @@ fn advanced_page(ui: &mut Ui, s: &mut VcsSettings) {
         &mut s.warn_detached,
         "Warn when committing in detached HEAD or mid-rebase",
     );
-    ui.checkbox(&mut s.no_commit_hooks, "Do not run git commit hooks");
 
     ui.add_space(6.0);
     setting_row(
@@ -543,11 +542,12 @@ fn advanced_page(ui: &mut Ui, s: &mut VcsSettings) {
 
     ui.add_space(6.0);
     ui.label(RichText::new("Commit checks").weak());
-    for label in ["Run git commit hooks", "Sign-off commits"] {
-        let mut off = false;
-        let resp = ui.add_enabled(false, egui::Checkbox::new(&mut off, label));
-        resp.on_disabled_hover_text(tooltip);
-    }
+    // "Run git commit hooks" is not one of these placeholders: it is a real
+    // control on the commit card's options menu, per commit rather than
+    // IDE-wide.
+    let mut off = false;
+    let resp = ui.add_enabled(false, egui::Checkbox::new(&mut off, "Sign-off commits"));
+    resp.on_disabled_hover_text(tooltip);
 }
 
 fn update_method_label(m: UpdateMethod) -> &'static str {
@@ -675,7 +675,6 @@ fn restore_category_defaults(state: &mut AppState) {
         SettingsCategory::Advanced => {
             draft.warn_crlf = d.warn_crlf;
             draft.warn_detached = d.warn_detached;
-            draft.no_commit_hooks = d.no_commit_hooks;
         }
     }
 }

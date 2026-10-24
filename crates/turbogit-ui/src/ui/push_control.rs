@@ -78,9 +78,6 @@ pub fn push_without_dialog(state: &mut AppState) -> bool {
     let mut request =
         PushRequest::single(target.root, target.remote, target.branch, &state.settings);
     request.set_upstream = target.set_upstream;
-    // `no_commit_hooks` is the IDE-wide standing answer, so the fast path honours
-    // it; the dialog exposes the same thing per push.
-    request.no_verify = state.settings.no_commit_hooks;
     state.dispatch_push(request, None);
     true
 }

@@ -886,8 +886,6 @@ pub struct VcsSettings {
     pub gutter_markers: bool,
     /// Date format for the log.
     pub date_format: DateFormat,
-    /// IDE-wide "do not run git commit hooks".
-    pub no_commit_hooks: bool,
     /// Which **Git engine** adapter runs — see [`GitBackend`].
     #[serde(default)]
     pub backend: GitBackend,
@@ -932,7 +930,6 @@ impl Default for VcsSettings {
             restore_workspace: false,
             gutter_markers: true,
             date_format: DateFormat::default(),
-            no_commit_hooks: false,
             backend: GitBackend::default(),
             in_process_diffs: true,
             auto_update_on_push_rejected: false,

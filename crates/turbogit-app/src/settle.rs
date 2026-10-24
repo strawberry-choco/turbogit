@@ -390,6 +390,12 @@ fn settle_ok(state: &mut AppState, rules: RuleSet, kind: OpKind, label: &str, af
     arm_landed_rewrite_undo(state, rules);
     granular::settle(state);
     reload_get_from_branch_rows(state, rules);
+    // The commit card's no-verify toggle armed exactly one commit; a landed
+    // one spends it. Cleared here rather than at the click so a failed commit
+    // (a hook rejecting, say) keeps the answer for the retry.
+    if kind == OpKind::Commit {
+        state.ui.commit_no_verify = false;
+    }
     // Rules seven to nine all read what rules three to six left behind, which
     // is why they take this arm's results as arguments rather than re-reading
     // the state each one happens to want.

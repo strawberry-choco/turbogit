@@ -102,13 +102,17 @@ pub fn plan(vcs: &dyn GitExecutor, paths: &[PathBuf]) -> Vec<PlanRow> {
 /// [`GitExecutor::commit`]. Returns the new HEAD SHA on success; an empty
 /// index surfaces the engine's "nothing to commit" as a `TgError` for the
 /// caller to surface through the cascade-run monitor.
+///
+/// The card's no-verify toggle does not travel here on purpose: the cascade
+/// commits other repositories than the one the toggle was set on, and hooks
+/// are per-repo configuration.
 pub fn run_one(
     vcs: &dyn GitExecutor,
     root: &Path,
     message: &str,
     amend: bool,
 ) -> TgResult<CommitId> {
-    vcs.commit(root, message, amend)
+    vcs.commit(root, message, amend, false)
 }
 
 #[cfg(test)]

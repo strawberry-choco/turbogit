@@ -1457,6 +1457,11 @@ pub struct UiState {
     // Commit tab
     pub commit_message: String,
     pub amend: bool,
+    /// The commit card's "Do not run git commit hooks" answer for the commit
+    /// it dispatches next. One-shot by construction: settlement clears it on
+    /// the operation's success, so it never becomes a standing preference the
+    /// way the retired settings flag was.
+    pub commit_no_verify: bool,
     /// The Local Changes files the developer is looking at, keyed by
     /// `Root::canonical_key`. A row-body click rebuilds it through the reducer in
     /// `turbogit_ui::ui::changes_selection`: a plain click leaves one file in
@@ -2837,12 +2842,20 @@ impl AppState {
     /// that did land as "No outgoing commits". Only
     /// [`crate::settle`]'s `open_push_dialog_owed` may open it, over the
     /// snapshots the completion has already refreshed.
-    pub fn dispatch_commit(&mut self, root: &RootId, message: &str, amend: bool, then_push: bool) {
+    pub fn dispatch_commit(
+        &mut self,
+        root: &RootId,
+        message: &str,
+        amend: bool,
+        no_verify: bool,
+        then_push: bool,
+    ) {
         self.ui.commit_push_dialog_pending = then_push.then(|| root.clone());
         self.dispatch(Operation::Commit {
             root: root.clone(),
             message: message.to_string(),
             amend,
+            no_verify,
         });
     }
 
