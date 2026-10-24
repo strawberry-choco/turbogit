@@ -1,4 +1,4 @@
-//! What the two **Git engine** backends genuinely differ on.
+//! What the two **Git engine** adapters genuinely differ on.
 //!
 //! Replaces the parity suite that proved two of the three picker options agreed:
 //! with the pair collapsed there is one CLI adapter and one composed adapter, and
@@ -9,10 +9,27 @@
 
 use std::path::{Path, PathBuf};
 
+use std::sync::Arc;
 use test_support::git_seed::{GitEnv, git_with_env};
-use turbogit_domain::model::{GitBackend, VcsSettings};
+use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
-use turbogit_engine::build_executor;
+use turbogit_engine::cli::CliExecutor;
+use turbogit_engine::git2_exec::Git2Executor;
+
+/// The composed adapter exactly as the factory builds it — spelled out here
+/// because this suite exists to contrast the two adapters the factory composes.
+fn composed() -> Arc<dyn GitExecutor> {
+    Arc::new(Git2Executor::new(CliExecutor {
+        settings: VcsSettings::default(),
+    }))
+}
+
+/// The bare CLI adapter, the composed adapter's delegation core.
+fn cli() -> Arc<dyn GitExecutor> {
+    Arc::new(CliExecutor {
+        settings: VcsSettings::default(),
+    })
+}
 
 // `repo_with_remote_branch` below writes NO `user.*` config, so the pinned
 // identity is the repository's only source of identity: every call is pinned per
@@ -66,12 +83,9 @@ fn tracking_of(exec: &dyn GitExecutor, repo: &Path, name: &str) -> Option<String
 }
 
 #[test]
-fn the_cli_backend_records_the_upstream_that_git_dwims_from_a_remote_start_point() {
+fn the_cli_adapter_records_the_upstream_that_git_dwims_from_a_remote_start_point() {
     let (_tmp, repo) = repo_with_remote_branch();
-    let exec = build_executor(&VcsSettings {
-        backend: GitBackend::Cli,
-        ..VcsSettings::default()
-    });
+    let exec = cli();
     exec.branch_create(&repo, "feat", true, Some("origin/feat"))
         .expect("creating feat from origin/feat");
     assert_eq!(
@@ -82,12 +96,9 @@ fn the_cli_backend_records_the_upstream_that_git_dwims_from_a_remote_start_point
 }
 
 #[test]
-fn the_composed_backend_creates_the_branch_without_recording_an_upstream() {
+fn the_composed_adapter_creates_the_branch_without_recording_an_upstream() {
     let (_tmp, repo) = repo_with_remote_branch();
-    let exec = build_executor(&VcsSettings {
-        backend: GitBackend::InProcessReads,
-        ..VcsSettings::default()
-    });
+    let exec = composed();
     exec.branch_create(&repo, "feat", true, Some("origin/feat"))
         .expect("creating feat from origin/feat");
     assert_eq!(

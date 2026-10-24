@@ -839,24 +839,6 @@ pub enum DateFormat {
     Iso,
 }
 
-/// Which **Git engine** adapter performs git operations. There are two, and
-/// they differ in how much is answered in-process — not in whether libgit2 can
-/// run the whole job, which no adapter does. `InProcessReads` is the default
-/// and the spelling `Auto` and `Libgit2` in an older `state.ron` still load
-/// onto: both of those built this same object.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum GitBackend {
-    /// Shell out to the system `git` binary for every operation.
-    Cli,
-    /// Answers the reads `git2` has in-process and delegates the rest to the
-    /// CLI adapter. Not a libgit2-only path: it holds no fallback *policy*, and
-    /// most of it is CLI delegation.
-    #[default]
-    #[serde(alias = "Auto")]
-    #[serde(alias = "Libgit2")]
-    InProcessReads,
-}
-
 /// Project + per-root settings, serialized under `.turbogit/`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VcsSettings {
@@ -886,9 +868,6 @@ pub struct VcsSettings {
     pub gutter_markers: bool,
     /// Date format for the log.
     pub date_format: DateFormat,
-    /// Which **Git engine** adapter runs — see [`GitBackend`].
-    #[serde(default)]
-    pub backend: GitBackend,
     /// Compute unified diffs in-process with `similar` instead of
     /// post-processing CLI diff text (Phase L1). `false` rolls back to the
     /// CLI-produced text path.
@@ -930,7 +909,6 @@ impl Default for VcsSettings {
             restore_workspace: false,
             gutter_markers: true,
             date_format: DateFormat::default(),
-            backend: GitBackend::default(),
             in_process_diffs: true,
             auto_update_on_push_rejected: false,
             when_patch_is_created: PatchCreatedPolicy::default(),

@@ -1,5 +1,6 @@
-//! Git engine adapters: the CLI executor, the libgit2 executor, and the
-//! backend-selection factory (ADR-0001).
+//! Git engine adapters: the CLI executor, the composed libgit2-over-CLI
+//! executor, and the one factory over them (ADR-0001, as corrected by ADR-0022
+//! and ADR-0030).
 //!
 //! The port these adapters implement lives in `turbogit-engine-api`; this
 //! crate is the only place (besides the composition root) that may name the
@@ -16,22 +17,20 @@ pub mod fake;
 pub use turbogit_engine_api::{ApplyDirection, GitExecutor};
 
 use turbogit_domain::error::TgError;
-use turbogit_domain::model::{GitBackend, VcsSettings, git_binary};
+use turbogit_domain::model::{VcsSettings, git_binary};
 
-/// Construct the engine for `settings` behind the seam (ADR-0001, as corrected
-/// by ADR-0022): `InProcessReads` builds the composed executor — the reads
-/// `git2` has answered in-process, the CLI adapter for the rest — and `Cli`
-/// builds the CLI adapter alone. There is no libgit2-only engine. Callers
-/// rebuild this whenever settings change (e.g. the settings modal's Apply),
-/// exactly like they rebuilt a bare [`cli::CliExecutor`] before.
+/// Construct the engine behind the seam (ADR-0001, as corrected by ADR-0022
+/// and ADR-0030): the composed executor — the reads `git2` answers
+/// in-process, the CLI adapter for the rest — is the one engine, and the
+/// factory builds nothing else. The retired `backend` key in an older
+/// `state.ron` is an ignored field, not a choice (ADR-0030). Callers rebuild
+/// this whenever settings change (e.g. the settings modal's Apply), exactly
+/// like they rebuilt a bare [`cli::CliExecutor`] before.
 pub fn build_executor(settings: &VcsSettings) -> std::sync::Arc<dyn GitExecutor> {
     let cli = cli::CliExecutor {
         settings: settings.clone(),
     };
-    match settings.backend {
-        GitBackend::InProcessReads => std::sync::Arc::new(git2_exec::Git2Executor::new(cli)),
-        GitBackend::Cli => std::sync::Arc::new(cli),
-    }
+    std::sync::Arc::new(git2_exec::Git2Executor::new(cli))
 }
 
 /// Resolve the git version behind `settings` (issue #26): runs the resolved

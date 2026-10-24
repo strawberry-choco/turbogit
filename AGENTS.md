@@ -10,8 +10,8 @@ plus a thin root composition root.
 - `crates/turbogit-engine-api` — the `GitExecutor` trait (the only git
   boundary) and `ApplyDirection`. Depends on domain only.
 - `crates/turbogit-engine` — the two adapters (`cli`, `git2_exec`), the
-  backend-selecting `build_executor` factory, and `fake` behind the `test-util`
-  feature.
+  `build_executor` factory over them (the composed pair is the one engine,
+  ADR-0030), and `fake` behind the `test-util` feature.
 - `crates/turbogit-services` — pure domain services over the port: branch,
   sync, history/editor, integrate, changes, partial, diff engine, conflict,
   shelve/stash, multi-root.

@@ -381,10 +381,6 @@ fn the_pinned_read_reaches_head() {
         write_file(&repo, "file.txt", "WORKTREE ONLY\n");
 
         let mut h = diff_harness(&repo);
-        assert_eq!(
-            h.state().settings.backend,
-            turbogit_domain::model::GitBackend::InProcessReads
-        );
         assert!(h.state().settings.in_process_diffs);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while h.query_by_label("file.txt").is_none() {

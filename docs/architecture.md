@@ -251,8 +251,8 @@ Pure-ish services over the engine seam; no egui, no `AppState`:
   - `cli::CliExecutor` — shells out to system `git`; handles **all mutating ops**.
   - `git2_exec::Git2Executor` — in-process libgit2 for supported reads, falling
     back to the CLI for sync/credential ops, reverse patch apply, intent-to-add,
-    and diffs libgit2 can't express. Selected via `build_executor(settings)`
-    behind the backend setting (ADR-0001).
+    and diffs libgit2 can't express. `build_executor(settings)` builds the
+    composed pair and nothing else — the engine is not a setting (ADR-0030).
   - `fake::FakeExecutor` — test double, exported only behind the `test-util`
     cargo feature so release builds never compile it.
 

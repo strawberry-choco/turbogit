@@ -2174,7 +2174,7 @@ impl AppState {
     }
 
     /// Rebuild the engine from the current settings behind the seam
-    /// (ADR-0001: a changed git binary or backend applies live). The
+    /// (ADR-0001: a changed git binary applies live). The
     /// composition-root factory lives in `turbogit-engine`, so the app
     /// crate owns this call and the UI crate reaches it through here
     /// instead of depending on the adapters.
@@ -4935,8 +4935,7 @@ impl AppState {
     ///
     /// The upstream is written explicitly rather than left to git: only the
     /// CLI adapter's `checkout -b <name> origin/<name>` sets it by DWIM, and
-    /// under the default `Auto` backend `branch_create` is libgit2's, which
-    /// never does. [`Self::checkout_branch_set_aside`] tracks for the same
+    /// `branch_create` is the composed adapter's, which never does. [`Self::checkout_branch_set_aside`] tracks for the same
     /// reason, and `tests/branch_checkout.rs` pins the result for both.
     /// Stand the root ON a rev with Detached HEAD — the log's commit menu's
     /// Checkout. The dirty worktree routes through the SAME

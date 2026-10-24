@@ -9,9 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use test_support::git_seed::git;
-use turbogit_domain::model::{GitBackend, VcsSettings};
+use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
-use turbogit_engine::build_executor;
 
 // `conflicting_repo` stays local, deliberately NOT `repo_with_conflict`: this one is
 // parameterised over `(ours, theirs, ancestor)` and its `None` arm is an add/add
@@ -35,9 +34,8 @@ fn git_merge_that_must_conflict(repo: &Path, args: &[&str]) {
 }
 
 fn exec() -> std::sync::Arc<dyn GitExecutor> {
-    build_executor(&VcsSettings {
-        backend: GitBackend::Cli,
-        ..VcsSettings::default()
+    std::sync::Arc::new(turbogit_engine::cli::CliExecutor {
+        settings: VcsSettings::default(),
     })
 }
 

@@ -1,5 +1,10 @@
 # The Git engine answers with domain values, over one honest adapter
 
+**Superseded as to the backend choice by `ADR-0030` (2026-10-24).** The seam,
+the census method, and the raised reads stand; the Settings row this record
+shrank from three options to two is gone, and the composed adapter is the one
+engine.
+
 `ADR-0001` set the seam in the right place and described it wrongly. This record
 replaces its description — and the direction that follows from the description
 being wrong. The interface itself stays where 0001 put it: one trait, no

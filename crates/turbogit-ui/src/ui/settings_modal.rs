@@ -25,8 +25,8 @@ use super::widgets;
 use crate::theme::Palette;
 use turbogit_app::state::{AppState, SettingsCategory, Toast};
 use turbogit_domain::model::{
-    CleanTreeMethod, DateFormat, GitBackend, IncomingCheckInterval, PatchCreatedPolicy,
-    UpdateMethod, VcsSettings,
+    CleanTreeMethod, DateFormat, IncomingCheckInterval, PatchCreatedPolicy, UpdateMethod,
+    VcsSettings,
 };
 
 /// Spec §8.8: large modal, ~768px wide.
@@ -248,29 +248,10 @@ fn general_page(ui: &mut Ui, s: &mut VcsSettings) {
     );
 }
 
-/// Git (screen 11): engine backend, the git executable, remote management.
+/// Git (screen 11): the git executable and remote management. The engine
+/// itself is not a setting (ADR-0030): one composed adapter runs everything.
 fn git_page(ui: &mut Ui, s: &mut VcsSettings, version_badge: Option<&Result<String, String>>) {
-    setting_row(
-        ui,
-        "Git backend",
-        "Runs the git executable for everything, or answers some reads inside the \
-         app and runs git for the rest. Which git runs the diffs is a separate choice.",
-        |ui| {
-            let options = ["CLI", "In-process reads"];
-            let selected = match s.backend {
-                GitBackend::Cli => 0,
-                GitBackend::InProcessReads => 1,
-            };
-            if let Some(ix) = widgets::segmented_control(ui, &options, selected) {
-                s.backend = match ix {
-                    0 => GitBackend::Cli,
-                    _ => GitBackend::InProcessReads,
-                };
-            }
-        },
-    );
-
-    ui.add_space(6.0);
+    ui.add_space(2.0);
     setting_row(
         ui,
         "Git executable",
@@ -653,7 +634,6 @@ fn restore_category_defaults(state: &mut AppState) {
             draft.restore_workspace = d.restore_workspace;
         }
         SettingsCategory::Git => {
-            draft.backend = d.backend;
             draft.git_executable = d.git_executable.clone();
         }
         SettingsCategory::UpdateMethod => {

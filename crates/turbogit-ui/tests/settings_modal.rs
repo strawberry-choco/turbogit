@@ -19,7 +19,7 @@ use test_support::harness::{
 };
 use turbogit_app::persistence;
 use turbogit_app::state::{AppState, Tab};
-use turbogit_domain::model::{GitBackend, IncomingCheckInterval, VcsSettings};
+use turbogit_domain::model::{IncomingCheckInterval, VcsSettings};
 
 /// The modal opens from the command palette: the palette's `Settings…`
 /// action turns the flag on. The tab strip's settings button is the other
@@ -101,7 +101,6 @@ fn categories_switch_the_visible_page() {
 
     harness.get_by_label("Git").click();
     settle(&mut harness);
-    assert_painted(&harness, "Git backend");
     assert_not_painted(&harness, "Protected branch patterns");
 
     // The selection is modal-ephemeral state on UiState, not persisted.
@@ -225,59 +224,25 @@ fn backed_rows_paint_their_loaded_values() {
     assert_painted(&harness, "Warn before committing CRLF");
 }
 
-// --- Cycle 2b: the Git backend selector (issue #26, screen 11) -----------------
+// --- Cycle 2b: the engine is not a setting (ADR-0030) ---------------------------
 
 #[test]
-fn git_backend_offers_two_options_that_select_two_different_adapters() {
+fn the_git_page_offers_no_engine_choice() {
     let (mut harness, project) = shell_harness();
     settle(&mut harness);
     open_settings(&mut harness);
     harness.get_by_label("Git").click();
     settle(&mut harness);
 
-    // Two options, each naming an adapter that actually exists.
-    for label in ["CLI", "In-process reads"] {
-        assert_painted(&harness, label);
-    }
-    // The retired spellings named the object the other option already built.
-    for label in ["libgit2", "Auto"] {
-        assert_not_painted(&harness, label);
-    }
-
-    // Default settings ship the composed adapter…
+    // The row is gone with the field behind it: neither option paints, and
+    // Apply has nothing to enable on this page until the executable is edited.
+    assert_not_painted(&harness, "Git backend");
+    assert_not_painted(&harness, "CLI");
+    assert_not_painted(&harness, "In-process reads");
     assert_eq!(
-        harness.state().ui.settings_draft.as_ref().unwrap().backend,
-        GitBackend::InProcessReads
-    );
-
-    // …and the two segments select *different* adapters. This is what the old
-    // round-trip test could not fail: three options, two of them one object.
-    harness.get_by_label("CLI").click();
-    settle(&mut harness);
-    harness.get_by_label("Apply").click();
-    settle(&mut harness);
-    let cli = harness.state().settings.backend;
-    assert_eq!(cli, GitBackend::Cli);
-    assert_eq!(
-        persistence::load_settings(project.path())
-            .expect("state.ron readable")
-            .backend,
-        cli
-    );
-
-    harness.get_by_label("In-process reads").click();
-    settle(&mut harness);
-    harness.get_by_label("Apply").click();
-    settle(&mut harness);
-    let composed = harness.state().settings.backend;
-    assert_ne!(
-        cli, composed,
-        "picking the other option changed nothing the engine could observe"
-    );
-    assert_eq!(composed, GitBackend::InProcessReads);
-    assert_eq!(
-        persistence::load_settings(project.path()).unwrap().backend,
-        composed
+        persistence::load_settings(project.path()).unwrap(),
+        VcsSettings::default(),
+        "opening the page wrote nothing"
     );
 }
 
@@ -453,11 +418,9 @@ fn restore_defaults_resets_only_the_visible_category() {
     settle(&mut harness);
     open_settings(&mut harness);
 
-    // Edit a General field, then move to Git and edit two Git fields.
+    // Edit a General field, then move to Git and edit its one field.
     toggle_restore_workspace(&mut harness);
     harness.get_by_label("Git").click();
-    settle(&mut harness);
-    harness.get_by_label("CLI").click();
     settle(&mut harness);
     {
         let edit = harness.get_by_role_and_label(Role::TextInput, "Git executable");
@@ -471,11 +434,6 @@ fn restore_defaults_resets_only_the_visible_category() {
     settle(&mut harness);
     let draft = harness.state().ui.settings_draft.as_ref().unwrap();
     assert_eq!(draft.git_executable, "", "Git fields return to defaults");
-    assert_eq!(
-        draft.backend,
-        GitBackend::InProcessReads,
-        "Git fields return to defaults"
-    );
     assert!(
         draft.restore_workspace,
         "edits on other categories must survive the reset"

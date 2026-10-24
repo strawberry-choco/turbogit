@@ -10,8 +10,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use std::sync::Arc;
 use test_support::git_seed::git;
-use turbogit_domain::model::{GitBackend, VcsSettings};
+use turbogit_domain::model::VcsSettings;
 use turbogit_engine::GitExecutor;
 use turbogit_engine::cli::CliExecutor;
 use turbogit_engine::fake::FakeExecutor;
@@ -204,19 +205,20 @@ fn the_composed_adapter_answers_the_same_questions_as_the_cli_one() {
 }
 
 #[test]
-fn no_backend_selects_a_range_by_accident() {
+fn no_adapter_selects_a_range_by_accident() {
     // The two production adapters are the only places a dot range may appear;
-    // `build_executor`'s two options answer the same count question alike.
+    // both answer the same count question alike.
     let (_tmp, repo) = ahead_repo();
-    for backend in [GitBackend::Cli, GitBackend::InProcessReads] {
-        let exec = turbogit_engine::build_executor(&VcsSettings {
-            backend,
-            ..VcsSettings::default()
-        });
+    for engine in [
+        Arc::new(CliExecutor {
+            settings: VcsSettings::default(),
+        }) as Arc<dyn GitExecutor>,
+        turbogit_engine::build_executor(&VcsSettings::default()),
+    ] {
         assert_eq!(
-            exec.commit_count_between(&repo, "HEAD", "main").unwrap(),
+            engine.commit_count_between(&repo, "HEAD", "main").unwrap(),
             0,
-            "{backend:?} must answer the count question the same way"
+            "the adapter must answer the count question the same way"
         );
     }
 }
