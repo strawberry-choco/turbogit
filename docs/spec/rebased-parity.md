@@ -993,7 +993,7 @@ the reference's shape.
 | 11 | **Tri-state checkbox selection summary** | `multi_selection.rs` | Rebased's checkboxes are per-file with no aggregate semantics. | none |
 | 12 | **Pinned views** — saved named selections persisted to `.turbogit/ui.ron` | `pinned_views.rs` | Rebased's recents are per-project and per-branch; a saved *query* is a different object. | recents with branch names |
 | 13 | **Command palette** (`⌃⇧A`, fuzzy) | `popups.rs` | Rebased reaches most verbs through a context menu. | context menus |
-| 14 | **Blame view** replacing the graph in place | `blame_view.rs` | Rebased's annotate is a gutter overlay in an editor TurboGit does not have. | `Annotate with Git Blame` |
+| 14 | **Blame view** in a floating window over the still-painted graph | `blame_view.rs` | Rebased's annotate is a gutter overlay in an editor TurboGit does not have. | `Annotate with Git Blame` |
 | 15 | **Protected-branch guard as an up-front refusal** | `Operation::Rebase`, `Operation::DropCommit` | Rebased discovers the problem at push time and explains it then. TurboGit refuses before acting, so its own "your rewrite will be rejected" warning is unnecessary. | `settings.protected.branched` |
 | 16 | **Per-root in-flight admission control** (one fetch per root) | `worktree_lifecycle.rs` | Rebased skips roots with a stated reason but does not appear to *admit* work per root. | `update.skip.root.reason.*` |
 | 17 | **Bulk preflight before destructive work** | `bulk_preflight.rs`, `rewrite_preflight.rs` | Rebased's preflight is either per-verb confirmation or *post-hoc* disclosure. TurboGit has a reusable matrix. | confirmations; post-hoc notifications |
