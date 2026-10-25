@@ -340,6 +340,48 @@ fn repository_grouping_off_removes_the_level_without_losing_a_branch() {
     );
 }
 
+// --- the gear's own lifecycle -------------------------------------------------
+
+/// The gear reopens after a toggle closed it. The toggle click closes the list
+/// the frame it changes a preference, so reopening is half of every toggle's
+/// path: a gear that only ever opens once turns the four preferences into
+/// one-shot controls until relaunch.
+#[test]
+fn the_gear_reopens_after_a_toggle_closed_it() {
+    let (_tmp, project) = grouped_project();
+    let mut harness = branches_harness(project);
+    open_branches_tab(&mut harness);
+
+    toggle(&mut harness, "Group by Directory");
+    open_gear(&mut harness);
+
+    assert!(
+        has_painted(&harness, "Group by Directory"),
+        "the gear reopens after its toggle list closed on a change"
+    );
+}
+
+/// The same reopen after the other close path: Escape. Every way the list
+/// closes must leave the gear able to open it again.
+#[test]
+fn the_gear_reopens_after_escape_closed_it() {
+    let (_tmp, project) = grouped_project();
+    let mut harness = branches_harness(project);
+    open_branches_tab(&mut harness);
+
+    open_gear(&mut harness);
+    assert!(has_painted(&harness, "Group by Directory"));
+    harness.key_press(egui::Key::Escape);
+    settle_quiet(&mut harness);
+    assert_eq!(painted_count(&harness, "Group by Directory"), 0);
+
+    open_gear(&mut harness);
+    assert!(
+        has_painted(&harness, "Group by Directory"),
+        "the gear reopens after Escape closed its toggle list"
+    );
+}
+
 // --- persistence -------------------------------------------------------------
 
 #[test]
