@@ -712,21 +712,15 @@ pub fn show_log(ui: &mut Ui, state: &mut AppState) {
             );
         });
 
-    // Pane 2 — graph fills the remainder, in a card of its own; the blame view
-    // (issue 18) takes its place while open, keeping the branches / files /
-    // details panes. Both are wrapped in the SAME `pane_card` call so the slot
-    // has one surface whatever is in it — the view swapped, the region did not.
+    // Pane 2 — graph fills the remainder, in a card of its own. The view's
+    // diff and blame verbs open floating windows.
     //
     // The leftovers' geometry is what makes the two gutters: the branches panel
     // already claimed its [`PANE_COLUMN_GAP`], the right column already claimed
     // its own, and the body that is left between them is the commits card's
     // region exactly. The air is not subtracted from anything, so the two outer
     // cards keep the widths they have always had.
-    if state.ui.blame.is_some() {
-        pane_card(ui, |ui| super::blame_view::show_blame(ui, state));
-    } else {
-        pane_card(ui, |ui| graph_pane(ui, state));
-    }
+    pane_card(ui, |ui| graph_pane(ui, state));
 }
 
 /// Run one pane's body inside the log's one card.

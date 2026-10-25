@@ -1609,15 +1609,18 @@ pub struct UiState {
     /// Carries its own target for the same reason the commit menu does — the row
     /// it opened on, not whatever is selected now.
     pub log_file_menu: Option<(RootId, CommitId, std::path::PathBuf)>,
-    /// Open diff view: `Some` renders the diff surface in the log window's
-    /// graph slot, the same swap the blame view below gets. Reached from the
-    /// changed-files pane's footer `Open diff` link and the hidden-jump
-    /// band's `View in Diff` escape; it is also the target
-    /// [`crate::keyed_read`] reads its patch by, so it carries the root the
-    /// comparison runs in, not whatever root is focused.
+    /// Open diff view: `Some` opens the floating diff window
+    /// (`ui::diff::show_diff`) over whatever tab is up, so the listing the
+    /// verb came from stays as it was. Reached from the changed-files pane's
+    /// footer `Open diff` link and the hidden-jump band's `View in Diff`
+    /// escape; it is also the target [`crate::keyed_read`] reads its patch
+    /// by, so it carries the root the comparison runs in, not whatever root
+    /// is focused.
     pub diff: Option<DiffTarget>,
-    /// Open blame view (issue 18): `Some` renders the blame surface for the
-    /// target file at the target revision; `None` shows the commit graph.
+    /// Open blame window (issue 18): `Some` opens the floating blame window
+    /// (`ui::blame_view::show_blame`) for the target file at the target
+    /// revision, over whatever tab is up; `None` means no window. The commit
+    /// graph never yields its region to it.
     pub blame: Option<BlameTarget>,
     /// Blame lines fetched for the open [`Self::blame`] target, keyed like
     /// `diff_cache` to drop stale results, and read only through
@@ -1794,7 +1797,7 @@ pub struct UiState {
     /// replaces) is open.
     pub diff_options_open: bool,
     /// The line `F4` jumped to: the caret the diff viewer held, preserved across
-    /// the jump into the blame surface. Cleared by every other route into blame.
+    /// the jump into the blame window. Cleared by every other route into blame.
     pub blame_caret_line: Option<usize>,
     /// Armed edge press for F7/Shift+F7 cross-file navigation (spec R7): the
     /// direction and instant of the last edge nudge. A same-direction repeat

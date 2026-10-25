@@ -408,8 +408,9 @@ fn apply_hunk_nav(state: &mut AppState, dir: super::hunk_nav::Dir) {
 /// (`preview_caret_line`), which is what makes the jump land where the
 /// reader was looking instead of at the top of the file. Blame is this app's
 /// source surface — one row per line of the file, with the commit that introduced
-/// it — and it lives in the log workspace, so the tab moves with the jump and the
-/// line travels in `blame_caret_line` for the surface to aim at.
+/// it — and it floats in its own window over the tab the reader is on, so the
+/// tab stays put and the line travels in `blame_caret_line` for the window to
+/// aim at.
 ///
 /// Working-tree preview only, and so blame at `HEAD`: the pair being read here is
 /// the working tree's, and the committed side is the only side with an author per
@@ -425,7 +426,6 @@ fn jump_to_source(state: &mut AppState) {
         rev: "HEAD".to_owned(),
     });
     state.ui.blame_caret_line = Some(line);
-    switch_tab(state, Tab::Log);
 }
 
 struct Shortcut {
@@ -460,7 +460,10 @@ fn ensure_worktree_data(state: &mut AppState) {
     }
 }
 
-fn switch_tab(state: &mut AppState, tab: Tab) {
+/// Change the active tool tab and persist the choice. `pub(crate)` because
+/// surfaces outside the shell's own dispatch also land the user on a tab —
+/// the blame window's row click navigates to the log.
+pub(crate) fn switch_tab(state: &mut AppState, tab: Tab) {
     state.ui.tab = tab;
     if tab == Tab::Branches {
         // Focus lands in the Branches search box when the tab opens (issue 06).

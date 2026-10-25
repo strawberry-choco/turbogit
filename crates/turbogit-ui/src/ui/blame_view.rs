@@ -1,20 +1,24 @@
 //! Blame view (issue 18): line-by-line attribution — commit, author, age —
-//! for one file at one revision, shown in place of the commit graph while
-//! open. Reached from the changed-files pane footer ("Blame", screen 09)
-//! and the changed-file context menu; a row's commit navigates back to the
-//! log with that commit selected, and the current path filter is untouched
-//! by opening or closing the view.
+//! for one file at one revision, in a floating window over the workspace,
+//! closed from its footer or the title bar's X. Reached from the
+//! changed-files pane footer ("Blame", screen 09) and the changed-file
+//! context menu; a row's commit navigates to the log with that commit
+//! selected, and the current path filter is untouched by opening or closing
+//! the window.
 //!
-//! **This view replaces the commit table; it does not sit beside it**
-//! (conformance issue 15). It occupies the same slot in the same region, so a
-//! reader who switches between the two is looking at the same table twice — and
-//! anything this file decided for itself was a visual reset at the moment of
-//! switching. Everything it used to spell out for itself is now read from
-//! [`log_window::CommitTable`]: the row height, the leading gutter the ROOTS
-//! column owns, the hash / author / wide-column offsets, the trailing column's
-//! right inset, and the two row inks. Its rows go through the same
-//! [`log_window::paint_log_row`], so the band and the one accent rail are the
-//! commit table's rather than a second answer to "what is a chosen row".
+//! **The window floats; the log keeps its graph.** The chrome is the `diff`
+//! window's, so the listing a blame verb came from stays exactly as it was
+//! and the graph never yields its region to this view.
+//!
+//! **Its rows are the commit table's rows** (conformance issue 15): the row
+//! height, the hash / author / wide-column offsets, the trailing column's
+//! right inset, and the two row inks are [`log_window::CommitTable`]'s, and
+//! the rows go through the same [`log_window::paint_log_row`], so the band
+//! and the one accent rail are the commit table's rather than a second
+//! answer to "what is a chosen row". The ROOTS gutter is not reserved here:
+//! a blame target names one repository and one file, and with no table
+//! beside the window to line up with, the gutter would name a root the
+//! window is already scoped to.
 //!
 //! The two cells that are *not* shared, and why: the wide column holds a source
 //! line here rather than a subject (so it is labelled `LINE`, and it is measured
@@ -23,16 +27,14 @@
 //! table's.
 
 use crate::theme::Palette;
-use crate::ui::log_window::{
-    CommitTable, paint_log_row, row_meta_ink, row_name_ink, shows_root_gutter, table_content_left,
-};
+use crate::ui::log_window::{CommitTable, paint_log_row, row_meta_ink, row_name_ink};
 use crate::ui::widgets;
 use chrono::{DateTime, Local, TimeZone, Utc};
 use egui::{
     FontFamily, FontId, Pos2, Rect, RichText, ScrollArea, Sense, Ui, Vec2, WidgetInfo, WidgetType,
 };
 use turbogit_app::keyed_read::Read;
-use turbogit_app::state::AppState;
+use turbogit_app::state::{AppState, Tab};
 use turbogit_domain::model::BlameLine;
 
 /// Uppercase micro text (§3.3) — shared control role (T2).
@@ -97,29 +99,36 @@ fn fmt_age(t: i64) -> String {
     }
 }
 
-/// Render the blame surface over the graph pane's region. Data flows through
-/// the keyed read of the open [`turbogit_app::state::BlameTarget`] (worker
-/// thread → `BlameReady`), so this is a pure render over the verdict: which of
-/// its four answers paints is the read's question, not one this view can forget
-/// to ask.
+/// The floating blame window the log's blame verbs open (the
+/// [`turbogit_app::state::BlameTarget`] in `state.ui.blame`), in the house
+/// `egui::Window` chrome, closing from its own footer or the title bar's X.
+///
+/// Data flows through the keyed read of the open target (worker thread →
+/// `BlameReady`), so the body is a pure render over the verdict: which of
+/// its four answers paints is the read's question, not one this view can
+/// forget to ask.
 pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     let Some(target) = state.ui.blame.clone() else {
         return;
     };
+    let mut open = true;
+    egui::Window::new("Blame")
+        .open(&mut open)
+        // The body's ScrollArea owns scrolling; the window's own would leave it
+        // a remainder to measure, and the rows would collapse inside it.
+        .vscroll(false)
+        .default_size(egui::vec2(760.0, 520.0))
+        .show(ui.ctx(), |ui| blame_body(ui, state, &target));
+    if !open {
+        state.ui.blame = None;
+    }
+}
+
+/// The subject line names what is open, then the blame surface itself and the
+/// footer that closes it.
+fn blame_body(ui: &mut Ui, state: &mut AppState, target: &turbogit_app::state::BlameTarget) {
     let verdict = state.read(target.clone());
 
-    // The header's close affordance sets a flag; like every interaction in
-    // the log workspace it is applied after the borrow-heavy render ends.
-    let mut close = false;
-    widgets::pane_header(ui, "BLAME", None, |ui| {
-        if ui
-            .link("Close blame")
-            .on_hover_text("Back to the commit log")
-            .clicked()
-        {
-            close = true;
-        }
-    });
     ui.label(
         RichText::new(format!(
             "{} @ {}",
@@ -131,57 +140,18 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     );
     ui.add_space(2.0);
 
-    // Whether the ROOTS column's gutter exists in this listing. Read from the
-    // commit table's own predicate, not re-decided here: a blame view that
-    // reserved the gutter on a different rule than the table it replaced would
-    // put every one of its columns 5px out from under the table's the moment the
-    // user switched back.
-    let multi_root = shows_root_gutter(state);
-
     // The column header row, from the shared column chrome and the same
-    // `[BLAME_COLUMNS]` table the rows measure their cells from (R7), at the
-    // commit table's own content edge so its labels sit over the commit table's
-    // cells. It replaces three hand-laid galleys at the control size with no
-    // rule under them, which is how this pane had a header no other pane could
-    // be compared against.
+    // `[BLAME_COLUMNS]` table the rows measure their cells from (R7). A blame
+    // target names one repository, so there is no ROOTS gutter to reserve.
     let available = ui.available_rect_before_wrap();
     widgets::column_header(
         ui,
         Rect::from_min_max(
-            Pos2::new(table_content_left(available, multi_root), available.top()),
+            Pos2::new(available.left(), available.top()),
             Pos2::new(available.right(), available.bottom()),
         ),
         &BLAME_COLUMNS,
     );
-
-    let lines = match verdict {
-        Read::Fresh(lines) if lines.is_empty() => {
-            widgets::empty_state(ui, "No blame lines for this revision.");
-            if close {
-                state.ui.blame = None;
-            }
-            return;
-        }
-        Read::Fresh(lines) => lines,
-        Read::Empty => {
-            widgets::empty_state(ui, "No blame lines for this revision.");
-            if close {
-                state.ui.blame = None;
-            }
-            return;
-        }
-        Read::Waiting => {
-            widgets::keyed_read_presentation(
-                ui,
-                widgets::KeyedReadPresentation::Waiting("Computing blame…"),
-            );
-            return;
-        }
-        Read::Failed(message) => {
-            widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Failed(&message));
-            return;
-        }
-    };
 
     // Row clicks are deferred (plan §1.3): the handle keeps the rows alive
     // across the scroll pass, which is what the owned verdict is for.
@@ -191,23 +161,39 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     // and this is the surface's one chance to aim at a row.
     let caret = state.ui.blame_caret_line;
     let mut caret_aimed = false;
-    ScrollArea::vertical()
-        .id_salt("blame_lines")
-        .show(ui, |ui| {
-            for line in lines.iter() {
-                let response = blame_row(ui, line, &target.rev, multi_root);
-                if Some(line.line_no) == caret {
-                    // Arrive at the line the reader was looking at, not at the top of
-                    // the file. Centre, not start: a line pinned to the window's edge
-                    // is a line the reader has to find again.
-                    response.scroll_to_me(Some(egui::Align::Center));
-                    caret_aimed = true;
-                }
-                if response.clicked() {
-                    clicked = Some(line.commit.clone());
-                }
-            }
-        });
+    match verdict {
+        Read::Fresh(lines) if !lines.is_empty() => {
+            ScrollArea::vertical()
+                .id_salt("blame_lines")
+                .show(ui, |ui| {
+                    for line in lines.iter() {
+                        let response = blame_row(ui, line, &target.rev);
+                        if Some(line.line_no) == caret {
+                            // Arrive at the line the reader was looking at, not at the top of
+                            // the file. Centre, not start: a line pinned to the window's edge
+                            // is a line the reader has to find again.
+                            response.scroll_to_me(Some(egui::Align::Center));
+                            caret_aimed = true;
+                        }
+                        if response.clicked() {
+                            clicked = Some(line.commit.clone());
+                        }
+                    }
+                });
+        }
+        Read::Fresh(_) | Read::Empty => {
+            widgets::empty_state(ui, "No blame lines for this revision.");
+        }
+        Read::Waiting => {
+            widgets::keyed_read_presentation(
+                ui,
+                widgets::KeyedReadPresentation::Waiting("Computing blame…"),
+            );
+        }
+        Read::Failed(message) => {
+            widgets::keyed_read_presentation(ui, widgets::KeyedReadPresentation::Failed(&message));
+        }
+    }
     if caret_aimed {
         // One-shot: the aim is this surface's opening position, not a claim on
         // every frame — leaving it set would pin the view against the reader's
@@ -215,18 +201,28 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
         state.ui.blame_caret_line = None;
     }
 
+    ui.add_space(6.0);
+    widgets::dialog_footer(ui, |ui| {
+        if widgets::compact_button(ui, "Close").clicked() {
+            state.ui.blame = None;
+        }
+    });
+
     if let Some(commit) = clicked {
         // Navigate to the line's commit in the log (issue 18): select it,
-        // close the blame view, and keep the path filter untouched.
+        // close the blame window, and keep the path filter untouched.
         state.ui.selected_commit = Some(commit.clone());
         state.ui.log_selected_file = None;
         state.ui.blame = None;
         // The log is what the user sees next, and the commit they picked can be
         // anywhere in its history — so the list is asked to show it (issue 08).
         state.ui.log_scroll_to = Some(commit);
-    }
-    if close {
-        state.ui.blame = None;
+        // The window floats over any tab, so the log is not necessarily the
+        // visible one; the click's promise is still that the log is what the
+        // user sees next, so the tab follows it.
+        if state.ui.tab != Tab::Log {
+            crate::ui::shell::switch_tab(state, Tab::Log);
+        }
     }
 }
 
@@ -245,22 +241,17 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
 /// tint alone, as this used to paint, is a selection without the rail every
 /// other chosen row in the app wears.
 ///
-/// Its cells are measured from [`table_content_left`] at the commit table's
-/// offsets, which is what makes the **ROOTS column line up**: on a multi-root
-/// listing this view reserves the gutter the column owns rather than painting
-/// over it, so its hash starts where the commit table's hash started. The gutter
-/// stays empty here on purpose — a blame target names one repository and one
-/// file, so a per-root swatch repeated down a screen of lines would name a root
-/// the view is already scoped to, and it would make this a fifth site asking
-/// `root_color` for a value the ROOTS column has already said.
-fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str, multi_root: bool) -> egui::Response {
+/// Its cells are measured from [`CommitTable`]'s offsets at the row's own
+/// leading edge, which is what keeps the hash, author and wide column at the
+/// table's spacing inside whatever width the window is dragged to.
+fn blame_row(ui: &mut Ui, line: &BlameLine, rev: &str) -> egui::Response {
     let width = ui.available_width();
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(width, CommitTable::ROW_HEIGHT), Sense::click());
 
     paint_log_row(ui, rect, line.commit == rev, response.hovered());
 
-    let content_left = table_content_left(rect, multi_root);
+    let content_left = rect.left();
     let painter = ui.painter().clone();
     let cy = rect.center().y;
     let hash = painter.layout_no_wrap(

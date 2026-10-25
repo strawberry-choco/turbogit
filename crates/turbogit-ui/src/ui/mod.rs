@@ -184,6 +184,9 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
     // The diff window the Log view's diff verbs open: floating over whatever
     // tab is up, so the listing the verb came from stays exactly as it was.
     diff::show_diff(ui, state);
+    // The blame window the same view's blame verbs open, in the same chrome
+    // and for the same reason: the listing the verb came from stays as it was.
+    blame_view::show_blame(ui, state);
     render_toast(ui, state);
 }
 
