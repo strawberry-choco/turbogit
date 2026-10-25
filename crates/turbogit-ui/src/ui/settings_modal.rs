@@ -189,6 +189,7 @@ fn settings_panel(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
         // The chips page also edits the new-pattern input on UiState, so it
         // reaches the draft through `state` instead of a pre-taken `&mut`.
         egui::ScrollArea::vertical()
+            .id_salt("settings_protected_branches")
             .max_height(panel_h)
             .show(&mut pane, |ui| {
                 page_title(ui, category.label());
@@ -200,6 +201,7 @@ fn settings_panel(ui: &mut Ui, state: &mut AppState, panel_h: f32) {
         return;
     };
     egui::ScrollArea::vertical()
+        .id_salt("settings_rows")
         .max_height(panel_h)
         .show(&mut pane, |ui| {
             page_title(ui, category.label());

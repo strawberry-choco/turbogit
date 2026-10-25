@@ -779,6 +779,7 @@ fn preview_reports(ui: &mut Ui, preview: &PushPreview) {
         ui.colored_label(Palette::STATE_ERROR, "Push rejected by git:");
     }
     egui::ScrollArea::vertical()
+        .id_salt("push_preview_reports")
         .max_height(160.0)
         .show(ui, |ui| {
             for (name, report) in &preview.reports {

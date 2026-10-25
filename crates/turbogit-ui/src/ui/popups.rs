@@ -404,6 +404,7 @@ pub fn command_palette(ui: &mut Ui, state: &mut AppState) {
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     egui::ScrollArea::vertical()
+                        .id_salt("palette_matches")
                         .max_height(list_h)
                         .show(ui, |ui| {
                             for &a in &matches {

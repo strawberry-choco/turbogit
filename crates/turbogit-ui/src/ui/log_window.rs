@@ -2142,33 +2142,35 @@ fn files_pane(ui: &mut Ui, state: &mut AppState) {
     let shown = files.iter().filter(|c| row_shown(c)).count();
 
     let mut action = FileAction::None;
-    ScrollArea::vertical().show(ui, |ui| {
-        for ch in files {
-            if !row_shown(ch) {
-                continue;
+    ScrollArea::vertical()
+        .id_salt("commit_changed_files")
+        .show(ui, |ui| {
+            for ch in files {
+                if !row_shown(ch) {
+                    continue;
+                }
+                let row_action = file_row(ui, state, root_id, ch, file_stat(stats, &ch.path));
+                // The first row that reports an intent owns the frame: a later
+                // non-clicked row must not clear it (only one row can be clicked
+                // per frame, but the loop keeps painting after it).
+                if matches!(action, FileAction::None) {
+                    action = row_action;
+                }
             }
-            let row_action = file_row(ui, state, root_id, ch, file_stat(stats, &ch.path));
-            // The first row that reports an intent owns the frame: a later
-            // non-clicked row must not clear it (only one row can be clicked
-            // per frame, but the loop keeps painting after it).
-            if matches!(action, FileAction::None) {
-                action = row_action;
+            if !changes_state.is_default() {
+                if let Some(recovery) = log_state_slot(ui, &changes_state)
+                    && recovery == LogRecovery::Refresh
+                {
+                    action = FileAction::Refresh;
+                }
+            } else if files.is_empty() {
+                widgets::empty_state(ui, "No changed files.");
+            } else if shown == 0 {
+                // A filter that hides every row is its own state — never the
+                // "this commit changed nothing" message (issue 02).
+                widgets::empty_state(ui, "No file matches the filter.");
             }
-        }
-        if !changes_state.is_default() {
-            if let Some(recovery) = log_state_slot(ui, &changes_state)
-                && recovery == LogRecovery::Refresh
-            {
-                action = FileAction::Refresh;
-            }
-        } else if files.is_empty() {
-            widgets::empty_state(ui, "No changed files.");
-        } else if shown == 0 {
-            // A filter that hides every row is its own state — never the
-            // "this commit changed nothing" message (issue 02).
-            widgets::empty_state(ui, "No file matches the filter.");
-        }
-    });
+        });
 
     // Footer links (screen 09): Open diff · Blame · Full path history,
     // acting on the selected changed file. Rendered only with a selection —
@@ -2754,6 +2756,7 @@ fn details_pane(ui: &mut Ui, state: &mut AppState) {
     if !body.is_empty() {
         let message_height = ui.available_height().max(40.0);
         ScrollArea::vertical()
+            .id_salt("commit_message_body")
             .max_height(message_height)
             .show(ui, |ui| {
                 for line in body {

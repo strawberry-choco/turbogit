@@ -191,21 +191,23 @@ pub fn show_blame(ui: &mut Ui, state: &mut AppState) {
     // and this is the surface's one chance to aim at a row.
     let caret = state.ui.blame_caret_line;
     let mut caret_aimed = false;
-    ScrollArea::vertical().show(ui, |ui| {
-        for line in lines.iter() {
-            let response = blame_row(ui, line, &target.rev, multi_root);
-            if Some(line.line_no) == caret {
-                // Arrive at the line the reader was looking at, not at the top of
-                // the file. Centre, not start: a line pinned to the window's edge
-                // is a line the reader has to find again.
-                response.scroll_to_me(Some(egui::Align::Center));
-                caret_aimed = true;
+    ScrollArea::vertical()
+        .id_salt("blame_lines")
+        .show(ui, |ui| {
+            for line in lines.iter() {
+                let response = blame_row(ui, line, &target.rev, multi_root);
+                if Some(line.line_no) == caret {
+                    // Arrive at the line the reader was looking at, not at the top of
+                    // the file. Centre, not start: a line pinned to the window's edge
+                    // is a line the reader has to find again.
+                    response.scroll_to_me(Some(egui::Align::Center));
+                    caret_aimed = true;
+                }
+                if response.clicked() {
+                    clicked = Some(line.commit.clone());
+                }
             }
-            if response.clicked() {
-                clicked = Some(line.commit.clone());
-            }
-        }
-    });
+        });
     if caret_aimed {
         // One-shot: the aim is this surface's opening position, not a claim on
         // every frame — leaving it set would pin the view against the reader's

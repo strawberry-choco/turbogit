@@ -516,170 +516,179 @@ pub fn branches_popup(ui: &mut Ui, state: &mut AppState) {
                 vec2(ui.available_width(), body_h),
                 Layout::top_down(Align::Min),
                 |ui| {
-                    ScrollArea::vertical().max_height(body_h).show(ui, |ui| {
-                        let mut clicked: Option<PopupEntry> = None;
-                        let mut toggled_star: Option<String> = None;
-                        let mut row_intent: Option<BranchRowAction> = None;
-                        let mut last_section: Option<&'static str> = None;
+                    ScrollArea::vertical()
+                        .id_salt("branch_popup_list")
+                        .max_height(body_h)
+                        .show(ui, |ui| {
+                            let mut clicked: Option<PopupEntry> = None;
+                            let mut toggled_star: Option<String> = None;
+                            let mut row_intent: Option<BranchRowAction> = None;
+                            let mut last_section: Option<&'static str> = None;
 
-                        for (idx, e) in entries.iter().enumerate() {
-                            if last_section != Some(e.section()) {
-                                if last_section.is_some() {
-                                    ui.separator();
+                            for (idx, e) in entries.iter().enumerate() {
+                                if last_section != Some(e.section()) {
+                                    if last_section.is_some() {
+                                        ui.separator();
+                                    }
+                                    widgets::group_title(ui, e.section());
+                                    last_section = Some(e.section());
                                 }
-                                widgets::group_title(ui, e.section());
-                                last_section = Some(e.section());
-                            }
 
-                            let selected = idx == state.ui.branches_cursor;
-                            let label = e.label();
-                            // Issue 32 row anatomy: the lock marks protected
-                            // branches (settings patterns), the stale badge
-                            // shows the tip's age, and the sync markers ride
-                            // the remote rows.
-                            let protected =
-                                sync_service::is_protected(&state.settings, e.branch_name());
-                            // Remote and tag rows are refs that exist by
-                            // definition; a recent/local row exists when its
-                            // branch is still listed locally.
-                            let exists = match e {
-                                PopupEntry::Remote { .. } | PopupEntry::Tag { .. } => true,
-                                _ => locals.iter().any(|b| b.name == e.branch_name()),
-                            };
-                            let actions = row_actions(e, current.as_deref(), protected, exists);
-                            // Hover band for the protected row's quick actions
-                            // (issue 32): the row's full rect from the previous
-                            // frame. Testing the pointer against the rect laid
-                            // out so far would collapse the band the moment the
-                            // pointer travels onto the revealed buttons, so the
-                            // last frame's rect is kept in egui memory — the
-                            // classic two-frame hover toolbar.
-                            let band_id = egui::Id::new(("branch-quick-actions", e.label()));
-                            let hinted = ui
-                                .ctx()
-                                .memory(|m| m.data.get_temp::<egui::Rect>(band_id))
-                                .is_some_and(|r| ui.rect_contains_pointer(r));
-                            let row = ui.horizontal(|ui| {
-                                match e {
-                                    PopupEntry::Recent { name, favorite, .. }
-                                    | PopupEntry::Local { name, favorite, .. } => {
-                                        let glyph = if *favorite { "★" } else { "☆" };
-                                        let star = egui::Button::new(
-                                            RichText::new(glyph).color(STAR_COLOR),
-                                        )
-                                        .frame(false);
-                                        if ui.add(star).clicked() {
-                                            toggled_star = Some(name.clone());
+                                let selected = idx == state.ui.branches_cursor;
+                                let label = e.label();
+                                // Issue 32 row anatomy: the lock marks protected
+                                // branches (settings patterns), the stale badge
+                                // shows the tip's age, and the sync markers ride
+                                // the remote rows.
+                                let protected =
+                                    sync_service::is_protected(&state.settings, e.branch_name());
+                                // Remote and tag rows are refs that exist by
+                                // definition; a recent/local row exists when its
+                                // branch is still listed locally.
+                                let exists = match e {
+                                    PopupEntry::Remote { .. } | PopupEntry::Tag { .. } => true,
+                                    _ => locals.iter().any(|b| b.name == e.branch_name()),
+                                };
+                                let actions = row_actions(e, current.as_deref(), protected, exists);
+                                // Hover band for the protected row's quick actions
+                                // (issue 32): the row's full rect from the previous
+                                // frame. Testing the pointer against the rect laid
+                                // out so far would collapse the band the moment the
+                                // pointer travels onto the revealed buttons, so the
+                                // last frame's rect is kept in egui memory — the
+                                // classic two-frame hover toolbar.
+                                let band_id = egui::Id::new(("branch-quick-actions", e.label()));
+                                let hinted = ui
+                                    .ctx()
+                                    .memory(|m| m.data.get_temp::<egui::Rect>(band_id))
+                                    .is_some_and(|r| ui.rect_contains_pointer(r));
+                                let row = ui.horizontal(|ui| {
+                                    match e {
+                                        PopupEntry::Recent { name, favorite, .. }
+                                        | PopupEntry::Local { name, favorite, .. } => {
+                                            let glyph = if *favorite { "★" } else { "☆" };
+                                            let star = egui::Button::new(
+                                                RichText::new(glyph).color(STAR_COLOR),
+                                            )
+                                            .frame(false);
+                                            if ui.add(star).clicked() {
+                                                toggled_star = Some(name.clone());
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                    if protected {
+                                        icons::icon(ui, Icon::LOCK, 13.0, Palette::STATE_WARNING);
+                                    }
+                                    if ui.selectable_label(selected, label.clone()).clicked() {
+                                        clicked = Some(e.clone());
+                                    }
+                                    // Stale badge (issue 32): the branch tip's age
+                                    // in compact units, e.g. "3w".
+                                    if let Some(ts) = e.last_touched() {
+                                        let age = chrono::Utc::now()
+                                            .signed_duration_since(ts)
+                                            .to_std()
+                                            .unwrap_or_default();
+                                        ui.label(
+                                            RichText::new(stale_badge(age))
+                                                .small()
+                                                .color(Palette::INK_3),
+                                        );
+                                    }
+                                    // Remote rows carry the upstream sync state:
+                                    // `gone` when the tracked upstream was deleted,
+                                    // else `↑a ↓b` when diverged.
+                                    if let PopupEntry::Remote {
+                                        ahead,
+                                        behind,
+                                        gone,
+                                        ..
+                                    } = e
+                                        && let Some(marker) = remote_marker(*ahead, *behind, *gone)
+                                    {
+                                        ui.label(RichText::new(marker).small().color(if *gone {
+                                            Palette::STATE_WARNING
+                                        } else {
+                                            Palette::INK_3
+                                        }));
+                                    }
+
+                                    // Wired row action (ADR-0012).
+                                    if widgets::compact_button(ui, "Checkout").clicked() {
+                                        clicked = Some(e.clone());
+                                    }
+                                    // Issue 32: rename / delete / compare dispatch real flows. Gated
+                                    // actions stay rendered but disabled with the
+                                    // reason on hover, so the mockup's action set
+                                    // is intact and the gate is discoverable.
+                                    let rename = widgets::compact_button_enabled(
+                                        ui,
+                                        "Rename",
+                                        actions.rename,
+                                    );
+                                    if let Some(reason) =
+                                        rename_gate(e, current.as_deref(), protected, exists)
+                                    {
+                                        rename.on_disabled_hover_text(reason);
+                                    } else if rename.clicked() {
+                                        row_intent = Some(BranchRowAction::Rename(e.clone()));
+                                    }
+                                    let delete = widgets::compact_button_enabled(
+                                        ui,
+                                        "Delete",
+                                        actions.delete,
+                                    );
+                                    if let Some(reason) =
+                                        delete_gate(e, current.as_deref(), protected, exists)
+                                    {
+                                        delete.on_disabled_hover_text(reason);
+                                    } else if delete.clicked() {
+                                        row_intent = Some(BranchRowAction::Delete(e.clone()));
+                                    }
+                                    if widgets::compact_button(ui, "Compare…").clicked() {
+                                        row_intent = Some(BranchRowAction::Compare(e.clone()));
+                                    }
+                                    // New Worktree… stays visibly inert until the
+                                    // worktree-from-popup flow exists (ADR-0012).
+                                    ui.scope(|ui| {
+                                        ui.disable();
+                                        let _ = widgets::compact_button(ui, "New Worktree…");
+                                    });
+                                    // Protected branches: pull / merge quick actions appear on hover
+                                    // (issue 32, screen 13).
+                                    if protected && hinted {
+                                        if widgets::compact_button(ui, "Pull").clicked() {
+                                            row_intent = Some(BranchRowAction::Pull(
+                                                e.branch_name().to_string(),
+                                            ));
+                                        }
+                                        if widgets::compact_button(ui, "Merge").clicked() {
+                                            row_intent = Some(BranchRowAction::Merge(
+                                                e.branch_name().to_string(),
+                                            ));
                                         }
                                     }
-                                    _ => {}
-                                }
-                                if protected {
-                                    icons::icon(ui, Icon::LOCK, 13.0, Palette::STATE_WARNING);
-                                }
-                                if ui.selectable_label(selected, label.clone()).clicked() {
-                                    clicked = Some(e.clone());
-                                }
-                                // Stale badge (issue 32): the branch tip's age
-                                // in compact units, e.g. "3w".
-                                if let Some(ts) = e.last_touched() {
-                                    let age = chrono::Utc::now()
-                                        .signed_duration_since(ts)
-                                        .to_std()
-                                        .unwrap_or_default();
-                                    ui.label(
-                                        RichText::new(stale_badge(age))
-                                            .small()
-                                            .color(Palette::INK_3),
-                                    );
-                                }
-                                // Remote rows carry the upstream sync state:
-                                // `gone` when the tracked upstream was deleted,
-                                // else `↑a ↓b` when diverged.
-                                if let PopupEntry::Remote {
-                                    ahead,
-                                    behind,
-                                    gone,
-                                    ..
-                                } = e
-                                    && let Some(marker) = remote_marker(*ahead, *behind, *gone)
-                                {
-                                    ui.label(RichText::new(marker).small().color(if *gone {
-                                        Palette::STATE_WARNING
-                                    } else {
-                                        Palette::INK_3
-                                    }));
-                                }
-
-                                // Wired row action (ADR-0012).
-                                if widgets::compact_button(ui, "Checkout").clicked() {
-                                    clicked = Some(e.clone());
-                                }
-                                // Issue 32: rename / delete / compare dispatch real flows. Gated
-                                // actions stay rendered but disabled with the
-                                // reason on hover, so the mockup's action set
-                                // is intact and the gate is discoverable.
-                                let rename =
-                                    widgets::compact_button_enabled(ui, "Rename", actions.rename);
-                                if let Some(reason) =
-                                    rename_gate(e, current.as_deref(), protected, exists)
-                                {
-                                    rename.on_disabled_hover_text(reason);
-                                } else if rename.clicked() {
-                                    row_intent = Some(BranchRowAction::Rename(e.clone()));
-                                }
-                                let delete =
-                                    widgets::compact_button_enabled(ui, "Delete", actions.delete);
-                                if let Some(reason) =
-                                    delete_gate(e, current.as_deref(), protected, exists)
-                                {
-                                    delete.on_disabled_hover_text(reason);
-                                } else if delete.clicked() {
-                                    row_intent = Some(BranchRowAction::Delete(e.clone()));
-                                }
-                                if widgets::compact_button(ui, "Compare…").clicked() {
-                                    row_intent = Some(BranchRowAction::Compare(e.clone()));
-                                }
-                                // New Worktree… stays visibly inert until the
-                                // worktree-from-popup flow exists (ADR-0012).
-                                ui.scope(|ui| {
-                                    ui.disable();
-                                    let _ = widgets::compact_button(ui, "New Worktree…");
                                 });
-                                // Protected branches: pull / merge quick actions appear on hover
-                                // (issue 32, screen 13).
-                                if protected && hinted {
-                                    if widgets::compact_button(ui, "Pull").clicked() {
-                                        row_intent = Some(BranchRowAction::Pull(
-                                            e.branch_name().to_string(),
-                                        ));
-                                    }
-                                    if widgets::compact_button(ui, "Merge").clicked() {
-                                        row_intent = Some(BranchRowAction::Merge(
-                                            e.branch_name().to_string(),
-                                        ));
-                                    }
-                                }
-                            });
-                            // Remember this frame's full row rect as the next
-                            // frame's hover band (includes the revealed
-                            // quick actions once they appear).
-                            let band = row.response.rect;
-                            ui.ctx().memory_mut(|m| m.data.insert_temp(band_id, band));
-                        }
+                                // Remember this frame's full row rect as the next
+                                // frame's hover band (includes the revealed
+                                // quick actions once they appear).
+                                let band = row.response.rect;
+                                ui.ctx().memory_mut(|m| m.data.insert_temp(band_id, band));
+                            }
 
-                        if let Some(name) = toggled_star {
-                            shell_writes::branch::toggle_favorite(state, &id, &name);
-                        }
-                        if enter && !entries.is_empty() {
-                            clicked = Some(entries[state.ui.branches_cursor].clone());
-                        }
-                        match (clicked, row_intent) {
-                            (Some(e), _) => checkout_entry(state, &id, &e),
-                            (None, Some(intent)) => apply_branch_row_action(state, &id, intent),
-                            _ => {}
-                        }
-                    });
+                            if let Some(name) = toggled_star {
+                                shell_writes::branch::toggle_favorite(state, &id, &name);
+                            }
+                            if enter && !entries.is_empty() {
+                                clicked = Some(entries[state.ui.branches_cursor].clone());
+                            }
+                            match (clicked, row_intent) {
+                                (Some(e), _) => checkout_entry(state, &id, &e),
+                                (None, Some(intent)) => apply_branch_row_action(state, &id, intent),
+                                _ => {}
+                            }
+                        });
                 },
             );
 

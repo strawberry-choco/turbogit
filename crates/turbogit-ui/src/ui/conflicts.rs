@@ -239,78 +239,81 @@ pub fn render(ui: &mut Ui, state: &mut AppState) {
                     );
                 });
 
-                ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                    // Conflict resolutions are indexed by conflict ORDINAL,
-                    // not by segment position (normal segments interleave).
-                    let mut ci = 0usize;
-                    for (ours, theirs, is_conf) in segs.iter() {
-                        if !*is_conf {
-                            let text = ours.as_str();
-                            crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
-                                for col in cols.iter_mut() {
-                                    col.label(
-                                        RichText::new(text).monospace().color(Palette::INK_2),
+                ScrollArea::vertical()
+                    .id_salt("conflict_segments")
+                    .max_height(400.0)
+                    .show(ui, |ui| {
+                        // Conflict resolutions are indexed by conflict ORDINAL,
+                        // not by segment position (normal segments interleave).
+                        let mut ci = 0usize;
+                        for (ours, theirs, is_conf) in segs.iter() {
+                            if !*is_conf {
+                                let text = ours.as_str();
+                                crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
+                                    for col in cols.iter_mut() {
+                                        col.label(
+                                            RichText::new(text).monospace().color(Palette::INK_2),
+                                        );
+                                    }
+                                });
+                            } else {
+                                let res_i = ci;
+                                ci += 1;
+                                let block = res_i + 1;
+                                // Marker strips frame the discrete conflict block.
+                                // The three literals come from `turbogit_domain` —
+                                // the crate that also parses them — so this painter
+                                // cannot name a different marker than the parser.
+                                crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
+                                    crate::ui::kit::conflict_pane::marker_strip(
+                                        &mut cols[0],
+                                        CONFLICT_MARKER_OURS,
                                     );
-                                }
-                            });
-                        } else {
-                            let res_i = ci;
-                            ci += 1;
-                            let block = res_i + 1;
-                            // Marker strips frame the discrete conflict block.
-                            // The three literals come from `turbogit_domain` —
-                            // the crate that also parses them — so this painter
-                            // cannot name a different marker than the parser.
-                            crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
-                                crate::ui::kit::conflict_pane::marker_strip(
-                                    &mut cols[0],
-                                    CONFLICT_MARKER_OURS,
-                                );
-                                crate::ui::kit::conflict_pane::marker_strip(
-                                    &mut cols[1],
-                                    CONFLICT_MARKER_SEPARATOR,
-                                );
-                                crate::ui::kit::conflict_pane::marker_strip(
-                                    &mut cols[2],
-                                    CONFLICT_MARKER_THEIRS,
-                                );
-                            });
-                            // Tinted yours/theirs sections + read-only result.
-                            let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
-                            let result_text =
-                                chosen.and_then(|choice| resolved_block_text(ours, theirs, choice));
-                            crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
-                                crate::ui::kit::conflict_pane::side_section(
-                                    &mut cols[0],
-                                    ours,
-                                    Side::Local,
-                                );
-                                crate::ui::kit::conflict_pane::result_cell(
-                                    &mut cols[1],
-                                    result_text,
-                                );
-                                crate::ui::kit::conflict_pane::side_section(
-                                    &mut cols[2],
-                                    theirs,
-                                    Side::Incoming,
-                                );
-                            });
-                            // Per-block resolutions drive the composed Result.
-                            ui.horizontal(|ui| {
-                                if ui.button(format!("Accept Yours {block}")).clicked() {
-                                    resolve(state, res_i, CHOICE_OURS);
-                                }
-                                if ui.button(format!("Accept Theirs {block}")).clicked() {
-                                    resolve(state, res_i, CHOICE_THEIRS);
-                                }
-                                if ui.button(format!("Ignore {block}")).clicked() {
-                                    resolve(state, res_i, CHOICE_BOTH_OURS_FIRST);
-                                }
-                            });
-                            ui.add_space(4.0);
+                                    crate::ui::kit::conflict_pane::marker_strip(
+                                        &mut cols[1],
+                                        CONFLICT_MARKER_SEPARATOR,
+                                    );
+                                    crate::ui::kit::conflict_pane::marker_strip(
+                                        &mut cols[2],
+                                        CONFLICT_MARKER_THEIRS,
+                                    );
+                                });
+                                // Tinted yours/theirs sections + read-only result.
+                                let chosen = state.ui.conflict_res.get(res_i).copied().flatten();
+                                let result_text = chosen
+                                    .and_then(|choice| resolved_block_text(ours, theirs, choice));
+                                crate::ui::kit::conflict_pane::equal_panes(ui, |cols| {
+                                    crate::ui::kit::conflict_pane::side_section(
+                                        &mut cols[0],
+                                        ours,
+                                        Side::Local,
+                                    );
+                                    crate::ui::kit::conflict_pane::result_cell(
+                                        &mut cols[1],
+                                        result_text,
+                                    );
+                                    crate::ui::kit::conflict_pane::side_section(
+                                        &mut cols[2],
+                                        theirs,
+                                        Side::Incoming,
+                                    );
+                                });
+                                // Per-block resolutions drive the composed Result.
+                                ui.horizontal(|ui| {
+                                    if ui.button(format!("Accept Yours {block}")).clicked() {
+                                        resolve(state, res_i, CHOICE_OURS);
+                                    }
+                                    if ui.button(format!("Accept Theirs {block}")).clicked() {
+                                        resolve(state, res_i, CHOICE_THEIRS);
+                                    }
+                                    if ui.button(format!("Ignore {block}")).clicked() {
+                                        resolve(state, res_i, CHOICE_BOTH_OURS_FIRST);
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
                         }
-                    }
-                });
+                    });
 
                 ui.separator();
                 ui.horizontal(|ui| {

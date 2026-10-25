@@ -76,22 +76,25 @@ fn body(ui: &mut Ui, state: &mut AppState) {
     } else if rows.is_empty() {
         widgets::empty_state(ui, "No file differs between the two sides.");
     } else {
-        ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-            for row in &rows {
-                let take = file_row(ui, row);
-                if take {
-                    // The window is per root, so the root that was compared is the
-                    // root the take writes into — carried in the confirmation rather
-                    // than re-read from whichever root is focused at OK time.
-                    let Some(root) = root.clone() else { return };
-                    state.ui.confirm = Some(PendingConfirm::GetFileFromBranch {
-                        root,
-                        source: source.clone(),
-                        path: row.path.clone(),
-                    });
+        ScrollArea::vertical()
+            .id_salt("compare_branch_files")
+            .max_height(300.0)
+            .show(ui, |ui| {
+                for row in &rows {
+                    let take = file_row(ui, row);
+                    if take {
+                        // The window is per root, so the root that was compared is the
+                        // root the take writes into — carried in the confirmation rather
+                        // than re-read from whichever root is focused at OK time.
+                        let Some(root) = root.clone() else { return };
+                        state.ui.confirm = Some(PendingConfirm::GetFileFromBranch {
+                            root,
+                            source: source.clone(),
+                            path: row.path.clone(),
+                        });
+                    }
                 }
-            }
-        });
+            });
     }
 
     widgets::dialog_footer(ui, |ui| {

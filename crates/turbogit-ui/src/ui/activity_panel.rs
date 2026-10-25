@@ -88,36 +88,39 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
         return;
     }
 
-    ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-        if rows.is_empty() {
-            ui.add_space(16.0);
-            widgets::empty_state(ui, "No activity yet — dispatched operations land here.");
-            return;
-        }
-        // Newest first: the feed is a record, but what the user wants to
-        // see is what just happened.
-        for e in rows.iter().rev() {
-            ui.horizontal(|ui| {
-                ui.style_mut().spacing.item_spacing.x = 8.0;
-                let time = e.at.format("%H:%M").to_string();
-                ui.label(
-                    RichText::new(time)
-                        .font(FontId::new(HEADER_TEXT, FontFamily::Monospace))
-                        .color(Palette::INK_3),
-                );
-                ui.label(
-                    RichText::new(e.repo.clone().unwrap_or_else(|| "all repos".to_owned()))
-                        .font(FontId::new(HEADER_TEXT, FontFamily::Proportional))
-                        .color(Palette::INK_2),
-                );
-                ui.label(
-                    RichText::new(&e.message)
-                        .font(FontId::new(ROW_TEXT, FontFamily::Proportional))
-                        .color(kind_color(e.kind)),
-                );
-            });
-        }
-    });
+    ScrollArea::vertical()
+        .id_salt("activity_feed")
+        .auto_shrink(false)
+        .show(ui, |ui| {
+            if rows.is_empty() {
+                ui.add_space(16.0);
+                widgets::empty_state(ui, "No activity yet — dispatched operations land here.");
+                return;
+            }
+            // Newest first: the feed is a record, but what the user wants to
+            // see is what just happened.
+            for e in rows.iter().rev() {
+                ui.horizontal(|ui| {
+                    ui.style_mut().spacing.item_spacing.x = 8.0;
+                    let time = e.at.format("%H:%M").to_string();
+                    ui.label(
+                        RichText::new(time)
+                            .font(FontId::new(HEADER_TEXT, FontFamily::Monospace))
+                            .color(Palette::INK_3),
+                    );
+                    ui.label(
+                        RichText::new(e.repo.clone().unwrap_or_else(|| "all repos".to_owned()))
+                            .font(FontId::new(HEADER_TEXT, FontFamily::Proportional))
+                            .color(Palette::INK_2),
+                    );
+                    ui.label(
+                        RichText::new(&e.message)
+                            .font(FontId::new(ROW_TEXT, FontFamily::Proportional))
+                            .color(kind_color(e.kind)),
+                    );
+                });
+            }
+        });
 }
 
 /// The header's title chip — the chevron and the LOG label inside one

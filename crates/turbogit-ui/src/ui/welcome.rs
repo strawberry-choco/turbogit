@@ -86,26 +86,28 @@ fn wordmark_font() -> egui::FontId {
 
 /// Render the Welcome page inside the shell's central panel.
 pub fn show(ui: &mut Ui, state: &mut AppState) {
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        let avail = ui.available_width();
-        let margin = ((avail - CONTENT_WIDTH) / 2.0).max(0.0);
-        ui.add_space(20.0);
-        ui.horizontal(|ui| {
-            ui.add_space(margin);
-            ui.vertical(|ui| {
-                ui.set_max_width(CONTENT_WIDTH.min(avail));
-                // Left-aligned vertical rhythm (spec §5.6): hero → clone panel →
-                // quick actions → lower, uniform 20px between sections.
-                hero(ui, state);
-                ui.add_space(20.0);
-                clone_box(ui, state);
-                ui.add_space(20.0);
-                quick_actions(ui, state);
-                ui.add_space(20.0);
-                lower(ui, state);
+    egui::ScrollArea::vertical()
+        .id_salt("welcome_page")
+        .show(ui, |ui| {
+            let avail = ui.available_width();
+            let margin = ((avail - CONTENT_WIDTH) / 2.0).max(0.0);
+            ui.add_space(20.0);
+            ui.horizontal(|ui| {
+                ui.add_space(margin);
+                ui.vertical(|ui| {
+                    ui.set_max_width(CONTENT_WIDTH.min(avail));
+                    // Left-aligned vertical rhythm (spec §5.6): hero → clone panel →
+                    // quick actions → lower, uniform 20px between sections.
+                    hero(ui, state);
+                    ui.add_space(20.0);
+                    clone_box(ui, state);
+                    ui.add_space(20.0);
+                    quick_actions(ui, state);
+                    ui.add_space(20.0);
+                    lower(ui, state);
+                });
             });
         });
-    });
     changelog_overlay(ui, state);
 }
 
@@ -884,6 +886,7 @@ fn changelog_overlay(ui: &mut Ui, state: &mut AppState) {
                     });
                     ui.add_space(10.0);
                     egui::ScrollArea::vertical()
+                        .id_salt("welcome_changelog")
                         .max_height(400.0)
                         .show(ui, |ui| {
                             for (version, note) in CHANGELOG {

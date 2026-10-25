@@ -109,20 +109,28 @@ pub(crate) fn column_table_pane<T: Clone>(
     widgets::column_header(ui, ui.available_rect_before_wrap(), spec.columns);
     ui.add_space(4.0);
 
-    ScrollArea::vertical().show(ui, |ui| {
-        // A cold cache is **not** the empty state: the pane has already said
-        // "Loading …" above, and printing the empty word under it would report
-        // an absence the cache has not established.
-        if rows.is_empty() && answered {
-            // The loading line and the empty line are one role — a word about
-            // what the pane has to show — and go through the one empty state so
-            // the two never read as two different decisions.
-            widgets::empty_state(ui, spec.empty);
-        }
-        for row in &rows {
-            (spec.row)(ui, state, row);
-        }
-    });
+    // The scroll's persistent id comes from the pane title, not from layout:
+    // egui's default salt is a constant, so two unsalted ScrollAreas nested at
+    // the same anonymous-child depth share one id — one scroll moves the other
+    // and egui paints its id-clash error over both. The title is the pane's
+    // name, and the titles of every `column_table_pane` call site are distinct;
+    // a duplicate would re-collide and fail `shell_scroll_id_clash.rs` first.
+    ScrollArea::vertical()
+        .id_salt(format!("pane_table_{}", spec.title.to_lowercase()))
+        .show(ui, |ui| {
+            // A cold cache is **not** the empty state: the pane has already said
+            // "Loading …" above, and printing the empty word under it would report
+            // an absence the cache has not established.
+            if rows.is_empty() && answered {
+                // The loading line and the empty line are one role — a word about
+                // what the pane has to show — and go through the one empty state so
+                // the two never read as two different decisions.
+                widgets::empty_state(ui, spec.empty);
+            }
+            for row in &rows {
+                (spec.row)(ui, state, row);
+            }
+        });
 }
 
 /// Paint one fleet matrix: a band of column labels over one row band per row,

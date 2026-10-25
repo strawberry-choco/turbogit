@@ -1463,6 +1463,7 @@ fn compare_branches(ui: &mut Ui, state: &mut AppState) {
         })
         .unwrap_or_default();
     egui::ScrollArea::vertical()
+        .id_salt("compare_branch_commits")
         .max_height(240.0)
         .show(ui, |ui| {
             for c in &commits {
@@ -1526,6 +1527,7 @@ pub(crate) fn unmerged_disclosure(
 ) -> UnmergedAction {
     ui.label(unmerged.header());
     egui::ScrollArea::vertical()
+        .id_salt("unmerged_commits")
         .max_height(240.0)
         .show(ui, |ui| {
             for c in &unmerged.commits {

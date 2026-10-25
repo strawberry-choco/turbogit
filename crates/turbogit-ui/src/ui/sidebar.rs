@@ -496,15 +496,17 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
             .layout(Layout::top_down(Align::Min)),
     );
     let project_dir = state.project_dir.clone();
-    ScrollArea::vertical().show(&mut list, |ui| {
-        for node in &tree.nodes {
-            let root_path = match node {
-                ProjectNode::Folder(_) => project_dir.clone(),
-                ProjectNode::Repo(r) => r.path.clone(),
-            };
-            render_node(ui, state, node, 0, &root_path, &project_dir);
-        }
-    });
+    ScrollArea::vertical()
+        .id_salt("sidebar_project_tree")
+        .show(&mut list, |ui| {
+            for node in &tree.nodes {
+                let root_path = match node {
+                    ProjectNode::Folder(_) => project_dir.clone(),
+                    ProjectNode::Repo(r) => r.path.clone(),
+                };
+                render_node(ui, state, node, 0, &root_path, &project_dir);
+            }
+        });
     if bar_h > 0.0 {
         let bar_rect = Rect::from_min_max(
             Pos2::new(rect.left(), rect.bottom() - bar_h),

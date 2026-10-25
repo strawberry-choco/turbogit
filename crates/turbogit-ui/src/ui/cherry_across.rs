@@ -116,24 +116,27 @@ fn commits_pane(ui: &mut Ui, state: &mut AppState, candidates: &[Commit], select
         &mut state.ui.dlg.cherry_search,
     );
     let query = state.ui.dlg.cherry_search.to_lowercase();
-    ScrollArea::vertical().max_height(190.0).show(ui, |ui| {
-        for commit in candidates {
-            let matches = query.is_empty()
+    ScrollArea::vertical()
+        .id_salt("cherry_candidates")
+        .max_height(190.0)
+        .show(ui, |ui| {
+            for commit in candidates {
+                let matches = query.is_empty()
                 || widgets::filter_matches(&commit.message, &query)
                 || widgets::filter_matches(&commit.author.name, &query)
                 // A hash, matched as a PREFIX — a search box that accepted the
                 // middle of a sha is a search box nobody can use.
                 || commit.id.starts_with(&query);
-            if !matches {
-                continue;
+                if !matches {
+                    continue;
+                }
+                let mut checked = selected.contains(&commit.id);
+                if ui.checkbox(&mut checked, commit.subject()).clicked() {
+                    state.cherry_toggle_commit(commit.id.clone());
+                    state.cherry_focus_commit(commit.id.clone());
+                }
             }
-            let mut checked = selected.contains(&commit.id);
-            if ui.checkbox(&mut checked, commit.subject()).clicked() {
-                state.cherry_toggle_commit(commit.id.clone());
-                state.cherry_focus_commit(commit.id.clone());
-            }
-        }
-    });
+        });
 }
 
 // --------------------------------------------------------------- preview ---
@@ -266,25 +269,28 @@ fn preview_pane(ui: &mut Ui, state: &mut AppState) {
             );
         });
     });
-    ScrollArea::vertical().max_height(170.0).show(ui, |ui| {
-        for line in &files[idx].lines {
-            let color = match line.role {
-                PreviewRole::Source => Palette::INK_3,
-                PreviewRole::Added => Palette::STATE_SUCCESS,
-                // A removal of an empty line stays dim: the same rendering the
-                // prefix classifier produced, kept deliberately.
-                PreviewRole::Removed if line.text == "-" => Palette::INK_3,
-                PreviewRole::Removed => Palette::STATE_ERROR,
-                PreviewRole::Metadata | PreviewRole::Context => Palette::INK_2,
-            };
-            ui.label(
-                egui::RichText::new(format!("{text} ", text = line.text))
-                    .monospace()
-                    .font(crate::theme::data_font(crate::theme::TYPE_CONTROL))
-                    .color(color),
-            );
-        }
-    });
+    ScrollArea::vertical()
+        .id_salt("cherry_file_preview")
+        .max_height(170.0)
+        .show(ui, |ui| {
+            for line in &files[idx].lines {
+                let color = match line.role {
+                    PreviewRole::Source => Palette::INK_3,
+                    PreviewRole::Added => Palette::STATE_SUCCESS,
+                    // A removal of an empty line stays dim: the same rendering the
+                    // prefix classifier produced, kept deliberately.
+                    PreviewRole::Removed if line.text == "-" => Palette::INK_3,
+                    PreviewRole::Removed => Palette::STATE_ERROR,
+                    PreviewRole::Metadata | PreviewRole::Context => Palette::INK_2,
+                };
+                ui.label(
+                    egui::RichText::new(format!("{text} ", text = line.text))
+                        .monospace()
+                        .font(crate::theme::data_font(crate::theme::TYPE_CONTROL))
+                        .color(color),
+                );
+            }
+        });
 }
 
 // --------------------------------------------------------------- targets ---
