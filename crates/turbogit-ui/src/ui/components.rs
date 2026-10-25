@@ -356,6 +356,47 @@ pub fn state_mark(ui: &mut Ui, text: &str, color: Color32) -> Response {
     mark(ui, text, color, &chrome_font(TYPE_CHIP))
 }
 
+/// How wide [`state_words`] will paint `text` — the measured words alone, with
+/// no mark in front. One implementation beside the paint it measures, so the
+/// band's fallback cut cannot disagree with what reaches the screen.
+pub fn state_words_width(ui: &Ui, text: &str) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), chrome_font(TYPE_CHIP), Color32::WHITE)
+        .size()
+        .x
+}
+
+/// The state in coloured words alone — the branches band's summary, without
+/// [`state_mark`]'s dot.
+///
+/// The band is the one state site with no dot: the repository's head-ref chip
+/// and its Fetch already fix the band's meaning, so the summary is read as a
+/// sentence on that band rather than a mark needing its own shape — and a
+/// repository with nothing to report paints nothing at all, so the band skips
+/// the call on an empty summary. The words keep the mark pair's other half
+/// exactly: one colour from [`crate::theme::RepoState::color`], the chrome
+/// face at the chip size, no fill, no chip geometry.
+pub fn state_words(ui: &mut Ui, text: &str, color: Color32) -> Response {
+    let w = state_words_width(ui, text);
+    let h = super::widgets::CHIP_HEIGHT;
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let galley = ui
+            .painter()
+            .layout_no_wrap(text.to_owned(), chrome_font(TYPE_CHIP), color);
+        ui.painter().galley(
+            Pos2::new(rect.left(), rect.center().y - galley.size().y / 2.0),
+            galley,
+            color,
+        );
+    }
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, text));
+    response
+}
+
 /// The mark pair painted in a caller-chosen face: see [`mark_width`] for why
 /// there is only one copy of the geometry.
 fn mark(ui: &mut Ui, text: &str, color: Color32, font: &FontId) -> Response {

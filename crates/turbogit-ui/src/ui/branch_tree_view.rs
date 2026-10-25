@@ -47,7 +47,7 @@ use crate::ui::components::{
     BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H, badge_mark,
     badge_mark_width, current_row_fill, kit_button, kit_button_width, middle_truncate_to_width,
     paint_rail, ref_chip_with_ink, ref_chip_with_ink_width, row_fill, row_ink, section_header,
-    state_mark, state_mark_width, sync_badge, sync_ink,
+    state_mark, state_words, state_words_width, sync_badge, sync_ink,
 };
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::menu_host::{self, MenuId};
@@ -62,7 +62,7 @@ const REPO_HEADER_H: f32 = 30.0;
 /// left edge whatever the names do.
 const NAME_ZONE_SHARE: f32 = 0.5;
 
-/// Share of a repo header held by its identity cluster (dot, name, current
+/// Share of a repo header held by its identity cluster (name, current
 /// branch); the status summary and Fetch take the rest.
 const HEADER_IDENTITY_SHARE: f32 = 0.45;
 
@@ -765,12 +765,13 @@ fn paint_nodes(
 /// One repo section header — the **repository band** (ticket 16). Its
 /// composition, left to right: the repository's name in the interface face, its
 /// head ref as a **neutral ref chip** (never a brand-filled pill), and — on the
-/// right — its state summary as the **mark pair** (a leading dot and coloured
-/// words), then a Fetch that fetches **this repository only**.
+/// right — its state summary in coloured words, then a Fetch that fetches
+/// **this repository only**.
 ///
-/// The band has no second dot: the mark pair's dot *is* the band's state mark,
-/// so the state reaches the screen as exactly one dot and one sentence, which is
-/// what R6 asks for and what `tests/branch_component_kit.rs` counts.
+/// The band carries no state dot. The head-ref chip and the Fetch already fix
+/// what the band is, so the summary reads as a sentence on it; a repository
+/// with nothing to report says nothing. [`state_mark`] keeps its dot for the
+/// surfaces that scan states side by side with nothing else to anchor them.
 ///
 /// `show_identity` is false for a single-repo project, where the grouping is
 /// invisible: the identity cluster (name, chip) is suppressed so no redundant
@@ -839,10 +840,9 @@ fn repo_header(
     }
 
     // Right cluster: the repo's Fetch, with the state summary in front of it.
-    // The summary is the **mark pair** — a leading dot and the state (counts in
-    // the badge spelling, words for everything else), all wearing the one map's
-    // colour — and it is never a chip: a state behind a fill stops reading as
-    // state and starts reading as a category.
+    // The summary is coloured words and nothing else — never a chip: a state
+    // behind a fill stops reading as state and starts reading as a category —
+    // and a summary with nothing to say paints nothing, gap included.
     let mut right = ui.new_child(
         UiBuilder::new()
             .max_rect(Rect::from_min_max(
@@ -864,9 +864,11 @@ fn repo_header(
             });
         }
         if show_identity {
-            ui.add_space(PAD_LIST);
             let summary = fit_summary(ui, &header_summary(section), ui.available_width());
-            state_mark(ui, &summary, section.status.color());
+            if !summary.is_empty() {
+                ui.add_space(PAD_LIST);
+                state_words(ui, &summary, section.status.color());
+            }
         }
     });
 }
@@ -875,7 +877,7 @@ fn repo_header(
 /// it. Geometry decides, never the words: a state that is silently dropped is
 /// worse than one that is visibly cut.
 fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
-    if state_mark_width(ui, text) <= avail {
+    if state_words_width(ui, text) <= avail {
         return text.to_owned();
     }
     let mut keep = text.chars().count();
@@ -886,7 +888,7 @@ fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
             .take(keep)
             .chain(std::iter::once('…'))
             .collect();
-        if state_mark_width(ui, &candidate) <= avail {
+        if state_words_width(ui, &candidate) <= avail {
             return candidate;
         }
     }
@@ -895,9 +897,11 @@ fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
 
 /// The header's state summary: the current branch's counts in the one badge
 /// spelling (`↑2 · ↓1`), then the repository's state in words — all read off
-/// the section the builder already derived, so the numbers, the dot and the
-/// words can never disagree. A state with nothing to report contributes no
-/// words, and an empty part is dropped rather than left to dangle a separator.
+/// the section the builder already derived, so the numbers and the words can
+/// never disagree. A state with nothing to report contributes no words, and an
+/// empty part is dropped rather than left to dangle a separator — so a clean,
+/// in-sync repository yields the empty string, and the band paints no summary
+/// at all.
 ///
 /// The band is one chrome galley, so the arrows ride the fallback cut exactly
 /// as they do in the sidebar's repository rows; the row badges are the marks

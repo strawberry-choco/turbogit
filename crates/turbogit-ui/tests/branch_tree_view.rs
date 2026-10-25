@@ -393,17 +393,18 @@ fn painted_contains(harness: &Harness<'_, Fixture>, needle: &str) -> bool {
 // --- rows per repository ------------------------------------------------------
 
 /// Each repository paints its own block, and its band's state reaches the
-/// screen as exactly **one mark**: the leading dot of the mark pair beside the
-/// band summary.
+/// screen as the coloured summary words alone — no dot leads them, and a
+/// repository with nothing to report says nothing.
 ///
-/// **Why the dot moved.** The band used to carry a second, heading status dot on
-/// its left *and* a coloured summary on its right. Two dots in one band, in the
-/// same colour, saying the same thing, is one of them redundant — and R6 asks
-/// for one. The mark pair's dot is that dot now, so "one status dot per repo
-/// header" still holds, counted on the band's own line rather than at a radius
-/// that a row's inline mark could collide with.
+/// **Why the dot left.** The band carried a heading status dot first beside
+/// and then inside its summary (the mark pair's leading dot), and the head-ref
+/// chip and the Fetch already fix what the band is: the summary reads as a
+/// sentence on the band, so the shape was chrome the words never needed. The
+/// state still has exactly one presentation per band — the one map's colour
+/// on the one summary galley — and "one state voice per repo header" holds
+/// with no circle to count.
 #[test]
-fn rows_render_per_repository_with_one_state_mark_each() {
+fn rows_render_per_repository_with_their_state_in_words_alone() {
     let mut fx = Fixture::two_repos();
     fx.tree.show_remotes = false;
     let mut h = fixture_harness(fx);
@@ -414,17 +415,17 @@ fn rows_render_per_repository_with_one_state_mark_each() {
     assert!(texts.iter().any(|t| t.contains("beta")));
     assert!(texts.iter().any(|t| t.contains("wip")));
 
-    // The band is located by its own name, and its mark is the dot on the same
-    // line — a *circle*, at the mark pair's own radius, in the one map's colour.
-    for (repo, color) in [
-        ("alpha", Palette::AHEAD),
-        ("beta", Palette::STATUS_DIVERGED),
-    ] {
+    // The band is located by its own name. No mark-radius circle sits on
+    // either band's line — the dot's one painter no longer runs on a band —
+    // and beta's diverged state is stated by its summary galley, in the one
+    // map's colour, on the band's own line. alpha is clean: its band carries
+    // no state galley at all.
+    for repo in ["alpha", "beta"] {
         let name = galleys_for(&h, repo)
             .into_iter()
             .next()
             .unwrap_or_else(|| panic!("the `{repo}` band names its repository"));
-        let marks: Vec<_> = filled_circles(&h)
+        let dots: Vec<_> = filled_circles(&h)
             .into_iter()
             .filter(|(center, r, _)| {
                 (center.y - name.pos.y).abs() < 14.0
@@ -432,15 +433,31 @@ fn rows_render_per_repository_with_one_state_mark_each() {
             })
             .collect();
         assert_eq!(
-            marks.len(),
-            1,
-            "one state mark on the `{repo}` band's own line, found {marks:?}"
-        );
-        assert_eq!(
-            marks[0].2, color,
-            "…in that repository's state colour, from `RepoState::color()`"
+            dots.len(),
+            0,
+            "no state dot on the `{repo}` band's own line, found {dots:?}"
         );
     }
+    let beta_band = galleys_for(&h, "beta")
+        .into_iter()
+        .next()
+        .expect("the beta band names its repository")
+        .pos
+        .y;
+    let summary: Vec<_> = painted_galleys(&h)
+        .into_iter()
+        .filter(|g| g.text.contains("diverged") && (g.pos.y - beta_band).abs() < 14.0)
+        .collect();
+    assert_eq!(
+        summary.len(),
+        1,
+        "beta states its state once, on its own band: {summary:#?}"
+    );
+    assert_eq!(
+        summary[0].color,
+        Palette::STATUS_DIVERGED,
+        "…in that repository's state colour, from `RepoState::color()`"
+    );
 }
 
 // --- group labels read as structure --------------------------------------------

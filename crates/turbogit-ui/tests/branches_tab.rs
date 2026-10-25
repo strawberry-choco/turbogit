@@ -2771,7 +2771,7 @@ fn an_unpulled_branch_states_its_state_beside_the_name_not_on_it() {
 }
 
 #[test]
-fn repo_status_marks_paint_their_status_color() {
+fn repo_bands_state_their_status_in_words_without_a_dot() {
     use turbogit_ui::theme::Palette;
 
     let (_project, _dir, harness) =
@@ -2799,10 +2799,10 @@ fn repo_status_marks_paint_their_status_color() {
             }
         });
 
-    // **What moved, and why.** The bands' 4px heading status dot is gone; the
-    // band's state is the mark pair's leading dot beside its state summary, at
-    // the mark radius. The mark is what carries the colour, so this is the same
-    // claim at the mark's own geometry.
+    // **What moved, and why.** The band's state is its summary in coloured
+    // words alone: the mark pair's dot left the band, so the words carry the
+    // colour and the state, and a repository with nothing to report (alpha,
+    // clean and in sync) says nothing at all.
     let list_top = tool_window_top(&harness);
     let list_x = LIST_RIGHT;
     let band_names: Vec<f32> = ["alpha", "beta"]
@@ -2816,7 +2816,7 @@ fn repo_status_marks_paint_their_status_color() {
                 .y
         })
         .collect();
-    let marks: Vec<_> = filled_circles(&harness)
+    let band_dots: Vec<_> = filled_circles(&harness)
         .into_iter()
         .filter(|(c, r, _)| {
             c.y > list_top
@@ -2826,17 +2826,30 @@ fn repo_status_marks_paint_their_status_color() {
         })
         .collect();
     assert_eq!(
-        marks.len(),
-        2,
-        "one state mark per repo band, on that band's own line: {marks:?}"
+        band_dots.len(),
+        0,
+        "no state dot on a repo band: the words state the state, found {band_dots:?}"
     );
-    assert!(
-        marks.iter().any(|(_, _, f)| *f == Palette::COUNTER),
-        "the unpulled repo's mark is the counter orange: {marks:?}"
+
+    // The unpulled repository states it in words, once, on its own band, in
+    // the one map's colour — which for `Unpulled` is the reserved counter
+    // orange. The band's summary is one galley (counts and words joined by
+    // the separator), so the claim is scoped to that galley on that band's
+    // own line: a row badge elsewhere in the tree cannot answer for it.
+    let beta_band = band_names[1];
+    let hits: Vec<_> = painted_galleys(&harness)
+        .into_iter()
+        .filter(|g| g.text.contains("unpulled commits") && (g.pos.y - beta_band).abs() < 20.0)
+        .collect();
+    assert_eq!(
+        hits.len(),
+        1,
+        "the band states the state in words exactly once, on its own line: {hits:#?}"
     );
-    assert!(
-        marks.iter().any(|(_, _, f)| *f == Palette::AHEAD),
-        "the clean repo's mark is the ahead green: {marks:?}"
+    assert_eq!(
+        hits[0].color,
+        Palette::COUNTER,
+        "the state words wear the one repository-state colour map's ink"
     );
 }
 

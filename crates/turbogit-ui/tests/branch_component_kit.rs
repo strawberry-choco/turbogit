@@ -834,8 +834,10 @@ fn mid_operation_label_is_first_class() {
 // from a frame with no state at all.
 //
 // The words themselves come from the one map — `RepoState::words()` beside
-// `RepoState::color()` — and the dot is the *mark*: a filled circle, with no
-// fill rect, no radius, no chip geometry and no node of its own.
+// `RepoState::color()` — and a state never wears a fill: where a surface wants
+// a mark shape, `state_mark` is a filled circle with no fill rect, no radius,
+// no chip geometry and no node of its own. The branches band wants none of
+// that either: its summary is the coloured words alone.
 
 /// The state colours the one repository-state map produces for a **severity**,
 /// as a closed list of three.
@@ -858,7 +860,7 @@ fn mid_operation_label_is_first_class() {
 /// and lose the distinction the seventh variant exists to draw. The exclusion is
 /// therefore *asserted* below rather than merely absent: the loop over
 /// [`ALL_REPO_STATES`] states both halves, and the painted negative in
-/// `a_dirty_repository_reaches_the_branches_screen_as_a_dot_and_words_never_as_a_chip_fill`
+/// `a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill`
 /// sweeps the severities.
 const STATE_SEVERITY_COLORS: [(&str, Color32); 3] = [
     ("dirt / unpushed orange", Palette::COUNTER),
@@ -1027,16 +1029,16 @@ fn repository_state_is_one_map_and_the_chip_set_holds_none_of_it() {
     use turbogit_ui::ui::widgets::{COUNT_CHIP_COLORS, CURRENT_CHIP_COLORS, REF_CHIP_COLORS};
 
     // Every state has a colour, and every state that has something to report has
-    // words — a dot and the summary beside it can never disagree, because there
-    // is only one source for both halves. `Clean` is the one state that says
+    // words — the words and their colour can never disagree, because there is
+    // only one source for both halves. `Clean` is the one state that says
     // nothing: a repository with nothing outstanding is not an event worth a
-    // sentence, and its band paints the green dot alone.
+    // sentence, and its band paints nothing at all.
     for state in ALL_REPO_STATES {
         if state == turbogit_ui::theme::RepoState::Clean {
             assert_eq!(
                 state.words(),
                 "",
-                "{state:?} is the state that says nothing: its mark is the dot"
+                "{state:?} is the state that says nothing: its band paints nothing"
             );
         } else {
             assert!(
@@ -1125,13 +1127,13 @@ fn repository_state_is_one_map_and_the_chip_set_holds_none_of_it() {
     }
 }
 
-/// **The render half.** A dirty root's state reaches the branches screen as two
-/// things and two only: a leading dot (a *circle* — no fill rect, no radius, no
-/// chip geometry) and the state in words, inked from the one map. No filled
-/// rectangle anywhere in the frame wears a repository-state colour, which is
-/// what "state is not a chip" means once it reaches pixels.
+/// **The render half.** A dirty root's state reaches the branches screen as
+/// one thing and one only: the state in words, inked from the one map. No
+/// dot leads it — the band's summary is words alone — and no filled rectangle
+/// anywhere in the frame wears a repository-state colour, which is what
+/// "state is not a chip" means once it reaches pixels.
 #[test]
-fn a_dirty_repository_reaches_the_branches_screen_as_a_dot_and_words_never_as_a_chip_fill() {
+fn a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill() {
     let mut harness = dirty_repo_header_harness();
     settle(&mut harness);
 
@@ -1167,17 +1169,17 @@ fn a_dirty_repository_reaches_the_branches_screen_as_a_dot_and_words_never_as_a_
         "the state word wears the one repository-state colour map's ink"
     );
 
-    // (2) A leading dot, and specifically a *circle*. The dot is a mark: it has
-    // no fill rect, so the negative below can be stated about rects alone.
+    // (2) And no dot leads it. The band's summary is the words alone, so no
+    // circle in the state's colour reaches the frame — the dot's one painter
+    // (`state_mark`) no longer runs on the branches band.
     let dots: Vec<_> = filled_circles(&harness)
         .into_iter()
         .filter(|(_, _, fill)| *fill == expected_ink)
         .collect();
     assert_eq!(
         dots.len(),
-        1,
-        "the state reaches the screen as a leading dot too, in the same colour \
-         as the word beside it: found {dots:?}"
+        0,
+        "the band states the state in words alone, with no leading dot: {dots:?}"
     );
 
     // (3) And never as a fill. No filled rectangle in the whole frame carries a
@@ -2636,7 +2638,7 @@ fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apar
 // --- R6: the mark pair is a dot and words, at its construction site (ticket 21) -
 //
 // The render half of "state is not a chip" is
-// `a_dirty_repository_reaches_the_branches_screen_as_a_dot_and_words_never_as_a_chip_fill`:
+// `a_dirty_repository_reaches_the_branches_screen_as_words_never_as_a_chip_fill`:
 // in a real frame, no filled rect wears a state colour. The construction half is
 // here, because a frame only shows the states a fixture happens to produce, and
 // the failure this guards is `state_mark` itself growing a chip body — which
