@@ -186,28 +186,29 @@ pub fn show(ui: &mut Ui, state: &mut AppState) {
     list_area(&mut list_ui, state, &view);
     ui.advance_cursor_after_rect(list_rect);
 
-    // The gear's toggle list, hosted once per frame at the end of the surface
-    // like every other menu here: the host owns the lifecycle, this surface owns
-    // only which menu is open.
-    if state.ui.branches_settings_open {
-        let mut dismiss = false;
-        let changed = widgets::menu_host::host_menu(
-            ui,
-            widgets::menu_host::MenuId::new("branches_settings", ""),
-            true,
-            &mut dismiss,
-            |ui| settings_toggles(ui, &mut state.ui.branches_view),
-        );
-        let changed = changed.unwrap_or(false);
-        if dismiss || changed {
-            state.ui.branches_settings_open = false;
-        }
-        if changed {
-            // A toggle is a preference the person chose, not a scratch value for
-            // this session: it is written down the frame it changes, the same
-            // way every other durable UI preference on this surface is.
-            state.save_durable_ui();
-        }
+    // The gear's toggle list, hosted at the end of the surface like every other
+    // menu here: the host owns the lifecycle, this surface owns only which menu
+    // is open. The call runs on every frame, closed or not — the closed pass is
+    // what clears the host's painted-last-frame marker, and a skipped pass
+    // leaves it stale so the next open reads its own opening click as a click
+    // outside and dismisses itself the frame it opens.
+    let mut dismiss = false;
+    let changed = widgets::menu_host::host_menu(
+        ui,
+        widgets::menu_host::MenuId::new("branches_settings", ""),
+        state.ui.branches_settings_open,
+        &mut dismiss,
+        |ui| settings_toggles(ui, &mut state.ui.branches_view),
+    )
+    .unwrap_or(false);
+    if dismiss || changed {
+        state.ui.branches_settings_open = false;
+    }
+    if changed {
+        // A toggle is a preference the person chose, not a scratch value for
+        // this session: it is written down the frame it changes, the same
+        // way every other durable UI preference on this surface is.
+        state.save_durable_ui();
     }
 }
 
