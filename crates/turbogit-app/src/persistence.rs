@@ -4,6 +4,11 @@
 //! analog of IntelliJ's `.idea/`). This layer NEVER touches `.git/`. State is
 //! serialized as RON via `serde`.
 //!
+//! The directory is therefore untracked, and it is hidden from `git status`
+//! rather than ignored through a tracked file: `AppState::hide_project_metadata`
+//! asks the repository that contains it to list it in its own `info/exclude`,
+//! through the engine — which is why the sentence above stays true.
+//!
 //! `.turbogit/ui.ron`'s layout — which of the 138 [`UiState`] fields are
 //! durable, in what order they are written, and how the active tab is spelled
 //! — belongs to the one `durable_ui_state!` list below. Its ten rows are

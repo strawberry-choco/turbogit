@@ -582,6 +582,13 @@ impl GitExecutor for FakeExecutor {
         Ok(())
     }
 
+    fn exclude_dir(&self, _root: &Path, _dir: &Path) -> TgResult<()> {
+        // Nothing to write: the fake has repositories only as far as its
+        // scripted answers reach, and no ignore file behind them. A caller
+        // that wants the entry asserted drives the real engine instead.
+        Ok(())
+    }
+
     // ---- branches ----
 
     fn branch_create(

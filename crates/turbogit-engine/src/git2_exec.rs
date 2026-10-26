@@ -1249,6 +1249,14 @@ impl GitExecutor for Git2Executor {
         self.cli.add_intent_to_add(root, paths)
     }
 
+    fn exclude_dir(&self, root: &Path, dir: &Path) -> TgResult<()> {
+        // Delegated to the CLI: libgit2 exposes ignore *checks*
+        // (`git_ignore_path_is_ignored`) and `.gitignore` updates, but no API
+        // for the clone's own `info/exclude`, and resolving which exclude file
+        // git actually reads is the part with the worktree hazard (see the port).
+        self.cli.exclude_dir(root, dir)
+    }
+
     // ----------------------------------------------------------- branches ----
 
     fn branch_create(

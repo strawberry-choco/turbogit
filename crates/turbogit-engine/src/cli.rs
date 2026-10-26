@@ -58,6 +58,14 @@ fn ls_remote_invocation(remote: &str) -> (Vec<String>, Vec<(&'static str, String
 /// nowhere else: the port's three backup verbs are the only way to touch it.
 pub const REWRITE_BACKUP_REF: &str = "refs/turbogit/preflight-backup";
 
+/// The line [`GitExecutor::exclude_dir`] puts above the rule it adds to
+/// `info/exclude`, so whoever opens that file can see which tool wrote the
+/// entry and that removing it only brings the directory back into `git status`.
+/// Written with the rule, never on its own — an already-listed directory
+/// returns before this is reached.
+const EXCLUDE_HEADING: &str =
+    "# Added by TurboGit — the app's own project metadata (safe to delete)\n";
+
 /// Parse `git reflog --date=unix --grep-reflog "checkout:"` output into
 /// recent checkouts, newest first (the reflog's own order, kept as-is — the
 /// caller merges roots over it). Line shape:
@@ -1892,6 +1900,46 @@ impl GitExecutor for CliExecutor {
         }
         let args: Vec<&str> = a.iter().map(|s| s.as_str()).collect();
         self.run(root, &args)?;
+        Ok(())
+    }
+
+    fn exclude_dir(&self, root: &Path, dir: &Path) -> TgResult<()> {
+        // The work-tree probe, and the only use of it: `--show-toplevel` exits
+        // non-zero in a bare repository, which has nothing to hide and no
+        // status to hide it from, so git's own error is the refusal here
+        // rather than a rule invented above it. The pattern below is a basename,
+        // so the top level never has to be re-based against.
+        self.run(root, &["rev-parse", "--show-toplevel"])?;
+        let name = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| TgError::Other(format!("no usable name to exclude: {dir:?}")))?;
+        let pattern = format!("{name}/");
+        // `--absolute-git-dir` is the wrong answer for a linked worktree, whose
+        // own `info/exclude` git never reads (see the port). This is the
+        // `--git-common-dir` spelling for that reason, not by preference.
+        let (common, _, _) = self.run(root, &["rev-parse", "--git-common-dir"])?;
+        let common = Path::new(common.trim());
+        let common = if common.is_absolute() {
+            common.to_path_buf()
+        } else {
+            root.join(common)
+        };
+        let exclude = common.join("info").join("exclude");
+        let mut text = std::fs::read_to_string(&exclude).unwrap_or_default();
+        if text.lines().map(str::trim).any(|line| line == pattern) {
+            return Ok(());
+        }
+        // A file whose last line has no newline would otherwise have the new
+        // rule glued onto it, and git would read one unmatchable line.
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(EXCLUDE_HEADING);
+        text.push_str(&pattern);
+        text.push('\n');
+        std::fs::create_dir_all(common.join("info"))?;
+        std::fs::write(&exclude, text)?;
         Ok(())
     }
 

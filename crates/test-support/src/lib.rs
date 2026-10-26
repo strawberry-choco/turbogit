@@ -736,6 +736,10 @@ impl GitExecutor for RecordingExecutor {
         self.inner.check_patch(root, patch)
     }
 
+    fn exclude_dir(&self, root: &Path, dir: &Path) -> TgResult<()> {
+        self.inner.exclude_dir(root, dir)
+    }
+
     fn branch_create(
         &self,
         root: &Path,

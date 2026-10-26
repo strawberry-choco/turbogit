@@ -2248,6 +2248,7 @@ impl AppState {
         if self.selected_root.is_none() {
             self.selected_root = self.multi.roots.first().map(|r| r.id.clone());
         }
+        self.hide_project_metadata();
 
         let roots: Vec<RootId> = self.multi.roots.iter().map(|r| r.id.clone()).collect();
         for root in roots {
@@ -2271,6 +2272,33 @@ impl AppState {
                     });
                 }
             });
+        }
+    }
+
+    /// Ask the one repository that can see this app's `.turbogit/` to list it in
+    /// its own ignore file, so the directory the project store is written into
+    /// never reads as the developer's own untracked work.
+    ///
+    /// "The one repository" is a fact about discovery, not a policy: roots are
+    /// `project_dir` itself or a directory **beneath** it
+    /// ([`turbogit_services::multi_root::scan_for_roots`]), and the store always
+    /// sits at `project_dir`, so every root below it has the store *above* its
+    /// work tree and cannot report it at all. A workspace of sibling
+    /// repositories therefore gets nothing written to it, which is why this asks
+    /// per registration rather than per root.
+    ///
+    /// Deliberately not on [`Self::for_roots`]'s path: the headless harness
+    /// registers roots directly, and a test fixture must not take a `.git` write
+    /// it did not ask for. Only the launch/open paths production uses reach this.
+    ///
+    /// A refusal is swallowed here, as it is by every other store write
+    /// (`add_mapping`, [`Self::save_durable_ui`]): the entry is a courtesy to
+    /// `git status`, and a repository whose exclude file cannot be written shows
+    /// a directory instead of losing anything.
+    fn hide_project_metadata(&self) {
+        let dir = crate::persistence::turbogit_dir(&self.project_dir);
+        if let Some(root) = self.multi.roots.iter().find(|r| r.path == self.project_dir) {
+            let _ = self.executor.exclude_dir(&root.path, &dir);
         }
     }
 
@@ -3995,6 +4023,9 @@ impl AppState {
         if self.selected_root.is_none() {
             self.selected_root = self.multi.roots.first().map(|r| r.id.clone());
         }
+        // Also on this path, which registers its roots here instead of through
+        // [`Self::rescan`] — the one place the hide would otherwise be missed.
+        self.hide_project_metadata();
         self.ui.welcome_visible = false;
 
         let count = self.multi.roots.len();

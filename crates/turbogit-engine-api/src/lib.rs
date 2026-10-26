@@ -398,6 +398,45 @@ pub trait GitExecutor: Send + Sync {
         ))
     }
 
+    // ---- the repository's own ignore file ----
+    //
+    /// List `dir` in `info/exclude`, the ignore file a clone keeps for itself:
+    /// the one mechanism that is local to this checkout, never committed, and
+    /// never a tracked file. This is not `.gitignore` editing and must not
+    /// become it — a tracked ignore file is a rule imposed on everyone who
+    /// clones, which is not this app's to write.
+    ///
+    /// Three facts the adapter owns, because getting any of them wrong still
+    /// looks like success:
+    ///
+    /// - The file read is the **common** directory's. A linked worktree has its
+    ///   own `$GIT_DIR` (`.git/worktrees/<name>`), and git never reads an
+    ///   `info/exclude` there — measured against git 2.54, where a pattern
+    ///   written in a worktree's own gitdir leaves the directory listed as
+    ///   untracked. So the write goes to `--git-common-dir`, and the one entry
+    ///   then covers every work tree of the clone.
+    /// - `dir` is recorded as a **basename directory pattern** (`<name>/`),
+    ///   which git matches at any depth. Deliberate: the caller knows an
+    ///   absolute path, and a work-tree-relative pattern would have to resolve
+    ///   the top level and re-base the path for an answer that is no better.
+    ///   The cost is stated so it is not discovered later — it also hides a
+    ///   same-named directory deeper in this repository. Tracked files are
+    ///   never ignored, so a repository that commits its own such directory
+    ///   keeps showing it.
+    /// - A bare repository has no work tree, so nothing can be hidden from it
+    ///   and this refuses rather than writing into the bare directory.
+    ///
+    /// What the entry does *not* buy, because a caller may assume it: it is a
+    /// visibility change with one side effect on safety. `git clean -fd` leaves
+    /// the directory alone once it is listed, and `git clean -fdx` still deletes
+    /// it — `-x` sweeps ignored files too, measured against git 2.54. Nothing
+    /// written here is a backup of anything.
+    ///
+    /// Idempotent: a directory already listed is left with the one line it
+    /// has, however many rescans ask, and rules already in the file survive —
+    /// including the newline a hand-edit may have omitted before the append.
+    fn exclude_dir(&self, root: &Path, dir: &Path) -> TgResult<()>;
+
     // ---- branches ----
     /// Create a branch (`git branch [<start>]`), optionally checking it out.
     fn branch_create(
