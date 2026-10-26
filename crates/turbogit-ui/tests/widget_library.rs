@@ -22,10 +22,10 @@ use egui_kittest::{
 };
 use test_support::git_seed::git;
 use test_support::harness::{
-    assert_painted, painted_galleys, painted_text, settle, widget_harness,
+    assert_painted, painted_galleys, painted_paths, painted_text, settle, widget_harness,
 };
 use test_support::srcscan;
-use turbogit_ui::theme::{PILL_RADIUS, Palette, RAIL_WIDTH};
+use turbogit_ui::theme::{BUTTON_PADDING, PILL_RADIUS, Palette, RAIL_WIDTH};
 use turbogit_ui::ui::icons::Icon;
 use turbogit_ui::ui::widgets::*;
 
@@ -170,6 +170,94 @@ fn primary_button_brightens_instead_of_surface_hover() {
     assert_eq!(Primary.text(Disabled), Palette::INK_3);
     // Disabled primary keeps its solid fill (no hover change, §7.2).
     assert_eq!(Primary.fill(Disabled), Primary.fill(Idle));
+}
+
+/// The glyph a button paints must sit in the middle of the frame the click
+/// lands in, on **both** axes. Both are pinned because the bug this guards was
+/// one-axis: the icon-only path placed its glyph with `cy - icon_size / 2.0`
+/// vertically, which is right, while its horizontal start came from a content
+/// measure that counted no width for the icon at all, which put the glyph's
+/// left edge on the button's centre line — half an icon to the right of where
+/// it belongs. A pin that only checked the vertical axis passes it.
+#[test]
+fn icon_only_and_icon_label_buttons_centre_their_glyph_on_both_axes() {
+    // A deliberately non-square glyph, so a measure that used the icon's height
+    // where its width belongs cannot satisfy the horizontal assertion either.
+    let mut harness = widget_harness(egui::vec2(320.0, 120.0), |ui| {
+        icon_button(ui, Icon::ALIGN_JUSTIFY);
+        ghost_button(ui, Some(Icon::ALIGN_JUSTIFY), "Refresh");
+    });
+    harness.step();
+    harness.step();
+
+    let glyph_of = |label: &str| -> (egui::Rect, egui::Rect) {
+        let frame = harness.get_by_label(label).rect();
+        let rects: Vec<egui::Rect> = painted_paths(&harness)
+            .into_iter()
+            .filter(|(r, _)| frame.contains(r.center()))
+            .map(|(r, _)| r)
+            .collect();
+        assert!(
+            !rects.is_empty(),
+            "`{label}` painted no glyph inside {frame:?}"
+        );
+        (
+            frame,
+            rects.into_iter().reduce(|a, b| a.union(b)).expect("union"),
+        )
+    };
+
+    // The icon-only button is the one the bug lived in: the glyph has the whole
+    // frame to itself, so it owes the frame its centre on both axes.
+    let (frame, glyph) = glyph_of("align-justify");
+    assert!(
+        (glyph.center().x - frame.center().x).abs() < 0.01,
+        "an icon-only button's glyph is {} px from the frame's horizontal centre \
+         (glyph at {}, frame at {}): the content measure must count the icon's own width",
+        glyph.center().x - frame.center().x,
+        glyph.center().x,
+        frame.center().x,
+    );
+    assert!(
+        (glyph.center().y - frame.center().y).abs() < 0.01,
+        "an icon-only button's glyph is {} px from the frame's vertical centre",
+        glyph.center().y - frame.center().y,
+    );
+
+    // The labelled button centres the [glyph][gap][label] group between its own
+    // padding edges. The label is the group's last piece, so its right edge is
+    // the group's right edge, and that is observable exactly — unlike the glyph,
+    // whose painted ink is narrower than the em box the layout measured.
+    // `configure_style` installs this token, so the group edge is the token, not
+    // a literal the test would have to keep in step by hand.
+    let pad_x = BUTTON_PADDING.x;
+    let (frame, glyph) = glyph_of("Refresh");
+    let label = painted_galleys(&harness)
+        .into_iter()
+        .find(|g| g.text == "Refresh")
+        .expect("the labelled button paints its label")
+        .rect;
+    assert!(
+        (label.max.x - (frame.max.x - pad_x)).abs() < 0.01,
+        "a labelled button's group must end at its padding edge: label ends at {}, \
+         expected {}",
+        label.max.x,
+        frame.max.x - pad_x,
+    );
+    assert!(
+        glyph.min.x >= frame.min.x + pad_x - 0.01,
+        "the glyph spills left of the button's padding edge: {} vs {}",
+        glyph.min.x,
+        frame.min.x + pad_x,
+    );
+    assert!(
+        glyph.center().x < frame.center().x && label.center().x > frame.center().x,
+        "a labelled button must sit its glyph left of centre and its label right, \
+         got glyph at {} and label at {} around frame centre {}",
+        glyph.center().x,
+        label.center().x,
+        frame.center().x,
+    );
 }
 
 #[test]

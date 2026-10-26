@@ -15,6 +15,8 @@ const COMPACT_BUTTON_HEIGHT: f32 = 28.0; // h-7 compact variants
 /// action cluster) instead of restating the number.
 pub const ICON_BUTTON_SIZE: f32 = 28.0;
 const BUTTON_ICON_SIZE: f32 = 16.0; // §5.3: 16×16 in buttons
+/// The space held between a button's icon and its label.
+const ICON_LABEL_GAP: f32 = 6.0;
 
 // The compact primary's whole reason to exist is the pane-header band, so the
 // compact height **is** the band height. Asserted here rather than restated at
@@ -398,12 +400,18 @@ fn button_response_sized(
             .layout_no_wrap(l.to_owned(), font_id.clone(), Color32::WHITE)
     });
     let label_w = galley.as_ref().map_or(0.0, |g| g.size().x);
-    let icon_w = if icon.is_some() && !icon_only {
-        icon_size + 6.0
+    let icon_w = if icon.is_some() { icon_size } else { 0.0 };
+    let gap = if icon.is_some() && label.is_some() {
+        ICON_LABEL_GAP
     } else {
         0.0
     };
-    let content_w = icon_w + label_w;
+    // The extent of the painted group, which the centering below measures the
+    // group's left edge against. It must count the icon's own width even when
+    // there is no label: an icon-only button takes its width from `height`, so a
+    // measure of 0 leaves the group's left edge at the button's centre and the
+    // glyph lands half an icon to the right of it.
+    let content_w = icon_w + gap + label_w;
     let width = width_override.unwrap_or(if icon_only {
         height
     } else {
@@ -444,7 +452,7 @@ fn button_response_sized(
     if let Some(ic) = icon {
         paint_icon_at(ui, ic, Pos2::new(x, cy - icon_size / 2.0), icon_size, ink);
         if !icon_only {
-            x += icon_size + 6.0;
+            x += icon_size + ICON_LABEL_GAP;
         }
     }
     if let Some(g) = galley {
