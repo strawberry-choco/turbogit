@@ -1302,8 +1302,9 @@ fn the_data_face_owns_both_direction_arrows() {
     }
 }
 
-/// The band's summary paints its counts in the chrome galley (`state_mark`), so
-/// the arrows ride whatever the proportional chain resolves them through. That
+/// The band's summary paints its counts through the chrome words
+/// (`state_words`), so the arrows ride whatever the proportional chain resolves
+/// them through. That
 /// chain changing is invisible to every text assertion — tofu still lays out as
 /// text — so the coverage the band now depends on is pinned the way the data
 /// face's is.
@@ -2646,11 +2647,9 @@ fn the_sidebar_active_band_is_the_focus_role_and_the_two_fills_are_one_step_apar
 // and in every state it does not.
 #[test]
 fn the_mark_pair_paints_a_dot_and_words_and_borrows_no_chip_geometry() {
-    // The scan target is `mark`, the one implementation behind both faces:
-    // `state_mark` (a state in words, chrome) and `badge_mark` (a direction
-    // arrow and its count, data) each hand the text and the face to it, so the
-    // dot's geometry is still decided in exactly one place. A second copy of
-    // these claims would have to be a second mark, which is what this guards.
+    // The scan target is `mark`, the dot painter behind `state_mark`: the dot's
+    // geometry is decided there and nowhere else. A second copy of these claims
+    // would have to be a second mark, which is what this guards.
     let components = Path::new(CRATE_SRC).join("ui/components.rs");
     let src = srcscan::fn_code(&srcscan::read_source(&components), "mark");
 

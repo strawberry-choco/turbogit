@@ -298,27 +298,15 @@ pub fn row_ink(stale: bool) -> Color32 {
 /// a mark has no fill rect, no radius and no geometry of its own, so a state
 /// can never acquire a chip's shape by accident.
 ///
-/// Smaller than the repository band's own 4px status dot on purpose: the band
-/// dot heads a section, the mark dot leads an inline state, and two different
-/// marks at one radius would be indistinguishable by shape alone.
+/// 3px, so the dot reads as punctuation before the words rather than as a
+/// bullet of its own.
 pub const STATE_DOT_R: f32 = 3.0;
 
-/// How wide [`state_mark`] will paint `text` — the dot, its gap, and the
-/// measured words. A row that lays its zones out up front reserves through this
-/// rather than guessing.
-pub fn state_mark_width(ui: &Ui, text: &str) -> f32 {
-    mark_width(ui, text, &chrome_font(TYPE_CHIP))
-}
-
-/// The mark pair's geometry, measured in the face its text is painted in. One
-/// implementation behind both [`state_mark`] and [`badge_mark`], so the dot, its
-/// offset and its gap are decided in exactly one place whether the state reads
-/// as a word or as a glyph beside a count.
+/// The mark pair's geometry, measured in the face its text is painted in. The
+/// dot, its offset and its gap are decided in exactly one place.
 ///
-/// A mark with no words is a dot alone, so it holds no gap for text it is not
-/// painting: the repository state with nothing to report contributes no words
-/// ([`crate::theme::RepoState::words`]) and its dot still sits where the band's
-/// summary ends.
+/// A mark with no words is a dot alone, so it reserves no gap for text it is
+/// not painting.
 fn mark_width(ui: &Ui, text: &str, font: &FontId) -> f32 {
     if text.is_empty() {
         return STATE_DOT_R * 2.0;
@@ -335,9 +323,10 @@ fn mark_width(ui: &Ui, text: &str, font: &FontId) -> f32 {
 ///
 /// R6's replacement for a state that used to arrive as a filled pill. A
 /// repository state is a fact about the repository — not a ref and not a number
-/// — so it takes the *same* treatment everywhere it appears: a mark and a
-/// coloured word, coloured from [`crate::theme::RepoState::color`], with no
-/// fill behind the text and no chip geometry anywhere in it.
+/// — so it is a coloured word from [`crate::theme::RepoState::color`], with no
+/// fill behind the text and no chip geometry anywhere in it. A state that stands
+/// alone keeps this dot; the branches band and tree paint [`state_words`] and
+/// [`badge_words`] instead.
 ///
 /// The dot is painted here, by this function, because this is the only place
 /// the mark's geometry is decided: a circle at the leading edge's
@@ -349,44 +338,36 @@ fn mark_width(ui: &Ui, text: &str, font: &FontId) -> f32 {
 ///
 /// The text is interface, not data, so it reads in the proportional face at the
 /// chip's type size: a state is a sentence rather than a ref name. A row's
-/// direction badge is a count and takes [`badge_mark`] in the data face instead;
-/// the band's summary is the one place counts and words share this chrome
-/// galley, its arrows riding the fallback chain like the sidebar's rows.
+/// direction badge is a count and takes the data face through [`badge_words`]
+/// instead; the band's summary is the one place counts and words share this
+/// chrome galley, its arrows riding the fallback chain like the sidebar's rows.
 pub fn state_mark(ui: &mut Ui, text: &str, color: Color32) -> Response {
     mark(ui, text, color, &chrome_font(TYPE_CHIP))
 }
 
-/// How wide [`state_words`] will paint `text` — the measured words alone, with
-/// no mark in front. One implementation beside the paint it measures, so the
-/// band's fallback cut cannot disagree with what reaches the screen.
-pub fn state_words_width(ui: &Ui, text: &str) -> f32 {
+/// The words-only form's measured width: the text as it will paint, with no dot
+/// and no gap. One implementation beside the paint it measures, so no caller's
+/// reserved slot can disagree with what reaches the screen.
+fn words_width(ui: &Ui, text: &str, font: &FontId) -> f32 {
     if text.is_empty() {
         return 0.0;
     }
     ui.painter()
-        .layout_no_wrap(text.to_owned(), chrome_font(TYPE_CHIP), Color32::WHITE)
+        .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
         .size()
         .x
 }
 
-/// The state in coloured words alone — the branches band's summary, without
-/// [`state_mark`]'s dot.
-///
-/// The band is the one state site with no dot: the repository's head-ref chip
-/// and its Fetch already fix the band's meaning, so the summary is read as a
-/// sentence on that band rather than a mark needing its own shape — and a
-/// repository with nothing to report paints nothing at all, so the band skips
-/// the call on an empty summary. The words keep the mark pair's other half
-/// exactly: one colour from [`crate::theme::RepoState::color`], the chrome
-/// face at the chip size, no fill, no chip geometry.
-pub fn state_words(ui: &mut Ui, text: &str, color: Color32) -> Response {
-    let w = state_words_width(ui, text);
+/// The words-only form: one state or one badge in coloured text, in a
+/// caller-chosen face. [`state_words`] and [`badge_words`] are its two faces.
+fn words(ui: &mut Ui, text: &str, color: Color32, font: &FontId) -> Response {
+    let w = words_width(ui, text, font);
     let h = super::widgets::CHIP_HEIGHT;
     let (rect, response) = ui.allocate_exact_size(Vec2::new(w, h), Sense::hover());
     if ui.is_rect_visible(rect) {
         let galley = ui
             .painter()
-            .layout_no_wrap(text.to_owned(), chrome_font(TYPE_CHIP), color);
+            .layout_no_wrap(text.to_owned(), font.clone(), color);
         ui.painter().galley(
             Pos2::new(rect.left(), rect.center().y - galley.size().y / 2.0),
             galley,
@@ -395,6 +376,25 @@ pub fn state_words(ui: &mut Ui, text: &str, color: Color32) -> Response {
     }
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, text));
     response
+}
+
+/// How wide [`state_words`] will paint `text` — the measured words alone, with
+/// no mark in front.
+pub fn state_words_width(ui: &Ui, text: &str) -> f32 {
+    words_width(ui, text, &chrome_font(TYPE_CHIP))
+}
+
+/// The state in coloured words alone — no [`state_mark`] dot.
+///
+/// The branches band's summary and the branch tree's rows both read state this
+/// way: the head-ref chip and the Fetch already fix what the band is, and a
+/// row's own ref chip does the same, so the words are a sentence rather than a
+/// mark needing a shape. The words keep the mark pair's other half exactly: one
+/// colour from [`crate::theme::RepoState::color`], the chrome face at the chip
+/// size, no fill, no chip geometry. A state with nothing to report paints
+/// nothing at all, so the band skips the call on an empty summary.
+pub fn state_words(ui: &mut Ui, text: &str, color: Color32) -> Response {
+    words(ui, text, color, &chrome_font(TYPE_CHIP))
 }
 
 /// The mark pair painted in a caller-chosen face: see [`mark_width`] for why
@@ -425,15 +425,15 @@ fn mark(ui: &mut Ui, text: &str, color: Color32, font: &FontId) -> Response {
     response
 }
 
-/// How wide [`badge_mark`] will paint one sync badge.
-pub fn badge_mark_width(ui: &Ui, kind: SyncKind, text: &str) -> f32 {
-    mark_width(ui, text, &badge_face(kind))
+/// How wide [`badge_words`] will paint one sync badge.
+pub fn badge_words_width(ui: &Ui, kind: SyncKind, text: &str) -> f32 {
+    words_width(ui, text, &badge_face(kind))
 }
 
-/// The mark pair for one sync badge: the same dot, then the direction glyph and
-/// its count (`↓1`).
-pub fn badge_mark(ui: &mut Ui, kind: SyncKind, text: &str, color: Color32) -> Response {
-    mark(ui, text, color, &badge_face(kind))
+/// The sync badge as coloured glyphs alone: the direction arrow and its count,
+/// without the mark pair's leading dot.
+pub fn badge_words(ui: &mut Ui, kind: SyncKind, text: &str, color: Color32) -> Response {
+    words(ui, text, color, &badge_face(kind))
 }
 
 /// The face one sync badge's label is painted in, and why it is not the chrome
@@ -669,8 +669,7 @@ pub enum SyncKind {
 /// A direction is stated as `glyph + count` (`↑2`, `↓1`), the spelling the
 /// sidebar's repository rows, the branches popup and the repository band's
 /// summary all use, so one meaning does not arrive in two formats across the
-/// panes. The arrow carries what the word used to and the mark pair's dot stays
-/// the icon; [`badge_mark`] paints it in the face that actually owns the glyph.
+/// panes. [`badge_words`] paints the glyph and count on the branch tree's rows.
 pub fn sync_badge(ahead: usize, behind: usize, gone: bool) -> Vec<(SyncKind, String)> {
     if gone {
         return vec![(SyncKind::Gone, "gone".to_string())];

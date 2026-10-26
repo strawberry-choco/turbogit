@@ -1836,13 +1836,6 @@ fn two_current_branches_are_distinct_rows_owned_by_their_repo() {
     // What tells the two `main`s apart is the section each one sits in, not a
     // name repeated on the row. The section headers anchor that: the first main
     // falls between alpha's band and beta's, the second below beta's.
-    //
-    // **What moved, and why.** These were read off the band's 4px heading status
-    // dot. Ticket 16 removed that dot: the band's state reaches the screen as
-    // the mark pair's leading dot beside the state summary, so there is one dot
-    // per band instead of two, and it is at the mark radius. The bands are now
-    // located by the repository names they print, which is what a reader reads
-    // them by.
     let mut header_y: Vec<f32> = ["alpha", "beta"]
         .iter()
         .map(|repo| {
@@ -2313,12 +2306,6 @@ fn repo_section_headers_name_their_repo_inside_the_list() {
 
     let (_project, _dir, harness) = open_branches_over(two_repo_project(), two_repo_harness);
 
-    // **What moved, and why.** This suite used to anchor the bands on a 4px
-    // heading status dot on their left. Ticket 16 removed that dot: the band's
-    // state reaches the screen as the *mark pair* — one leading dot beside the
-    // state summary — so a band has one dot, at the mark radius, and it leads
-    // the words rather than the name. The bands are now located by the
-    // repository names they print, below the tab strip.
     let list_top = tool_window_top(&harness);
     let galleys = painted_galleys(&harness);
     let mut bands: Vec<f32> = ["alpha", "beta"]
@@ -2335,18 +2322,20 @@ fn repo_section_headers_name_their_repo_inside_the_list() {
     bands.sort_by(f32::total_cmp);
     assert_eq!(bands.len(), 2, "one band per repo section");
 
-    // One mark per band, in that repository's state colour, on the band's line.
+    // The tree paints no state dots: every state is coloured text, so no
+    // mark-radius circle sits in the list.
     let list_x = LIST_RIGHT;
-    let marks: Vec<_> = filled_circles(&harness)
+    let dots: Vec<_> = filled_circles(&harness)
         .into_iter()
-        .filter(|(c, r, _)| c.y > list_top && c.x < list_x && (*r - 3.0).abs() < f32::EPSILON)
+        .filter(|(c, r, _)| {
+            c.y > list_top
+                && c.x < list_x
+                && (*r - turbogit_ui::ui::components::STATE_DOT_R).abs() < f32::EPSILON
+        })
         .collect();
     assert!(
-        marks
-            .iter()
-            .all(|(c, _, _)| bands.iter().any(|y| (c.y - y).abs() < 20.0)),
-        "each mark leads a band's state summary, on that band's own line: \
-         marks {marks:?} vs bands {bands:?}"
+        dots.is_empty(),
+        "no state dot paints in the branch list: {dots:?}"
     );
 
     // The head ref rides the same band line, and it is a **ref chip**: a ref
@@ -2616,9 +2605,9 @@ fn a_branch_name_is_a_ref_chip_and_its_state_is_coloured_text_beside_it() {
 }
 /// The inks of the state words a row paints beside its name, left to right.
 ///
-/// The mark pair paints its dot and its words in one colour, so every painted
-/// word on the row that is *not* the name or the tracking ref is state. Scoped
-/// by the row's own rect, because "↓3" paints on
+/// A row's state is coloured words alone, so every painted word on the row that
+/// is *not* the name or the tracking ref is state. Scoped by the row's own rect,
+/// because "↓3" paints on
 /// every row that is three behind — and every ink is checked against the one
 /// map, so a state that grew a colour of its own would fail here rather than in
 /// the token suite.

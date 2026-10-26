@@ -44,16 +44,16 @@ use crate::ui::branch_widget::stale_badge;
 use crate::ui::branches::{branch_matches, matches_query, row_meta};
 use crate::ui::branches_tree::{self, BranchNode, BranchView, RemoteGroup, RepoSection};
 use crate::ui::components::{
-    BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H, badge_mark,
-    badge_mark_width, current_row_fill, kit_button, kit_button_width, middle_truncate_to_width,
+    BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H, badge_words,
+    badge_words_width, current_row_fill, kit_button, kit_button_width, middle_truncate_to_width,
     paint_rail, ref_chip_with_ink, ref_chip_with_ink_width, row_fill, row_ink, section_header,
-    state_mark, state_words, state_words_width, sync_badge, sync_ink,
+    state_words, state_words_width, sync_badge, sync_ink,
 };
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::menu_host::{self, MenuId};
 use crate::ui::widgets::{self, ref_chip};
 
-/// Height of one repo section header (repo name + head-ref chip + state mark).
+/// Height of one repo section header (repo name + head-ref chip + state summary).
 const REPO_HEADER_H: f32 = 30.0;
 
 /// Share of a branch row's content width held by the icon + name zone; the
@@ -770,8 +770,9 @@ fn paint_nodes(
 ///
 /// The band carries no state dot. The head-ref chip and the Fetch already fix
 /// what the band is, so the summary reads as a sentence on it; a repository
-/// with nothing to report says nothing. [`state_mark`] keeps its dot for the
-/// surfaces that scan states side by side with nothing else to anchor them.
+/// with nothing to report says nothing. Other surfaces' state marks keep their
+/// dot for scanning states side by side with nothing else to anchor them
+/// ([`crate::ui::components::state_mark`]).
 ///
 /// `show_identity` is false for a single-repo project, where the grouping is
 /// invisible: the identity cluster (name, chip) is suppressed so no redundant
@@ -904,8 +905,8 @@ fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
 /// at all.
 ///
 /// The band is one chrome galley, so the arrows ride the fallback cut exactly
-/// as they do in the sidebar's repository rows; the row badges are the marks
-/// that take the data face ([`badge_mark`]).
+/// as they do in the sidebar's repository rows; the row badges take the data
+/// face ([`badge_words`]).
 fn header_summary(section: &RepoSection) -> String {
     let mut parts: Vec<String> = sync_badge(section.ahead, section.behind, false)
         .into_iter()
@@ -1114,9 +1115,9 @@ fn remote_rollup_row(
 /// **Identity and state are two different objects, and this row is where that
 /// stops being a convention.** The name is a **ref chip** (the shared chip
 /// geometry on the raised-on-card fill, in the row's own ink); the ahead /
-/// behind / dirty state is **coloured text** beside it, with a leading mark,
-/// coloured from the one repository-state map. The `current` chip is the only
-/// other filled thing on the row, so **no row carries two filled pills**.
+/// behind / dirty state is **coloured text** beside it, in the one
+/// repository-state map's inks. The name's ref chip is the row's only filled
+/// pill; the current marker is an icon on no fill, so no row carries two.
 ///
 /// The fill is the shared row shell's: [`row_fill`] for a chosen row, or
 /// [`current_row_fill`] for the repository's current ref, and a **2px brand
@@ -1227,7 +1228,7 @@ fn branch_row(
     let mut badges_w: f32 = pill_w
         + chips
             .iter()
-            .map(|(kind, label)| badge_mark_width(ui, *kind, label) + 4.0)
+            .map(|(kind, label)| badge_words_width(ui, *kind, label) + 4.0)
             .sum::<f32>();
 
     // The name/tracking split reads off the row's own width and nothing else —
@@ -1278,10 +1279,10 @@ fn branch_row(
         }
         // Mid-operation state is first-class on the row (issue 09): a
         // merge in progress reads "merging…" and survives tab switches. It is a
-        // state, so it is a mark and a coloured word like every other one.
+        // state, so it is coloured words like every other one.
         if is_current && props.merge_in_progress {
             ui.add_space(8.0);
-            state_mark(
+            state_words(
                 ui,
                 &crate::ui::components::mid_op_label("merging"),
                 Palette::STATE_WARNING,
@@ -1289,20 +1290,18 @@ fn branch_row(
         }
         if shows_badges {
             for (kind, label) in chips.iter().rev() {
-                // **Coloured text with a leading mark**, never a chip: the
-                // reserved counter orange and the diverged red are state inks
-                // and a state behind a fill reads as a category. This is the
-                // site the v1 `sync_chip` used to tint a chip background with
-                // `RepoState::color()`.
+                // **Coloured text**, never a chip: the reserved counter orange
+                // and the diverged red are state inks and a state behind a fill
+                // reads as a category.
                 //
-                // The gap is spent *before* the mark: this zone runs
-                // right-to-left, so a space added after it lands between this
-                // mark and the one further left, and the rightmost mark sits
-                // flush against the `Current` marker it is supposed to stand
-                // apart from. It also matches the slot the row reserved, which
-                // charges each chip its mark plus 4px on its left.
+                // The gap is spent *before* the badge: this zone runs
+                // right-to-left, so a space added after it would land between
+                // this badge and the one further left, leaving the rightmost
+                // flush against the current marker it stands apart from. It
+                // also matches the slot the row reserved, which charges each
+                // badge 4px on its left.
                 ui.add_space(4.0);
-                badge_mark(ui, *kind, label, sync_ink(*kind));
+                badge_words(ui, *kind, label, sync_ink(*kind));
             }
         }
         // A remote-tracking ref deleted upstream reads "gone" (issue 17,
@@ -1310,7 +1309,7 @@ fn branch_row(
         // branch snapshot the caller assembles).
         if branch.kind == BranchKind::Remote && branch.gone {
             ui.add_space(8.0);
-            state_mark(ui, "gone", Palette::STATE_ERROR);
+            state_words(ui, "gone", Palette::STATE_ERROR);
         }
     });
 

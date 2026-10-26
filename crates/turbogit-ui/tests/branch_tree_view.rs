@@ -682,8 +682,8 @@ fn the_collapsed_rollup_reads_as_a_section_label() {
 
 /// A header says what state its repository is in: the current branch's counts in
 /// the one badge spelling, then the state in words. A repository with nothing
-/// outstanding is the one that has no sentence: the band keeps its state dot and
-/// paints no words, because "in sync" was a word for the absence of a fact.
+/// outstanding is the one that has no sentence: the band paints no words,
+/// because "in sync" is a word for the absence of a fact.
 #[test]
 fn the_repo_header_names_its_status() {
     let mut h = fixture_harness(Fixture::two_repos());
@@ -712,9 +712,7 @@ fn the_repo_header_paints_a_resting_band() {
     let mut h = fixture_harness(Fixture::two_repos());
     settle(&mut h);
 
-    // Located by the repository's own name: the band's leading status dot is
-    // gone (the mark pair's dot leads the state summary instead), so the band is
-    // found the way a reader finds it.
+    // Located by the repository's own name, the way a reader finds it.
     let band_y = galleys_for(&h, "alpha")[0].pos.y + 6.0;
     let band = filled_rects(&h)
         .into_iter()
@@ -1097,15 +1095,8 @@ fn the_bands_head_ref_is_a_ref_chip_and_the_rows_marker_is_an_icon() {
 }
 
 /// A row that is both current and carrying sync state keeps the state it also
-/// carries: the band must not swallow the words.
-///
-/// **Why the assertion moved.** It used to assert the *tinted chip fills*
-/// (`sync_bg(Ahead)` / `sync_bg(Behind)`) survived the band. Ticket 16 deletes
-/// that tint entirely — a repository state behind a fill is an R6 violation and
-/// the last misuse of the reserved counter orange in the tree — so the words are
-/// now painted by the shared mark pair and the assertion is on the words and
-/// their ink. The rule the old assertion was reaching for (the band never hides
-/// what the row says) is the same rule; the shape of what it says changed.
+/// carries: the band must not swallow the words. Each badge paints its arrow
+/// and count in the data face and the one state ink, and no dot leads them.
 #[test]
 fn a_current_row_keeps_its_state_marks() {
     use turbogit_ui::ui::components::SyncKind;
@@ -1142,6 +1133,18 @@ fn a_current_row_keeps_its_state_marks() {
              chrome face the arrow only arrives through a fallback cut"
         );
     }
+    let state_dots: Vec<_> = filled_circles(&h)
+        .into_iter()
+        .filter(|(center, radius, fill)| {
+            (center.y - row.pos.y).abs() < 20.0
+                && (*radius - turbogit_ui::ui::components::STATE_DOT_R).abs() < f32::EPSILON
+                && (*fill == sync_ink(SyncKind::Ahead) || *fill == sync_ink(SyncKind::Behind))
+        })
+        .collect();
+    assert!(
+        state_dots.is_empty(),
+        "no leading dot on a row's state, only its coloured words: {state_dots:#?}"
+    );
     // …and neither state ink is ever a *fill* anywhere in the frame.
     let state_fills: Vec<egui::Rect> = filled_rects(&h)
         .into_iter()
@@ -1152,8 +1155,7 @@ fn a_current_row_keeps_its_state_marks() {
         .collect();
     assert!(
         state_fills.is_empty(),
-        "a state is coloured text or a leading dot, never a chip fill: \
-         {state_fills:#?}"
+        "a state is coloured text, never a chip fill: {state_fills:#?}"
     );
 }
 
