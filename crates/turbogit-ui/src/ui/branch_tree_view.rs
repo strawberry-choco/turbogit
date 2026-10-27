@@ -917,11 +917,25 @@ fn header_summary(section: &RepoSection) -> String {
     parts.join(" · ")
 }
 
+/// Whether one already-reserved row lies in the viewport, so its body can be
+/// skipped for this frame.
+///
+/// The test reads the row's **own allocated rect**, never the walk's `y_cursor`.
+/// That counter adds the row height alone while the flow adds
+/// `item_spacing.y` on top of it, so it runs six pixels short per row and would
+/// cull against a position no row actually occupies.
+fn row_visible(ui: &Ui, rect: Rect) -> bool {
+    ui.is_rect_visible(rect)
+}
+
 /// One directory group header inside a repo section: the directory segment
 /// (sans) and its branch count, indented by nesting depth.
 fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize, step: f32) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
+    if !row_visible(ui, rect) {
+        return;
+    }
     let mut child = ui.new_child(
         UiBuilder::new()
             .max_rect(rect)
@@ -1151,6 +1165,11 @@ fn branch_row(
         return;
     }
 
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
+    if !row_visible(ui, rect) {
+        return;
+    }
     let now = props.now;
     let meta = row_meta(branch, now);
     // Remote rows are reference material (issue 13): quieter, labelled with
@@ -1158,8 +1177,6 @@ fn branch_row(
     let is_remote = branch.kind == BranchKind::Remote;
     let selected = tree.selected_root.as_ref() == Some(id)
         && tree.selected.as_deref() == Some(branch.name.as_str());
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
     let hovered = ui.rect_contains_pointer(rect);
 
     // Interact after contents so child widgets (later actions) win clicks.
@@ -1453,6 +1470,13 @@ fn rename_editor(
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 56.0), Sense::hover());
     let mut child = ui.new_child(
         UiBuilder::new()
+            // An explicit id, so the `TextEdit` below and its stored caret sit at
+            // the same id every frame. `UiBuilder::id` is `IdSource::Explicit`,
+            // which seeds the child's auto-id counter from this id alone, so the
+            // counter no longer depends on how many rows above this one were
+            // built. Rows now stop being built once they leave the viewport, and
+            // a counter-derived id would move under the caret on the first tick.
+            .id(ui.id().with(("branch_rename", root, branch.name.as_str())))
             .max_rect(rect)
             .layout(Layout::top_down(Align::Min)),
     );
@@ -1509,6 +1533,9 @@ fn rename_editor(
 fn tag_row(ui: &mut Ui, tag: &crate::ui::branches_tree::TagLeaf) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, BRANCH_ROW_H), Sense::hover());
+    if !row_visible(ui, rect) {
+        return;
+    }
     let mut child = ui.new_child(
         UiBuilder::new()
             .max_rect(rect)
