@@ -7,10 +7,12 @@
 //! - [`plan`] classifies every selected root by whether its index has any
 //!   staged content (the `git status` snapshot read through the engine
 //!   port, never cached — the cascade button must answer against live state).
-//! - [`run_one`] executes the per-repo commit through [`GitExecutor::commit`]
-//!   (the `-a` form, which only commits tracked changes that are also
-//!   staged; untracked files are not in the index, so they cannot be
-//!   committed in the first place).
+//! - [`run_one`] executes the per-repo commit through
+//!   [`GitExecutor::commit_index`] — the index only, no `-a` — so a cascade
+//!   commits exactly the staged content the preflight counted. `-a` would also
+//!   sweep a repo's *unstaged* tracked edits into the commit, which is more than
+//!   the "commit the staged changes" the surface promises, and the whole-file
+//!   commit button is index-only for the same reason.
 //!
 //! The fan-out itself — pool, monitor, events, toasts — is composed from the
 //! existing [`crate::bulk_run`] engine by the app layer; this module is the
@@ -99,7 +101,7 @@ pub fn plan(vcs: &dyn GitExecutor, paths: &[PathBuf]) -> Vec<PlanRow> {
 
 /// Execute the cascade commit's step on one root: commit (or amend) whatever
 /// is in the index with `message`. `amend` passes through to
-/// [`GitExecutor::commit`]. Returns the new HEAD SHA on success; an empty
+/// [`GitExecutor::commit_index`]. Returns the new HEAD SHA on success; an empty
 /// index surfaces the engine's "nothing to commit" as a `TgError` for the
 /// caller to surface through the cascade-run monitor.
 ///
@@ -112,7 +114,7 @@ pub fn run_one(
     message: &str,
     amend: bool,
 ) -> TgResult<CommitId> {
-    vcs.commit(root, message, amend, false)
+    vcs.commit_index(root, message, amend, false)
 }
 
 #[cfg(test)]

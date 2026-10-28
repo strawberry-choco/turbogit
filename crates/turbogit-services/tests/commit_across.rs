@@ -1,4 +1,4 @@
-//! Issue 21 — cascade commit ("Also commit on N selected repos").
+//! Issue 21 — cascade commit (one message across several repos).
 //!
 //! Headless integration tests over real git repositories (tempdir + system
 //! `git`): each root is a fresh repo with local identity; the service

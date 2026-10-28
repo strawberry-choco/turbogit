@@ -58,9 +58,10 @@ use crate::ui::icons::{self, Icon};
 use crate::ui::widgets;
 use crate::ui::widgets::PaneColumn;
 use crate::ui::widgets::TabItem;
+use egui::containers::menu::{MenuConfig, SubMenuButton};
 use egui::{
-    Align, Color32, CornerRadius, FontFamily, FontId, Key, Layout, Margin, Pos2, Rect, RichText,
-    Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
+    Align, Color32, CornerRadius, FontFamily, FontId, Key, Layout, Margin, PopupCloseBehavior,
+    Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType,
 };
 use std::path::{Path, PathBuf};
 use turbogit_app::root_caches::Affected;
@@ -265,20 +266,6 @@ fn selected_changes(state: &AppState) -> Vec<Change> {
         }
     }
     out
-}
-
-/// Whether the selected root's index holds anything — the Commit control's
-/// half-gate, computed without building an owned change list (plan §1.4).
-///
-/// Not "is anything selected": a row click is a preview, and previewing a file
-/// is not a promise to commit it.
-fn has_staged_changes(state: &AppState) -> bool {
-    state.selected_root.as_ref().is_some_and(|id| {
-        state
-            .multi
-            .by_id(id)
-            .is_some_and(|root| root.status.changes.iter().any(|c| c.staged))
-    })
 }
 
 pub fn show(ui: &mut Ui, state: &mut AppState) {
@@ -2190,11 +2177,47 @@ fn commit_options_kebab_at(ui: &mut Ui, rect: Rect, state: &mut AppState) {
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, COMMIT_OPTIONS_LABEL));
     widgets::focus_ring(ui, &response);
 
+    // The repos with staged content, captured before the popup borrows `state`
+    // mutably: the checklist lists exactly these, and every one is checked by
+    // default — `commit_repo_unchecks` holds only the boxes the developer
+    // cleared by hand.
+    let repos: Vec<(RootId, String)> = state
+        .multi
+        .roots
+        .iter()
+        .filter(|r| r.status.changes.iter().any(|c| c.staged))
+        .map(|r| (r.id.clone(), r.path.display_name_or("?")))
+        .collect();
+
     // The popup anchors to, and opens on, the kebab's own response — the
     // split button's menu does the same.
     Popup::menu(&response).show(|menu| {
         menu.checkbox(&mut state.ui.commit_no_verify, COMMIT_NO_VERIFY_LABEL)
             .on_hover_text(COMMIT_NO_VERIFY_HINT);
+        // The multi-repo commit checklist: only repos with staged content are
+        // rows, every box starts checked, and a cleared box is what lands the
+        // repo in `commit_repo_unchecks`. The submenu closes only on a click
+        // outside it (`CloseOnClickOutside`), so toggling one box does not
+        // dismiss the list before the next.
+        menu.separator();
+        SubMenuButton::new(COMMIT_MULTI_LABEL)
+            .config(MenuConfig::new().close_behavior(PopupCloseBehavior::CloseOnClickOutside))
+            .ui(menu, |ui| {
+                if repos.is_empty() {
+                    ui.label(COMMIT_MULTI_EMPTY);
+                    return;
+                }
+                for (id, name) in &repos {
+                    let mut checked = !state.ui.commit_repo_unchecks.contains(id);
+                    if ui.checkbox(&mut checked, name).changed() {
+                        if checked {
+                            state.ui.commit_repo_unchecks.remove(id);
+                        } else {
+                            state.ui.commit_repo_unchecks.insert(id.clone());
+                        }
+                    }
+                }
+            });
     });
 }
 
@@ -2202,11 +2225,16 @@ fn commit_options_kebab_at(ui: &mut Ui, rect: Rect, state: &mut AppState) {
 /// changes-header item's name: "Commit options" is that control's spelling,
 /// and `tests/commit_window.rs` pins its absence.
 const COMMIT_OPTIONS_LABEL: &str = "Commit card options";
-/// The options menu's one item: skip this next commit's hooks.
+/// The options menu's no-verify item: skip this next commit's hooks.
 const COMMIT_NO_VERIFY_LABEL: &str = "Do not run git commit hooks";
 /// Why the item is safe to leave checked, stated where the check happens.
 const COMMIT_NO_VERIFY_HINT: &str =
     "Commits with --no-verify. Unchecks itself after a successful commit.";
+/// The options menu's multi-repo item: the submenu that lists the repos a
+/// plain Commit will commit together with the one message.
+const COMMIT_MULTI_LABEL: &str = "Commit on multiple repos";
+/// What the checklist shows when no repo holds staged content.
+const COMMIT_MULTI_EMPTY: &str = "No repos have staged changes";
 
 /// The meta row's Amend control, at an already-allocated rect.
 ///
@@ -2346,10 +2374,11 @@ fn meta_button(ui: &mut Ui, label: &str) -> egui::Response {
 fn commit_action_row(ui: &mut Ui, state: &mut AppState) {
     ui.horizontal(|ui| {
         // The two gates are independent: an empty *message* is never
-        // committable, and an empty *index* is not either. The index is what
-        // the commit reads, so "something is selected in the file list" is not
-        // a gate at all any more.
-        let can_commit = !state.ui.commit_message.trim().is_empty() && has_staged_changes(state);
+        // committable, and a commit with no *target* is not either. A target is
+        // a repo with staged content the checklist has not unchecked, so
+        // "something is selected in the file list" is not a gate at all, and
+        // neither is the focused repo on its own.
+        let can_commit = !state.ui.commit_message.trim().is_empty() && state.has_commit_target();
         commit_control(ui, state, can_commit);
         ui.add_space(10.0);
         if widgets::ghost_button(ui, None, "Shelve\u{2026}")
@@ -2520,8 +2549,12 @@ fn commit_control_paint(ui: &mut Ui) -> CommitHalves {
     CommitHalves { label, chevron }
 }
 
-/// The split button's dropdown menu (issue 07): `Commit and Push...` always,
-/// plus the multi-repo cascade entry when more than one repo is selected.
+/// The split button's dropdown menu (issue 07): `Commit and Push...`.
+///
+/// The multi-repo commit entry that once lived here is gone: the same message
+/// across several repos is now the primary Commit button, driven by the
+/// checklist in the card's options kebab. The chevron keeps only the verb the
+/// plain button does not carry.
 fn commit_split_menu(chevron: &egui::Response, state: &mut AppState) {
     use egui::Popup;
     Popup::menu(chevron).show(|menu| {
@@ -2533,30 +2566,10 @@ fn commit_split_menu(chevron: &egui::Response, state: &mut AppState) {
             do_commit(state, true);
             menu.close();
         }
-        let selection_count = state.ui.repo_selection.len();
-        if selection_count > 1 {
-            menu.separator();
-            let footer = state.commit_rail_footer(&state.ui.commit_message);
-            menu.label(footer);
-            let button_label = format!("Also commit on {selection_count} selected repos");
-            if menu
-                .button(button_label)
-                .on_hover_text("Commit the same message on every selected repo")
-                .clicked()
-            {
-                let message = state.ui.commit_message.clone();
-                let amend = state.ui.amend;
-                state.run_commit_across(&message, amend);
-                state.ui.commit_message.clear();
-                state.save_durable_ui();
-                menu.close();
-            }
-        }
     });
 }
 
 fn do_commit(state: &mut AppState, and_push: bool) {
-    let root = state.selected_root.clone();
     let msg = state.ui.commit_message.clone();
     let amend = state.ui.amend;
     let no_verify = state.ui.commit_no_verify;
@@ -2566,8 +2579,29 @@ fn do_commit(state: &mut AppState, and_push: bool) {
         state.ui.recent_messages.insert(0, msg.clone());
         state.ui.recent_messages.truncate(12);
     }
-    if let Some(root) = root {
-        state.dispatch_commit(&root, &msg, amend, no_verify, and_push);
+    if and_push {
+        // Commit and Push is one root's chain — the push dialog is per-root —
+        // so it stays on the focused repo and ignores the checklist.
+        if let Some(root) = state.selected_root.clone() {
+            state.dispatch_commit(&root, &msg, amend, no_verify, true);
+        }
+    } else {
+        // The targets are the plain Commit's fan-out, each committed with this
+        // one message. Every repo with staged content is a target unless the
+        // checklist unchecked it, so the focused repo is only one of them.
+        let targets = state.commit_targets();
+        match targets.len() {
+            // Unreachable behind the gate: no target means the control is
+            // disabled. Kept so a dispatch with nothing to do stays a no-op.
+            0 => {}
+            // One target is the plain single-root commit, at the same settle
+            // path the focused repo always took — no cascade monitor for one.
+            1 => {
+                let root = targets[0].id.clone();
+                state.dispatch_commit(&root, &msg, amend, no_verify, false);
+            }
+            _ => state.run_commit_across_roots(targets, &msg, amend),
+        }
     }
     // Only the message well resets. The selection is "the files I am looking
     // at", and a commit says nothing about what the developer is looking at —

@@ -1462,6 +1462,14 @@ pub struct UiState {
     /// the operation's success, so it never becomes a standing preference the
     /// way the retired settings flag was.
     pub commit_no_verify: bool,
+    /// The repos the commit card's checklist has had unchecked by hand for the
+    /// multi-repo commit. Every repo with staged content is checked by default
+    /// — the checklist lists exactly those repos and starts them all checked —
+    /// so this set is the exception: a repo lands here the moment the developer
+    /// unchecks it, and stays unchecked (staging another file into it does not
+    /// re-check it). Session-only like every other field here: it is not written
+    /// to durable UI state, so a relaunch starts with every repo checked.
+    pub commit_repo_unchecks: HashSet<RootId>,
     /// The Local Changes files the developer is looking at, keyed by
     /// `Root::canonical_key`. A row-body click rebuilds it through the reducer in
     /// `turbogit_ui::ui::changes_selection`: a plain click leaves one file in
@@ -4562,54 +4570,52 @@ impl AppState {
     }
 
     // -- Cascade commit (issue 21, screen 06) -------------------------------
-    /// The cascade-commit rail footer text (issue 21): the "Commit M hunks"
-    /// label that scopes the "Also commit on N selected repos" button. When
-    /// at least one selected repo has nothing staged, the footer appends a
-    /// "skips repos with nothing staged" clause so the user sees the skip
-    /// before they confirm. Reads live status — never cached — so the count
-    /// matches what the cascade step will actually find.
-    pub fn commit_rail_footer(&self, message: &str) -> String {
-        let paths: Vec<PathBuf> = self
-            .ui
-            .repo_selection
+    /// The repos the commit card will commit: every root that still holds
+    /// staged content and that the checklist has not unchecked by hand, in
+    /// registration order. Reads the cached status the changes list already
+    /// paints, never a fresh git read — the checklist and the button gate both
+    /// answer from that one snapshot.
+    pub fn commit_targets(&self) -> Vec<Root> {
+        self.multi
+            .roots
             .iter()
-            .filter_map(|id| self.multi.by_id(id))
-            .map(|root| root.path.clone())
-            .collect();
-        if paths.is_empty() {
-            return if message.trim().is_empty() {
-                "No selected repos".to_string()
-            } else {
-                "No selected repos — nothing to commit".to_string()
-            };
-        }
-        let rows = commit_across::plan(self.executor.as_ref(), &paths);
-        let total: usize = rows.iter().filter_map(|r| r.outcome.as_ref().ok()).sum();
-        let skip = rows.iter().filter(|r| r.outcome.is_err()).count();
-        let mut label = if total == 0 {
-            "Nothing to commit".to_string()
-        } else {
-            format!(
-                "Commit {total} {}",
-                if total == 1 { "hunk" } else { "hunks" }
-            )
-        };
-        if skip > 0 {
-            label.push_str(" · skips repos with nothing staged");
-        }
-        label
+            .filter(|r| self.is_commit_target(r))
+            .cloned()
+            .collect()
+    }
+
+    /// Whether any repo is a commit target. The button gate asks this every
+    /// frame, so it answers without the owned `Root` clones
+    /// [`Self::commit_targets`] pays for a dispatch.
+    pub fn has_commit_target(&self) -> bool {
+        self.multi.roots.iter().any(|r| self.is_commit_target(r))
+    }
+
+    /// A root is a commit target while it holds staged content and the
+    /// checklist has not unchecked it.
+    fn is_commit_target(&self, root: &Root) -> bool {
+        !self.ui.commit_repo_unchecks.contains(&root.id)
+            && root.status.changes.iter().any(|c| c.staged)
     }
 
     /// Execute the cascade-commit step over the current multi-repo selection
     /// (issue 21): one per-repo commit (or amend) per root that has staged
-    /// content. Skipped roots (clean index) seed the monitor as
-    /// pre-skipped rows and are never dispatched. Per-repo outcomes flow
-    /// through the cascade-run pool ([`AppEvent::BulkRunProgress`]) and the
-    /// completion summary ([`AppEvent::BulkCompleted`]) — the same pipeline
-    /// the operations grid uses (issue 09). `message` and `amend` are
-    /// captured for the duration of the worker pool pass.
+    /// content. A thin wrapper over [`Self::run_commit_across_roots`] that keeps
+    /// the operations-grid selection as the root set.
     pub fn run_commit_across(&mut self, message: &str, amend: bool) {
         let roots = self.bulk_selected_roots();
+        self.run_commit_across_roots(roots, message, amend);
+    }
+
+    /// Execute the cascade-commit step over `roots`: one per-repo commit (or
+    /// amend) per root that has staged content. Skipped roots (clean index)
+    /// seed the monitor as pre-skipped rows and are never dispatched. Per-repo
+    /// outcomes flow through the cascade-run pool
+    /// ([`AppEvent::BulkRunProgress`]) and the completion summary
+    /// ([`AppEvent::BulkCompleted`]) — the same pipeline the operations grid
+    /// uses (issue 09). `message` and `amend` are captured for the duration of
+    /// the worker pool pass.
+    pub fn run_commit_across_roots(&mut self, roots: Vec<Root>, message: &str, amend: bool) {
         if roots.is_empty() {
             return;
         }

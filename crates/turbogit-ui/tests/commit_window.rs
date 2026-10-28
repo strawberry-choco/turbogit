@@ -1092,12 +1092,12 @@ fn single_primary_commit_split_button_with_grey_shelve_stash() {
 }
 
 #[test]
-fn commit_split_dropdown_offers_commit_and_push_only_in_single_repo_scope() {
-    // Issue 07: the split button's dropdown holds the alternative commit
-    // surfaces — `Commit and Push...` always. The multi-repo cascade entry
-    // stays gated on an active multi-repo selection (the shell shows the
-    // selection summary instead of the commit panel while that is live), so
-    // in the normal single-scope view it must not appear.
+fn commit_split_dropdown_offers_commit_and_push_only() {
+    // Issue 07: the split button's dropdown holds the one alternative commit
+    // surface, `Commit and Push...`. The multi-repo commit that once shared it
+    // is now the primary button driven by the options kebab's checklist, so the
+    // chevron carries only the push chain — and nothing paints the retired
+    // cascade entry.
     let parent = tempfile::tempdir().unwrap();
     let a = temp_repo(parent.path(), "dd-a");
     let b = temp_repo(parent.path(), "dd-b");
@@ -3902,5 +3902,204 @@ fn commit_options_toggle_skips_hooks_and_unchecks_after_the_commit() {
     assert!(
         !h.state().ui.commit_no_verify,
         "a successful commit must uncheck the toggle"
+    );
+}
+
+// --- the commit checklist: one message across several repos -------------------
+
+/// A repo with staged content is a commit target with no separate gesture: the
+/// checklist lists the staged repos and starts every one checked.
+#[test]
+fn a_staged_repo_is_a_commit_target_by_default() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "checklist-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+    let id = RootId(repo.path.clone().into());
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    assert!(
+        h.state().commit_targets().is_empty(),
+        "nothing is staged, so there are no targets yet"
+    );
+    assert!(
+        h.state().ui.commit_repo_unchecks.is_empty(),
+        "and nothing has been unchecked by hand"
+    );
+
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
+    let targets: Vec<RootId> = h
+        .state()
+        .commit_targets()
+        .iter()
+        .map(|r| r.id.clone())
+        .collect();
+    assert_eq!(
+        targets,
+        vec![id],
+        "staging a file makes its repo a commit target with no separate check"
+    );
+}
+
+/// The options kebab carries the multi-repo entry — the only route to the
+/// checklist now that the split menu's cascade item is gone — and opening it
+/// lists exactly the repos that hold staged content.
+#[test]
+fn commit_options_kebab_offers_the_multi_repo_checklist() {
+    let parent = tempfile::tempdir().unwrap();
+    let staged = temp_repo(parent.path(), "checklist-staged");
+    let clean = temp_repo(parent.path(), "checklist-clean");
+    std::fs::write(staged.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(&[staged.path.clone(), clean.path.clone()]));
+    stage_through_checkbox(&mut h, &staged.path, "base.txt");
+
+    h.get_by_label("Commit card options").click();
+    h.run();
+    assert_painted(&h, "Commit on multiple repos");
+
+    // The checklist is a submenu. Counting the repo names before and after
+    // opening it isolates the rows it adds from the sidebar's own repo labels
+    // (which spell the same names): one row for the repo with staged content,
+    // and none for the clean one.
+    let staged_before = h.get_all_by_label("checklist-staged").count();
+    let clean_before = h.get_all_by_label("checklist-clean").count();
+    // The submenu trigger's accessible label carries egui's `⏵` arrow, so it is
+    // addressed by substring.
+    h.get_by_label_contains("Commit on multiple repos").click();
+    h.run();
+    assert_eq!(
+        h.get_all_by_label("checklist-staged").count(),
+        staged_before + 1,
+        "the checklist must add one row for the repo with staged content"
+    );
+    assert_eq!(
+        h.get_all_by_label("checklist-clean").count(),
+        clean_before,
+        "the checklist must not list a repo with nothing staged"
+    );
+}
+
+/// The primary Commit button fans out over every staged repo — all checked by
+/// default — with the one message from the well.
+#[test]
+fn primary_commit_commits_every_staged_repo_with_the_same_message() {
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "multi-a");
+    let b = temp_repo(parent.path(), "multi-b");
+    seed_tracked(&a.path, "a.txt");
+    seed_tracked(&b.path, "b.txt");
+
+    let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    // Stage in the focused repo, then expand the collapsed sibling and stage
+    // its file too. Both are targets by default: nothing was unchecked.
+    stage_through_checkbox(&mut h, &a.path, "a.txt");
+    h.get_by_label("Toggle multi-b").click();
+    h.run();
+    stage_through_checkbox(&mut h, &b.path, "b.txt");
+
+    assert!(
+        h.state().ui.commit_repo_unchecks.is_empty(),
+        "nothing has been unchecked by hand"
+    );
+    assert_eq!(
+        h.state().commit_targets().len(),
+        2,
+        "both staged repos are commit targets"
+    );
+
+    h.state_mut().ui.commit_message = "multi subject".into();
+    h.run();
+    commit_action_button(&h).click();
+    // The fan-out opens the live monitor, whose spinner repaints forever, so
+    // settle with fixed steps — `run` panics on a UI that never goes idle — and
+    // let the worker pool land the commits while we poll git.
+    h.step();
+    h.step();
+
+    assert!(
+        wait_until(15_000, || a
+            .subjects()
+            .contains(&"multi subject".to_string())),
+        "checked repo a must be committed; got {:?}",
+        a.subjects()
+    );
+    assert!(
+        wait_until(15_000, || b
+            .subjects()
+            .contains(&"multi subject".to_string())),
+        "checked repo b must be committed with the same message; got {:?}",
+        b.subjects()
+    );
+}
+
+/// Unchecking a repo takes it out of the commit: the checklist is
+/// authoritative, and an unchecked repo does not fall back in.
+#[test]
+fn unchecking_the_repo_keeps_it_out_of_the_commit() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "uncheck-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
+    // Clear the only staged repo's box: there is nothing left to commit.
+    let id = RootId(repo.path.clone().into());
+    h.state_mut().ui.commit_repo_unchecks.insert(id);
+    h.state_mut().ui.commit_message = "unchecked subject".into();
+    h.run();
+    assert!(
+        h.state().commit_targets().is_empty(),
+        "the only staged repo is unchecked, so there are no fan-out targets"
+    );
+
+    // The Commit control is disabled with no target; a click must not dispatch.
+    commit_action_button(&h).click();
+    h.run();
+    assert!(
+        !repo.subjects().contains(&"unchecked subject".to_string()),
+        "an unchecked repo must not commit; got {:?}",
+        repo.subjects()
+    );
+}
+
+/// Toggling a repo's box in the checklist keeps the submenu open — the box is
+/// still addressable after the click, and the repo is now an explicit uncheck
+/// that drops it from the commit targets.
+#[test]
+fn unchecking_a_repo_in_the_checklist_keeps_the_menu_open() {
+    let parent = tempfile::tempdir().unwrap();
+    let staged = temp_repo(parent.path(), "checklist-toggle");
+    std::fs::write(staged.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&staged.path)));
+    stage_through_checkbox(&mut h, &staged.path, "base.txt");
+    let id = RootId(staged.path.clone().into());
+    assert!(
+        h.state().commit_targets().iter().any(|r| r.id == id),
+        "the staged repo starts as a commit target"
+    );
+
+    h.get_by_label("Commit card options").click();
+    h.run();
+    h.get_by_label_contains("Commit on multiple repos").click();
+    h.run();
+
+    // The menu row is the only checkbox wearing the bare repo-name label (the
+    // sidebar's own entry is a button, its box labelled "Select repo ..."), so
+    // the role+label query resolves it uniquely.
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "checklist-toggle")
+        .click();
+    h.run();
+
+    // The box is still in the tree after the click: a menu that had closed
+    // would drop it, and this query would panic instead of returning.
+    let _still_open = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "checklist-toggle");
+    assert!(
+        h.state().ui.commit_repo_unchecks.contains(&id),
+        "the toggle must record an explicit uncheck"
+    );
+    assert!(
+        h.state().commit_targets().is_empty(),
+        "an unchecked repo is no longer a commit target"
     );
 }

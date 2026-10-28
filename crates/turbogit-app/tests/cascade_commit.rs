@@ -1,17 +1,19 @@
-//! Issue 21 — cascade commit ("Also commit on N selected repos"): the app
+//! Issue 21 — cascade commit (one message across the checked repos): the app
 //! seam.
 //!
 //! Headless tests over real temporary repositories through the production
-//! registration path ([`AppState::for_roots`]): the cascade-commit rail
-//! surfaces a "Commit M hunks" footer over the multi-repo selection; the
-//! dispatch fans out across the selection, skipping repos with nothing
-//! staged and reporting per-repo outcomes through the cascade-run monitor +
-//! completion toast + activity feed.
+//! registration path ([`AppState::for_roots`]): `commit_targets` selects the
+//! repos that hold staged content — every one is a target by default, and only
+//! an explicit uncheck drops it — and the roots-driven dispatch fans the one
+//! message out across them, skipping repos with nothing staged and reporting
+//! per-repo outcomes through the cascade-run monitor + completion toast +
+//! activity feed.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use test_support::git_seed::{git, repo_with_one_commit};
+use turbogit_app::root_caches::Affected;
 use turbogit_app::state::AppState;
 use turbogit_domain::model::RootId;
 
@@ -64,55 +66,6 @@ fn settle_bulk_run(state: &mut AppState) {
 /// HEAD SHA for the repo.
 fn head(repo: &Path) -> String {
     git(repo, &["rev-parse", "HEAD"]).trim().to_string()
-}
-
-// -- Commit-rail footer text ---------------------------------------------------
-
-#[test]
-fn commit_rail_footer_counts_staged_hunks_across_the_selection() {
-    // The "Commit 4 hunks" footer must add up the staged-change count of
-    // every selected root whose index is non-empty — and signal "skips repos
-    // with nothing staged" when at least one selected repo is clean. The
-    // text is the contract the spec calls out (issue 21).
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("p");
-    let alpha = temp_repo(&project, "alpha");
-    let ui = temp_repo(&project, "ui");
-    let lib = temp_repo(&project, "lib");
-    let state = app_with_selection(&project, &[alpha.clone(), ui.clone(), lib.clone()]);
-
-    // alpha: 2 staged files. ui: clean (skip). lib: 1 staged file.
-    stage(&alpha, "a.txt", "alpha a\n");
-    stage(&alpha, "b.txt", "alpha b\n");
-    stage(&lib, "c.txt", "lib c\n");
-
-    let footer = state.commit_rail_footer("Commit shared message");
-    assert!(
-        footer.starts_with("Commit 3 hunks"),
-        "footer should sum the staged changes of every selected repo: {footer:?}"
-    );
-    assert!(
-        footer.contains("skips repos with nothing staged"),
-        "footer should warn about skipped repos: {footer:?}"
-    );
-}
-
-#[test]
-fn commit_rail_footer_is_a_no_op_label_when_nothing_is_selected() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let project = tmp.path().join("p");
-    let alpha = temp_repo(&project, "alpha");
-    let mut state = app_with_selection(&project, std::slice::from_ref(&alpha));
-    state.ui.repo_selection.clear();
-
-    let footer = state.commit_rail_footer("msg");
-    // The button is hidden / disabled in this case; the footer text just
-    // surfaces "no selection" so a stray render does not mislead.
-    assert!(
-        footer.to_lowercase().contains("no selected")
-            || footer.to_lowercase().contains("nothing to commit"),
-        "footer should reflect the empty selection: {footer:?}"
-    );
 }
 
 #[test]
@@ -182,4 +135,69 @@ fn cascade_commit_amend_amends_only_repos_that_have_a_committable_index() {
 
     let log = git(&alpha, &["log", "-1", "--format=%s"]);
     assert_eq!(log.trim(), "amended message");
+}
+
+// -- The commit card's checklist targets ---------------------------------------
+
+#[test]
+fn commit_targets_are_the_staged_repos_in_registration_order() {
+    // The commit card commits every repo that holds staged content, in
+    // registration order. All staged repos are checked by default, so a clean
+    // repo drops out with no gesture needed.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("p");
+    let alpha = temp_repo(&project, "alpha");
+    let ui = temp_repo(&project, "ui");
+    let lib = temp_repo(&project, "lib");
+    let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone(), lib.clone()]);
+
+    // alpha and lib hold staged content; ui is clean.
+    stage(&alpha, "a.txt", "alpha a\n");
+    stage(&lib, "c.txt", "lib c\n");
+    state.refresh(Affected::All);
+
+    let alpha_id = RootId(alpha.clone().into());
+    let lib_id = RootId(lib.clone().into());
+
+    let targets: Vec<RootId> = state
+        .commit_targets()
+        .iter()
+        .map(|root| root.id.clone())
+        .collect();
+    assert_eq!(
+        targets,
+        vec![alpha_id, lib_id],
+        "staged & default-checked, in registration order — the clean ui is excluded"
+    );
+}
+
+#[test]
+fn run_commit_across_roots_commits_exactly_the_passed_roots() {
+    // The roots-driven cascade commits each passed root that holds staged
+    // content and leaves a root that is not passed untouched.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("p");
+    let alpha = temp_repo(&project, "alpha");
+    let ui = temp_repo(&project, "ui");
+    let lib = temp_repo(&project, "lib");
+    let mut state = app_with_selection(&project, &[alpha.clone(), ui.clone(), lib.clone()]);
+
+    stage(&alpha, "feature.txt", "alpha\n");
+    stage(&lib, "feature.txt", "lib\n");
+    state.refresh(Affected::All);
+
+    let alpha_before = head(&alpha);
+    let lib_before = head(&lib);
+    let ui_before = head(&ui);
+
+    // alpha and lib hold staged content, so both are targets by default (ui is
+    // staged nowhere).
+    let roots = state.commit_targets();
+    assert_eq!(roots.len(), 2, "two staged targets");
+    state.run_commit_across_roots(roots, "roots message", false);
+    settle_bulk_run(&mut state);
+
+    assert_ne!(head(&alpha), alpha_before, "alpha advanced");
+    assert_ne!(head(&lib), lib_before, "lib advanced");
+    assert_eq!(head(&ui), ui_before, "ui was not passed, untouched");
 }
