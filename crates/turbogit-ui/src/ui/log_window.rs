@@ -451,6 +451,11 @@ fn apply_log_tree_event(state: &mut AppState, event: TreeEvent) {
                 state.ui.log_tree.groups.tags = !on;
             }
         },
+        TreeEvent::RepoToggled { root } => {
+            if !state.ui.log_tree.collapsed_repos.remove(&root) {
+                state.ui.log_tree.collapsed_repos.insert(root);
+            }
+        }
         TreeEvent::RemoteToggled { root, remote } => {
             let key = (root.clone(), remote.clone());
             if !state.ui.log_tree.collapsed_remotes.remove(&key) {

@@ -45,9 +45,9 @@ use crate::ui::branches::{branch_matches, matches_query, row_meta};
 use crate::ui::branches_tree::{self, BranchNode, BranchView, RemoteGroup, RepoSection};
 use crate::ui::components::{
     BRANCH_ROW_H, KIT_BUTTON_H, KIT_ICON, KitButton, PAD_LIST, RowState, SECTION_H, badge_words,
-    badge_words_width, current_row_fill, kit_button, kit_button_width, middle_truncate_to_width,
-    paint_rail, ref_chip_with_ink, ref_chip_with_ink_width, row_fill, row_ink, section_header,
-    state_words, state_words_width, sync_badge, sync_ink,
+    badge_words_width, counted, current_row_fill, kit_button, kit_button_width,
+    middle_truncate_to_width, paint_rail, ref_chip_with_ink, ref_chip_with_ink_width, row_fill,
+    row_ink, section_header, state_words, state_words_width, sync_badge, sync_ink,
 };
 use crate::ui::icons::{self, Icon};
 use crate::ui::widgets::menu_host::{self, MenuId};
@@ -74,6 +74,9 @@ pub enum TreeEvent {
         branch: String,
     },
     GroupToggled(TreeGroup),
+    RepoToggled {
+        root: RootId,
+    },
     RemoteToggled {
         root: RootId,
         remote: String,
@@ -374,8 +377,12 @@ fn paint_repo_section(
     target_y: &mut Option<f32>,
     events: &mut Vec<TreeEvent>,
 ) {
-    repo_header(ui, section, !invisible, events);
+    let collapsed = !invisible && repo_collapsed(tree, !filter.trim().is_empty(), &section.root_id);
+    repo_header(ui, section, !invisible, collapsed, events);
     *y_cursor += REPO_HEADER_H;
+    if collapsed {
+        return;
+    }
 
     let locals = filter_nodes(&section.locals, filter);
     paint_local_group(
@@ -649,16 +656,33 @@ fn paint_nodes(
     }
 }
 
+// Not an `egui::CollapsingHeader`: it sizes its header from its own galley rather than
+// `REPO_HEADER_H`, paints a rotating triangle instead of the kit chevron, and gates its body on a
+// tweened `openness`, which this painter's manual `y_cursor` walk cannot follow.
 fn repo_header(
     ui: &mut Ui,
     section: &RepoSection,
     show_identity: bool,
+    collapsed: bool,
     events: &mut Vec<TreeEvent>,
 ) {
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, REPO_HEADER_H), Sense::hover());
     ui.painter()
         .rect_filled(rect, CornerRadius::ZERO, Palette::SURFACE);
+    if show_identity {
+        // Allocated before the `Fetch` button below, in this same layer. egui resolves a click to one
+        // widget and its tie goes to the last rect registered, so allocating this target after the
+        // button would steal that button's clicks and fold the band every time anyone fetched.
+        let id = ui.make_persistent_id(("repo_header", &section.root_id));
+        let response = ui.interact(rect, id, Sense::click());
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, &section.repo_name));
+        if response.clicked() {
+            events.push(TreeEvent::RepoToggled {
+                root: section.root_id.clone(),
+            });
+        }
+    }
     let split_x = rect.left() + rect.width() * HEADER_IDENTITY_SHARE;
     let chip_w = section
         .current_branch
@@ -676,13 +700,25 @@ fn repo_header(
     left.spacing_mut().item_spacing.x = 0.0;
     left.add_space(PAD_LIST);
     if show_identity {
-        let name_w = (split_x - rect.left() - 2.0 * PAD_LIST - chip_w).max(24.0);
+        let chevron_w = KIT_ICON + 6.0;
+        let name_w = (split_x - rect.left() - 2.0 * PAD_LIST - chip_w - chevron_w).max(24.0);
         let name = middle_truncate_to_width(
             &left,
             &section.repo_name,
             &chrome_font(TYPE_CONTROL),
             name_w,
         );
+        icons::icon(
+            &mut left,
+            if collapsed {
+                Icon::CHEVRON_RIGHT
+            } else {
+                Icon::CHEVRON_DOWN
+            },
+            KIT_ICON,
+            Palette::T_MUTED,
+        );
+        left.add_space(6.0);
         left.add(
             egui::Label::new(
                 RichText::new(name)
@@ -714,13 +750,32 @@ fn repo_header(
             });
         }
         if show_identity {
-            let summary = fit_summary(ui, &header_summary(section), ui.available_width());
+            let summary = fit_summary(ui, &band_summary(section, collapsed), ui.available_width());
             if !summary.is_empty() {
                 ui.add_space(PAD_LIST);
                 state_words(ui, &summary, section.status.color());
             }
         }
     });
+}
+
+/// The band's own line: sync and state words, and, while folded, what the fold is hiding. The count
+/// goes last because `fit_summary` truncates the tail and a repository's drift outranks its size.
+fn band_summary(section: &RepoSection, collapsed: bool) -> String {
+    let summary = header_summary(section);
+    if !collapsed {
+        return summary;
+    }
+    let size = counted(
+        leaf_count(&section.locals),
+        "local branch",
+        "local branches",
+    );
+    if summary.is_empty() {
+        size
+    } else {
+        format!("{summary} · {size}")
+    }
 }
 
 fn fit_summary(ui: &Ui, text: &str, avail: f32) -> String {
@@ -789,6 +844,12 @@ fn dir_header(ui: &mut Ui, label: &str, count: usize, depth: usize, step: f32) {
 
 pub fn remotes_revealed(tree: &TreeState, root: &RootId) -> bool {
     tree.show_remotes || tree.remotes_revealed.contains(root)
+}
+
+/// A fold is display state, not a filter result. While a query is live the rows it matched must
+/// paint, or `section_match_count` promises a branch nobody can see.
+fn repo_collapsed(tree: &TreeState, filtering: bool, root: &RootId) -> bool {
+    !filtering && tree.collapsed_repos.contains(root)
 }
 
 fn remote_collapsed(tree: &TreeState, props: &TreeProps<'_>, root: &RootId, remote: &str) -> bool {

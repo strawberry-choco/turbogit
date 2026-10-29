@@ -914,6 +914,51 @@ fn creating_a_branch_honours_the_switch_decision_it_was_given() {
 }
 
 #[test]
+fn creating_a_branch_reveals_it_through_a_folded_repository() {
+    let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
+    let root = harness.state().multi.roots[0].id.clone();
+    harness
+        .state_mut()
+        .ui
+        .branches_tree
+        .collapsed_repos
+        .insert(root.clone());
+    settle_quiet(&mut harness);
+
+    harness.get_by_label("New Branch").click();
+    settle_quiet(&mut harness);
+    {
+        let field = harness
+            .get_all_by_role(egui::accesskit::Role::TextInput)
+            .find(|n| n.accesskit_node().label().is_none())
+            .expect("dialog Name input queryable");
+        field.focus();
+        field.type_text("past-the-fold");
+    }
+    settle_quiet(&mut harness);
+    harness.get_by_label("Create").click();
+
+    pump_until(&mut harness, "the created branch lands", |s| {
+        s.selected_root
+            .as_ref()
+            .and_then(|id| s.multi.by_id(id))
+            .map(|r| r.branches.iter().any(|b| b.name == "past-the-fold"))
+            .unwrap_or(false)
+    });
+    assert!(
+        !harness
+            .state()
+            .ui
+            .branches_tree
+            .collapsed_repos
+            .contains(&root),
+        "a one-shot reveal clears the fold it would otherwise paint under"
+    );
+    assert!(harness.state().ui.branches_tree.scroll_to.is_none());
+    assert_painted(&harness, "past-the-fold");
+}
+
+#[test]
 fn merge_from_detail_opens_the_preflighted_dialog() {
     let (_project, _dir, mut harness) = open_branches_over(single_repo_project(), branches_harness);
 

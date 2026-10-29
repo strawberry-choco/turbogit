@@ -206,6 +206,11 @@ impl Fixture {
             TreeEvent::GroupToggled(TreeGroup::Tags) => {
                 self.tree.groups.tags = !self.tree.groups.tags;
             }
+            TreeEvent::RepoToggled { root } => {
+                if !self.tree.collapsed_repos.remove(root) {
+                    self.tree.collapsed_repos.insert(root.clone());
+                }
+            }
             TreeEvent::RemoteToggled { root, remote } => {
                 let key = (root.clone(), remote.clone());
                 if !self.tree.collapsed_remotes.remove(&key) {
@@ -1863,5 +1868,232 @@ fn a_surface_without_the_capability_emits_nothing_on_right_click() {
             .iter()
             .any(|e| matches!(e, TreeEvent::ContextMenuRequested { .. })),
         "the shared component must not open a menu the surface forbade: {events:#?}"
+    );
+}
+
+fn alpha_id() -> RootId {
+    RootId(Arc::from(PathBuf::from("/alpha")))
+}
+
+fn beta_id() -> RootId {
+    RootId(Arc::from(PathBuf::from("/beta")))
+}
+
+#[test]
+fn the_repo_band_folds_its_whole_repository() {
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+    for open in ["starred", "a", "b", "stale-branch"] {
+        assert_eq!(
+            galleys_for(&h, open).len(),
+            1,
+            "alpha lists `{open}` before its band is clicked: {:?}",
+            painted_text(&h)
+        );
+    }
+    assert_eq!(
+        galleys_for(&h, "LOCAL").len(),
+        2,
+        "each repository carries its own Local strip"
+    );
+
+    let events = click_events(&mut h, "alpha");
+    assert!(
+        events.contains(&TreeEvent::RepoToggled { root: alpha_id() }),
+        "the band's click folds its own repository: {events:#?}"
+    );
+    settle(&mut h);
+
+    for hidden in ["starred", "a", "b", "stale-branch", "feature/"] {
+        assert!(
+            galleys_for(&h, hidden).is_empty(),
+            "`{hidden}` hides with its repository: {:?}",
+            painted_text(&h)
+        );
+    }
+    assert_eq!(
+        galleys_for(&h, "alpha").len(),
+        1,
+        "the folded band still names its repository"
+    );
+    assert_eq!(
+        galleys_for(&h, "Fetch").len(),
+        2,
+        "a folded repository is still fetchable"
+    );
+    assert_eq!(
+        galleys_for(&h, "LOCAL").len(),
+        1,
+        "only beta's Local strip is left standing"
+    );
+    assert_eq!(
+        galleys_for(&h, "wip").len(),
+        2,
+        "beta keeps painting its row beside its current-branch pill"
+    );
+    assert_eq!(
+        galleys_for(&h, "5 local branches").len(),
+        1,
+        "a clean repository's folded band says its size alone, with no separator in front of it: \
+         {:?}",
+        painted_text(&h)
+    );
+
+    click_events(&mut h, "alpha");
+    settle(&mut h);
+    assert_eq!(
+        galleys_for(&h, "starred").len(),
+        1,
+        "a second click reopens the repository"
+    );
+    assert_eq!(galleys_for(&h, "LOCAL").len(), 2);
+    assert!(
+        !painted_contains(&h, "local branches"),
+        "and the band goes back to state words alone: {:?}",
+        painted_text(&h)
+    );
+}
+
+#[test]
+fn the_fetch_button_keeps_its_click_against_the_fold() {
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+
+    let events = click_events(&mut h, "Fetch");
+    assert!(
+        events.contains(&TreeEvent::FetchRequested { root: alpha_id() }),
+        "the button keeps the click its row also answers to: {events:#?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, TreeEvent::RepoToggled { .. })),
+        "a click on `Fetch` must not fold the repository too: {events:#?}"
+    );
+    settle(&mut h);
+    assert_eq!(
+        galleys_for(&h, "starred").len(),
+        1,
+        "and the repository stays open: {:?}",
+        painted_text(&h)
+    );
+}
+
+#[test]
+fn folds_are_per_repository_and_folding_every_one_is_allowed() {
+    let mut h = fixture_harness(Fixture::two_repos());
+    settle(&mut h);
+
+    click_events(&mut h, "alpha");
+    settle(&mut h);
+    let folded = &h.state().tree.collapsed_repos;
+    assert_eq!(folded.len(), 1, "the fold names exactly one repository");
+    assert!(
+        folded.contains(&alpha_id()),
+        "and it names the one that was clicked: {folded:?}"
+    );
+    assert!(galleys_for(&h, "starred").is_empty());
+    assert_eq!(
+        galleys_for(&h, "wip").len(),
+        2,
+        "beta keeps its row beside its current-branch pill, untouched by alpha's fold"
+    );
+
+    click_events(&mut h, "beta");
+    settle(&mut h);
+    assert_eq!(
+        h.state().tree.collapsed_repos.len(),
+        2,
+        "every repository may be folded at once"
+    );
+    assert_eq!(galleys_for(&h, "alpha").len(), 1);
+    assert_eq!(galleys_for(&h, "beta").len(), 1);
+    assert_eq!(
+        galleys_for(&h, "↑2 · ↓1 · diverged · 2 local branches").len(),
+        1,
+        "the drift words stay ahead of the size, because the tail is what `fit_summary` truncates: \
+         {:?}",
+        painted_text(&h)
+    );
+    for gone in ["LOCAL", "REMOTE", "TAGS"] {
+        assert!(
+            galleys_for(&h, gone).is_empty(),
+            "with every repository folded no `{gone}` strip paints: {:?}",
+            painted_text(&h)
+        );
+    }
+}
+
+#[test]
+fn a_live_filter_paints_its_matches_through_a_fold() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.collapsed_repos.insert(alpha_id());
+    fx.filter = "starred".to_string();
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    assert_eq!(
+        galleys_for(&h, "starred").len(),
+        1,
+        "a match inside a folded repository still paints: {:?}",
+        painted_text(&h)
+    );
+    assert!(
+        !painted_contains(&h, "Create \"") && !painted_contains(&h, "no branch called"),
+        "the tree must not promise a branch nobody can see: {:?}",
+        painted_text(&h)
+    );
+    assert!(
+        h.state().tree.collapsed_repos.contains(&alpha_id()),
+        "the fold stays folded; a query only overrides its paint"
+    );
+}
+
+#[test]
+fn a_fold_does_not_masquerade_as_a_no_match() {
+    let mut fx = Fixture::two_repos();
+    fx.tree.collapsed_repos.insert(alpha_id());
+    fx.tree.collapsed_repos.insert(beta_id());
+    fx.filter = "nonexistent".to_string();
+    let mut h = fixture_harness(fx);
+    settle(&mut h);
+
+    assert!(
+        painted_contains(&h, "Create \"nonexistent\""),
+        "a query that matched nothing still says so with every repository folded: {:?}",
+        painted_text(&h)
+    );
+}
+
+#[test]
+fn a_single_repository_band_offers_no_fold() {
+    let mut h = fixture_harness(Fixture::alpha_only());
+    settle(&mut h);
+
+    let fold_affordances = h
+        .query_all_by_label_contains("alpha")
+        .filter(|n| {
+            n.accesskit_node().role() == Role::Button
+                && n.accesskit_node().label().is_some_and(|l| l == "alpha")
+        })
+        .count();
+    assert_eq!(
+        fold_affordances,
+        0,
+        "one repository in scope shows no identity and so no fold affordance: {:?}",
+        painted_text(&h)
+    );
+    assert!(
+        !painted_contains(&h, "local branches"),
+        "and no collapsed summary: {:?}",
+        painted_text(&h)
+    );
+
+    h.state_mut().tree.collapsed_repos.insert(alpha_id());
+    settle(&mut h);
+    assert_eq!(
+        galleys_for(&h, "starred").len(),
+        1,
+        "a fold a band cannot reach never hides the one repository's rows"
     );
 }

@@ -298,6 +298,7 @@ pub struct TreeState {
     pub groups: BranchesGroups,
     pub show_remotes: bool,
     pub remotes_revealed: HashSet<RootId>,
+    pub collapsed_repos: HashSet<RootId>,
     pub collapsed_remotes: HashSet<(RootId, String)>,
     pub selected: Option<String>,
     pub selected_root: Option<RootId>,

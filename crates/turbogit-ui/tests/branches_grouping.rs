@@ -275,6 +275,51 @@ fn repository_grouping_off_removes_the_level_without_losing_a_branch() {
 }
 
 #[test]
+fn folding_every_repository_leaves_the_ungrouped_list_whole() {
+    let (_tmp, project) = two_repo_project();
+    let mut harness = branches_harness(project);
+    open_branches_tab(&mut harness);
+
+    let roots: Vec<turbogit_domain::model::RootId> = harness
+        .state()
+        .multi
+        .roots
+        .iter()
+        .map(|r| r.id.clone())
+        .collect();
+    assert_eq!(roots.len(), 2, "the fixture is two repositories");
+    for root in &roots {
+        harness
+            .state_mut()
+            .ui
+            .branches_tree
+            .collapsed_repos
+            .insert(root.clone());
+    }
+    settle_quiet(&mut harness);
+    for name in ["only-alpha", "only-beta"] {
+        assert!(
+            !has_painted(&harness, name),
+            "grouped, a folded repository paints no `{name}` row"
+        );
+    }
+
+    toggle(&mut harness, "Group by Repository");
+
+    for name in ["only-alpha", "only-beta"] {
+        assert!(
+            has_painted(&harness, name),
+            "{name} paints with grouping off, fold or no fold"
+        );
+    }
+    assert_eq!(
+        harness.state().ui.branches_tree.collapsed_repos.len(),
+        2,
+        "the level that ignores the fold leaves it in place"
+    );
+}
+
+#[test]
 fn the_gear_reopens_after_a_toggle_closed_it() {
     let (_tmp, project) = grouped_project();
     let mut harness = branches_harness(project);

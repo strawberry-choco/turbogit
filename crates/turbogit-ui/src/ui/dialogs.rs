@@ -194,6 +194,10 @@ fn new_branch(ui: &mut Ui, state: &mut AppState) {
                 .map(str::to_owned);
             let co = state.ui.dlg.new_branch_checkout;
             state.ui.branches_tree.scroll_to = Some(name.clone());
+            // `scroll_to` is consumed the frame it resolves, so the reveal has to lift the fold too.
+            if let Some(root) = &root {
+                state.ui.branches_tree.collapsed_repos.remove(root);
+            }
             if let Some(root) = root {
                 state.dispatch(shell_writes::branch::create(
                     &root,
