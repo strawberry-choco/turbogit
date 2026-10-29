@@ -598,7 +598,9 @@ impl GitExecutor for CliExecutor {
             root,
             &[
                 "for-each-ref",
-                "--format=%(refname:short)%00%(objectname:short)%00%(subject)%00%(authorname)%00%(committerdate:iso-strict)",
+                // `%(refname)`, not `%(refname:short)`: the namespace is what tells a
+                // local `feature/…` branch from a remote one below.
+                "--format=%(refname)%00%(objectname:short)%00%(subject)%00%(authorname)%00%(committerdate:iso-strict)",
                 "refs/heads",
                 "refs/remotes",
             ],
@@ -618,9 +620,17 @@ impl GitExecutor for CliExecutor {
                 let Ok(dt) = chrono::DateTime::parse_from_rfc3339(date) else {
                     continue;
                 };
-                let (kind, short) = match name.split_once('/') {
-                    Some((_, rest)) => (BranchKind::Remote, rest.to_string()),
-                    None => (BranchKind::Local, name.to_string()),
+                // A remote is keyed by its name without the remote prefix, which is
+                // what the `-vv` listing shows as the row's display name.
+                let (kind, short) = match name.strip_prefix("refs/heads/") {
+                    Some(local) => (BranchKind::Local, local.to_string()),
+                    None => match name
+                        .strip_prefix("refs/remotes/")
+                        .and_then(|with_remote| with_remote.split_once('/'))
+                    {
+                        Some((_, local)) => (BranchKind::Remote, local.to_string()),
+                        None => continue,
+                    },
                 };
                 let dt = dt.with_timezone(&chrono::Utc);
                 last_touched.insert((kind, short.clone()), dt);
@@ -637,7 +647,9 @@ impl GitExecutor for CliExecutor {
             if trimmed.is_empty() {
                 continue;
             }
-            let content = trimmed.strip_prefix('*').unwrap_or(trimmed).trim_start();
+            // `*` marks the current branch and `+` one checked out in another linked
+            // worktree. Both are column markers, not name characters.
+            let content = trimmed.trim_start_matches(['*', '+']).trim_start();
             let name = match content.split_whitespace().next() {
                 Some(n) => n,
                 None => continue,

@@ -5,6 +5,7 @@ use chrono::DateTime;
 use test_support::git_seed::git;
 use turbogit_domain::model::{BranchKind, Upstream, VcsSettings};
 use turbogit_engine::cli::CliExecutor;
+use turbogit_engine::git2_exec::Git2Executor;
 use turbogit_engine_api::GitExecutor;
 
 const EPOCH_1: i64 = 1_112_911_993;
@@ -12,10 +13,11 @@ const EPOCH_2: i64 = 1_234_567_890;
 const EPOCH_3: i64 = 1_700_000_000;
 const EPOCH_4: i64 = 1_750_000_000;
 
-fn engine() -> CliExecutor {
-    CliExecutor {
+/// The composed adapter, because that is the one `AppState` reads through.
+fn engine() -> Git2Executor {
+    Git2Executor::new(CliExecutor {
         settings: VcsSettings::default(),
-    }
+    })
 }
 
 fn commit_at_epoch(repo: &Path, msg: &str, epoch: i64) {
@@ -144,5 +146,81 @@ fn branches_parse_ahead_behind_gone_and_last_touched() {
             .iter()
             .any(|b| b.kind == BranchKind::Remote && b.name == "ghost"),
         "a pruned remote ref must not be listed"
+    );
+}
+
+#[test]
+fn a_branch_held_in_a_linked_worktree_is_listed_by_its_own_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "t@t"]);
+    git(&repo, &["config", "user.name", "t"]);
+    commit_at_epoch(&repo, "c1", EPOCH_1);
+    git(&repo, &["branch", "held"]);
+    git(&repo, &["branch", "feat"]);
+    git(&repo, &["checkout", "-q", "feat"]);
+    commit_at_epoch(&repo, "c2", EPOCH_2);
+    git(&repo, &["checkout", "-q", "main"]);
+    git(
+        &repo,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "held"],
+    );
+
+    let branches = engine().branches(&repo).expect("branches");
+    assert!(
+        !branches.iter().any(|b| b.name == "+"),
+        "the worktree marker was read as a branch name"
+    );
+    let held = local(&branches, "held");
+    assert!(
+        !held.gone,
+        "a branch held in a worktree is not gone, only elsewhere"
+    );
+    assert_eq!((held.ahead, held.behind), (0, 0));
+    assert_eq!(
+        local(&branches, "feat").last_touched,
+        Some(DateTime::from_timestamp(EPOCH_2, 0).unwrap()),
+        "an ordinary branch still reads its tip"
+    );
+    assert!(
+        local(&branches, "main").exists,
+        "the current branch is listed"
+    );
+}
+
+#[test]
+fn a_namespaced_local_branch_keeps_its_tip_and_date() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "user.email", "t@t"]);
+    git(&repo, &["config", "user.name", "t"]);
+    commit_at_epoch(&repo, "c1", EPOCH_1);
+    git(&repo, &["checkout", "-q", "-b", "feature/tokens"]);
+    commit_at_epoch(&repo, "c2", EPOCH_2);
+    git(&repo, &["checkout", "-q", "main"]);
+
+    let branches = engine().branches(&repo).expect("branches");
+    let held = local(&branches, "feature/tokens");
+    assert_eq!(
+        held.last_touched,
+        Some(DateTime::from_timestamp(EPOCH_2, 0).unwrap()),
+        "a namespaced local branch keeps its date"
+    );
+    let tip = held.tip.as_ref().expect("a namespaced local tip");
+    assert_eq!(tip.message, "c2");
+    assert!(
+        !branches
+            .iter()
+            .any(|b| b.kind == BranchKind::Remote && b.name == "tokens"),
+        "the local branch must not be filed as a remote one"
+    );
+    assert_eq!(
+        local(&branches, "main").last_touched,
+        Some(DateTime::from_timestamp(EPOCH_1, 0).unwrap())
     );
 }

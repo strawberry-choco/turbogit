@@ -43,7 +43,7 @@ fn the_engine_serves_reads_and_runs_git_for_the_rest() {
     );
     assert!(
         !exec.branches(&repo).unwrap().is_empty(),
-        "the composed adapter must answer libgit2-native reads"
+        "the composed adapter must answer the branch listing, whichever side of it reads"
     );
 
     let status = exec
