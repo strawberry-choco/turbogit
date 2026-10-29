@@ -1414,7 +1414,7 @@ fn commit_meta_row(ui: &mut Ui, state: &mut AppState) {
     let font = crate::theme::chrome_font(crate::theme::TYPE_CONTROL);
     let amend_label = painter.layout_no_wrap(AMEND_LABEL.to_owned(), font, Palette::INK_2);
     let amend_w = ROW_CHECKBOX + ROW_GAP + amend_label.size().x;
-    amend_checkbox_at(
+    let amend = amend_checkbox_at(
         ui,
         Rect::from_min_max(
             Pos2::new(row.right() - amend_w, row.top()),
@@ -1422,6 +1422,11 @@ fn commit_meta_row(ui: &mut Ui, state: &mut AppState) {
         ),
         &mut state.ui.amend,
     );
+    // The click arm is `ui.amend`'s only writer, so `clicked() && amend` is the
+    // false→true edge that seeds a blank buffer exactly once.
+    if amend.clicked() && state.ui.amend {
+        state.prefill_amend_message();
+    }
     let kebab_rect = Rect::from_min_size(
         Pos2::new(row.left(), row.center().y - META_KEBAB_SIZE / 2.0),
         Vec2::splat(META_KEBAB_SIZE),

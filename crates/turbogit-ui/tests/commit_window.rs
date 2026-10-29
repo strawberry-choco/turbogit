@@ -511,6 +511,176 @@ fn amend_commits_with_amend_flag() {
 }
 
 #[test]
+fn amend_click_seeds_the_full_head_message_into_the_painted_well() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "seed-repo");
+    std::fs::write(repo.path.join("seeded.txt"), "work\n").unwrap();
+    git(&repo.path, &["add", "seeded.txt"]);
+    git(
+        &repo.path,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "prefill subject",
+            "-m",
+            "prefill body",
+        ],
+    );
+    std::fs::write(repo.path.join("base.txt"), "next change\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
+    h.get_by_label("Amend").click();
+    h.run();
+
+    assert!(h.state().ui.amend, "the click still toggles amend");
+    assert_eq!(
+        h.state().ui.commit_message,
+        "prefill subject\n\nprefill body",
+        "the seed is the full head message, body included"
+    );
+    assert_painted(&h, "prefill subject");
+    assert_painted(&h, "prefill body");
+}
+
+#[test]
+fn amend_click_leaves_a_typed_draft_untouched() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "draft-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
+    h.get_by_label("Commit message").focus();
+    h.get_by_label("Commit message").type_text("my typed draft");
+    h.run();
+    h.get_by_label("Amend").click();
+    h.run();
+
+    assert_eq!(
+        h.state().ui.commit_message,
+        "my typed draft",
+        "a non-blank buffer is the user's and survives the toggle"
+    );
+}
+
+#[test]
+fn amend_click_with_disagreeing_heads_leaves_the_buffer_empty() {
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "disagree-a");
+    let b = temp_repo(parent.path(), "disagree-b");
+    std::fs::write(b.path.join("head.txt"), "head work\n").unwrap();
+    git(&b.path, &["add", "head.txt"]);
+    git(&b.path, &["commit", "-q", "-m", "b-only head"]);
+    std::fs::write(a.path.join("base.txt"), "modified a\n").unwrap();
+    std::fs::write(b.path.join("base.txt"), "modified b\n").unwrap();
+
+    let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    stage_through_checkbox(&mut h, &a.path, "base.txt");
+    h.get_by_label("Toggle disagree-b").click();
+    h.run();
+    stage_through_checkbox(&mut h, &b.path, "base.txt");
+    assert_eq!(
+        h.state().commit_targets().len(),
+        2,
+        "both checked repos hold a staged change"
+    );
+
+    h.get_by_label("Amend").click();
+    h.run();
+
+    assert!(h.state().ui.amend, "the toggle itself still happens");
+    assert_eq!(
+        h.state().ui.commit_message,
+        "",
+        "heads that disagree must withhold the seed and stay silent"
+    );
+}
+
+#[test]
+fn amend_off_edit_on_keeps_the_edit() {
+    let parent = tempfile::tempdir().unwrap();
+    let repo = temp_repo(parent.path(), "edge-repo");
+    std::fs::write(repo.path.join("base.txt"), "modified\n").unwrap();
+
+    let mut h = harness(app_state(std::slice::from_ref(&repo.path)));
+    stage_through_checkbox(&mut h, &repo.path, "base.txt");
+
+    h.get_by_label("Amend").click();
+    h.run();
+    assert_eq!(
+        h.state().ui.commit_message,
+        "init",
+        "the blank buffer seeds on the way on"
+    );
+
+    h.get_by_label("Amend").click();
+    h.run();
+    assert!(!h.state().ui.amend, "the second click turns amend off");
+
+    h.state_mut().ui.commit_message = "init, edited".into();
+    h.run();
+    h.get_by_label("Amend").click();
+    h.run();
+
+    assert!(
+        h.state().ui.amend,
+        "the third click is a false→true edge again"
+    );
+    assert_eq!(
+        h.state().ui.commit_message,
+        "init, edited",
+        "an edited buffer is not blank, so the re-toggle must not overwrite it"
+    );
+}
+
+#[test]
+fn amend_click_seeds_two_agreeing_roots_and_unchecking_one_still_seeds() {
+    let parent = tempfile::tempdir().unwrap();
+    let a = temp_repo(parent.path(), "agree-a");
+    let b = temp_repo(parent.path(), "agree-b");
+    std::fs::write(a.path.join("base.txt"), "modified a\n").unwrap();
+    std::fs::write(b.path.join("base.txt"), "modified b\n").unwrap();
+
+    let mut h = harness(app_state(&[a.path.clone(), b.path.clone()]));
+    stage_through_checkbox(&mut h, &a.path, "base.txt");
+    h.get_by_label("Toggle agree-b").click();
+    h.run();
+    stage_through_checkbox(&mut h, &b.path, "base.txt");
+
+    h.get_by_label("Amend").click();
+    h.run();
+    assert_eq!(
+        h.state().ui.commit_message,
+        "init",
+        "two agreeing heads seed the shared message"
+    );
+
+    h.get_by_label("Amend").click();
+    h.run();
+    h.state_mut().ui.commit_message = String::new();
+    h.state_mut()
+        .ui
+        .commit_repo_unchecks
+        .insert(RootId(b.path.clone().into()));
+    h.run();
+    assert_eq!(
+        h.state().commit_targets().len(),
+        1,
+        "agree-b is unchecked, agree-a alone votes"
+    );
+
+    h.get_by_label("Amend").click();
+    h.run();
+    assert_eq!(
+        h.state().ui.commit_message,
+        "init",
+        "the one checked repo still seeds on its own"
+    );
+}
+
+#[test]
 fn commit_and_push_chains_commit_then_opens_push_dialog() {
     let parent = tempfile::tempdir().unwrap();
     let repo = temp_repo(parent.path(), "push-repo");

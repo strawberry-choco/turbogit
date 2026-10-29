@@ -2019,6 +2019,24 @@ impl AppState {
         self.ui.dialog = Some(Dialog::Reword);
     }
 
+    /// Offer the checked repos' shared head message into a blank commit buffer
+    /// for an amend.
+    pub fn prefill_amend_message(&mut self) {
+        // Amend seeds only a blank buffer: reword's target is a dialog field
+        // the user just opened for one commit, this is the persisted shared draft.
+        if !self.ui.commit_message.trim().is_empty() {
+            return;
+        }
+        let paths: Vec<PathBuf> = self
+            .commit_targets()
+            .iter()
+            .map(|r| r.path.clone())
+            .collect();
+        if let Some(message) = commit_across::shared_head_message(self.executor.as_ref(), &paths) {
+            self.ui.commit_message = message;
+        }
+    }
+
     pub fn open_tag_dialog(&mut self, target: Option<&str>) {
         let dlg = &mut self.ui.dlg;
         dlg.tag_type = TagType::Annotated;

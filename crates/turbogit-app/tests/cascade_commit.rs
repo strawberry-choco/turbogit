@@ -153,3 +153,39 @@ fn run_commit_across_roots_commits_exactly_the_passed_roots() {
     assert_ne!(head(&lib), lib_before, "lib advanced");
     assert_eq!(head(&ui), ui_before, "ui was not passed, untouched");
 }
+
+#[test]
+fn prefill_amend_message_answers_from_a_fresh_read_when_no_log_cache_was_warmed() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let project = tmp.path().join("p");
+    let alpha = temp_repo(&project, "alpha");
+    let ui = temp_repo(&project, "ui");
+
+    git(
+        &ui,
+        &["commit", "-q", "--allow-empty", "-m", "diverged head"],
+    );
+    stage(&alpha, "feature.txt", "alpha\n");
+    stage(&ui, "feature.txt", "ui\n");
+
+    let mut state = AppState::for_roots(&project, &[alpha.clone(), ui.clone()]);
+    assert_eq!(
+        state.commit_targets().len(),
+        2,
+        "both staged repos are checked and vote"
+    );
+    assert!(
+        state.caches.log(&RootId(alpha.clone().into())).is_none(),
+        "nothing fetched a log for alpha, so only a fresh read can answer"
+    );
+
+    state.prefill_amend_message();
+    assert_eq!(
+        state.ui.commit_message, "",
+        "differing heads withhold the seed"
+    );
+
+    git(&ui, &["reset", "-q", "--soft", "HEAD~1"]);
+    state.prefill_amend_message();
+    assert_eq!(state.ui.commit_message, "init", "equal heads seed");
+}
